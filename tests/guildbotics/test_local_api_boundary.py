@@ -54,7 +54,6 @@ LOCAL_API_IMPORTS = {
     "cli/desktop_commands.py": {"connect_local_api"},
     "cli/member_client.py": {"connect_local_api"},
     "cli/service.py": {"connect_local_api", "server_port"},
-    "hub/secret_transport.py": {"connect_local_api"},
     # ``open`` through the proof-gated client; ``connect`` keeps the token the
     # consent exchange answers, which it posted only the code and verifier for.
     "cli/server.py": {
@@ -69,8 +68,6 @@ LOCAL_API_IMPORTS = {
 #: ``(module, client function)`` for every caller of a proof-gated client.
 CLIENT_CALLERS = {
     ("cli/run.py", "run_on_desktop"),
-    ("cli/hub.py", "secret_transport.execute"),
-    ("secrets/hub_client.py", "secret_transport.execute"),
 }
 
 #: ``(file, function) -> route`` in the frontend.
@@ -185,13 +182,6 @@ def test_every_caller_of_a_proof_gated_client_is_classified():
                 a.name == "run_on_desktop" for a in node.names
             ):
                 found.add((module, "run_on_desktop"))
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr == "execute"
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "secret_transport"
-            ):
-                found.add((module, "secret_transport.execute"))
     assert found == CLIENT_CALLERS
 
 

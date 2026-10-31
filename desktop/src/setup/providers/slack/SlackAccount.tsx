@@ -2,7 +2,6 @@ import { PasswordInput, SegmentedControl, Stack, TextInput } from "@mantine/core
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
-import { SecretStatusHint } from "../../../sync/SecretStatusHint";
 import { RequiredLabel } from "../../formParts";
 import { MASKED_SECRET_PLACEHOLDER } from "../../secretInput";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
@@ -92,12 +91,7 @@ function AccountPanel({
     );
   }
   const listens = context.chatChannels.length > 0;
-  const tokenField = (
-    token: "botToken" | "appToken",
-    label: string,
-    placeholder: string,
-    secret: string,
-  ) => {
+  const tokenField = (token: "botToken" | "appToken", label: string, placeholder: string) => {
     const required = listens && !form.stored[token];
     return (
       <PasswordInput
@@ -108,7 +102,6 @@ function AccountPanel({
         value={form[token]}
         onChange={(event) => set({ [token]: event.currentTarget.value })}
         error={fieldErrors[token]}
-        description={<SecretStatusHint envKey={context.secretEnvKeys[secret]} scope="identities" />}
       />
     );
   };
@@ -134,13 +127,11 @@ function AccountPanel({
         "botToken",
         t("setup.members.slackBotToken"),
         t("setup.members.slackBotTokenPlaceholder"),
-        "SLACK_BOT_TOKEN",
       )}
       {tokenField(
         "appToken",
         t("setup.members.slackAppToken"),
         t("setup.members.slackAppTokenPlaceholder"),
-        "SLACK_APP_TOKEN",
       )}
       <SlackTokenVerificationPanel
         botToken={form.botToken}

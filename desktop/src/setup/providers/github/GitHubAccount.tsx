@@ -15,7 +15,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiRequestError } from "../../../api/client";
-import { SecretStatusHint } from "../../../sync/SecretStatusHint";
 import { RequiredLabel } from "../../formParts";
 import { MASKED_SECRET_PLACEHOLDER } from "../../secretInput";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
@@ -404,12 +403,6 @@ function AccountPanel({
           value={form.accessToken}
           onChange={(event) => set({ accessToken: event.currentTarget.value })}
           error={fieldErrors.accessToken}
-          description={
-            <SecretStatusHint
-              envKey={context.secretEnvKeys.GITHUB_ACCESS_TOKEN}
-              scope="identities"
-            />
-          }
         />
       ) : null}
       {form.accountType === "human" ? (

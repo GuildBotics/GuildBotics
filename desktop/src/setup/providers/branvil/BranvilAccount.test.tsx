@@ -77,7 +77,6 @@ const memberContext = (human: boolean): MemberContext => ({
   memberKey: "my-bot",
   gitEmail: "",
   setGitEmail: () => undefined,
-  secretEnvKeys: {},
   chatChannels: [],
   chatChannelsField: null,
   services: SERVICES,

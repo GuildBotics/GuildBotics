@@ -18,10 +18,8 @@ en:
     required: "This command acts on the %{kind} workflow run that invoked it and is available only inside one."
     required_any: "This command acts on the workflow or command run that invoked it and is available only inside one."
     chat_event: "This command acts on a run other than a chat event's; a chat event's run is completed with guildbotics member chat complete."
-  sync:
-    invalid_identity: "Workspace synchronization did not start because %{path} is invalid. No command changes were made; repair the file and run the command again."
   chat_updates:
-    catching_up: "Received messages are waiting to be saved while workspace synchronization holds the write lock. Wait briefly and retry chat updates; do not publish or complete as blocked solely for this state."
+    catching_up: "Received messages are waiting to be saved while another writer holds the workspace's write lock. Wait briefly and retry chat updates; do not publish or complete as blocked solely for this state."
     invalid_run: "The run has no chat input for this member."
     unavailable: "Chat reception is unavailable or its heartbeat has expired. Wait for reception to recover; do not publish."
     not_checked: "Chat updates have not been checked for this input."

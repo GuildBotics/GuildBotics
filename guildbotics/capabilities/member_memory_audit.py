@@ -11,20 +11,18 @@ from guildbotics.utils.correlation import correlation_fields
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.timestamps import parse_iso_datetime
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     append_shared_text,
     write_shared_text,
 )
+from guildbotics.utils.timestamps import parse_iso_datetime
 from guildbotics.workspace.identity import ensure_device_identity
-from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
 MEMORY_AUDIT_DIR = "memory_events"
 MEMORY_AUDIT_SUFFIX = ".jsonl"
-# The audit journal is shared between devices, so its self-imposed bound is the
-# same one the commit boundary enforces for append journals.
-DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES
+# The audit journal trims itself to stay below this bound.
+DEFAULT_MEMORY_AUDIT_MAX_BYTES = 8 * 1024 * 1024
 _MEMORY_AUDIT_LOCK = threading.Lock()
 
 
@@ -118,12 +116,9 @@ def append_memory_event(
 class MemoryAuditStore:
     """The memory audit journal: one file per device, read as one log.
 
-    Every device and member writes memory events, including reads such as
-    ``recall``. A single file written by all of them changes on both sides of
-    nearly every reconnection, and synchronization sets the later side's commit
-    aside although nothing in it contradicts the other. Each device therefore
-    appends to, and trims, only its own file, and reading merges every
-    device's file so the log still reads as one.
+    Every member writes memory events, including reads such as ``recall``.
+    Each device appends to, and trims, only its own file, and reading merges
+    every device's file so the log still reads as one.
     """
 
     def __init__(
@@ -169,9 +164,9 @@ class MemoryAuditStore:
 
         Whether the journal has room decides whether this appends or rewrites
         it from the end, so the answer has to come from the same span as the
-        write: read outside it, the size belongs to a file the queue replaces
-        a moment later with a hub's longer version, and the trim that was not
-        thought necessary never happens. The span is declared here rather than
+        write: read outside it, the size belongs to a file another writer
+        grows a moment later, and the trim that was not thought necessary
+        never happens. The span is declared here rather than
         expressed with ``update_shared_text`` because that would read and
         rewrite the whole journal -- megabytes of it -- for every event, where
         all but the trimming one need only the file's size and an append.

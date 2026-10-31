@@ -10,7 +10,7 @@ export const branvil = {
         },
         baseUrl: "Base URL",
         baseUrlHint:
-          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, set up the SSH forwarding service with scripts/hub-forward.sh (macOS/Linux) or scripts/hub-forward.ps1 (Windows). The connection is the same in every workspace.",
+          "Where Branvil is reached from this machine, such as http://127.0.0.1:7878 for a Branvil running on it. The connection is the same in every workspace.",
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         workspace: "Workspace",
         workspaceHint:
@@ -26,7 +26,7 @@ export const branvil = {
           connected: "Connected to Branvil as its owner {{owner}}.",
           open: "Open Branvil",
           pending: "Answer Branvil's consent screen in the browser…",
-          hint: "Branvil asks its owner once, in the browser of the machine where Branvil runs, to let GuildBotics manage it. Other machines receive the connection from the Hub.",
+          hint: "Branvil asks its owner once, in the browser of the machine where Branvil runs, to let GuildBotics manage it.",
         },
         git: {
           title: "Your own git on this machine",
@@ -73,7 +73,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil is not reachable",
           description:
-            "Branvil did not answer at {{target}}. On a machine other than the Hub, check the SSH forwarding service with scripts/hub-forward.sh status (macOS/Linux) or powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status (Windows).",
+            "Branvil did not answer at {{target}}. Check that Branvil is running and that the Base URL in Settings → Integrations → Branvil is where it listens.",
         },
         branvil_access: {
           title: "Branvil refused the member's token",
@@ -104,7 +104,7 @@ export const branvil = {
         },
         baseUrl: "ベース URL",
         baseUrlHint:
-          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは scripts/hub-forward.sh（macOS/Linux）か scripts/hub-forward.ps1（Windows）で SSH 転送サービスを設定します。接続はすべてのワークスペースで共通です。",
+          "このマシンから Branvil に届く URL です。このマシンで動く Branvil なら http://127.0.0.1:7878 のようになります。接続はすべてのワークスペースで共通です。",
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         workspace: "ワークスペース",
         workspaceHint:
@@ -120,7 +120,7 @@ export const branvil = {
           connected: "Branvil にオーナー {{owner}} として接続しています。",
           open: "Branvil を開く",
           pending: "ブラウザで Branvil の同意画面に答えてください…",
-          hint: "Branvil は、Branvil が動いているマシンのブラウザで一度だけ、GuildBotics に管理を許可するかをオーナーに尋ねます。ほかのマシンには Hub から接続が届きます。",
+          hint: "Branvil は、Branvil が動いているマシンのブラウザで一度だけ、GuildBotics に管理を許可するかをオーナーに尋ねます。",
         },
         git: {
           title: "このマシンのあなたの git",
@@ -167,7 +167,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil に届きません",
           description:
-            "{{target}} の Branvil が応答しませんでした。Hub 以外のマシンでは、scripts/hub-forward.sh status（macOS/Linux）または powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status（Windows）で SSH 転送サービスを確認してください。",
+            "{{target}} の Branvil が応答しませんでした。Branvil が動いていることと、設定 → 連携 → Branvil のベース URL がその待ち受け先であることを確認してください。",
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",

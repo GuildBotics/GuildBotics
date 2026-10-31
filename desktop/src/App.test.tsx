@@ -36,11 +36,8 @@ import {
   getConfigStatus,
   getProjectConfig,
   getSystemAlerts,
-  getWorkspaceDevices,
   subscribeEvents,
-  getWorkspaceServiceOwner,
   runScenarioDiagnostics,
-  startScheduler,
   verify,
 } from "./api/client";
 import type { RuntimeEvent, RuntimeUnitStatus } from "./api/client";
@@ -82,16 +79,6 @@ vi.mock("./api/client", async (importOriginal) => {
     startScheduler: vi.fn(async () => ({
       scheduler: runtimeUnit("scheduler"),
       events: runtimeUnit("events"),
-    })),
-    getWorkspaceServiceOwner: vi.fn(async () => ({
-      workspace_id: "ws-1",
-      owner_device_id: null,
-      updated_at: null,
-      is_self: false,
-    })),
-    getWorkspaceDevices: vi.fn(async () => ({
-      devices: [],
-      device_id: "device-self",
     })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
@@ -244,54 +231,6 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Service Runtime" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Service/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
-  });
-
-  it("disables the run button with the owner reason when another machine owns the service", async () => {
-    vi.mocked(getWorkspaceServiceOwner).mockResolvedValueOnce({
-      workspace_id: "ws-1",
-      owner_device_id: "device-other",
-      updated_at: "2026-08-25T00:00:00Z",
-      is_self: false,
-    });
-    vi.mocked(getWorkspaceDevices).mockResolvedValueOnce({
-      devices: [
-        {
-          device_id: "device-other",
-          display_name: "Mac mini",
-          os: "macOS",
-          joined_at: "2026-08-01T00:00:00Z",
-          status: "active",
-          ssh_public_key_fingerprint: "SHA256:abc",
-          is_self: false,
-        },
-      ],
-      device_id: "device-self",
-    });
-    window.location.hash = "#/service";
-    renderApp();
-
-    const run = await screen.findByRole("button", { name: "Run" });
-    await waitFor(() => expect(run).toHaveAttribute("data-disabled", "true"));
-    fireEvent.click(run);
-    expect(startScheduler).not.toHaveBeenCalled();
-    fireEvent.mouseEnter(run);
-    expect(
-      await screen.findByText(
-        t()("service.ownerElsewhere", { name: "Mac mini", machine: "studio" }),
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the run button enabled when the service owner cannot be read", async () => {
-    vi.mocked(getWorkspaceServiceOwner).mockRejectedValueOnce(new Error("hub unreachable"));
-    window.location.hash = "#/service";
-    renderApp();
-
-    const run = await screen.findByRole("button", { name: "Run" });
-    await waitFor(() => expect(getWorkspaceServiceOwner).toHaveBeenCalled());
-    expect(run).not.toHaveAttribute("data-disabled");
-    fireEvent.click(run);
-    await waitFor(() => expect(startScheduler).toHaveBeenCalled());
   });
 
   it("hides activity navigation before initial setup", async () => {

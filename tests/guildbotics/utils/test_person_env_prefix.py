@@ -170,7 +170,7 @@ def forbid_store(monkeypatch):
     def unexpected(*_args, **_kwargs):
         pytest.fail("ambiguous namespace touched the secret store")
 
-    for operation in ("get", "set", "rename", "delete", "keys"):
+    for operation in ("get", "set", "delete", "keys"):
         monkeypatch.setattr(KeyringSecretStore, operation, unexpected)
 
 
@@ -264,7 +264,6 @@ def test_repair_preserves_ambiguous_secrets_without_access(
         service = SimplePersonSetupService()
         if action == "snapshot":
             snapshot = service.read_person_config(config_dir=config, person_id=names[0])
-            assert snapshot.secret_env_keys == {}
             assert set(snapshot.accounts) == {
                 p.name for p in PROVIDERS.values() if p.setup and p.setup.member
             }

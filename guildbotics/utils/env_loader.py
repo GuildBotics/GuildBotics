@@ -63,8 +63,8 @@ def read_workspace_secrets(
         stores.append(KeyringSecretStore(get_workspace_config_dir()))
     values: dict[str, str] = {}
     ambiguous = ambiguous_person_secret()
-    try:
-        for store in stores:
+    for store in stores:
+        try:
             stored_keys = store.keys()
             # Register provenance before the skip decision and before any
             # fetch: a stored key stays classified as secret even when its
@@ -86,12 +86,13 @@ def read_workspace_secrets(
                 value = store.get(key)
                 if value is not None:
                     values[key] = value
-    except SecretStoreError as exc:
-        get_logger().warning(
-            "OS secret store is unavailable; relying on process environment "
-            "variables for the remaining secrets: %s",
-            exc,
-        )
+        except SecretStoreError as exc:
+            get_logger().warning(
+                "The secrets of %s could not be read; relying on process "
+                "environment variables for them: %s",
+                store.location,
+                exc,
+            )
     return values
 
 

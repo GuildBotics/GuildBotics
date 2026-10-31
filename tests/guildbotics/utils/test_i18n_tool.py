@@ -69,16 +69,13 @@ def test_sets_fallback_to_english() -> None:
 
 
 @pytest.mark.parametrize("locale", ["en", "ja"])
-def test_branvil_unreachable_explains_forwarding_status(locale: str) -> None:
+def test_branvil_unreachable_names_the_address(locale: str) -> None:
     i18n_tool = _load_i18n_tool()
     i18n_tool.set_language(locale)
     message = i18n_tool.t(
         "integrations.branvil.api.unreachable", base_url="http://127.0.0.1:7878"
     )
     assert "http://127.0.0.1:7878" in message
-    assert "scripts/hub-forward.sh status" in message
-    assert "scripts\\hub-forward.ps1 -Action status" in message
-    assert "-ExecutionPolicy Bypass" in message
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

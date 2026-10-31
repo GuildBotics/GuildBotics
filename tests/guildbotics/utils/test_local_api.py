@@ -16,8 +16,6 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.cli.desktop_commands import run_on_desktop
-from guildbotics.hub import host, secret_service, secret_transport
-from guildbotics.secrets.hub_client import LocalHubSecretClient, SecretOffer
 from guildbotics.utils import local_api
 from guildbotics.utils.local_api import (
     API_PREFIX,
@@ -170,16 +168,6 @@ def test_the_cli_runs_locally_instead_of_delegating_to_an_impostor(
     impostor, machine_state
 ):
     assert run_on_desktop(machine_state, "ask", (), None, "work", machine_state) is None
-    _assert_only_a_nonce_was_sent(impostor)
-
-
-def test_hub_secrets_are_not_handed_to_an_impostor(impostor, monkeypatch):
-    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
-    host.create_hub()
-    host.create_workspace_repository(WORKSPACE_ID)
-    offer = SecretOffer("A_TOKEN", 1, SECRET.decode())
-    result = LocalHubSecretClient(WORKSPACE_ID).send([offer])
-    assert result[0].status == secret_service.DESKTOP_REQUIRED
     _assert_only_a_nonce_was_sent(impostor)
 
 

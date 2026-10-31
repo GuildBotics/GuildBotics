@@ -5,7 +5,7 @@ import io
 import json
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 import click
-from pydantic import ValidationError
 
 from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.chat_updates import (
@@ -91,25 +90,11 @@ from guildbotics.runtime.resources import (
     ReviewVerdict,
 )
 from guildbotics.runtime.ticket_service import CreateLane
-from guildbotics.sync.activation import (
-    ONE_SHOT_LOCK_TIMEOUT_SECONDS,
-    PreparedOneShotSync,
-    prepare_commit_and_push_once,
-)
 from guildbotics.utils.correlation import join_trace, trace_scope
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
-from guildbotics.utils.sync_lock import SyncRepositoryBusyError
-from guildbotics.workspace.identity import (
-    DeviceIdentity,
-    WorkspaceIdentity,
-    device_identity_path,
-    read_device_identity,
-    read_workspace_identity,
-    workspace_identity_path,
-)
 
 WorkspaceMode = Literal["member", "current"]
 #: What a member command's callback returns: the work the command runs.
@@ -2163,15 +2148,11 @@ def _run(coro: _CommandWork, *, output_format: str) -> Any:
 
 
 async def _run_async(coro: _CommandWork) -> Any:
-    prepared_sync = None
     started = False
     try:
         interactive_session = _interactive_session_for_current_command()
         command = _current_command_path()
-        needs_sync = _member_command_writes()
         _validate_member_delegation()
-        if needs_sync:
-            prepared_sync = _prepare_member_sync()
         started = True
         if interactive_session is None:
             result = await _run_in_owner_trace(coro, command)
@@ -2184,7 +2165,6 @@ async def _run_async(coro: _CommandWork) -> Any:
         ChatUpdatesRequired,
         TaskRunError,
         KeyError,
-        SyncRepositoryBusyError,
     ) as exc:
         if not started:
             coro.close()
@@ -2193,8 +2173,6 @@ async def _run_async(coro: _CommandWork) -> Any:
         if not started:
             coro.close()
         raise
-    if needs_sync:
-        result = _sync_member_result(result, prepared_sync)
     return result
 
 
@@ -2309,10 +2287,6 @@ def run_client_git(
                                 work.close()
 
                     try:
-                        if phase == "identity":
-                            with _identity_validation():
-                                read_workspace_identity()
-                                read_device_identity()
                         return await _git_service(context, person).client_git(
                             phase,
                             data,
@@ -2340,7 +2314,6 @@ def run_client_git(
         ChatUpdatesRequired,
         TaskRunError,
         KeyError,
-        SyncRepositoryBusyError,
     ) as exc:
         click.ClickException(str(exc) or type(exc).__name__).show(stderr)
         code = 1
@@ -2348,47 +2321,6 @@ def run_client_git(
         stderr.write(traceback.format_exc())
         code = 1
     return code, stdout.getvalue(), stderr.getvalue()
-
-
-def _prepare_member_sync() -> PreparedOneShotSync | None:
-    """Prepare one-shot sync and turn identity damage into an actionable error."""
-    with _identity_validation():
-        return prepare_commit_and_push_once()
-
-
-@contextmanager
-def _identity_validation():
-    """Present invalid sync identity records consistently, before local writes."""
-    try:
-        yield
-    except ValidationError as exc:
-        identity_paths = {
-            WorkspaceIdentity.__name__: workspace_identity_path(),
-            DeviceIdentity.__name__: device_identity_path(),
-        }
-        path = identity_paths.get(exc.title)
-        if path is None:
-            raise
-        raise click.ClickException(
-            t("cli.member.sync.invalid_identity", path=path)
-        ) from exc
-
-
-def _sync_member_result(
-    result: dict[str, Any], prepared_sync: PreparedOneShotSync | None
-) -> dict[str, Any]:
-    """Make one best-effort sync and expose a local lock timeout in output."""
-    if prepared_sync is None:
-        return result
-    try:
-        status = prepared_sync.commit_and_push_once(
-            timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS
-        )
-    except SyncRepositoryBusyError:
-        return {**result, "sync": "pending"}
-    if status.failure is not None:
-        return {**result, "sync": "pending"}
-    return result
 
 
 def _validate_member_delegation() -> None:
@@ -2422,9 +2354,9 @@ async def _run_interactive(
 ) -> dict[str, Any]:
     """Run one member command inside its interactive session.
 
-    The command's start and end are local diagnostics; what the session did
-    is one shared record, rewritten when the command ends, so other devices
-    read the session from that record instead of from its command events.
+    The command's start and end are diagnostics; what the session did is one
+    record, rewritten when the command ends, so the activity history reads the
+    session from that record instead of from its command events.
     """
     store = InteractiveTraceStore()
     recorded: dict[str, Any] = {}

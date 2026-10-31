@@ -5,11 +5,9 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from guildbotics.capabilities.task_runs import RunStore, trace_stamp
-from guildbotics.drivers.live_state import LivePresentation, LiveStatePort
-from guildbotics.drivers.trace_presentations import normalize_trace_presentation
 from guildbotics.entities.task_run import (
     TaskRunExecutionMode,
     TaskRunRecord,
@@ -21,9 +19,7 @@ from guildbotics.runtime.person_lease import (
 )
 from guildbotics.runtime.port import ServiceUnavailable
 from guildbotics.utils.correlation import new_id
-from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.workspace_sync_port import ChangeSet, await_shared_change
 
 WorkSource = Literal["manual", "scheduled", "routine", "event_queue"]
 
@@ -43,9 +39,6 @@ WorkRejectionReason = Literal[
     "draining",
     "lease_unavailable",
     "duplicate",
-    "sync_unavailable",
-    "owner_unreachable",
-    "not_owner",
 ]
 
 
@@ -62,16 +55,6 @@ class WorkRejectedError(RuntimeError):
         super().__init__(message)
         self.reason = reason
         self.holder = holder
-
-
-class TaskRunSyncUnavailableError(RuntimeError):
-    """Raised when a terminal TaskRun cannot be confirmed at the Hub."""
-
-    def __init__(self, record: TaskRunRecord) -> None:
-        super().__init__(
-            f"TaskRun '{record.run_id}' was saved locally but was not shared."
-        )
-        self.record = record
 
 
 @dataclass(frozen=True)
@@ -93,9 +76,6 @@ BeginReason = Literal[
     "started",
     "already_running",
     "already_finished",
-    "owner_unreachable",
-    "not_owner",
-    "sync_unavailable",
 ]
 
 
@@ -132,7 +112,6 @@ class ExecutionCoordinator:
         cancel: Callable[[], None] | None = None,
         exclusive: bool = True,
         work_identity: str | Mapping[str, object] | None = None,
-        owner_device_id: str | None = None,
         record_start: bool = True,
     ) -> Iterator[ActiveWork]:
         """Track one unit of member work for the lifetime of the context.
@@ -149,7 +128,6 @@ class ExecutionCoordinator:
                 still drained and cancelled like any other tracked work.
             work_identity: The stable input identity a task-run boundary
                 claims; this coordinator records nothing and ignores it.
-            owner_device_id: The device claiming that identity; ignored here.
             record_start: Whether a task-run boundary records the run's start
                 itself; ignored here.
 
@@ -232,150 +210,13 @@ class ExecutionCoordinator:
             return drained
 
 
-class ExecutionStatusPublisher:
-    """Publish the common execution lifecycle to live state and TaskRunRecord."""
-
-    def __init__(
-        self,
-        live_state: LiveStatePort | None = None,
-        owner_check: Callable[[], bool | None] | None = None,
-    ) -> None:
-        self._live_state = live_state
-        self._owner_check = owner_check
-
-    def set_live_state(self, live_state: LiveStatePort | None) -> None:
-        """Attach or detach the process-wide relay adapter."""
-        self._live_state = live_state
-
-    def set_owner_check(self, owner_check: Callable[[], bool | None] | None) -> None:
-        """Attach the owner probe used for service-derived live updates."""
-        self._owner_check = owner_check
-
-    def started(
-        self,
-        work: ActiveWork,
-        *,
-        record: bool = True,
-        service_work: bool = False,
-    ) -> None:
-        if self._live_state is not None and self._live_allowed(service_work):
-            with suppress(Exception):
-                self._live_state.started(
-                    work.id,
-                    work.id,
-                    work.person_id,
-                    work.command,
-                )
-        if record:
-            source, attributes = trace_stamp(work.id, work.source)
-            with suppress(Exception):
-                RunStore().start_record(
-                    work.id,
-                    work_kind=work.command,
-                    execution_mode=(
-                        "user_initiated" if work.source == "manual" else "autonomous"
-                    ),
-                    member_id=work.person_id,
-                    work_identity={"source": work.source, "command": work.command},
-                    source=source,
-                    attributes=attributes,
-                )
-
-    def progressed(
-        self,
-        work_id: str,
-        presentation: Mapping[str, object] | LivePresentation,
-        *,
-        service_work: bool = False,
-    ) -> None:
-        if self._live_state is None or not self._live_allowed(service_work):
-            return
-        with suppress(Exception):
-            self._live_state.progressed(work_id, presentation)
-
-    def diagnostics_recorded(
-        self,
-        work_id: str,
-        item: Mapping[str, Any],
-        *,
-        service_work: bool = False,
-    ) -> None:
-        """Publish the same presentation the local trace will display."""
-        if str(item.get("trace_id") or "") != work_id:
-            return
-        raw = {str(key): value for key, value in item.items()}
-        self.progressed(
-            work_id,
-            normalize_trace_presentation(raw),
-            service_work=service_work,
-        )
-
-    def finished(
-        self,
-        work: ActiveWork,
-        status: str,
-        *,
-        record: bool = True,
-        service_work: bool = False,
-    ) -> None:
-        if self._live_state is not None and self._live_allowed(service_work):
-            with suppress(Exception):
-                self._live_state.finished(work.id)
-        if record:
-            _source, attributes = trace_stamp(work.id)
-            with suppress(Exception):
-                RunStore().finish_record(
-                    work.id,
-                    status=status,
-                    safe_summary=(
-                        "Execution completed."
-                        if status == "succeeded"
-                        else "Execution deferred."
-                        if status == "deferred"
-                        else "Execution failed."
-                    ),
-                    attributes=attributes,
-                )
-
-    def _live_allowed(self, service_work: bool) -> bool:
-        if not service_work or self._owner_check is None:
-            return True
-        try:
-            return self._owner_check() is not False
-        except Exception:
-            return True
-
-
 class TaskRunCoordinator(ExecutionCoordinator):
     """Shared execution entry for scheduler, event listener, and manual work."""
-
-    def __init__(
-        self,
-        status_publisher: ExecutionStatusPublisher | None = None,
-        *,
-        owner_check: Callable[[], bool | None] | None = None,
-    ) -> None:
-        super().__init__()
-        self._status_publisher = status_publisher or ExecutionStatusPublisher()
-        self._owner_check = owner_check
-        self._finish_lock = threading.Lock()
-        self._pending_finishes: dict[str, ChangeSet] = {}
-        self._status_publisher.set_owner_check(owner_check)
-
-    def set_owner_check(self, owner_check: Callable[[], bool | None] | None) -> None:
-        """Attach the service-owner probe used by autonomous work."""
-        self._owner_check = owner_check
-        self._status_publisher.set_owner_check(owner_check)
-
-    def service_owner_state(self) -> bool | None:
-        """Return owner authority without collapsing an outage into a stop."""
-        return self._owner_state()
 
     def begin(
         self,
         work_identity: str | Mapping[str, object],
         member_id: str,
-        owner_device_id: str,
         *,
         work_kind: str = "workflow",
         execution_mode: TaskRunExecutionMode = "autonomous",
@@ -386,38 +227,28 @@ class TaskRunCoordinator(ExecutionCoordinator):
         """Atomically accept a new work identity and publish its start.
 
         The member/identity scan and record creation share the workspace write
-        lock, so two devices cannot both accept the same event or schedule slot
-        for one member. The exact write's sync notification is then awaited
-        outside that local lock; a failed barrier never starts the caller's
-        workflow.
+        lock, so two workers cannot both accept the same event or schedule slot
+        for one member.
 
         With ``record_start`` false the identity is only claimed: the caller
-        records the run's start itself, with the same barrier, once it has
-        decided to act on the input, so an input it declines leaves no record.
+        records the run's start itself once it has decided to act on the
+        input, so an input it declines leaves no record.
         The scan still rejects an identity another run holds.
 
         A run holds an identity while it is running, and keeps holding it
         unless it ended proving that its work did not happen. A run that
-        raised, was cancelled, or lost its owner device left the work undone,
+        raised or was cancelled left the work undone,
         so the caller's retry is accepted and re-opens that run rather than
         being reported as a duplicate of work that never happened. A
         ``result_unknown`` run keeps its identity: its outcome could not be
         observed, so it is never retried on its own.
         """
-        owner_state = self._owner_state()
-        if owner_state is False:
-            return BeginResult(False, None, "not_owner")
-        if owner_state is None:
-            return BeginResult(False, None, "owner_unreachable")
-
         identity = _work_identity(work_identity)
         store = RunStore(
             work_kind=work_kind,
             execution_mode=execution_mode,
             member_id=member_id,
-            device_id=owner_device_id,
         )
-        change: ChangeSet | None = None
         with shared_write_lock(store.workspace_root):
             existing = [
                 record
@@ -426,14 +257,6 @@ class TaskRunCoordinator(ExecutionCoordinator):
             ]
             if existing:
                 record = max(existing, key=lambda item: item.started_at)
-                if record.finished_at:
-                    with self._finish_lock:
-                        pending_finish = self._pending_finishes.get(record.run_id)
-                    if pending_finish is not None:
-                        if not await_shared_change(pending_finish):
-                            return BeginResult(False, record, "sync_unavailable")
-                        with self._finish_lock:
-                            self._pending_finishes.pop(record.run_id, None)
                 reason: BeginReason = (
                     "already_running"
                     if record.status == "running"
@@ -444,7 +267,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
                 return BeginResult(True, None, "started")
             accepted_run_id = run_id or new_id()
             _source, attributes = trace_stamp(accepted_run_id, source)
-            record, change = store.start_record_with_change(
+            record = store.start_record(
                 accepted_run_id,
                 work_kind=work_kind,
                 execution_mode=execution_mode,
@@ -453,14 +276,12 @@ class TaskRunCoordinator(ExecutionCoordinator):
                 source=_source,
                 attributes=attributes,
             )
-        if not await_shared_change(change):
-            return BeginResult(False, record, "sync_unavailable")
         return BeginResult(True, record, "started")
 
     def finish(
         self, run_id: str, terminal_status: str, safe_summary: str = ""
     ) -> TaskRunRecord | None:
-        """Persist a terminal state and wait for its sync notification.
+        """Persist a terminal state.
 
         Returns:
             The finished record, or None when the run never recorded a start
@@ -468,60 +289,12 @@ class TaskRunCoordinator(ExecutionCoordinator):
         """
         store = RunStore()
         _source, attributes = trace_stamp(run_id)
-        record, change = store.finish_record_with_change(
+        return store.finish_record(
             run_id,
             status=terminal_status,
             safe_summary=safe_summary,
             attributes=attributes,
         )
-        if record is None:
-            return None
-        if change is not None and not await_shared_change(change):
-            with self._finish_lock:
-                self._pending_finishes[run_id] = change
-            raise TaskRunSyncUnavailableError(record)
-        with self._finish_lock:
-            self._pending_finishes.pop(run_id, None)
-        return record
-
-    def mark_interrupted(self, previous_owner_device_id: str) -> list[TaskRunRecord]:
-        """Mark the previous owner's running workflows before taking over."""
-        store = RunStore()
-        changes: list[ChangeSet] = []
-        interrupted: list[TaskRunRecord] = []
-        with shared_write_lock(store.workspace_root):
-            for record in store.records():
-                if (
-                    record.device_id != previous_owner_device_id
-                    or record.status != "running"
-                ):
-                    continue
-                updated, change = store.finish_record_with_change(
-                    record.run_id,
-                    status="interrupted",
-                    safe_summary="The previous service owner stopped before completion.",
-                )
-                if updated is None:
-                    continue
-                interrupted.append(updated)
-                if change is not None:
-                    changes.append(change)
-        for change in changes:
-            if not await_shared_change(change):
-                raise TaskRunSyncUnavailableError(interrupted[-1])
-        return interrupted
-
-    def _owner_state(self) -> bool | None:
-        if self._owner_check is None:
-            return True
-        try:
-            return self._owner_check()
-        except Exception:
-            return None
-
-    def set_live_state(self, live_state: LiveStatePort | None) -> None:
-        """Update the relay adapter without replacing the execution boundary."""
-        self._status_publisher.set_live_state(live_state)
 
     @contextmanager
     def track_work(
@@ -534,7 +307,6 @@ class TaskRunCoordinator(ExecutionCoordinator):
         cancel: Callable[[], None] | None = None,
         exclusive: bool = True,
         work_identity: str | Mapping[str, object] | None = None,
-        owner_device_id: str | None = None,
         record_start: bool = True,
     ) -> Iterator[ActiveWork]:
         """Track autonomous work through the task-run boundary.
@@ -560,77 +332,66 @@ class TaskRunCoordinator(ExecutionCoordinator):
                 accepted = self.begin(
                     work_identity or {"work_id": work.id},
                     work.person_id,
-                    owner_device_id or RunStore().device_id,
                     work_kind=work.command,
                     run_id=work.id,
                     source=work.source,
                     record_start=record_start,
                 )
                 if not accepted.accepted:
-                    if accepted.reason in {"already_running", "already_finished"}:
-                        reason: WorkRejectionReason = "duplicate"
-                    elif accepted.reason == "sync_unavailable":
-                        reason = "sync_unavailable"
-                    elif accepted.reason == "owner_unreachable":
-                        reason = "owner_unreachable"
-                    else:
-                        reason = "not_owner"
                     raise WorkRejectedError(
                         f"Autonomous work was not accepted: {accepted.reason}.",
-                        reason=reason,
+                        reason="duplicate",
                         holder=accepted.record,
                     )
-            if autonomous and self._owner_state() is False:
-                with suppress(Exception):
-                    self.finish(
-                        work.id,
-                        "interrupted",
-                        "The service owner changed before execution started.",
-                    )
-                raise WorkRejectedError(
-                    "The service owner changed before execution started.",
-                    reason="not_owner",
-                )
-            self._status_publisher.started(
-                work,
-                record=not autonomous,
-                service_work=autonomous,
-            )
+            else:
+                _start_manual_record(work)
             try:
-                with diagnostics_record_scope(
-                    lambda item: self._status_publisher.diagnostics_recorded(
-                        work.id, item, service_work=autonomous
-                    )
-                ):
-                    yield work
+                yield work
             except BaseException as exc:
                 status = failure_status(exc, work.source)
                 if autonomous:
-                    try:
-                        self.finish(
-                            work.id,
-                            status,
-                            "Waiting for an unavailable service."
-                            if status == "deferred"
-                            else "Execution was cancelled or failed.",
-                        )
-                    finally:
-                        self._status_publisher.finished(
-                            work, status, record=False, service_work=True
-                        )
+                    self.finish(
+                        work.id,
+                        status,
+                        "Waiting for an unavailable service."
+                        if status == "deferred"
+                        else "Execution was cancelled or failed.",
+                    )
                 else:
-                    self._status_publisher.finished(work, status)
+                    _finish_manual_record(work, status)
                 raise
             else:
                 if autonomous:
-                    try:
-                        self.finish(work.id, "succeeded", "Execution completed.")
-                    finally:
-                        self._status_publisher.finished(
-                            work, "succeeded", record=False, service_work=True
-                        )
+                    self.finish(work.id, "succeeded", "Execution completed.")
                 else:
-                    self._status_publisher.finished(work, "succeeded")
+                    _finish_manual_record(work, "succeeded")
+
+
+def _start_manual_record(work: ActiveWork) -> None:
+    source, attributes = trace_stamp(work.id, work.source)
+    with suppress(Exception):
+        RunStore().start_record(
+            work.id,
+            work_kind=work.command,
+            execution_mode="user_initiated",
+            member_id=work.person_id,
+            work_identity={"source": work.source, "command": work.command},
+            source=source,
+            attributes=attributes,
+        )
+
+
+def _finish_manual_record(work: ActiveWork, status: str) -> None:
+    _source, attributes = trace_stamp(work.id)
+    with suppress(Exception):
+        RunStore().finish_record(
+            work.id,
+            status=status,
+            safe_summary=(
+                "Execution completed." if status == "succeeded" else "Execution failed."
+            ),
+            attributes=attributes,
+        )
 
 
 def _work_identity(value: str | Mapping[str, object]) -> dict[str, str]:

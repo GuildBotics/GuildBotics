@@ -22,7 +22,7 @@ from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.runtime.chat_service import ChatEvent, ChatMessage, message_position
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     delete_shared_path,
     dump_shared_json,
@@ -35,19 +35,17 @@ class FileConversationStateStore(ConversationStateStore):
     """JSON file-backed state store for chat workflows.
 
     ``state/chat_state`` is shared, so every change here is a change another
-    device can be making at the same instant, and several of them read the file
-    they are about to write. The synchronization queue checks a hub's content
-    out over these same files, and a read taken before that checkout and
-    written back after it reinstates what the queue just adopted, as an
-    ordinary local edit that the next cycle commits and pushes -- so the other
-    device's change disappears without being recorded as a conflict. For chat
-    state that means answering a message twice, or not at all.
+    writer -- the listener, a member's workflow, a member command -- can be
+    making at the same instant, and several of them read the file they are
+    about to write. A read taken before another write and written back after
+    it reinstates what that write replaced, so the other change disappears
+    without being recorded as a conflict. For chat state that means answering
+    a message twice, or not at all.
 
     Those methods therefore rewrite through :meth:`_update_json`, which reads
-    and writes inside one span of the workspace's shared-write lock -- the same
-    lock the queue holds across its checkout and commit. A method that simply
-    stores state its caller composed needs none of this and writes directly,
-    under the span the port takes for it.
+    and writes inside one span of the workspace's shared-write lock. A method
+    that simply stores state its caller composed needs none of this and writes
+    directly, under the span the write helper takes for it.
 
     The in-process lock is for the thread message cache, which is device-local
     and so has no other writer for the workspace lock to exclude. It is taken
@@ -114,7 +112,7 @@ class FileConversationStateStore(ConversationStateStore):
         """Acknowledge input and remove it while holding the shared-write lock.
 
         This spans the channel cursor and pending queue so a concurrent receive
-        or sync checkout cannot interleave with removal. A crash between the
+        cannot interleave with removal. A crash between the
         writes is recovered from the completed run's saved batch membership.
         Removing the whole batch also handles batches larger than the bounded
         processed-ID history.
@@ -239,10 +237,10 @@ class FileConversationStateStore(ConversationStateStore):
             merged.sort(key=_position)
             self._write_json(path, {"messages": merged[-self._max_thread_messages :]})
         # The shared thread state is what makes the thread discoverable
-        # (list_thread_states, backfill, handoff to another device). Only its
-        # absence is filled in here, and "absent" has to be decided in the same
-        # span that writes: answered a moment before the queue adopts a hub's
-        # richer version of the same thread, this would replace it with a stub.
+        # (list_thread_states, backfill). Only its absence is filled in here,
+        # and "absent" has to be decided in the same span that writes: answered
+        # a moment before another writer records a richer version of the same
+        # thread, this would replace it with a stub.
         self._update_json(
             self._thread_file(service, person_id, channel_id, thread_id),
             lambda data: data or {"channel_id": channel_id, "thread_id": thread_id},

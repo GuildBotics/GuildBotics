@@ -9,7 +9,6 @@ from typing import Any
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
     TaskRunCoordinator,
-    TaskRunSyncUnavailableError,
     WorkRejectedError,
     WorkSource,
 )
@@ -29,7 +28,6 @@ from guildbotics.utils.correlation import trace_scope
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
-OWNER_RETRY_INTERVAL_SECONDS = 5.0
 
 
 class TaskScheduler:
@@ -191,20 +189,6 @@ class TaskScheduler:
         consecutive_errors = 0
         try:
             while not self._stop_event.is_set():
-                if isinstance(self._execution, TaskRunCoordinator):
-                    authority = self._execution.service_owner_state()
-                    if authority is False:
-                        self.context.logger.info(
-                            "Stopping scheduler because this device is no longer the service owner."
-                        )
-                        self._stop_event.set()
-                        break
-                    if authority is None:
-                        self.context.logger.info(
-                            "The Hub owner could not be checked; waiting before accepting service work."
-                        )
-                        self._sleep_interruptible(OWNER_RETRY_INTERVAL_SECONDS)
-                        continue
                 start_time = datetime.datetime.now()
                 context.logger.debug(
                     f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
@@ -578,31 +562,15 @@ class TaskScheduler:
             return self._run(loop, _tracked())
         except ServiceUnavailable:
             return None
-        except TaskRunSyncUnavailableError as exc:
-            self.context.logger.warning(
-                "Service work result is not shared yet: %s", exc
-            )
-            return True
         except WorkRejectedError as exc:
             if exc.reason == "draining":
                 # A stop of this scheduler is already in progress; mirror it
                 # locally so worker loops exit without counting a command error.
                 self._stop_event.set()
                 return False
-            if exc.reason in {"owner_unreachable", "sync_unavailable"}:
-                # A Hub outage or an unconfirmed start barrier blocks only this
-                # new work item. Keep the service alive so a later polling
-                # cycle can retry; an already running workflow is never
-                # cancelled for a connectivity failure.
-                return True
-            if exc.reason == "not_owner":
-                # A confirmed transfer is different from an outage: this
-                # device must stop accepting service work immediately.
-                self._stop_event.set()
-                return True
             if exc.reason == "duplicate":
-                # The same stable input already has a running or terminal run
-                # on another device. It was deliberately not executed twice.
+                # The same stable input already has a running or terminal run.
+                # It was deliberately not executed twice.
                 return True
             # Another frontend is temporarily using this person. Skipping is a
             # successful scheduler cycle: the next tick can try again and other

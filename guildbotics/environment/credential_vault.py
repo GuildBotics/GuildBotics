@@ -9,7 +9,7 @@ shape's. It is written whole or not at all.
 Nothing falls back to a plain file: a keychain that is locked or missing,
 a key that is gone, or a record that does not open stops the tool with the
 reason, and logging in again is the way back. The login is this device's
-own; it is not a workspace secret and never travels to another machine.
+own; it is not a workspace secret.
 """
 
 from __future__ import annotations

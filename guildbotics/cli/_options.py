@@ -32,10 +32,10 @@ class SharedWriteBusyGroup(click.Group):
     """A command group, with the one failure every command shares.
 
     Any command that changes a workspace's shared files can find another
-    writer -- the synchronization queue, or a second GuildBotics process --
-    holding the lock for longer than the wait. That is not a fault of the
-    command, and every command would otherwise need its own handler for a
-    condition none of them causes, so it is answered once here. The API layer
+    writer -- the backend, or a second GuildBotics process -- holding the lock
+    for longer than the wait. That is not a fault of the command, and every
+    command would otherwise need its own handler for a condition none of them
+    causes, so it is answered once here. The API layer
     answers the same condition once, in its own exception handler.
     """
 
@@ -51,8 +51,7 @@ class LazyGroup(SharedWriteBusyGroup):
 
     Every invocation starts a fresh process, and a subcommand's module brings
     in everything that subcommand needs. Importing all of them up front made
-    one ``member`` command pay for the service, the hub, and the agent
-    environment too, so each is named here and imported on first use.
+    one ``member`` command pay for the service and the agent environment too, so each is named here and imported on first use.
 
     Args:
         lazy_commands: Subcommand name to ``"<module>:<attribute>"``.

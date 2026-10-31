@@ -11,20 +11,16 @@ from guildbotics.utils.avatar import (
     find_avatar_file,
     get_member_avatar_dir,
 )
-from guildbotics.utils.workspace_sync_port import delete_shared_path, write_shared_bytes
-from guildbotics.workspace.validation import MAX_SHARED_AVATAR_BYTES
+from guildbotics.utils.shared_writes import delete_shared_path, write_shared_bytes
 
 logger = logging.getLogger("guildbotics.app_api.avatar")
 
 # Outbound avatar downloads must time out so a stalled remote endpoint cannot
 # hang the API worker indefinitely.
 AVATAR_DOWNLOAD_TIMEOUT = 15.0
-# An avatar is shared between the user's machines, so the size that matters is
-# the one synchronization will carry. Accepting anything larger here would store
-# an avatar the product displays but can never send: the sync boundary would
-# hold it back on every cycle, and nothing in the normal paths would fail to
-# tell the user why.
-MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES
+# Every path that stores an avatar -- an upload and a URL import -- is held to
+# this one bound.
+MAX_AVATAR_BYTES = 4_194_304
 
 __all__ = [
     "MAX_AVATAR_BYTES",
@@ -54,14 +50,14 @@ def clean_existing_avatars(member_dir: Path) -> None:
 
 
 def require_shareable_avatar(content: bytes) -> bytes:
-    """Return ``content`` if it is small enough to reach the other machines.
+    """Return ``content`` if it is within the avatar size limit.
 
     Both ways an avatar arrives -- uploaded, or fetched from a provider URL --
     go through here, because a check on only one of them still lets in an
-    avatar that can never be shared.
+    oversized avatar.
 
     Raises:
-        ValueError: When the image is above the shared size limit.
+        ValueError: When the image is above the size limit.
     """
     if len(content) > MAX_AVATAR_BYTES:
         raise ValueError(
@@ -74,8 +70,8 @@ def store_avatar(person_id: str, content: bytes, suffix: str) -> Path:
     """Replace the member's avatar with ``content``.
 
     Deleting the old file and writing the new one is one change to the shared
-    state: a synchronization cycle that ran between the two would commit the
-    member as having no avatar. Callers hold the identities' shared-write lock
+    state: a reader between the two would see the member as having no avatar.
+    Callers hold the identities' shared-write lock
     around this, and do their downloading outside it.
     """
     member_dir = get_member_avatar_dir(person_id)

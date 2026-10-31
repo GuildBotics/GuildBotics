@@ -1,23 +1,16 @@
 """A shared file is never written outside the workspace's shared-write lock.
 
-This used to be a list of writers, each classified as taking the lock or not
-needing it, and the classification was the thing that kept being wrong. Then it
-was a refusal: the port raised at anyone who wrote without declaring a span,
-and every writer of a shared path had to declare one -- which is the same list
-again, spelled as a ``with`` in front of thirty functions and an entry here for
-each.
+The write helpers take the lock themselves, so a writer that reads nothing has
+nothing to declare and nothing to be listed as. What is left to check is what
+the helpers cannot infer: that a value derived from a file's current contents
+was decided inside the same span that wrote it. ``update_shared_text`` makes
+that structural and is checked as such; the few operations whose span is wider
+than any single write still say so by hand, and those are named below.
 
-Now the port takes the lock itself, so a writer that reads nothing has nothing
-to declare and nothing to be listed as. What is left to check is what the port
-cannot infer: that a value derived from a file's current contents was decided
-inside the same span that wrote it. ``update_shared_text`` makes that structural
-and is checked as such; the few operations whose span is wider than any single
-write still say so by hand, and those are named below.
-
-For those, waiting is not the property. The port takes the lock for the write
-whichever way the caller declared its span, so an operation that read before
-taking one reads happily and then raises at the write -- the same exception a
-correct one would raise. The reads themselves are watched instead.
+For those, waiting is not the property. The helpers take the lock for the
+write whichever way the caller declared its span, so an operation that read
+before taking one reads happily and then raises at the write -- the same
+exception a correct one would raise. The reads themselves are watched instead.
 """
 
 from __future__ import annotations
@@ -32,6 +25,7 @@ import pytest
 
 import guildbotics.utils.fileio as fileio
 import guildbotics.utils.shared_write_lock as shared_write_lock_module
+import guildbotics.utils.shared_writes as shared_writes
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
@@ -44,15 +38,11 @@ from guildbotics.utils.shared_write_lock import (
     member_write_operation,
     shared_write_lock,
 )
-from guildbotics.utils.workspace_sync_port import (
-    ChangeSet,
+from guildbotics.utils.shared_writes import (
     append_shared_text,
     delete_shared_path,
-    notify_shared_state_changed,
-    set_workspace_sync_port,
     shared_relative_path,
     update_shared_json,
-    update_shared_json_with_change,
     update_shared_text,
     write_shared_bytes,
     write_shared_json,
@@ -65,9 +55,7 @@ from tests.guildbotics.workspace.test_config_repository import shared_write_lock
 def brief_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shorten the wait so a refusal is immediate rather than half a minute.
 
-    The production wait is generous because a first copy from a hub restores
-    thousands of files inside the lock. Nothing here is testing how long a
-    writer waits, only that it does.
+    Nothing here is testing how long a writer waits, only that it does.
     """
     monkeypatch.setattr(shared_write_lock_module, "LOCK_TIMEOUT_SECONDS", 0.05)
 
@@ -106,9 +94,9 @@ def held_elsewhere(workspace: Path) -> Iterator[None]:
         assert not holder.is_alive()
 
 
-#: Every way the port lets a caller change a shared path. Each one takes the
+#: Every way the helpers let a caller change a shared path. Each one takes the
 #: lock, which is what replaced the list of writers this file used to keep.
-PORT_WRITES: dict[str, Callable[[Path], object]] = {
+HELPER_WRITES: dict[str, Callable[[Path], object]] = {
     "append_shared_text": lambda shared: append_shared_text(
         shared / "state/journal.jsonl", "{}\n"
     ),
@@ -131,20 +119,6 @@ PORT_WRITES: dict[str, Callable[[Path], object]] = {
 }
 
 
-class _RecordingPort:
-    """A sync port that keeps what it was told, so announcements can be counted."""
-
-    def __init__(self, announced: list[ChangeSet]) -> None:
-        self._announced = announced
-
-    def shared_state_changed(self, change: ChangeSet) -> bool:
-        self._announced.append(change)
-        return True
-
-    def await_pushed(self, change_id: str) -> bool:
-        return False
-
-
 def _existing_shared_files(workspace: Path) -> Path:
     shared = workspace / ".guildbotics"
     (shared / "state").mkdir(parents=True, exist_ok=True)
@@ -153,8 +127,8 @@ def _existing_shared_files(workspace: Path) -> Path:
     return shared
 
 
-@pytest.mark.parametrize("helper", sorted(PORT_WRITES))
-def test_every_port_write_waits_for_the_other_writer(
+@pytest.mark.parametrize("helper", sorted(HELPER_WRITES))
+def test_every_helper_write_waits_for_the_other_writer(
     tmp_path: Path, helper: str
 ) -> None:
     """Checked on every entry, because one unguarded entry is the whole hole."""
@@ -162,33 +136,17 @@ def test_every_port_write_waits_for_the_other_writer(
 
     with held_elsewhere(tmp_path):
         with pytest.raises(SharedWriteBusyError):
-            PORT_WRITES[helper](shared)
+            HELPER_WRITES[helper](shared)
 
 
-@pytest.mark.parametrize("helper", sorted(PORT_WRITES))
+@pytest.mark.parametrize("helper", sorted(HELPER_WRITES))
 def test_the_same_change_succeeds_when_nobody_else_is_writing(
     tmp_path: Path, helper: str
 ) -> None:
     """The wait is about the other writer, not about the path or the payload."""
     shared = _existing_shared_files(tmp_path)
 
-    PORT_WRITES[helper](shared)
-
-
-def test_announcing_a_change_already_made_takes_no_lock(tmp_path: Path) -> None:
-    """Excluding the queue after the file changed protects nothing.
-
-    A writer that renames or unlinks a shared file itself holds the lock across
-    the change and this announcement together. Taking it here as well would
-    only make an announcement look like the protection it is not, and would
-    stall a writer already inside a wider span of its own.
-    """
-    shared = _existing_shared_files(tmp_path)
-
-    with held_elsewhere(tmp_path):
-        change = notify_shared_state_changed("update", [shared / "state/other.json"])
-
-    assert change is not None and change.paths == ("state/other.json",)
+    HELPER_WRITES[helper](shared)
 
 
 def test_a_device_local_change_never_waits(tmp_path: Path) -> None:
@@ -288,10 +246,8 @@ def test_a_rewrite_sees_what_the_other_writer_left(tmp_path: Path) -> None:
     assert payload == {"n": 2}
 
 
-@pytest.mark.parametrize(
-    "helper", ["write_shared_json", "update_shared_json_with_change"]
-)
-def test_shared_target_stays_locked_and_announced_when_resolution_changes(
+@pytest.mark.parametrize("helper", ["write_shared_json", "update_shared_json"])
+def test_shared_target_stays_locked_when_resolution_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
 ) -> None:
     target = tmp_path / ".guildbotics/state/new/thing.json"
@@ -302,10 +258,11 @@ def test_shared_target_stays_locked_and_announced_when_resolution_changes(
             return tmp_path / "outside.json"
         return real_resolve(path, *args, **kwargs)
 
-    def write() -> ChangeSet | None:
+    def write() -> None:
         if helper == "write_shared_json":
-            return write_shared_json(target, {"id": "one"})
-        return update_shared_json_with_change(target, lambda _current: {"id": "one"})[1]
+            write_shared_json(target, {"id": "one"})
+        else:
+            update_shared_json(target, lambda _current: {"id": "one"})
 
     monkeypatch.setattr(Path, "resolve", unstable_resolve)
     assert shared_relative_path(target) == "state/new/thing.json"
@@ -314,19 +271,11 @@ def test_shared_target_stays_locked_and_announced_when_resolution_changes(
         write()
     assert not target.exists()
 
-    announced: list[ChangeSet] = []
-    set_workspace_sync_port(_RecordingPort(announced))
-    try:
-        change = write()
-    finally:
-        set_workspace_sync_port(None)
-
-    assert change is not None
-    assert change.paths == ("state/new/thing.json",)
-    assert announced == [change]
+    write()
+    assert json.loads(target.read_text(encoding="utf-8")) == {"id": "one"}
 
 
-def test_strict_resolution_prefix_still_locks_and_announces(
+def test_strict_resolution_prefix_still_locks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / ".guildbotics/state/new/thing.json"
@@ -351,16 +300,8 @@ def test_strict_resolution_prefix_still_locks_and_announces(
         write_shared_json(target, {"id": "one"})
     assert not target.exists()
 
-    announced: list[ChangeSet] = []
-    set_workspace_sync_port(_RecordingPort(announced))
-    try:
-        change = write_shared_json(target, {"id": "one"})
-    finally:
-        set_workspace_sync_port(None)
-
-    assert change is not None
-    assert change.paths == ("state/new/thing.json",)
-    assert announced == [change]
+    write_shared_json(target, {"id": "one"})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"id": "one"}
 
 
 @pytest.mark.parametrize("error", [PermissionError, NotADirectoryError])
@@ -377,16 +318,10 @@ def test_unreadable_shared_ancestor_stops_before_writing(
         return real_resolve(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", resolve)
-    announced: list[ChangeSet] = []
-    set_workspace_sync_port(_RecordingPort(announced))
-    try:
-        with pytest.raises(error):
-            write_shared_json(target, {"id": "one"})
-    finally:
-        set_workspace_sync_port(None)
+    with pytest.raises(error):
+        write_shared_json(target, {"id": "one"})
 
     assert not target.exists()
-    assert announced == []
 
 
 def test_dangling_symlink_to_shared_file_keeps_the_lock(
@@ -406,15 +341,13 @@ def test_dangling_symlink_to_shared_file_keeps_the_lock(
         append_shared_text(alias, "{}\n")
     assert not target.exists()
 
-    change = append_shared_text(alias, "{}\n")
+    append_shared_text(alias, "{}\n")
     assert target.read_text(encoding="utf-8") == "{}\n"
-    assert change is not None
-    assert change.paths == ("state/new.jsonl",)
 
 
 @pytest.mark.parametrize(
     "helper",
-    ["update_shared_text", "update_shared_json", "update_shared_json_with_change"],
+    ["update_shared_text", "update_shared_json"],
 )
 def test_an_unreadable_file_is_not_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
@@ -423,7 +356,6 @@ def test_an_unreadable_file_is_not_replaced(
     target = shared / "state/other.json"
     original = target.read_bytes()
     applied: list[object] = []
-    announced: list[ChangeSet] = []
     real_read_text = Path.read_text
 
     def unreadable(path: Path, *args: object, **kwargs: object) -> str:
@@ -436,39 +368,35 @@ def test_an_unreadable_file_is_not_replaced(
         return "changed" if helper == "update_shared_text" else {"changed": True}
 
     monkeypatch.setattr(Path, "read_text", unreadable)
-    set_workspace_sync_port(_RecordingPort(announced))
-    try:
-        with pytest.raises(PermissionError, match="temporarily unreadable"):
-            if helper == "update_shared_text":
-                update_shared_text(target, apply)
-            elif helper == "update_shared_json":
-                update_shared_json(target, apply)
-            else:
-                update_shared_json_with_change(target, apply)
-    finally:
-        set_workspace_sync_port(None)
+    with pytest.raises(PermissionError, match="temporarily unreadable"):
+        if helper == "update_shared_text":
+            update_shared_text(target, apply)
+        else:
+            update_shared_json(target, apply)
 
     assert applied == []
     assert target.read_bytes() == original
-    assert announced == []
 
 
-def test_unchanged_content_is_not_rewritten(tmp_path: Path) -> None:
-    """A file rewritten with what it already held is synchronization work with
-    nothing behind it, so no change is announced for one."""
+def test_unchanged_content_is_not_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     shared = _existing_shared_files(tmp_path)
     target = shared / "state/other.json"
-    announced: list[ChangeSet] = []
-    set_workspace_sync_port(_RecordingPort(announced))
-    try:
-        assert update_shared_text(target, lambda current: current) == "{}\n"
-        assert not announced
+    written: list[Path] = []
+    real_write = shared_writes.atomic_write_bytes
 
-        update_shared_text(target, lambda _current: "{ }\n")
-    finally:
-        set_workspace_sync_port(None)
+    def recording(path: Path, data: bytes) -> None:
+        written.append(path)
+        real_write(path, data)
 
-    assert [change.paths for change in announced] == [("state/other.json",)]
+    monkeypatch.setattr(shared_writes, "atomic_write_bytes", recording)
+
+    assert update_shared_text(target, lambda current: current) == "{}\n"
+    assert written == []
+
+    update_shared_text(target, lambda _current: "{ }\n")
+    assert written == [target]
 
 
 def test_a_rewrite_that_returns_nothing_removes_the_file(tmp_path: Path) -> None:
@@ -627,18 +555,15 @@ def test_a_hand_declared_span_starts_at_the_read(
     path, held = reads[0]
     assert held, (
         f"{operation} read {path} before taking the lock, so what it wrote was "
-        "decided from content the queue may have replaced in between"
+        "decided from content another writer may have replaced in between"
     )
 
 
 #: Every operation that changes a secret store, run against a store whose
 #: workspace is not the selected one. The key ``K`` exists before each runs.
 STORE_OPERATIONS: dict[str, Callable[[KeyringSecretStore], object]] = {
-    "adopt_received": lambda store: store.adopt_received("K", "fetched", 1),
-    "confirm_shared": lambda store: store.confirm_shared({"K": 1}, sent={"K": "v"}),
     "delete": lambda store: store.delete("K"),
     "ensure_initialized": lambda store: store.ensure_initialized(),
-    "rename": lambda store: store.rename("K", "L"),
     "set": lambda store: store.set("K", "changed"),
     "set_many": lambda store: store.set_many({"K": "changed", "M": "new"}),
 }
@@ -646,12 +571,7 @@ STORE_OPERATIONS: dict[str, Callable[[KeyringSecretStore], object]] = {
 #: The rest of the store's public surface, and why it takes no span.
 STORE_READERS = {
     "get": "reads one value",
-    "key_state": "reads one key's state",
-    "key_states": "reads every key's state",
     "keys": "reads the index",
-    "local_generation": "reads this device's record",
-    "shared_generation": "reads the index",
-    "stale_keys": "reads both records",
     "values": "reads every value",
     "write_span": "is the span itself",
 }
@@ -667,12 +587,12 @@ def test_every_public_store_method_is_classified() -> None:
 def test_a_store_change_holds_the_lock_of_the_store_s_own_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
-    """Not the selected workspace's: that queue never commits this index.
+    """Not the selected workspace's: the other writers of this index take its
+    own workspace's.
 
     The selected workspace here is ``tmp_path``. A store of another workspace
     that took the selected one's lock would read its records unprotected from
-    the queue that checks a hub's version of them out. The store's own reads
-    are watched, since one of these changes reads only this device's record.
+    those writers.
     """
     other = tmp_path / "other"
     store = KeyringSecretStore(other / ".guildbotics/config")

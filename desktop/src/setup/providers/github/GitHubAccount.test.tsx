@@ -19,7 +19,6 @@ const context: MemberContext = {
   memberKey: "edit:my-bot",
   gitEmail: "my-bot@example.com",
   setGitEmail: () => undefined,
-  secretEnvKeys: {},
   chatChannels: [],
   chatChannelsField: null,
   services: {},

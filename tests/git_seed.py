@@ -8,67 +8,18 @@ from shutil import copytree
 
 from git import Repo
 
-from guildbotics.sync.local_repository import GIT_ATTRIBUTES, GITIGNORE_CONTENT
-from guildbotics.utils.workspace_sync_port import dump_shared_json
-from guildbotics.workspace.identity import WorkspaceIdentity
-
-WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
-
 
 @dataclass(frozen=True)
 class WorkerGitSeed:
     """Repositories built once and copied into isolated per-test directories."""
 
     root: Path
-    empty_hub: Path
-    sync_device: Path
     member_remote: Path
     member_worktree: Path
     _snapshot: dict[str, bytes]
 
     @classmethod
     def create(cls, root: Path) -> WorkerGitSeed:
-        empty_hub = root / "empty.git"
-        with Repo.init(empty_hub, bare=True, initial_branch="main") as repository:
-            repository.git.config("receive.denyNonFastForwards", "true")
-
-        sync_source = root / "sync-source"
-        with Repo.init(sync_source, initial_branch="main") as repository:
-            _configure_identity(repository, "GuildBotics", "sync@guildbotics.invalid")
-            (sync_source / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
-            identity = sync_source / "state" / "workspace.json"
-            identity.parent.mkdir(parents=True)
-            identity.write_text(
-                dump_shared_json(
-                    WorkspaceIdentity(
-                        workspace_id=WORKSPACE_ID,
-                        created_at="2026-08-01T00:00:00Z",
-                    ).model_dump()
-                ),
-                encoding="utf-8",
-            )
-            repository.git.add(A=True)
-            repository.index.commit("Initialize shared workspace")
-
-        sync_hub = root / "sync.git"
-        with Repo.clone_from(sync_source, sync_hub, bare=True) as repository:
-            repository.git.config("receive.denyNonFastForwards", "true")
-        sync_device = root / "sync-device"
-        # Production writes the ignore file -- ``.*`` keeps it out of the
-        # commit -- and the attributes that switch off conversions at
-        # initialization, before anything is checked out; keep the seed in that
-        # same state. Checked out first, a global ``core.autocrlf`` would leave
-        # files the attributes then report as changed.
-        with Repo.clone_from(
-            sync_hub, sync_device, branch="main", no_checkout=True
-        ) as repository:
-            _configure_identity(repository, "GuildBotics", "sync@guildbotics.invalid")
-            (sync_device / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
-            (sync_device / ".git" / "info" / "attributes").write_text(
-                GIT_ATTRIBUTES, encoding="utf-8"
-            )
-            repository.git.checkout("main")
-
         member_source = root / "member-source"
         with Repo.init(member_source, initial_branch="main") as repository:
             _configure_identity(repository, "Seed", "seed@example.com")
@@ -88,8 +39,6 @@ class WorkerGitSeed:
         snapshot = _snapshot(root)
         return cls(
             root=root,
-            empty_hub=empty_hub,
-            sync_device=sync_device,
             member_remote=member_remote,
             member_worktree=member_worktree,
             _snapshot=snapshot,

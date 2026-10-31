@@ -38,14 +38,14 @@ Hub machine                                 another machine
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
-- Branvil runs once, on the machine that hosts the GuildBotics Hub, and listens on
+- Branvil runs once, on the Hub (the machine where GuildBotics runs), and listens on
   loopback only.
 - Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default.
   On the Hub machine that is Branvil itself. On another machine, set up the
   [SSH forwarding service](#set-up-ssh-forwarding-on-another-machine) once. OpenSSH
   starts at login and forwards the loopback ports over one connection, independently
-  of GuildBotics and Branvil's client. The browser, git and CLI can use it even when
-  GuildBotics is closed.
+  of GuildBotics and Branvil's client. The browser, git and Branvil's CLI on that
+  machine use it.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
   on every machine, and GuildBotics' connection to Branvil names one base URL. A repository
@@ -73,9 +73,7 @@ context, or another member's patrol, does not renew the wait. Member, admin and 
 responses all clear this state; a failed admin or health probe does not set it.
 A request Branvil may already have
 received is never sent again, so a write does not land twice. The setup screens and the check that
-Branvil answers do not wait: they report whether Branvil answers now. Through the SSH
-forward of a machine other than the Hub, a Branvil that refuses connections looks like a
-connection that was accepted and then dropped, so there it is not waited for.
+Branvil answers do not wait: they report whether Branvil answers now.
 
 When no connection could be made, the provider raises the port's `ServiceUnavailable`
 type. Autonomous patrols and scheduled commands defer that work: they leave no failed
@@ -91,7 +89,7 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 Following the Branvil README:
 
-1. Run Branvil on the Hub machine. Set up SSH forwarding on other machines as below.
+1. Run Branvil on the Hub. Set up SSH forwarding on other machines as below.
    `branvil init` creates Branvil's owner, the one person who uses it: the
    GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
@@ -105,7 +103,9 @@ Members and their tokens are not created in Branvil: GuildBotics does that.
 
 Run the bundled script from a checkout on each machine other than the Hub. It
 needs only OpenSSH and the OS service manager; Python and the GuildBotics CLI are
-not needed. No setup is needed on the Hub itself, beyond accepting your SSH key.
+not needed. No setup is needed on the Hub itself, beyond accepting your SSH key. The
+same service forwards the GuildBotics server's port (8765) for the
+[browser](../README.md#use-it-from-a-browser); pass every port it should forward.
 
 1. Stop any `branvil tunnel` you run manually or as a service.
 2. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
@@ -113,7 +113,7 @@ not needed. No setup is needed on the Hub itself, beyond accepting your SSH key.
    in your existing OpenSSH configuration. Do **not** put `LocalForward` in that
    host entry: an ordinary `ssh my-hub` would then compete with the service.
 3. Use an unencrypted key or an unlocked ssh-agent key. The unencrypted
-   `~/.ssh/id_ed25519` created for Hub sync can be reused. The service uses
+   `~/.ssh/id_ed25519` is a common choice. The service uses
    `BatchMode=yes` and strict host-key checking, so it never prompts. On Windows,
    enable the OpenSSH client and, if used, the OpenSSH Authentication Agent service.
 4. Install the service using the commands below, then inspect its status.
@@ -121,7 +121,7 @@ not needed. No setup is needed on the Hub itself, beyond accepting your SSH key.
 macOS (launchd user agent) and Linux (systemd user service):
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765
 sh scripts/hub-forward.sh status
 # Replace the entire port list by running install again with every desired port.
 sh scripts/hub-forward.sh uninstall
@@ -132,7 +132,7 @@ Without `--agent-socket` the service disables agent use and needs an unencrypted
 key. To use an agent, pass its **stable, absolute socket path**, for example:
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765 --agent-socket "$SSH_AUTH_SOCK"
 ```
 
 The script sets `SSH_AUTH_SOCK` in the service. If your agent uses a new socket
@@ -142,9 +142,9 @@ macOS uses the agent made available to launchd by the OS.
 Windows (Task Scheduler, Windows PowerShell 5.1; no administrator account needed):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port 7878
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878,8765"
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
-# Replace the entire port list with -Port "7878,12345" (use your actual ports).
+# Replace the entire port list by running install again with every desired port.
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
 ```
 
@@ -158,7 +158,7 @@ the task also ends its ssh. macOS stores the definition at
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service` (logs via
 `journalctl --user -u hub-forward.service`). The scripts do not change SSH config,
 keys or known_hosts. There is one service per user: install replaces its Hub and
-complete port list, with repeated `--port` on POSIX or `-Port "7878,12345"` in PowerShell.
+complete port list, with repeated `--port` on POSIX or `-Port "7878,8765"` in PowerShell.
 
 All forwards bind only `127.0.0.1` and target the same port on the Hub's
 `127.0.0.1`. A dropped connection is detected by SSH keepalives and restarted.
@@ -167,14 +167,8 @@ limits how often launchd starts it to once per 15 seconds. Status reports the OS
 end-to-end health check of Branvil. On Windows, a running task may be between SSH
 attempts. Check `http://127.0.0.1:7878` in the browser to verify Branvil too.
 
-Until the backend is consolidated on the Hub, GuildBotics still has its own
-forward. If this service binds first, the backend waits. If the backend already
-owns the port, this service's ssh exits (`ExitOnForwardFailure=yes`) and retries
-at intervals. Status may show it stopped or restarting while Branvil is still
-reachable through the backend. After stopping that backend forward, the service
-takes over on a retry. Do not run a second forwarding service for the same ports.
-The future client installer adds the GuildBotics server port once it is fixed;
-the scripts themselves contain no application names or default ports.
+Do not run a second forwarding service for the same ports. The scripts themselves
+contain no application names or default ports.
 
 Several GuildBotics workspaces can use one Branvil. The connection to Branvil and each
 member's agent and token belong with the members' identities, which every workspace
@@ -183,7 +177,7 @@ workspace its members work in.
 
 ## Connect GuildBotics to Branvil
 
-On the Hub machine, where Branvil runs, under **Setup → Integrations** in the desktop app:
+On the Hub, under **Setup → Integrations** in the desktop app (or the same screen in a browser):
 
 1. Choose **Branvil** for the code host and for the tickets. Both use the one Branvil
    GuildBotics is connected to.
@@ -205,13 +199,8 @@ its own process on the machine (the setup screens and the checks): no member, co
 isolated environment receives it. To revoke it, delete the token under Branvil's
 **Settings → Members → owner → Tokens**, then connect again.
 
-On the other machines there is nothing to connect: the connection's file reaches them with
-the members' identities, and the Secrets are sent from the Hub machine and fetched under
-**Members' credentials on this machine** (the admin token and the members' tokens alike).
-No machine issues them again.
-
-**Open Branvil**, next to the connection, opens Branvil's GUI in the system browser from
-any machine: GuildBotics asks Branvil for a single-use entry link with the admin token.
+**Open Branvil**, next to the connection, opens Branvil's GUI in the browser: GuildBotics
+asks Branvil for a single-use entry link with the admin token.
 The **Branvil** item below **Setup** in the sidebar opens it the same way, with an
 external-link icon. It appears when the saved code host or ticket service uses Branvil;
 saving the integration settings updates its visibility immediately. If opening fails,
@@ -244,7 +233,7 @@ Under **Setup → Members → Branvil**:
   `guildbotics` tokens of its agent. The agent stays in Branvil, as its history names it.
 
 Saving an AI member and deleting one reach Branvil, so they need Branvil to be reachable
-and GuildBotics to be connected on that machine; otherwise nothing is saved or deleted,
+and GuildBotics to be connected; otherwise nothing is saved or deleted,
 and the screen says why.
 
 Without the GUI, the same settings are in `team/project.yml`:
@@ -267,14 +256,14 @@ account_info:
 ```
 
 Press **Validate settings** under **Setup → Verification**: it checks that Branvil
-answers, that this machine holds GuildBotics' connection and Branvil takes it for its
+answers, that GuildBotics holds its connection and Branvil takes it for its
 owner (the human member), that each AI member's token is accepted as that member's own,
 and that the workspace can be read.
 
 ## Use Branvil from your own checkouts
 
 You, the human member, are Branvil's owner, and you can make Branvil the `origin` of your own
-checkouts on any machine where GuildBotics runs. Branvil's git asks for a member's name and
+checkouts on the Hub. Branvil's git asks for a member's name and
 token. GuildBotics hands git yours, so git never asks for a name or a password:
 
 1. Under **Setup → Integrations → Branvil**, while connected, **Your own git on this machine**
@@ -294,26 +283,23 @@ token. GuildBotics hands git yours, so git never asks for a name or a password:
    `!guildbotics git-credential`, since the installer puts the CLI on `PATH`.
 3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
 
-On its first request on a machine, GuildBotics issues the owner a token for that machine with
-its connection. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
-and kept in that machine's OS keychain only. It is never written to a URL, a git configuration, your shell
-history, or anything the Hub shares. Each machine has its own token, and you can revoke one
-machine's token under Branvil's **Settings → Members → owner → Tokens**. Once Branvil no
-longer accepts a machine's token, the next request issues that machine a new one in its place
-and revokes the machine's other tokens (such as one labelled with its name before a rename).
+On its first request, GuildBotics issues the owner a token for the machine with its
+connection. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
+and kept in the machine's OS keychain only. It is never written to a URL, a git configuration,
+your shell history, or a workspace file. You can revoke it under Branvil's **Settings → Members →
+owner → Tokens**. Once Branvil no longer accepts the token, the next request issues a new one in
+its place and revokes the machine's other `git:` tokens.
 
-The token is a full owner token, the same trust as the connection the machine already holds.
-Revoking a machine's token does not lock that machine out, because GuildBotics there issues
-another. To cut a machine off, remove it from the Hub, revoke the `app:GuildBotics` token and
-connect again (the other machines fetch the new connection from the Hub), then revoke that
-machine's `git:` token.
+The token is a full owner token, the same trust as the connection GuildBotics already holds.
+Revoking it does not lock the helper out: while GuildBotics is connected, the next request
+issues another.
 
-When the helper cannot hand a token (Branvil does not answer, the connection's token is not on
-that machine, or the keychain cannot be used), git stops and prints why, without asking for a
-password. When GuildBotics on that machine is not connected to the Branvil of the remote at all,
-the helper says so, and git falls back to asking for a name and a password: connect, or fetch the
-connection from the Hub, instead of answering. The members' own git never uses this helper. GuildBotics hands member git the agent's
-token and drops every configured helper.
+When the helper cannot hand a token (Branvil does not answer, the connection's token is
+missing, or the keychain cannot be used), git stops and prints why, without asking for a
+password. When GuildBotics is not connected to the Branvil of the remote at all, the helper
+says so, and git falls back to asking for a name and a password: connect instead of
+answering. The members' own git never uses this helper. GuildBotics hands member git the
+agent's token and drops every configured helper.
 
 ## How members work with it
 

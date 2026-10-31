@@ -1,17 +1,18 @@
-"""The two guarantees every payload must satisfy before it is shared.
+"""The two guarantees every payload must satisfy before it is recorded.
 
-Shared state is synchronized between the single user's own machines, so the
-boundary protects exactly two things -- and deliberately nothing more:
+Shared records -- activity events, task runs, diagnostics answers -- are kept
+in the workspace and shown on the screens, so this protects exactly two
+things -- and deliberately nothing more:
 
-1. secret values must not enter the durable synchronized history, and
-2. the history must not grow without bound.
+1. secret values must not enter a durable record, and
+2. the records must not grow without bound.
 
 Both are enforced by walking values rather than by naming fields. A field-name
 rule only covers the fields somebody remembered, so a new payload shape, a new
 event, or a secret quoted inside an error message would slip past it; masking
 the values themselves and bounding every string cannot be outgrown that way.
-Bulk log bodies are the one key-based exception: they are dropped because they
-have no cross-device value at all, not because of what they might contain.
+Bulk log bodies are the one key-based exception: they are dropped because the
+local diagnostics already hold them, not because of what they might contain.
 """
 
 from __future__ import annotations

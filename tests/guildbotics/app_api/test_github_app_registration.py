@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
@@ -39,7 +38,7 @@ HTTP_OK = 200
 HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
-HTTP_SERVER_ERROR = 500
+HTTP_SERVICE_UNAVAILABLE = 503
 APP_ID = 1978826
 INSTALLATION_ID = 86632391
 BOT_USER_ID = 233270845
@@ -69,7 +68,6 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
-        self.workspace_sync_service = WorkspaceSyncService()
         self.event_bus = EventBus()
 
     def get_config_status(self) -> ConfigStatus:
@@ -426,7 +424,7 @@ def test_member_save_retries_a_registration_after_the_keychain_failed(
     with monkeypatch.context() as patch:
         patch.setattr(KeyringSecretStore, "set", locked)
         failed = _add(client, tmp_path, app_registration_id=registration)
-    assert failed.status_code == HTTP_SERVER_ERROR
+    assert failed.status_code == HTTP_SERVICE_UNAVAILABLE
     assert not _person_file(tmp_path).exists()
 
     retried = _add(client, tmp_path, app_registration_id=registration)

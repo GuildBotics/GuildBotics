@@ -7,8 +7,8 @@ Which commands belong to one session is decided here on the device
 member, workspace, host and thread and expires when idle. What the session did
 is recorded once per session as a shared record (:class:`InteractiveSessionStore`,
 ``state/sessions/<trace_id>.json``), rewritten at the end of every command, so
-another device shows the session from that one record instead of folding the
-command events it emitted.
+the activity history shows the session from that one record instead of folding
+the command events it emitted.
 """
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ from guildbotics.utils.fileio import (
     iter_json_objects,
 )
 from guildbotics.utils.shared_redaction import redact_for_sharing
-from guildbotics.utils.timestamps import parse_iso_datetime
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     update_shared_json,
 )
+from guildbotics.utils.timestamps import parse_iso_datetime
 
 INTERACTIVE_TRACE_STATE_FILE = "interactive_trace_state.json"
 INTERACTIVE_SESSIONS_DIR = "sessions"
@@ -189,9 +189,9 @@ class InteractiveSessionStore:
     ) -> dict[str, Any]:
         """Rewrite the session's record with the command that just ended.
 
-        One device writes one session, so there is no concurrent writer to
-        lose to; the read-modify-write span is still held because the sync
-        queue may check the hub's copy out in between.
+        One session's commands run one after another, so there is rarely a
+        concurrent writer to lose to; the read-modify-write span is still held
+        so a command's record is never written from a stale read.
 
         Args:
             session: The session the command ran in.

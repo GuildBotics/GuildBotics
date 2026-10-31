@@ -244,7 +244,6 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
     monkeypatch.setattr(
         member_cli, "resolve_member_context", lambda _: (member, member.person)
     )
-    monkeypatch.setattr(member_cli, "prepare_commit_and_push_once", lambda: None)
     lanes: list[str] = []
 
     class _Selection:

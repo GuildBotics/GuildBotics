@@ -1,13 +1,10 @@
-"""Branvil as a provider: the code host and the tickets of a Branvil service
-that every machine reaches at the same base URL."""
+"""Branvil as a provider: the code host and the tickets of a Branvil service."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.branvil.api import (
@@ -208,16 +205,6 @@ async def _workspace(
     )
 
 
-def _hub_port(services: Mapping[str, Mapping[str, Any]]) -> int | None:
-    """The port of the Branvil the project reaches at a loopback base URL:
-    Branvil runs once, on the hub machine, and every machine uses that same
-    base URL."""
-    if not any(item.get("name") == PROVIDER for item in services.values()):
-        return None
-    url = urlsplit(branvil_url())
-    return url.port if url.hostname in ("127.0.0.1", "localhost") else None
-
-
 async def _load_ci_image(archive: Path) -> list[str]:
     """Load ``archive``, a file on Branvil's machine, into its CI runner's
     image cache, and answer the references it loaded once the load is over.
@@ -280,7 +267,6 @@ BRANVIL = Provider(
     verify=_verify,
     diagnose=_diagnose,
     setup=SETUP,
-    hub_port=_hub_port,
     load_ci_image=_load_ci_image,
     human_git_credential=owner_git_credential,
 )

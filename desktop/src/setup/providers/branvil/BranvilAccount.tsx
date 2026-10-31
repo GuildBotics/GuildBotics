@@ -2,7 +2,6 @@ import { Checkbox, Radio, Select, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { SecretStatusHint } from "../../../sync/SecretStatusHint";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
 import { branvilKey, listAgents } from "./api";
 import { BranvilConnection, heldConnection, useConnection } from "./BranvilConnection";
@@ -116,7 +115,6 @@ function AccountPanel({
             {form.storedToken
               ? t("setup.branvil.member.tokenSet")
               : t("setup.branvil.member.tokenMissing")}
-            <SecretStatusHint envKey={context.secretEnvKeys.BRANVIL_TOKEN} scope="identities" />
           </Text>
           <Checkbox
             label={t("setup.branvil.member.reissue")}

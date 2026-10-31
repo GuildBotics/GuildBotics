@@ -1,11 +1,11 @@
-"""Workspace and device identity used to synchronize across machines.
+"""Workspace and device identity.
 
-A workspace identity is shared: it is generated once, stored in
-``state/workspace.json``, and travels with every copy so a hub can refuse to
-mix two workspaces. A device identity is machine-local: it is generated on
-first use, stored in ``~/.guildbotics/data/device.json``, and published into
-the shared ``state/devices/`` directory so other machines can name the device
-that made a change. Neither identity authenticates anything; OpenSSH does that.
+A workspace identity is generated once and stored in ``state/workspace.json``;
+the member CLI names the workspace it means by it, so a backend serving another
+selection refuses rather than acting there. A device identity is this
+machine's: it is generated on first use, stored in
+``~/.guildbotics/data/device.json``, and names the machine on the records it
+writes. Neither identity authenticates anything.
 """
 
 from __future__ import annotations
@@ -24,15 +24,14 @@ from guildbotics.utils.fileio import (
     get_machine_state_path,
     get_workspace_state_path,
 )
-from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     dump_shared_json,
     update_shared_json,
 )
+from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 
 DeviceOs = Literal["macos", "windows", "linux"]
-DeviceStatus = Literal["active", "retired"]
 
 
 def _supported_schema_version(value: int) -> int:
@@ -61,11 +60,10 @@ TimestampString = Annotated[str, AfterValidator(_timestamp_string)]
 
 
 class SharedRecord(BaseModel):
-    """Base for records that travel between devices.
+    """Base for the identity records.
 
-    Unknown fields are rejected rather than carried along, which is what keeps
-    device-local data -- paths, PIDs, cache locations, secrets -- out of shared
-    files without maintaining a list of forbidden field names.
+    Unknown fields are rejected rather than carried along, so a record in
+    another shape is refused instead of being read as this one.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -88,31 +86,14 @@ class DeviceIdentity(SharedRecord):
     os: DeviceOs
 
 
-class DeviceRecord(SharedRecord):
-    """A device as the other machines see it (``state/devices/<device_id>.json``).
-
-    Online state, tool versions, and running jobs come from a live session and
-    are deliberately absent here, so this record changes only when the user
-    renames a device, joins one, or retires one.
-    """
-
-    schema_version: SchemaVersion = Field(default=SHARED_RECORD_SCHEMA_VERSION)
-    device_id: UuidString
-    display_name: str = Field(min_length=1)
-    os: DeviceOs
-    joined_at: TimestampString
-    status: DeviceStatus = "active"
-    ssh_public_key_fingerprint: str | None = None
-
-
 def new_uuid7() -> str:
-    """Return a UUID version 7, so directory listings of shared records stay
-    roughly chronological."""
+    """Return a UUID version 7, so directory listings of records stay roughly
+    chronological."""
     return str(uuid.uuid7())
 
 
 def current_device_os() -> DeviceOs:
-    """Return this machine's OS as the shared device records name it."""
+    """Return this machine's OS as the device identity names it."""
     if sys.platform == "darwin":
         return "macos"
     if sys.platform.startswith("win"):
@@ -142,12 +123,9 @@ def ensure_workspace_identity(
 
     The identity is generated exactly once per workspace, so first use is
     serialized: two processes starting together would otherwise each return a
-    different identifier while only one survived on disk, and a caller holding
-    the discarded one would register the wrong workspace with a hub. Deciding
-    inside the same span that writes is what makes that true -- the identifier
-    already on disk always wins, whether it was drawn by another process or
-    adopted from a hub a moment ago. Every later copy adopts the value it
-    received, so joining a hub never renumbers a workspace.
+    different identifier while only one survived on disk. Deciding inside the
+    same span that writes is what makes that true -- the identifier already on
+    disk always wins.
     """
     existing = read_workspace_identity(workspace_root)
     if existing is not None:
@@ -188,8 +166,7 @@ def ensure_device_identity() -> DeviceIdentity:
     Like the workspace identity, first use is serialized so that concurrent
     starts cannot hand two processes different device identifiers.
 
-    The initial display name is the host name so setup never has to ask for
-    one; the user can rename the device later from the sync settings screen.
+    The display name is the host name, so setup never has to ask for one.
     """
     existing = read_device_identity()
     if existing is not None:
@@ -207,103 +184,13 @@ def ensure_device_identity() -> DeviceIdentity:
         return identity
 
 
-def set_device_display_name(display_name: str) -> DeviceIdentity:
-    """Rename this machine, keeping its identifier.
-
-    Args:
-        display_name (str): The new name. Surrounding whitespace is trimmed.
-
-    Raises:
-        ValueError: When ``display_name`` is blank.
-    """
-    name = display_name.strip()
-    if not name:
-        raise ValueError("A device display name must not be blank.")
-    ensure_device_identity()
-    with held_lock(_device_identity_lock_path()):
-        current = read_device_identity()
-        assert current is not None  # ensured above, and only ever created
-        identity = current.model_copy(
-            update={
-                "display_name": name,
-                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
-            }
-        )
-        _write_device_identity(identity)
-        return identity
-
-
-def device_record_path(device_id: str, workspace_root: Path | None = None) -> Path:
-    """Return ``<workspace>/.guildbotics/state/devices/<device_id>.json``."""
-    return get_workspace_state_path(
-        "devices", f"{device_id}.json", workspace_root=workspace_root
-    )
-
-
-def publish_device_record(
-    workspace_root: Path | None = None,
-    ssh_public_key_fingerprint: str | None = None,
-) -> DeviceRecord:
-    """Publish this machine into the workspace's shared device list.
-
-    The fields not being set here are carried over from what is on disk, and
-    that is not only this machine's own writing: another device retires this
-    one by setting ``status`` in the same record. Renaming a device happens
-    while the queue is running, so the read and the write are held together --
-    otherwise a rename that read the record before a retirement was adopted
-    writes ``active`` back over it, and pushes the reversal as this device's
-    own change.
-
-    Args:
-        workspace_root (Path | None): The workspace, or None to use the selected one.
-        ssh_public_key_fingerprint (str | None): The key registered with the hub,
-            or None to keep the fingerprint already published.
-    """
-    identity = ensure_device_identity()
-
-    def _published(current: Any | None) -> dict[str, Any]:
-        existing = DeviceRecord.model_validate(current) if current is not None else None
-        return DeviceRecord(
-            device_id=identity.device_id,
-            display_name=identity.display_name,
-            os=identity.os,
-            joined_at=existing.joined_at if existing is not None else utc_now_iso(),
-            status=existing.status if existing is not None else "active",
-            ssh_public_key_fingerprint=(
-                ssh_public_key_fingerprint
-                if ssh_public_key_fingerprint is not None
-                else (existing.ssh_public_key_fingerprint if existing else None)
-            ),
-        ).model_dump()
-
-    return DeviceRecord.model_validate(
-        update_shared_json(
-            device_record_path(identity.device_id, workspace_root),
-            _published,
-            workspace_root=workspace_root,
-        )
-    )
-
-
-def list_device_records(workspace_root: Path | None = None) -> list[DeviceRecord]:
-    """Return every shared device record, ordered by device identifier."""
-    root = get_workspace_state_path("devices", workspace_root=workspace_root)
-    if not root.is_dir():
-        return []
-    records = [
-        DeviceRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        for path in sorted(root.glob("*.json"))
-    ]
-    return sorted(records, key=lambda record: record.device_id)
-
-
 def _device_identity_lock_path() -> Path:
     """Return the machine-wide lock guarding device identity creation."""
     return get_machine_state_path("run", "device-identity.lock")
 
 
 def _write_device_identity(identity: DeviceIdentity) -> None:
-    """Write the machine-local identity, which is never part of shared state."""
+    """Write this machine's identity, which lives outside every workspace."""
     atomic_write_text(device_identity_path(), dump_shared_json(identity.model_dump()))
 
 

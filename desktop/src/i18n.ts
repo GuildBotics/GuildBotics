@@ -114,382 +114,6 @@ const resources = {
             "To allow {{client}}, open GuildBotics in this browser first. Within 10 minutes, entering brings you back to this page.",
         },
       },
-      sync: {
-        registeredWorkspaces: {
-          title: "Registered workspaces",
-          body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
-          empty: "No workspaces are registered on this device.",
-          removeLabel: "Remove registration",
-          remove: "Remove registration for {{path}}",
-          active: "Selected",
-          confirm:
-            "Remove {{path}} from this device’s protected workspaces? Its files remain, but agents may access the location if you grant its directory later.",
-          confirmLabel: "Confirm removal",
-          cancel: "Cancel",
-        },
-        indicator: {
-          aria: "Synchronization: {{state}}",
-          scope: {
-            identities: "Members: {{state}}",
-            workspace: "Workspace: {{state}}",
-          },
-        },
-        identities: {
-          title: "Members' sync: {{label}}",
-        },
-        settings: {
-          title: "Sync",
-          subtitle: "Share this workspace with your other machines through a hub you run yourself.",
-        },
-        device: {
-          title: "Device and hub",
-          subtitle:
-            "These settings belong to this machine rather than to a workspace. The machine that hosts the hub needs nothing else.",
-        },
-        clone: {
-          action: "Take a copy from a hub",
-          title: "Take a copy from a hub",
-          body: "Create a workspace on {{machine}} from one the hub already holds. Use this on a machine that has no workspace yet; a machine that already has one connects it instead.",
-          destination: "Created in:",
-          chooseTitle: "Which workspace to take",
-          take: "Take",
-          current: "Open on {{machine}}",
-          empty: "This hub holds no workspace yet.",
-          failed: "Could not take a copy",
-        },
-        connect: {
-          title: "Connect to a hub",
-          cloneHint:
-            'This shares the workspace already on this machine. A machine that has none yet uses "Take a copy from a hub" in Project settings instead.',
-          changeTitle: "Connect to a different hub",
-          endpoint: "Hub address",
-          endpointHint:
-            "The machine hosting the hub, as user@host. GuildBotics decides where the repositories live on it.",
-          inspect: "Look up",
-          useLocal: "Use the hub on {{machine}}",
-          useLocalHint:
-            "{{machine}} hosts a hub, so a workspace on it reaches the hub without a network.",
-          failed: "Could not connect",
-          chooseTitle: "What to do with this workspace",
-          register: "Register this workspace on the hub",
-          joinHint: "Or join a workspace the hub already holds:",
-          join: "Join…",
-        },
-        hostKey: {
-          title: "Confirm the hub machine's host key",
-          body: "Select the fingerprint that matches the one shown on the hub machine. Nothing is sent until it matches.",
-          changedTitle: "The hub machine is offering a different host key",
-          changedBody:
-            "A key was already stored for this address, and none of the keys being offered is it. Reinstalling the hub machine does that — so does something else answering in its place. Confirm the fingerprint on the hub machine itself before selecting it.",
-          confirm: "This is the one",
-          compareHint: "On the hub machine, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
-        },
-        preview: {
-          title: "Before joining",
-          mode: {
-            join: "This machine's content is committed first, then the hub's version wins for any file both hold. What loses is kept locally and never discarded.",
-            reconnect:
-              "This machine and the hub share history, so the usual reconciliation applies rather than a replacement.",
-          },
-          differing_one: "1 file the hub's version will replace",
-          differing_other: "{{count}} files the hub's version will replace",
-          hubOnly_one: "1 file to take from the hub",
-          hubOnly_other: "{{count}} files to take from the hub",
-          deviceOnly_one: "1 file only this machine has, which will be sent",
-          deviceOnly_other: "{{count}} files only this machine has, which will be sent",
-          unsendableTitle: "Some changes stay on this machine",
-          unsendableBody_one: "1 change cannot be sent yet and is left untouched.",
-          unsendableBody_other: "{{count}} changes cannot be sent yet and are left untouched.",
-          cancel: "Cancel",
-          confirm: "Join",
-        },
-        connected: {
-          title: "Connected hub",
-          change: "Connect to a different hub",
-          cancelChange: "Cancel",
-          changeHint:
-            "Use this after rebuilding the hub on another machine. Content only this machine has is sent to the new hub rather than discarded.",
-        },
-        unsendable: {
-          title: {
-            identities: "Members' changes that cannot be sent",
-            workspace: "Changes that cannot be sent",
-          },
-          body: "These files stay on this machine until they are repaired here. Nothing is discarded.",
-          path: "File",
-          reason: "Reason",
-        },
-        rejected: {
-          title: {
-            identities: "Members' changes set aside",
-            workspace: "Changes set aside",
-          },
-          identitiesLocation:
-            "They are held in the members' own repository, so run the recovery procedure in ~/.guildbotics/identity/.guildbotics instead of <workspace>/.guildbotics.",
-          body: "Another machine's version of these files reached the hub first, so this machine's version was set aside instead of being merged. It is kept here, and only here.",
-          when: "Set aside",
-          paths: "Files",
-          more: "Show {{count}} more",
-          less: "Show fewer",
-          id: "Recovery ID",
-          discard: "Discard…",
-          discardTitle: "Discard this set-aside change?",
-          discardBody:
-            "This machine holds the only copy. It is on no other device and not on the hub, and discarding cannot be undone.",
-          discardHint:
-            "To look at the content first, follow the recovery procedure in the README on this machine. Discard it once you are done with it.",
-          discardConfirm: "Discard",
-          cancel: "Cancel",
-          alert_one: "One change of yours was set aside and is still held on {{machine}}.",
-          alert_other:
-            "{{count}} changes of yours were set aside and are still held on {{machine}}.",
-          alertTitle: {
-            identities: "Members' changes set aside",
-            workspace: "Changes set aside",
-          },
-        },
-        devices: {
-          title: "Devices",
-          empty: "No device has joined this workspace yet.",
-          os: "OS",
-          joinedAt: "Joined",
-          id: "Device ID",
-          live: "Live",
-          fingerprint: "Device key fingerprint",
-          revokeHint:
-            "To cut off a lost machine, delete the line with its key fingerprint from the hub machine's ~/.ssh/authorized_keys, then reissue the tokens and API keys it held. GuildBotics does not edit that file, and values already on that machine cannot be erased remotely.",
-          fingerprintMissing: "Not registered",
-          liveStatus: {
-            unknown: "Unknown",
-            online: "Online",
-            delayed: "Delayed",
-            expired: "Offline",
-          },
-          currentWork_one: "{{count}} work running",
-          currentWork_other: "{{count}} works running",
-          self: "This machine",
-          copy: "Copy",
-          copied: "Copied",
-          rename: "Name of this machine",
-          renameHint: "Each machine is named on itself.",
-          renameAction: "Rename",
-        },
-        owner: {
-          title: "Service owner",
-          current: "Current owner: {{name}} ({{deviceId}})",
-          none: "No service owner has been claimed.",
-          self: "This machine owns the service",
-          hint: "Ownership never moves automatically. Transfer it only after confirming the service on the owner machine has stopped.",
-          takeOver: "Take over on {{name}}",
-          connection: {
-            unknown: "Connection unknown",
-            online: "Online",
-            delayed: "Updates delayed",
-            expired: "Offline",
-          },
-          confirmTitle: "Confirm service takeover",
-          confirmBody: "The current owner is {{current}} ({{status}}).",
-          confirmWarning: "This can run the service twice",
-          confirmHint:
-            "Confirm directly that the service on the current owner machine has stopped before continuing.",
-          cancel: "Cancel",
-          confirmAction: "I confirmed; take over",
-          failed: "Could not read the service owner",
-        },
-        sshKey: {
-          title: "This device's SSH key",
-          body: "Add this public key to the hub machine's authorized_keys. GuildBotics cannot do it for you: that step is what proves you already have access to that machine.",
-          create: "Create a key",
-          copy: "Copy",
-          copied: "Copied",
-        },
-        secrets: {
-          title: {
-            identities: "Members' credentials on {{machine}}",
-            workspace: "This workspace's credentials on {{machine}}",
-          },
-          scope: {
-            identities:
-              "The members' accounts and the services' connections, the same in every workspace.",
-            workspace: "The API keys this workspace uses.",
-          },
-          body: "API keys and tokens are kept in each machine's own OS secret store, never in the shared history. What travels between machines is a key name and a generation; the value itself moves only when you send or fetch it.",
-          empty: "This workspace has no credentials stored yet.",
-          key: "Key",
-          status: "State",
-          generations: "Generation",
-          generationDetail: "shared {{shared}} / here {{here}} / hub {{hub}}",
-          fetch: "Fetch",
-          send: "Send",
-          fetchAll_zero: "Nothing to fetch",
-          fetchAll_one: "Fetch 1 credential",
-          fetchAll_other: "Fetch all {{count}} credentials",
-          sendAll_zero: "Nothing to send",
-          sendAll_one: "Send 1 credential",
-          sendAll_other: "Send {{count}} credentials",
-          state: {
-            ready: "Set",
-            missing: "Not on this machine",
-            outdated: "Updated elsewhere",
-            pending_send: "Not sent to the hub",
-            conflict: "Changed on two machines",
-            unconfirmed: "Needs checking",
-            hub_behind: "No copy on the hub",
-          },
-          stateDetail: {
-            missing:
-              "The workspace names this key, but this machine's secret store holds no value for it. Fetching settles it.",
-            outdated: "Another machine published a newer value. Fetching settles it.",
-            pending_send:
-              "A value entered on this machine has not reached the hub yet. Sending it lets the other machines fetch it.",
-            conflict:
-              "Two machines changed this key. Settle it from this row: send keeps this machine's value, fetch takes the other machine's.",
-            unconfirmed:
-              "A send was cut off partway: the hub holds a value the workspace has not recorded. Sending again from any machine that has the value settles it.",
-            hub_behind:
-              "The hub holds no copy of the shared value, so other machines cannot fetch it. Sending gives it one.",
-          },
-          transferFailed: "The transfer failed",
-          alert: {
-            local_locked: {
-              title: "This machine's secret store is locked",
-              body: "Unlock the OS secret store on this machine, then try again. GuildBotics never falls back to storing a value in plain text.",
-            },
-            hub_locked: {
-              title: "The hub machine's secret store is locked",
-              body: "Unlock the OS secret store on the hub machine, then try again. On a headless Linux hub, unlock the Secret Service once after each restart.",
-            },
-            hub_desktop_required: {
-              title: "Start Desktop on the macOS hub",
-              body: "Log in to the GUI on the hub and start GuildBotics Desktop, then retry the transfer.",
-            },
-            hub_store_unavailable: {
-              title: "The hub secret store is unavailable",
-              body: "Check the OS secret store on the hub machine, then retry the transfer.",
-            },
-            hub_unreachable: {
-              title: "The hub could not be reached",
-              body: "The states below are what this machine knows on its own. Credentials can be sent and fetched again once the hub answers.",
-            },
-            attention_one: "1 credential needs attention on {{machine}}.",
-            attention_other: "{{count}} credentials need attention on {{machine}}.",
-          },
-          refused: {
-            title_one: "1 credential was not transferred",
-            title_other: "{{count}} credentials were not transferred",
-            entry: "{{key}}: {{reason}}",
-          },
-          result: {
-            conflict: "changed on another machine since this value was entered",
-            missing: "the hub holds no value for it",
-            generation_mismatch:
-              "the hub holds a generation this workspace has not recorded; send from any machine that has the value to settle it",
-            locked: "a secret store is locked",
-            desktop_required: "log in to the macOS hub and start GuildBotics Desktop",
-            store_unavailable: "a secret store could not be used",
-            no_value: "this machine has no value to send",
-            unknown: "this workspace does not know that key",
-            invalid: "that name cannot be used as a credential key",
-            pending_send:
-              "a value entered on this machine has not been sent; send it (or delete it) before fetching",
-            ready: "this machine already holds the shared value",
-          },
-          hint: {
-            missing: "Not on {{machine}}",
-            outdated: "Updated elsewhere",
-            pending_send: "Not sent to the hub",
-            conflict: "Changed on two machines",
-            unconfirmed: "Needs checking",
-            hub_behind: "No copy on the hub",
-            link: "Open sync settings",
-          },
-        },
-        host: {
-          title: "Host the hub on this machine",
-          body: "One machine holds the shared repositories the others connect to.",
-          create: "Host the hub here",
-          hosted_one: "Hosting the hub, with 1 workspace.",
-          hosted_other: "Hosting the hub, with {{count}} workspaces.",
-          sshdHint:
-            "The other machines reach it over SSH, so this machine needs an OpenSSH server running.",
-        },
-        state: {
-          synced: {
-            label: "In sync",
-            detail: "{{machine}} and the hub hold the same content.",
-          },
-          sending: {
-            label: "Waiting to send",
-            detail:
-              "Changes made on {{machine}} have not reached the hub yet. They are sent automatically.",
-          },
-          receiving: {
-            label: "Receiving",
-            detail: "Content from the hub is being taken in.",
-          },
-          unreachable: {
-            label: "Hub sync failed",
-            detail:
-              "This workspace still works, and changes are kept until they can be synchronized with the hub.",
-          },
-          local_error: {
-            label: "Sync failed on {{machine}}",
-            detail:
-              "This workspace still works. Something on {{machine}} is keeping synchronization from running, and changes are kept until it is fixed.",
-          },
-          unsendable: {
-            label: "Changes that cannot be sent",
-            detail: "Some files cannot be shared until they are repaired on {{machine}}.",
-          },
-          invalid_shared_state: {
-            label: "Shared data problem",
-            detail:
-              "Synchronization stopped because the shared content could not be reconciled automatically.",
-          },
-          update_required: {
-            label: "Update required",
-            detail:
-              "Another machine is running a newer version of GuildBotics, and {{machine}} cannot read what it wrote.",
-          },
-          not_connected: {
-            label: "Not connected to the hub",
-            detail:
-              "The members are not on the hub this workspace synchronizes with, so their names and accounts do not reach the other machines.",
-          },
-          disabled: { label: "Not synchronized", detail: "" },
-        },
-        alerts: {
-          unreachable:
-            "Synchronization with the hub is failing. Work on {{machine}} continues, and sharing resumes automatically once the cause is resolved.",
-          local_error:
-            "Synchronization is failing because of something on {{machine}}. Check the file or folder shown in Error details. Sharing resumes automatically once it is fixed.",
-          unsendable_one: "One change cannot be sent until the file is repaired.",
-          unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
-          invalid_shared_state:
-            "Synchronization stopped because the shared content could not be reconciled.",
-          update_required: "Update GuildBotics on {{machine}} to keep sharing.",
-          not_connected:
-            "The workspace synchronizes, but the members' names and accounts do not reach the other machines. Update GuildBotics on the hub machine, then retry.",
-        },
-        live: {
-          updateRequiredTitle: "Live state client update required",
-          updateRequired: "Update GuildBotics on {{machine}} to read the current live state.",
-        },
-        counts: {
-          ahead_one: "1 change waiting to be sent",
-          ahead_other: "{{count}} changes waiting to be sent",
-          behind_one: "1 change to take in",
-          behind_other: "{{count}} changes to take in",
-          unsendable_one: "1 change cannot be sent",
-          unsendable_other: "{{count}} changes cannot be sent",
-          lastSuccess: "Last synchronized: {{time}}",
-        },
-        failureDetail: "Error details",
-        actions: {
-          retry: "Try again",
-          settings: "Sync settings",
-        },
-      },
       systemAlerts: {
         region: "System health alerts",
         severity: {
@@ -548,19 +172,6 @@ const resources = {
         memberHuman: "Human",
         nowRunning: "Current work",
         patrol: "Last patrol {{last}}",
-        live: {
-          title: "Remote live status",
-          status: {
-            online: "Live",
-            delayed: "Updates delayed",
-            expired: "Device offline",
-          },
-          device: {
-            online: "Device {{deviceId}} is online.",
-            delayed: "Updates from device {{deviceId}} are delayed.",
-            expired: "Device {{deviceId}} is offline.",
-          },
-        },
         events: "Events",
         loading: "Loading activity...",
         empty: "No activity recorded for this period.",
@@ -591,20 +202,6 @@ const resources = {
           incomplete: "Incomplete",
           awaiting_checks: "Waiting for CI",
         },
-        rejection: {
-          title: {
-            identities: "This change to the members was not applied",
-            workspace: "This change was not applied",
-          },
-          identitiesLocation:
-            "They are held in the members' own repository, so run the recovery procedure in ~/.guildbotics/identity/.guildbotics instead of <workspace>/.guildbotics.",
-          body: "Another machine's change to the same file reached the hub first. Nothing here failed, and nothing was lost: the change is kept on the machine that made it.",
-          paths: "Files",
-          sourceDevice: "Made on device",
-          id: "Recovery ID",
-          recovery:
-            "To look at what was held back, use the recovery steps in the README on that machine. It cannot be reached from here, and GuildBotics never restores it automatically.",
-        },
         eventTypes: {
           pr_create: "PR created",
           pr_merge: "PR merged",
@@ -613,7 +210,6 @@ const resources = {
           push: "Push",
           issue_create: "Issue created",
           issue_resolve: "Issue resolved",
-          sync_rejected: "Update not applied",
           external: "Event",
         },
       },
@@ -623,8 +219,6 @@ const resources = {
         noTargetTitle: "No service selected",
         noTargetBody:
           "Select patrol commands, scheduled commands, or event triggers before starting.",
-        ownerElsewhere:
-          "The service owner is another machine ({{name}}). To run the service on {{machine}}, take over ownership in Setup → Sync.",
         keepAwake: {
           title: "Keep this machine awake",
           description:
@@ -986,9 +580,24 @@ const resources = {
           members: "Members",
           integrations: "Integrations",
           shortcuts: "Shortcuts",
-          sync: "Sync",
           verification: "Verification",
-          device: "Device and hub",
+          device: "Registered workspaces",
+        },
+        device: {
+          title: "This machine",
+          subtitle: "These settings belong to this machine rather than to a workspace.",
+          registeredWorkspaces: {
+            title: "Registered workspaces",
+            body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
+            empty: "No workspaces are registered on this device.",
+            removeLabel: "Remove registration",
+            remove: "Remove registration for {{path}}",
+            active: "Selected",
+            confirm:
+              "Remove {{path}} from this device’s protected workspaces? Its files remain, but agents may access the location if you grant its directory later.",
+            confirmLabel: "Confirm removal",
+            cancel: "Cancel",
+          },
         },
         verification: {
           title: "Verification",
@@ -1060,7 +669,7 @@ const resources = {
           toolNotProvisionedTooltip:
             "This tool is not available in the agent execution environment yet.",
           cliHint:
-            "AI CLI tools run inside the agent execution environment. Log in to the selected tool on every device that runs turns.",
+            "AI CLI tools run inside the agent execution environment. Log in to the selected tool on this machine.",
           openEnvironment: "Check in Agent execution environment",
           skillStatusTitle: "GuildBotics skill",
           skillStatusButtonLabel: "View {{agent}} GuildBotics skill status",
@@ -1163,7 +772,7 @@ const resources = {
             declaration: {
               title: "Environment declaration",
               description:
-                "The base image every device builds from, the resources assigned at boot, where every turn may connect, and the DNS resolvers the environment uses. Shared by the workspace; only changing the image rebuilds the environment on every device.",
+                "The base image the environment is built from, the resources assigned at boot, where every turn may connect, and the DNS resolvers the environment uses. Shared by the workspace; only changing the image rebuilds the environment.",
               image: "Base image",
               imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
               imageHint:
@@ -1175,10 +784,9 @@ const resources = {
               imageDeclared: "Declared: {{digests}}",
               memory: "Memory (MiB)",
               memoryHint:
-                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the least memory. Assigned to every turn and snapshot build. Default: 4096.",
+                "Workspace-wide. Assigned to every turn and snapshot build. Default: 4096.",
               cpus: "Virtual CPUs",
-              cpusHint:
-                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the fewest CPU cores. Assigned to every turn and snapshot build. Default: 2.",
+              cpusHint: "Workspace-wide. Assigned to every turn and snapshot build. Default: 2.",
               positiveInteger: "Enter a whole number greater than zero.",
               nameservers: "DNS resolvers",
               nameserversHost:
@@ -1192,7 +800,7 @@ const resources = {
           documents: {
             title: "Directories shared by the workspace",
             description:
-              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn and Documents/GuildBotics (the exchange directory) are always readable and writable: files handed over from this app are placed there (its tmp/ is emptied when the app closes), and so is what agents make for you.",
+              "Directories under the home directory, registered as one access setting for every member of the workspace. Paths are written relative to the home directory; a missing one is created when a turn starts. The working directory of a turn and Documents/GuildBotics (the exchange directory) are always readable and writable: files handed over from this app are placed there (its tmp/ is emptied when the app closes), and so is what agents make for you.",
             builtin: "built in",
             empty: "No directories registered.",
             pathPlaceholder: "Documents/shared-documents",
@@ -1200,7 +808,7 @@ const resources = {
           deviceAccess: {
             title: "Directories on this device",
             description:
-              "Access to any directory on this device beyond the working directory and the shared directories. Kept on this device and never synchronized.",
+              "Access to any directory on this device beyond the working directory and the shared directories. Kept on this device only.",
             empty: "No additional directories.",
             deny: "Denied",
             builtin: "built in",
@@ -1275,12 +883,11 @@ const resources = {
           workspace: {
             title: "Workspace-wide settings",
             description:
-              "The environment declaration and shared directory access apply to every device after you save them.",
+              "The environment declaration and shared directory access apply once you save them.",
           },
           device: {
             title: "Settings for this device only",
-            description:
-              "Additional and denied directory access stays on this device and is never synchronized.",
+            description: "Additional and denied directory access stays on this device only.",
           },
           loading: "Loading environment settings...",
           loadError: "Failed to load environment settings",
@@ -1329,7 +936,7 @@ const resources = {
           personIdFixedByAccount:
             "The member ID stays fixed while the {{provider}} account set up for it is pending.",
           personIdFixed:
-            "A member keeps its ID: other workspaces, on {{machine}} or other machines, know the member by it.",
+            "A member keeps its ID: other workspaces on {{machine}} know the member by it.",
           scopeHint:
             "The name, character, avatar, and service accounts are the member's own, the same in every workspace. Roles, patrol, chat, and AI settings are for this workspace only.",
           joinLabel: "Add an existing member",
@@ -1405,7 +1012,7 @@ const resources = {
           tabHasError: "This tab has incomplete or invalid fields.",
           deleteConfirmTitle: "Delete member?",
           deleteConfirmBody:
-            "This deletes {{name}} itself: it leaves this workspace, and its name, accounts, credentials in the OS secret store, and the tokens GuildBotics issued it with the services are deleted for every workspace, on every machine. Another workspace that still has the member cannot use it until the member is removed there too. This action cannot be undone.",
+            "This deletes {{name}} itself: it leaves this workspace, and its name, accounts, credentials in the OS secret store, and the tokens GuildBotics issued it with the services are deleted for every workspace. Another workspace that still has the member cannot use it until the member is removed there too. This action cannot be undone.",
           editingBadge: "Editing: {{id}}",
           changedTitle: "This member's settings have changed",
           changedBody:
@@ -1492,7 +1099,7 @@ const resources = {
         },
         busySave: {
           title: "Nothing was saved yet",
-          body: "Synchronization is writing to this workspace. Your entries are still here — save again in a moment.",
+          body: "Another save is writing to this workspace. Your entries are still here — save again in a moment.",
         },
         validation: {
           workspaceRequired: "Workspace is required.",
@@ -1604,7 +1211,7 @@ const resources = {
           provider_secret: {
             title: "A provider's workspace credential is missing",
             description:
-              "{{target}} is not held on {{machine}}. Connect again under Setup → Integrations, or fetch it from the Hub under the credentials on {{machine}} in Setup → Sync.",
+              "{{target}} is not held on {{machine}}. Connect again under Setup → Integrations.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check failed",
@@ -1885,7 +1492,7 @@ const resources = {
         settingsTitle: "Quick run window",
         settingsDescription: "Copy the selected text, then press this key to open the run window.",
         deviceLocal:
-          "Hotkeys belong to this machine and are not shared with your other machines: which combinations are free depends on the OS, the other applications installed, and the keyboard layout.",
+          "Hotkeys belong to this machine rather than to the workspace: which combinations are free depends on the OS, the other applications installed, and the keyboard layout.",
         commandLabel: "Hotkey",
         commandDescription:
           "Runs this command directly. The run window opens instead when an input is missing.",
@@ -2033,379 +1640,6 @@ const resources = {
             "{{client}} を許可するには、先にこのブラウザで GuildBotics を開いてください。10 分以内に開くと、このページに戻ります。",
         },
       },
-      sync: {
-        registeredWorkspaces: {
-          title: "登録済みのワークスペース",
-          body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
-          empty: "この端末に登録されたワークスペースはありません。",
-          removeLabel: "登録を外す",
-          remove: "{{path}}の登録を外す",
-          active: "選択中",
-          confirm:
-            "{{path}}をこの端末の保護対象から外しますか？ファイルは残りますが、あとでディレクトリへのアクセスを許可すると、エージェントがこの場所へアクセスできます。",
-          confirmLabel: "登録解除を確定",
-          cancel: "キャンセル",
-        },
-        indicator: {
-          aria: "同期: {{state}}",
-          scope: {
-            identities: "メンバー: {{state}}",
-            workspace: "ワークスペース: {{state}}",
-          },
-        },
-        identities: {
-          title: "メンバーの同期: {{label}}",
-        },
-        settings: {
-          title: "同期設定",
-          subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
-        },
-        device: {
-          title: "端末とHub 設定",
-          subtitle:
-            "ワークスペースではなく、このマシン自体に属する設定です。Hub 役のマシンでは、ここ以外の設定は必要ありません。",
-        },
-        clone: {
-          action: "Hub から取得して作成",
-          title: "Hub から取得して作成",
-          body: "Hub にあるワークスペースから、{{machine}} にワークスペースを作ります。まだワークスペースが無いマシンで使う操作です。すでにある場合は、そのワークスペースを接続してください。",
-          destination: "作成先:",
-          chooseTitle: "取得するワークスペース",
-          take: "取得する",
-          current: "{{machine}} で開いているワークスペース",
-          empty: "この Hub にはまだワークスペースがありません。",
-          failed: "取得できませんでした",
-        },
-        connect: {
-          title: "Hub へ接続する",
-          cloneHint:
-            "この操作は、このマシンにあるワークスペースを共有するためのものです。まだワークスペースが無いマシンでは、プロジェクト設定の「Hub から取得して作成」を使います。",
-          changeTitle: "別の Hub へ接続する",
-          endpoint: "Hub のアドレス",
-          endpointHint:
-            "Hub を動かしているマシンを user@host の形で指定します。マシン内のどこに置くかは GuildBotics が決めます。",
-          inspect: "確認する",
-          useLocal: "{{machine}} の Hub を使う",
-          useLocalHint:
-            "{{machine}} は Hub を動かしているため、そこにあるワークスペースはネットワークを介さずに接続できます。",
-          failed: "接続できませんでした",
-          chooseTitle: "このワークスペースをどうするか",
-          register: "このワークスペースを Hub に登録する",
-          joinHint: "または、Hub にすでにあるワークスペースへ参加する:",
-          join: "参加する…",
-        },
-        hostKey: {
-          title: "Hub のマシンのホスト鍵を確認してください",
-          body: "Hub マシン側に表示されている fingerprint と一致するものを選んでください。一致するまで何も送信しません。",
-          changedTitle: "Hub のマシンは以前と違うホスト鍵を提示しています",
-          changedBody:
-            "このアドレスには保存済みの鍵がありますが、提示されている鍵はどれもそれと一致しません。Hub マシンを再インストールした場合にこうなりますが、別のものが代わりに応答している場合も同じに見えます。Hub マシン自身で fingerprint を確認してから選んでください。",
-          confirm: "これで合っています",
-          compareHint: "Hub マシンで実行: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
-        },
-        preview: {
-          title: "参加する前に",
-          mode: {
-            join: "先にこのマシンの内容を commit してから、両方にあるファイルは Hub 側を採用します。押し出された内容はこのマシンに残り、破棄されません。",
-            reconnect:
-              "このマシンと Hub は履歴を共有しているため、置き換えではなく通常の収束処理になります。",
-          },
-          differing_one: "Hub 側の内容で置き換わるファイル 1 件",
-          differing_other: "Hub 側の内容で置き換わるファイル {{count}} 件",
-          hubOnly_one: "Hub から取り込むファイル 1 件",
-          hubOnly_other: "Hub から取り込むファイル {{count}} 件",
-          deviceOnly_one: "このマシンにだけあり、送信されるファイル 1 件",
-          deviceOnly_other: "このマシンにだけあり、送信されるファイル {{count}} 件",
-          unsendableTitle: "このマシンに残る変更があります",
-          unsendableBody_one: "1 件の変更はまだ送信できないため、そのまま残します。",
-          unsendableBody_other: "{{count}} 件の変更はまだ送信できないため、そのまま残します。",
-          cancel: "キャンセル",
-          confirm: "参加する",
-        },
-        connected: {
-          title: "接続中の Hub",
-          change: "別の Hub へ接続する",
-          cancelChange: "キャンセル",
-          changeHint:
-            "Hub を別マシンで作り直したときに使います。このマシンにだけある内容は破棄されず、新しい Hub へ送信されます。",
-        },
-        unsendable: {
-          title: {
-            identities: "メンバーの送信できない変更",
-            workspace: "送信できない変更",
-          },
-          body: "これらのファイルは、このマシンで直すまで送信されずに残ります。破棄はされません。",
-          path: "ファイル",
-          reason: "理由",
-        },
-        rejected: {
-          title: {
-            identities: "メンバーの退避された変更",
-            workspace: "退避された変更",
-          },
-          identitiesLocation:
-            "メンバーの変更はメンバー専用のリポジトリに退避されています。回復手順は <workspace>/.guildbotics の代わりに ~/.guildbotics/identity/.guildbotics で実行してください。",
-          body: "同じファイルについて別マシンの内容が先に Hub へ確定したため、このマシンの内容は統合されずに退避されました。このマシンだけが持っています。",
-          when: "退避日時",
-          paths: "対象ファイル",
-          more: "他 {{count}} 件を表示",
-          less: "折りたたむ",
-          id: "回復用 ID",
-          discard: "破棄する…",
-          discardTitle: "この退避を破棄しますか？",
-          discardBody:
-            "控えを持っているのはこのマシンだけです。他の device にも Hub にも存在せず、破棄すると元に戻せません。",
-          discardHint:
-            "内容を先に確認する場合は、このマシンで README の回復手順を実行してください。確認が済んでから破棄してください。",
-          discardConfirm: "破棄する",
-          cancel: "キャンセル",
-          alert_one: "あなたの変更 1 件が退避され、{{machine}} に残っています。",
-          alert_other: "あなたの変更 {{count}} 件が退避され、{{machine}} に残っています。",
-          alertTitle: {
-            identities: "メンバーの退避された変更があります",
-            workspace: "退避された変更があります",
-          },
-        },
-        devices: {
-          title: "device 一覧",
-          empty: "このワークスペースに参加した device はまだありません。",
-          os: "OS",
-          joinedAt: "参加日時",
-          id: "device ID",
-          live: "現在状態",
-          fingerprint: "device 鍵の fingerprint",
-          revokeHint:
-            "紛失したマシンを切り離すには、その鍵の fingerprint に対応する行を Hub マシンの ~/.ssh/authorized_keys から削除し、そのマシンが持っていたトークンと API キーを再発行してください。GuildBotics はこのファイルを編集しません。また、そのマシンに保存済みの値を遠隔から消すことはできません。",
-          fingerprintMissing: "未登録",
-          liveStatus: {
-            unknown: "不明",
-            online: "稼働中",
-            delayed: "更新遅延",
-            expired: "オフライン",
-          },
-          currentWork_one: "実行中 {{count}} 件",
-          currentWork_other: "実行中 {{count}} 件",
-          self: "このマシン",
-          copy: "コピー",
-          copied: "コピーしました",
-          rename: "このマシンの名前",
-          renameHint: "各マシンの名前は、そのマシン自身で変更します。",
-          renameAction: "変更する",
-        },
-        owner: {
-          title: "サービスオーナー",
-          current: "現在のオーナー: {{name}}（{{deviceId}}）",
-          none: "サービスオーナーはまだ決まっていません。",
-          self: "このマシンがサービスオーナーです",
-          hint: "オーナーは自動では切り替わりません。オーナーのマシンでサービスが停止していることを確認してから引き継いでください。",
-          takeOver: "{{name}} へ引き継ぐ",
-          connection: {
-            unknown: "接続状態不明",
-            online: "オンライン",
-            delayed: "更新が遅延しています",
-            expired: "オフライン",
-          },
-          confirmTitle: "サービス引き継ぎの確認",
-          confirmBody: "現在のオーナーは {{current}}（{{status}}）です。",
-          confirmWarning: "サービスが二重に動く危険があります",
-          confirmHint:
-            "続行する前に、現在のオーナーのマシンでサービスが停止したことを直接確認してください。",
-          cancel: "キャンセル",
-          confirmAction: "確認済み。引き継ぐ",
-          failed: "サービスオーナーを読み取れませんでした",
-        },
-        sshKey: {
-          title: "この端末の SSH 鍵",
-          body: "この公開鍵を Hub マシンの authorized_keys へ追加してください。GuildBotics が代行はしません。その操作自体が、そのマシンへのアクセス権を持っていることの証明になるためです。",
-          create: "鍵を作成する",
-          copy: "コピー",
-          copied: "コピーしました",
-        },
-        secrets: {
-          title: {
-            identities: "{{machine}} のメンバーの認証情報",
-            workspace: "{{machine}} のワークスペースの認証情報",
-          },
-          scope: {
-            identities:
-              "メンバーの各サービスのアカウントと、サービスへの接続です。すべてのワークスペースで共通です。",
-            workspace: "このワークスペースが使う API キーです。",
-          },
-          body: "API キーやトークンは各マシンの OS 秘密ストアに保存され、共有履歴には入りません。マシン間を移動するのは key 名と世代だけで、値そのものは送信・取得を実行したときにだけ移動します。",
-          empty: "このワークスペースにはまだ認証情報がありません。",
-          key: "キー",
-          status: "状態",
-          generations: "世代",
-          generationDetail: "共有 {{shared}} / 手元 {{here}} / Hub {{hub}}",
-          fetch: "取得",
-          send: "送る",
-          fetchAll_zero: "取得するものはありません",
-          fetchAll_one: "1 件をまとめて取得",
-          fetchAll_other: "{{count}} 件をまとめて取得",
-          sendAll_zero: "送るものはありません",
-          sendAll_one: "1 件を Hub マシンへ送る",
-          sendAll_other: "{{count}} 件を Hub マシンへ送る",
-          state: {
-            ready: "設定済み",
-            missing: "このマシンに値がありません",
-            outdated: "値が更新されています",
-            pending_send: "Hub マシンへ未送信の更新があります",
-            conflict: "2 台で同じ値を変更しました",
-            unconfirmed: "確認が必要です",
-            hub_behind: "Hub マシンに写しがありません",
-          },
-          stateDetail: {
-            missing:
-              "ワークスペースはこの key を共有していますが、このマシンの秘密ストアに値がありません。取得すると揃います。",
-            outdated: "別のマシンが新しい値を公開しています。取得すると揃います。",
-            pending_send:
-              "このマシンで入力した値がまだ Hub マシンへ届いていません。送信すると他のマシンが取得できるようになります。",
-            conflict:
-              "2 台のマシンが同じ key を変更しました。この行の「送る」（このマシンの値を採用）か「取得」（相手の値を採用）で解消します。",
-            unconfirmed:
-              "送信が途中で中断され、ワークスペースが記録していない値を Hub マシンが持っています。値を持っているマシンからもう一度送信すると解消します。",
-            hub_behind:
-              "共有済みの値の写しが Hub マシンに無く、他のマシンが取得できません。送信すると写しが渡ります。",
-          },
-          transferFailed: "転送に失敗しました",
-          alert: {
-            local_locked: {
-              title: "このマシンの SecretStore がロックされています",
-              body: "このマシンの OS 秘密ストアのロックを解除してから、もう一度実行してください。GuildBotics が平文で保存することはありません。",
-            },
-            hub_locked: {
-              title: "Hub マシンの SecretStore がロックされています",
-              body: "Hub マシン上で OS 秘密ストアのロックを解除してから、もう一度実行してください。ヘッドレス Linux の Hub では、再起動のたびに一度 Secret Service のロックを解除します。",
-            },
-            hub_desktop_required: {
-              title: "macOS の Hub で Desktop を起動してください",
-              body: "Hub マシンに GUI ログインし、GuildBotics Desktop を起動してから転送を再実行してください。",
-            },
-            hub_store_unavailable: {
-              title: "Hub の SecretStore を利用できません",
-              body: "Hub マシンの OS SecretStore を確認してから転送を再実行してください。",
-            },
-            hub_unreachable: {
-              title: "Hub に接続できませんでした",
-              body: "以下の状態は、このマシンだけで分かる内容です。Hub に接続できるようになれば、送信・取得をやり直せます。",
-            },
-            attention_one: "{{machine}} で対応が必要な認証情報が 1 件あります。",
-            attention_other: "{{machine}} で対応が必要な認証情報が {{count}} 件あります。",
-          },
-          refused: {
-            title_one: "転送できなかった認証情報が 1 件あります",
-            title_other: "転送できなかった認証情報が {{count}} 件あります",
-            entry: "{{key}}: {{reason}}",
-          },
-          result: {
-            conflict: "入力後に別のマシンで変更されています",
-            missing: "Hub マシンに値がありません",
-            generation_mismatch:
-              "このワークスペースが記録していない世代を Hub が持っています。値を持っているどのマシンからでも送信すれば解消します",
-            locked: "SecretStore がロックされています",
-            desktop_required:
-              "macOS の Hub に GUI ログインし、GuildBotics Desktop を起動してください",
-            store_unavailable: "SecretStore を利用できませんでした",
-            no_value: "このマシンに送る値がありません",
-            unknown: "このワークスペースが知らない key です",
-            invalid: "認証情報の key 名として使えません",
-            pending_send:
-              "このマシンで入力された値が未送信のため取得しませんでした。先に送信（または削除）してください",
-            ready: "このマシンはすでに共有されている値を持っています",
-          },
-          hint: {
-            missing: "{{machine}} に値がありません",
-            outdated: "値が更新されています",
-            pending_send: "Hub マシンへ未送信",
-            conflict: "2 台で変更されています",
-            unconfirmed: "確認が必要です",
-            hub_behind: "Hub マシンに写しがありません",
-            link: "同期設定を開く",
-          },
-        },
-        host: {
-          title: "このマシンで Hub を動かす",
-          body: "1台のマシンが、他のマシンの接続先となる共有 repository を持ちます。",
-          create: "このマシンを Hub にする",
-          hosted_one: "Hub を動かしています（ワークスペース 1 件）。",
-          hosted_other: "Hub を動かしています（ワークスペース {{count}} 件）。",
-          sshdHint:
-            "他のマシンは SSH で接続するため、このマシンで OpenSSH サーバーを有効にしておく必要があります。",
-        },
-        state: {
-          synced: {
-            label: "同期済み",
-            detail: "{{machine}} と Hub の内容が一致しています。",
-          },
-          sending: {
-            label: "送信保留",
-            detail: "{{machine}} での変更がまだ Hub に届いていません。自動で送信されます。",
-          },
-          receiving: {
-            label: "受信中",
-            detail: "Hub の更新を取り込んでいます。",
-          },
-          unreachable: {
-            label: "Hub 同期エラー",
-            detail:
-              "このワークスペースはこのまま使えます。変更は Hub と同期できるまで保持されます。",
-          },
-          local_error: {
-            label: "{{machine}} の同期エラー",
-            detail:
-              "このワークスペースはこのまま使えます。{{machine}} 側の原因で同期できないため、変更は原因が解消するまで保持されます。",
-          },
-          unsendable: {
-            label: "送信できない変更",
-            detail: "一部のファイルは、{{machine}} で直すまで共有できません。",
-          },
-          invalid_shared_state: {
-            label: "共有データ異常",
-            detail: "共有内容を自動で収束できなかったため、同期を停止しました。",
-          },
-          update_required: {
-            label: "更新が必要",
-            detail:
-              "別のマシンが新しいバージョンの GuildBotics を使っており、{{machine}} では内容を読めません。",
-          },
-          not_connected: {
-            label: "Hub につなげません",
-            detail:
-              "メンバーがワークスペースと同じ Hub につながっていないため、メンバーの名前やアカウントは他のマシンへ届きません。",
-          },
-          disabled: { label: "同期していません", detail: "" },
-        },
-        alerts: {
-          unreachable:
-            "Hub と同期できません。{{machine}} での作業は続けられ、原因が解消すると共有は自動で再開します。",
-          local_error:
-            "{{machine}} 側の原因で同期できません。「エラー内容」に表示されたファイルやフォルダを確認してください。直すと共有は自動で再開します。",
-          unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
-          unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
-          invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
-          update_required: "共有を続けるには、{{machine}} の GuildBotics を更新してください。",
-          not_connected:
-            "ワークスペースは同期していますが、メンバーの名前やアカウントは他のマシンへ届きません。Hub のマシンの GuildBotics を更新してから再試行してください。",
-        },
-        live: {
-          updateRequiredTitle: "現在状態のクライアント更新が必要です",
-          updateRequired: "現在状態を読むには、{{machine}} の GuildBotics を更新してください。",
-        },
-        counts: {
-          ahead_one: "送信待ちの変更 1 件",
-          ahead_other: "送信待ちの変更 {{count}} 件",
-          behind_one: "取り込む変更 1 件",
-          behind_other: "取り込む変更 {{count}} 件",
-          unsendable_one: "送信できない変更 1 件",
-          unsendable_other: "送信できない変更 {{count}} 件",
-          lastSuccess: "最終同期: {{time}}",
-        },
-        failureDetail: "エラー内容",
-        actions: {
-          retry: "再試行",
-          settings: "同期設定",
-        },
-      },
       systemAlerts: {
         region: "システム健全性アラート",
         severity: {
@@ -2465,19 +1699,6 @@ const resources = {
         memberHuman: "人間",
         nowRunning: "現在の作業",
         patrol: "前回巡回 {{last}}",
-        live: {
-          title: "他の device の現在状態",
-          status: {
-            online: "稼働中",
-            delayed: "更新遅延",
-            expired: "device オフライン",
-          },
-          device: {
-            online: "device {{deviceId}} は稼働中です。",
-            delayed: "device {{deviceId}} の更新が遅れています。",
-            expired: "device {{deviceId}} はオフラインです。",
-          },
-        },
         events: "イベント",
         loading: "アクティビティを読み込んでいます...",
         empty: "この期間のアクティビティはまだありません。",
@@ -2508,20 +1729,6 @@ const resources = {
           incomplete: "未完了",
           awaiting_checks: "CI 待ち",
         },
-        rejection: {
-          title: {
-            identities: "メンバーのこの変更は反映されませんでした",
-            workspace: "この変更は反映されませんでした",
-          },
-          identitiesLocation:
-            "メンバーの変更はメンバー専用のリポジトリに退避されています。回復手順は <workspace>/.guildbotics の代わりに ~/.guildbotics/identity/.guildbotics で実行してください。",
-          body: "同じファイルへの別マシンの変更が先に Hub へ確定しました。失敗ではなく、内容も失われていません。変更したマシンに保持されています。",
-          paths: "対象ファイル",
-          sourceDevice: "変更元 device",
-          id: "回復用 ID",
-          recovery:
-            "保持された内容を確認するには、そのマシン上で README の回復手順を実行してください。ここからは参照できず、GuildBotics が自動で復元することもありません。",
-        },
         eventTypes: {
           pr_create: "PR 作成",
           pr_merge: "PR マージ",
@@ -2530,7 +1737,6 @@ const resources = {
           push: "Push",
           issue_create: "Issue 作成",
           issue_resolve: "Issue 解決",
-          sync_rejected: "更新が反映されませんでした",
           external: "イベント",
         },
       },
@@ -2588,9 +1794,24 @@ const resources = {
           members: "メンバー",
           integrations: "連携",
           shortcuts: "ショートカット",
-          sync: "同期",
           verification: "検証",
-          device: "端末とHub",
+          device: "登録済みのワークスペース",
+        },
+        device: {
+          title: "このマシン",
+          subtitle: "ワークスペースではなく、このマシン自体に属する設定です。",
+          registeredWorkspaces: {
+            title: "登録済みのワークスペース",
+            body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
+            empty: "この端末に登録されたワークスペースはありません。",
+            removeLabel: "登録を外す",
+            remove: "{{path}}の登録を外す",
+            active: "選択中",
+            confirm:
+              "{{path}}をこの端末の保護対象から外しますか？ファイルは残りますが、あとでディレクトリへのアクセスを許可すると、エージェントがこの場所へアクセスできます。",
+            confirmLabel: "登録解除を確定",
+            cancel: "キャンセル",
+          },
         },
         verification: {
           title: "検証",
@@ -2660,7 +1881,7 @@ const resources = {
             "選択中の LLM プロバイダのAPIキーを、キーのボタンから設定してください。設定するまでこのセクションは未完了のままです。",
           toolNotProvisionedTooltip: "このツールはまだエージェント実行環境に導入できません。",
           cliHint:
-            "AI CLIツールはエージェント実行環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
+            "AI CLIツールはエージェント実行環境の中で動きます。このマシンで、選んだツールへログインしてください。",
           openEnvironment: "エージェント実行環境で確認",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusButtonLabel: "{{agent}} のGuildBoticsスキル状態を表示",
@@ -2765,7 +1986,7 @@ const resources = {
             declaration: {
               title: "環境の宣言",
               description:
-                "各端末が環境をビルドする元になるベースイメージ、起動時に割り当てるリソース、全 turn の接続先、環境が使う DNS リゾルバです。ワークスペースで共有され、image を変えたときだけ全端末で環境が再ビルドされます。",
+                "環境をビルドする元になるベースイメージ、起動時に割り当てるリソース、全 turn の接続先、環境が使う DNS リゾルバです。ワークスペースで共有され、image を変えたときだけ環境が再ビルドされます。",
               image: "ベースイメージ",
               imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
               imageHint:
@@ -2777,10 +1998,10 @@ const resources = {
               imageDeclared: "宣言: {{digests}}",
               memory: "メモリ（MiB）",
               memoryHint:
-                "ワークスペース共通で、全端末に同じ値を使います。メモリが最も小さい端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 4096。",
+                "ワークスペース共通です。すべての turn と snapshot build に割り当てます。既定値: 4096。",
               cpus: "仮想 CPU 数",
               cpusHint:
-                "ワークスペース共通で、全端末に同じ値を使います。CPU コア数が最も少ない端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 2。",
+                "ワークスペース共通です。すべての turn と snapshot build に割り当てます。既定値: 2。",
               positiveInteger: "1 以上の整数を入力してください。",
               nameservers: "DNS リゾルバ",
               nameserversHost:
@@ -2794,7 +2015,7 @@ const resources = {
           documents: {
             title: "ワークスペース共通のディレクトリ",
             description:
-              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリと Documents/GuildBotics（受け渡しフォルダ）は常に読み書きできます。このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書きます。無ければターン開始時に作成します。作業ディレクトリと Documents/GuildBotics（受け渡しフォルダ）は常に読み書きできます。このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
             builtin: "同梱",
             empty: "登録されたディレクトリはありません。",
             pathPlaceholder: "Documents/shared-documents",
@@ -2802,7 +2023,7 @@ const resources = {
           deviceAccess: {
             title: "この端末のディレクトリ",
             description:
-              "作業ディレクトリと共有ディレクトリ以外に、この端末の任意のディレクトリへのアクセスを設定します。この設定はこの端末にだけ保存され、同期されません。",
+              "作業ディレクトリと共有ディレクトリ以外に、この端末の任意のディレクトリへのアクセスを設定します。この設定はこの端末にだけ保存されます。",
             empty: "追加のディレクトリはありません。",
             deny: "禁止",
             builtin: "同梱",
@@ -2876,12 +2097,11 @@ const resources = {
           },
           workspace: {
             title: "ワークスペース共通設定",
-            description:
-              "環境の宣言と共通ディレクトリアクセスは、保存後にすべての端末へ適用されます。",
+            description: "環境の宣言と共通ディレクトリアクセスは、保存すると適用されます。",
           },
           device: {
             title: "この端末だけの設定",
-            description: "追加・禁止ディレクトリアクセスはこの端末だけに保存され、同期されません。",
+            description: "追加・禁止ディレクトリアクセスはこの端末だけに保存されます。",
           },
           loading: "実行環境の設定を読み込み中...",
           loadError: "実行環境の設定を読み込めませんでした",
@@ -2930,7 +2150,7 @@ const resources = {
           personIdFixedByAccount:
             "このメンバー用の {{provider}} のアカウントを設定している間は、メンバー ID を変更できません。",
           personIdFixed:
-            "メンバー ID は変更できません。{{machine}} や他のマシンのワークスペースが、この ID でメンバーを指しているためです。",
+            "メンバー ID は変更できません。{{machine}} のほかのワークスペースが、この ID でメンバーを指しているためです。",
           scopeHint:
             "名前・人格・アイコン・各サービスのアカウントは、すべてのワークスペースで共通です。役割・巡回・チャット・AI 設定は、このワークスペースだけの設定です。",
           joinLabel: "既存のメンバーを追加",
@@ -3005,7 +2225,7 @@ const resources = {
           tabHasError: "このタブに未入力または形式エラーの項目があります。",
           deleteConfirmTitle: "メンバーを削除しますか？",
           deleteConfirmBody:
-            "{{name}} そのものを削除します。このワークスペースから外し、名前・アカウント・OS 秘密ストア内の認証情報・各サービスで GuildBotics が発行したトークンを、すべてのワークスペースとマシンから削除します。ほかのワークスペースにこのメンバーが残っている場合、そこからも外すまでそのワークスペースでは使えません。この操作は元に戻せません。",
+            "{{name}} そのものを削除します。このワークスペースから外し、名前・アカウント・OS 秘密ストア内の認証情報・各サービスで GuildBotics が発行したトークンを、すべてのワークスペースから削除します。ほかのワークスペースにこのメンバーが残っている場合、そこからも外すまでそのワークスペースでは使えません。この操作は元に戻せません。",
           editingBadge: "編集中: {{id}}",
           changedTitle: "このメンバーの設定が変更されました",
           changedBody:
@@ -3094,7 +2314,7 @@ const resources = {
         },
         busySave: {
           title: "まだ保存していません",
-          body: "同期がこのワークスペースへ書き込み中です。入力はそのまま残っているので、少し待ってからもう一度保存してください。",
+          body: "別の保存処理がこのワークスペースへ書き込み中です。入力はそのまま残っているので、少し待ってからもう一度保存してください。",
         },
         validation: {
           workspaceRequired: "ワークスペースは必須です。",
@@ -3119,8 +2339,6 @@ const resources = {
         sourceTarget: "サービス実行に含める",
         noTargetTitle: "開始対象が選択されていません",
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
-        ownerElsewhere:
-          "サービスオーナーは別のマシン（{{name}}）です。{{machine}} でサービスを実行するには、設定 → 同期 から引き継いでください。",
         keepAwake: {
           title: "このマシンをスリープさせない",
           description:
@@ -3517,7 +2735,7 @@ const resources = {
           provider_secret: {
             title: "サービスのワークスペースの認証情報がありません",
             description:
-              "{{machine}} に {{target}} がありません。設定 → 連携でもう一度接続するか、設定 → 同期 の {{machine}} の認証情報で Hub から取得してください。",
+              "{{machine}} に {{target}} がありません。設定 → 連携でもう一度接続してください。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に失敗しました",
@@ -3802,7 +3020,7 @@ const resources = {
         settingsDescription:
           "選択中の文字列をコピーしてからこのキーを押すと、実行ウィンドウが開きます。",
         deviceLocal:
-          "ホットキーはこのマシン固有の設定で、他のマシンとは共有されません。どの組み合わせが空いているかは、OS の標準ショートカット・入っている他のアプリ・キーボード配列で決まるためです。",
+          "ホットキーはワークスペースではなく、このマシン固有の設定です。どの組み合わせが空いているかは、OS の標準ショートカット・入っている他のアプリ・キーボード配列で決まるためです。",
         commandLabel: "ホットキー",
         commandDescription:
           "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",

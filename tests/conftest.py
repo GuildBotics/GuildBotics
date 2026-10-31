@@ -442,8 +442,8 @@ def _isolate_workspace_data(monkeypatch, tmp_path):
 def _isolate_machine_home(monkeypatch, tmp_path):
     """Keep ``~/.guildbotics`` out of the developer's real home directory.
 
-    Device identity, the service lock, and a hub all live under the home
-    directory rather than under a workspace, so a test that touches any of them
+    Device identity and the service lock live under the home directory rather
+    than under a workspace, so a test that touches any of them
     would otherwise write into the machine the suite is running on -- and read
     back whatever that machine already had.
     """
@@ -457,19 +457,6 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # The machine's server port is machine state too: a test's server and its
     # clients use the default one, under this home.
     monkeypatch.delenv(PORT_ENV, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _identity_sync_ends_with_its_test():
-    """Stop the identities' synchronization a test started, before its home goes.
-
-    Connecting a workspace to a hub connects the identities too, and their
-    cycles run on a worker thread that would otherwise outlive the test.
-    """
-    yield
-    from guildbotics.sync.activation import deactivate_identity_sync
-
-    deactivate_identity_sync()
 
 
 @pytest.fixture(autouse=True)
@@ -859,11 +846,3 @@ def coverage_suspended():
     finally:
         if cov is not None:
             cov.start()
-
-
-@pytest.fixture(autouse=True)
-def _local_hub_transport(monkeypatch):
-    """Run Hub tests without a real Desktop; macOS transport tests opt in explicitly."""
-    from guildbotics.hub import secret_transport
-
-    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", False)

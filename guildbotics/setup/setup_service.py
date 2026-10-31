@@ -55,7 +55,6 @@ from guildbotics.utils.shared_write_lock import (
     shared_write_operation,
 )
 from guildbotics.utils.workspace_state import register_workspace
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -326,10 +325,6 @@ class PersonConfigSnapshot(BaseModel):
     character: dict[str, Any] = Field(default_factory=dict)
     #: The member's account with each provider, as its setup shows it.
     accounts: dict[str, Any] = Field(default_factory=dict)
-    # Member-relative secret name -> the key that member's value is stored
-    # under. The naming belongs to the backend, so the screen that shows a
-    # value's synchronization state asks for the name rather than rebuilding it.
-    secret_env_keys: dict[str, str] = Field(default_factory=dict)
     chat_channels: list[str] = Field(default_factory=list)
     work_stop_notification_channels: list[str] = Field(default_factory=list)
     chat_channel_participation: dict[str, str] = Field(default_factory=dict)
@@ -576,9 +571,7 @@ class SimpleProjectSetupService:
         # walks one level down rather than the directory root. These templates
         # are copied as bytes rather than read and written as text: a text
         # round trip rewrites the newlines to the ones this OS uses, so the
-        # same template would land as CRLF on Windows and LF elsewhere -- and
-        # every device that joined a hub would find these files differing for
-        # no reason anyone chose.
+        # same template would land as CRLF on Windows and LF elsewhere.
         cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
         cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
         for src_file in sorted(cli_agent_config_src_dir.glob("*/*.yml")):
@@ -832,7 +825,6 @@ class SimplePersonSetupService:
             relationships=str(identity.get("relationships", "")),
             character=character,
             accounts={name: view.model_dump() for name, view in accounts.items()},
-            secret_env_keys=owned.keys(),
             chat_channels=channels,
             work_stop_notification_channels=notification_channels,
             chat_channel_participation=channel_participation,
@@ -894,7 +886,6 @@ class SimplePersonSetupService:
         everything it holds with other services, for the other workspaces."""
         person_dir = stored_person_config_dir(config_dir, person_id)
         shutil.rmtree(person_dir)
-        notify_shared_state_changed("delete", [person_dir / MEMBER_FILE])
         return PersonSetupResult(
             files=[
                 CreatedFile(path=person_dir / MEMBER_FILE, action="delete"),
@@ -907,8 +898,8 @@ class SimplePersonSetupService:
 
         A workspace that still has the member cannot load it afterwards, which
         is why the member is first taken out of the workspace the deletion is
-        made from; another machine's workspaces report it until it is removed
-        from them too.
+        made from; the other workspaces report it until it is removed from
+        them too.
         """
         with shared_write_lock(get_identity_root()):
             return self._delete_identity(person_id)
@@ -918,9 +909,8 @@ class SimplePersonSetupService:
         if not (identity_dir / IDENTITY_FILE).is_file():
             raise SetupError("person_not_found", "Member config was not found.")
         files: list[CreatedFile] = []
-        # SecretStore first: indexed keys are removed whether or not this
-        # device holds their current generation, and a store failure leaves
-        # the identity intact so the deletion can be retried.
+        # SecretStore first: a store failure leaves the identity intact so the
+        # deletion can be retried.
         owned = (
             _owned_secrets(person_id)
             if is_valid_person_id(person_id)
@@ -935,7 +925,6 @@ class SimplePersonSetupService:
             if indexed:
                 files.append(CreatedFile(path=owned.store.location, action="update"))
         shutil.rmtree(identity_dir)
-        notify_shared_state_changed("delete", [identity_dir / IDENTITY_FILE])
         files.append(CreatedFile(path=identity_dir / IDENTITY_FILE, action="delete"))
         return PersonSetupResult(files=files)
 

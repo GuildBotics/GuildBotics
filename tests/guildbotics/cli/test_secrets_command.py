@@ -4,6 +4,7 @@ import importlib
 from pathlib import Path
 
 import i18n
+import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main
@@ -63,6 +64,29 @@ def test_status_reports_os_secret_store(fake_keyring, tmp_path):
     assert result.exit_code == 0
     assert "os_secret_store: available" in result.output
     assert "locked: no" in result.output
+
+
+@pytest.mark.parametrize("command", ["list", "delete", "export", "set"])
+def test_an_index_the_store_cannot_read_is_a_command_error(
+    fake_keyring, tmp_path, command
+):
+    workspace = _workspace(tmp_path)
+    index = _config_dir(workspace) / "secrets.yml"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("keys: [BROKEN\n", encoding="utf-8")
+    arguments = {"delete": ["TOKEN"], "set": ["TOKEN", "value"]}.get(command, [])
+
+    result = CliRunner().invoke(
+        secrets, ["--workspace", str(workspace), command, *arguments]
+    )
+
+    assert result.exit_code == 1
+    assert str(index) in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    status = CliRunner().invoke(secrets, ["--workspace", str(workspace), "status"])
+    assert status.exit_code == 0
+    assert f"stored keys: unknown ({index}" in status.output
 
 
 def test_set_stores_in_keychain(fake_keyring, tmp_path):
@@ -243,193 +267,3 @@ def test_export_to_stdout(fake_keyring, tmp_path):
 
     assert result.exit_code == 0
     assert "OPENAI_API_KEY=sk-secret" in result.output
-
-
-class TestHubTransfers:
-    """``secrets push`` / ``secrets pull``, which a machine with no Desktop uses.
-
-    A headless Linux device joins a workspace, finds it holds none of the
-    values, and gets them here. So the commands are checked for the two things
-    that matter on such a machine: the value really arrives in the OS secret
-    store, and it appears in no output.
-    """
-
-    def _connected(self, tmp_path, monkeypatch, hub_secrets, order=None):
-        """A workspace whose hub is this same machine."""
-        workspace = _workspace(tmp_path)
-        monkeypatch.setattr(
-            secrets_cli,
-            "hub_remote_url",
-            lambda *_: f"/hub/{WORKSPACE_ID}/repository.git",
-        )
-        monkeypatch.setattr(secrets_cli, "hub_secret_client", lambda *_: hub_secrets)
-        monkeypatch.setattr(secrets_cli, "commit_and_push_once", lambda *_, **__: None)
-        monkeypatch.setattr(
-            secrets_cli,
-            "synchronize_once",
-            lambda *_, **__: order.append("refresh") if order is not None else None,
-        )
-        hub_secrets.order = order
-        return workspace
-
-    def test_push_takes_the_current_shared_files_before_deciding(
-        self, fake_keyring, tmp_path, monkeypatch
-    ):
-        """Which generation a value is sent from is read out of the shared
-        index, so a machine that has been offline refreshes it first."""
-        order: list[str] = []
-        hub = FakeHubSecrets()
-        workspace = self._connected(tmp_path, monkeypatch, hub, order)
-        KeyringSecretStore(_config_dir(workspace)).set("MY_TOKEN", "ghp-000111")
-
-        CliRunner().invoke(secrets, ["--workspace", str(workspace), "push"])
-
-        assert order == ["refresh", "send"]
-
-    def test_push_offers_a_hub_that_holds_nothing_every_value(
-        self, fake_keyring, tmp_path, monkeypatch
-    ):
-        """A workspace that has only just been connected -- or one whose hub was
-        rebuilt -- has given it nothing, so "everything" cannot mean only the
-        values typed since."""
-        hub = FakeHubSecrets()
-        workspace = self._connected(tmp_path, monkeypatch, hub)
-        store = KeyringSecretStore(_config_dir(workspace))
-        store.set("MY_TOKEN", "ghp-000111")
-        store.confirm_shared({"MY_TOKEN": 1}, sent={"MY_TOKEN": "ghp-000111"})
-
-        result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "push"])
-
-        assert result.exit_code == 0, result.output
-        assert "MY_TOKEN: sent (generation 2)" in result.output
-        assert hub.values == {"MY_TOKEN": "ghp-000111"}
-
-    def test_push_sends_what_was_entered_here(
-        self, fake_keyring, tmp_path, monkeypatch
-    ):
-        hub = FakeHubSecrets()
-        workspace = self._connected(tmp_path, monkeypatch, hub)
-        KeyringSecretStore(_config_dir(workspace)).set("MY_TOKEN", "ghp-000111")
-
-        result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "push"])
-
-        assert result.exit_code == 0, result.output
-        assert hub.values == {"MY_TOKEN": "ghp-000111"}
-        assert "MY_TOKEN: sent (generation 1)" in result.output
-        assert "ghp-000111" not in result.output
-
-    def test_pull_stores_every_missing_value_without_retyping_any(
-        self, fake_keyring, tmp_path, monkeypatch
-    ):
-        hub = FakeHubSecrets()
-        workspace = self._connected(tmp_path, monkeypatch, hub)
-        store = KeyringSecretStore(_config_dir(workspace))
-        store.set("MY_TOKEN", "ghp-000111")
-        runner = CliRunner()
-        runner.invoke(secrets, ["--workspace", str(workspace), "push"])
-        # The machine that has to fetch knows the key and holds no value.
-        (workspace / ".guildbotics" / "local" / "secrets.json").unlink()
-        fake_keyring.passwords.clear()
-
-        result = runner.invoke(secrets, ["--workspace", str(workspace), "pull"])
-
-        assert result.exit_code == 0, result.output
-        assert "MY_TOKEN: fetched (generation 1)" in result.output
-        assert "ghp-000111" not in result.output
-        assert (
-            KeyringSecretStore(_config_dir(workspace)).get("MY_TOKEN") == "ghp-000111"
-        )
-
-    def test_a_workspace_with_no_hub_says_so(self, fake_keyring, tmp_path, monkeypatch):
-        workspace = _workspace(tmp_path)
-        monkeypatch.setattr(secrets_cli, "hub_remote_url", lambda *_: None)
-
-        result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "pull"])
-
-        assert result.exit_code != 0
-        assert "not connected to a hub" in result.output
-
-
-WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
-
-
-class FakeHubSecrets:
-    """A hub holding values in memory, with the base check the real one makes."""
-
-    def __init__(self):
-        self.values: dict[str, str] = {}
-        self.held: dict[str, int] = {}
-        self.order: list[str] | None = None
-
-    def index(self):
-        from guildbotics.secrets.hub_client import HubSecretIndex
-
-        return HubSecretIndex(generations=dict(self.held))
-
-    def send(self, entries):
-        from guildbotics.secrets.hub_client import HubSendResult
-
-        if self.order is not None:
-            self.order.append("send")
-        results = []
-        for offer in entries:
-            if self.held.get(offer.key, offer.candidate - 1) != offer.candidate - 1:
-                results.append(HubSendResult(key=offer.key, status="conflict"))
-                continue
-            self.values[offer.key] = offer.value
-            self.held[offer.key] = offer.candidate
-            results.append(
-                HubSendResult(
-                    key=offer.key, status="stored", generation=offer.candidate
-                )
-            )
-        return results
-
-    def fetch(self, keys):
-        from guildbotics.secrets.hub_client import HubFetchResult
-
-        return [
-            HubFetchResult(
-                key=key,
-                status="sent" if key in self.values else "missing",
-                generation=self.held.get(key),
-                value=self.values.get(key),
-            )
-            for key in keys
-        ]
-
-
-def test_desktop_requirement_is_localized(monkeypatch):
-    import click
-    from click.testing import CliRunner
-
-    from guildbotics.cli.secrets import _report, _run_transfer
-    from guildbotics.hub.secret_service import HubDesktopRequiredError
-    from guildbotics.secrets import SecretTransferOutcome
-    from guildbotics.utils.i18n_tool import t
-
-    @click.command()
-    def command():
-        def failed():
-            raise HubDesktopRequiredError("desktop_required")
-
-        _run_transfer(failed)
-
-    result = CliRunner().invoke(command)
-    assert result.exit_code == 1
-    assert t("app_api.errors.hub_desktop_required") in result.output
-
-    @click.command()
-    def report():
-        _report(
-            _run_transfer(
-                lambda: [
-                    SecretTransferOutcome("A_TOKEN", "desktop_required"),
-                    SecretTransferOutcome("B_TOKEN", "desktop_required"),
-                ]
-            )
-        )
-
-    result = CliRunner().invoke(report)
-    assert result.stdout == "A_TOKEN: desktop_required\nB_TOKEN: desktop_required\n"
-    assert result.stderr == t("app_api.errors.hub_desktop_required") + "\n"

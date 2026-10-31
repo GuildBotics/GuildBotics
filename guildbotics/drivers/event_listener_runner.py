@@ -287,7 +287,7 @@ class EventListenerRunner:
             drained = listener.drain_events()
             self._events_drained_count += len(drained)
             pending.extend(drained)
-            # Never block the event loop behind sync. Re-entrant writes below
+            # Never block the event loop behind another writer. Re-entrant writes below
             # inherit this lock, and the receive loop retries on its next wake.
             if pending:
                 with shared_write_lock(timeout=0):
@@ -321,7 +321,7 @@ class EventListenerRunner:
     async def _write_backfill[T](
         self, scope: tuple[str, str, str], write: Callable[[], T]
     ) -> T:
-        """Wait for sync cooperatively so socket reception and heartbeats continue."""
+        """Wait for the write lock cooperatively so reception and heartbeats continue."""
         self._backfill_waiting.add(scope)
         try:
             while not self._stop_event.is_set():

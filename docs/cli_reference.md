@@ -34,25 +34,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
-| [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
-| [`guildbotics hub identity`](#guildbotics-hub-identity) | Manage the repository of the members' identities, which every workspace shares. |
-| [`guildbotics hub identity claim`](#guildbotics-hub-identity-claim) | Show the identities' repository, registering IDENTITY_ID if there is none. |
-| [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
-| [`guildbotics hub live publish`](#guildbotics-hub-live-publish) | Replace one live snapshot for each non-empty stdin line. |
-| [`guildbotics hub live watch`](#guildbotics-hub-live-watch) | Poll live snapshots and head updates until the SSH connection closes. |
-| [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
-| [`guildbotics hub owner claim`](#guildbotics-hub-owner-claim) | Claim ownership only when the workspace has no owner. |
-| [`guildbotics hub owner get`](#guildbotics-hub-owner-get) | Show the current service owner, if one has been claimed. |
-| [`guildbotics hub owner transfer`](#guildbotics-hub-owner-transfer) | Move ownership explicitly to another device. |
-| [`guildbotics hub secret`](#guildbotics-hub-secret) | Hold secret values for the devices that share a workspace. |
-| [`guildbotics hub secret list`](#guildbotics-hub-secret-list) | Report which generation this hub holds for each key, without values. |
-| [`guildbotics hub secret receive`](#guildbotics-hub-secret-receive) | Store the values a device sends, one framed entry each. |
-| [`guildbotics hub secret send`](#guildbotics-hub-secret-send) | Write the requested values back to the device, one framed entry each. |
-| [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
-| [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
-| [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
-| [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
 | [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
@@ -119,8 +100,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets pull`](#guildbotics-secrets-pull) | Fetch values from the hub into this machine's OS secret store. |
-| [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 | [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
@@ -150,7 +129,6 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member through the running backend. |
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
@@ -435,284 +413,6 @@ guildbotics git-credential [OPTIONS] ACTION
 
 | Option | Description |
 | --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub`
-
-Host a synchronization hub for GuildBotics workspaces on this machine.
-
-```text
-guildbotics hub [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
-| [`guildbotics hub identity`](#guildbotics-hub-identity) | Manage the repository of the members' identities, which every workspace shares. |
-| [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
-| [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
-| [`guildbotics hub secret`](#guildbotics-hub-secret) | Hold secret values for the devices that share a workspace. |
-| [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
-| [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
-
-## `guildbotics hub create`
-
-Make this machine a hub, or show the hub it already hosts.
-
-```text
-guildbotics hub create [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub identity`
-
-Manage the repository of the members' identities, which every workspace
-shares.
-
-```text
-guildbotics hub identity [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub identity claim`](#guildbotics-hub-identity-claim) | Show the identities' repository, registering IDENTITY_ID if there is none. |
-
-## `guildbotics hub identity claim`
-
-Show the identities' repository, registering IDENTITY_ID if there is none.
-
-```text
-guildbotics hub identity claim [OPTIONS] IDENTITY_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub live`
-
-Publish and watch transient workspace live state.
-
-```text
-guildbotics hub live [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub live publish`](#guildbotics-hub-live-publish) | Replace one live snapshot for each non-empty stdin line. |
-| [`guildbotics hub live watch`](#guildbotics-hub-live-watch) | Poll live snapshots and head updates until the SSH connection closes. |
-
-## `guildbotics hub live publish`
-
-Replace one live snapshot for each non-empty stdin line.
-
-```text
-guildbotics hub live publish [OPTIONS] WORKSPACE_ID DEVICE_ID PUBLISHER_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub live watch`
-
-Poll live snapshots and head updates until the SSH connection closes.
-
-```text
-guildbotics hub live watch [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner`
-
-Inspect or explicitly change a workspace's service owner.
-
-```text
-guildbotics hub owner [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub owner claim`](#guildbotics-hub-owner-claim) | Claim ownership only when the workspace has no owner. |
-| [`guildbotics hub owner get`](#guildbotics-hub-owner-get) | Show the current service owner, if one has been claimed. |
-| [`guildbotics hub owner transfer`](#guildbotics-hub-owner-transfer) | Move ownership explicitly to another device. |
-
-## `guildbotics hub owner claim`
-
-Claim ownership only when the workspace has no owner.
-
-```text
-guildbotics hub owner claim [OPTIONS] WORKSPACE_ID DEVICE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner get`
-
-Show the current service owner, if one has been claimed.
-
-```text
-guildbotics hub owner get [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner transfer`
-
-Move ownership explicitly to another device.
-
-```text
-guildbotics hub owner transfer [OPTIONS] WORKSPACE_ID DEVICE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub secret`
-
-Hold secret values for the devices that share a workspace.
-
-Values arrive and leave on this command's own standard input and output.
-They are never written to the workspace repository, to a relay file, or to
-a temporary file, and never appear in output, logs, or error messages.
-
-```text
-guildbotics hub secret [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub secret list`](#guildbotics-hub-secret-list) | Report which generation this hub holds for each key, without values. |
-| [`guildbotics hub secret receive`](#guildbotics-hub-secret-receive) | Store the values a device sends, one framed entry each. |
-| [`guildbotics hub secret send`](#guildbotics-hub-secret-send) | Write the requested values back to the device, one framed entry each. |
-
-## `guildbotics hub secret list`
-
-Report which generation this hub holds for each key, without values.
-
-```text
-guildbotics hub secret list [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub secret receive`
-
-Store the values a device sends, one framed entry each.
-
-```text
-guildbotics hub secret receive [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub secret send`
-
-Write the requested values back to the device, one framed entry each.
-
-```text
-guildbotics hub secret send [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--key TEXT` | A logical key to send back. |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub status`
-
-Show whether this machine hosts a hub, and which workspaces it holds.
-
-```text
-guildbotics hub status [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub workspace`
-
-Manage the repositories this hub holds, one per workspace.
-
-```text
-guildbotics hub workspace [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
-| [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
-
-## `guildbotics hub workspace create`
-
-Create the repository a workspace synchronizes through.
-
-```text
-guildbotics hub workspace create [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub workspace list`
-
-List the workspaces this hub holds.
-
-```text
-guildbotics hub workspace list [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics kill`
@@ -1860,8 +1560,6 @@ guildbotics secrets [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets pull`](#guildbotics-secrets-pull) | Fetch values from the hub into this machine's OS secret store. |
-| [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 
@@ -1908,41 +1606,6 @@ List the names of the stored secrets.
 
 ```text
 guildbotics secrets list [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics secrets pull`
-
-Fetch values from the hub into this machine's OS secret store.
-
-With no KEYS this is the whole of setting up a new device: every key this
-machine has no value for, or holds an older value for, arrives in one
-exchange and is stored without anything being retyped.
-
-The shared files are taken first: only the generation they name is ever
-adopted, so an old copy of them would leave nothing to fetch.
-
-```text
-guildbotics secrets pull [OPTIONS] [KEYS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics secrets push`
-
-Send values entered on this machine to the hub (all it lacks by default).
-
-The shared files are refreshed first. Which generation a value is sent from
-is read out of ``config/secrets.yml``, and a machine that has been offline
-would otherwise send from a generation the others have moved past.
-
-```text
-guildbotics secrets push [OPTIONS] [KEYS]...
 ```
 
 | Option | Description |

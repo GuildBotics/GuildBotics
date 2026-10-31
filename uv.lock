@@ -539,7 +539,6 @@ dependencies = [
     { name = "croniter" },
     { name = "cryptography" },
     { name = "fastapi" },
-    { name = "gitpython" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -577,6 +576,7 @@ redis = [
     { name = "redis" },
 ]
 test = [
+    { name = "gitpython" },
     { name = "grimp" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -594,7 +594,7 @@ requires-dist = [
     { name = "croniter", specifier = ">=3.0" },
     { name = "cryptography", specifier = ">=50,<51" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
-    { name = "gitpython", specifier = ">=3.2.1" },
+    { name = "gitpython", marker = "extra == 'test'", specifier = ">=3.2.1" },
     { name = "google-genai", specifier = ">=2.17,<3.0" },
     { name = "grimp", marker = "extra == 'test'", specifier = ">=3.9" },
     { name = "httpx", specifier = ">=0.28,<1.0" },

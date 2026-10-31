@@ -1,34 +1,16 @@
-"""The ``guildbotics secrets`` commands.
-
-Reading and writing this machine's own secret store, and the two explicit
-transfers with the hub. The transfers are here as well as in the Desktop
-because a machine can have no Desktop at all: a headless Linux device joins a
-workspace, finds it holds none of the values, and fetches them from here.
+"""The ``guildbotics secrets`` commands: this machine's own secret store.
 
 Secret values never appear in the arguments, the output, or an error of these
-commands. A value entered here is read from a prompt or a file, and a value
-arriving from the hub goes straight into the OS secret store.
+commands. A value entered here is read from a prompt or a file.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
 
 import click
 
 from guildbotics.cli._options import apply_workspace_option
-from guildbotics.hub import HubUnreachableError, connection
-from guildbotics.hub.secret_host import HubSecretError
-from guildbotics.hub.secret_service import HubDesktopRequiredError
-from guildbotics.secrets import SecretTransfer, SecretTransferOutcome, hub_secret_client
-from guildbotics.sync import hub_remote_url
-from guildbotics.sync.activation import (
-    ONE_SHOT_LOCK_TIMEOUT_SECONDS,
-    commit_and_push_once,
-    synchronize_once,
-)
 from guildbotics.utils.fileio import (
     get_identity_root,
     get_workspace_config_dir,
@@ -36,19 +18,16 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
-from guildbotics.utils.openssh import OpenSshNotFoundError
 from guildbotics.utils.person_id import is_member_secret
 from guildbotics.utils.secret_store import (
+    SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
-    SecretKeyState,
-    SecretKeyStatus,
     format_env_line,
     keyring_status,
     read_env_values,
     resolve_secret_store,
     write_env_text,
 )
-from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 
 
 class _SecretsContext:
@@ -76,26 +55,24 @@ class _SecretsContext:
             )
         _set_values(self.store(), values)
 
-    def transfer(self) -> SecretTransfer:
-        """Return the transfer for this workspace's hub.
 
-        Raises:
-            click.ClickException: When the workspace has no hub. There is
-                nowhere to send to and nothing to fetch from, and saying so is
-                more useful than an empty result.
-        """
-        remote_url = hub_remote_url(self.root)
-        if not remote_url:
+class _SecretStoreGroup(click.Group):
+    """A command group that reports a store it cannot use as a command error.
+
+    Every command reaches the store, and a locked keychain or an index that
+    cannot be read stops each of them the same way.
+    """
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except SecretStoreError as exc:
             raise click.ClickException(
-                "This workspace is not connected to a hub. "
-                "Connect it before transferring secrets."
-            )
-        workspace_id = connection.workspace_id_from_remote_url(remote_url)
-        location = connection.location_from_remote_url(remote_url, workspace_id)
-        return SecretTransfer(self.store(), hub_secret_client(location, workspace_id))
+                t("cli.secrets.store_failed", error=exc)
+            ) from exc
 
 
-@click.group()
+@click.group(cls=_SecretStoreGroup)
 @click.pass_context
 @click.option(
     "--workspace",
@@ -127,85 +104,16 @@ def secrets(ctx: click.Context, workspace_dir: Path | None, identities: bool) ->
 def secrets_status(env: _SecretsContext) -> None:
     """Show OS secret-store status for this workspace."""
     status = keyring_status()
-    stale: list[str] = []
-    states: list[SecretKeyState] = []
-    try:
-        store = env.store()
-        key_count = len(store.keys())
-        stale = store.stale_keys()
-        states = store.key_states()
-        location = str(store.location)
-    except SecretStoreError:
-        key_count = 0
-        location = str(env.config_dir / "secrets.yml")
     click.echo(f"workspace: {env.root}")
     click.echo(
         f"os_secret_store: {'available' if status['available'] else 'unavailable'}"
     )
     click.echo(f"locked: {'yes' if status['locked'] else 'no'}")
-    click.echo(f"location: {location}")
-    click.echo(f"stored keys: {key_count}")
-    click.echo(f"stale keys: {len(stale)}")
-    for state in states:
-        if state.status is SecretKeyStatus.READY:
-            continue
-        click.echo(
-            f"  {state.key}: {state.status} "
-            f"(shared {state.shared_generation}, here {state.local_generation})"
-        )
-    if states and any(state.status is not SecretKeyStatus.READY for state in states):
-        click.echo(
-            "Run `guildbotics secrets pull` to take what the hub holds, or "
-            "`guildbotics secrets push` to give it what was entered here."
-        )
-
-
-@secrets.command(name="push")
-@click.argument("keys", nargs=-1)
-@click.pass_obj
-def secrets_push(env: _SecretsContext, keys: tuple[str, ...]) -> None:
-    """Send values entered on this machine to the hub (all it lacks by default).
-
-    The shared files are refreshed first. Which generation a value is sent from
-    is read out of ``config/secrets.yml``, and a machine that has been offline
-    would otherwise send from a generation the others have moved past.
-    """
-    transfer = env.transfer()
-    _refresh(env.root)
-    outcomes = _run_transfer(
-        lambda: transfer.send(list(keys)) if keys else transfer.send_pending()
-    )
-    if not outcomes:
-        click.echo("Nothing to send: the hub holds every value entered here.")
-        return
-    _report(outcomes)
-    # The generations just published live in the shared config file, so a
-    # machine with no running service still gets them to the hub.
-    _synchronize_generations(env.root)
-
-
-@secrets.command(name="pull")
-@click.argument("keys", nargs=-1)
-@click.pass_obj
-def secrets_pull(env: _SecretsContext, keys: tuple[str, ...]) -> None:
-    """Fetch values from the hub into this machine's OS secret store.
-
-    With no KEYS this is the whole of setting up a new device: every key this
-    machine has no value for, or holds an older value for, arrives in one
-    exchange and is stored without anything being retyped.
-
-    The shared files are taken first: only the generation they name is ever
-    adopted, so an old copy of them would leave nothing to fetch.
-    """
-    transfer = env.transfer()
-    _refresh(env.root)
-    outcomes = _run_transfer(
-        lambda: transfer.fetch(list(keys)) if keys else transfer.fetch_missing()
-    )
-    if not outcomes:
-        click.echo("Nothing to fetch: this machine holds every shared value.")
-        return
-    _report(outcomes)
+    click.echo(f"location: {env.config_dir / SECRETS_INDEX_FILENAME}")
+    try:
+        click.echo(f"stored keys: {len(env.store().keys())}")
+    except SecretStoreError as exc:
+        click.echo(f"stored keys: unknown ({exc})")
 
 
 @secrets.command(name="list")
@@ -275,7 +183,7 @@ def secrets_export(env: _SecretsContext, file_path: Path | None) -> None:
         return
     write_env_text(file_path, content + "\n")
     click.echo(f"Exported {len(values)} secrets to {file_path}.")
-    click.echo("Delete the file after importing it on the target machine.")
+    click.echo("Delete the file once you no longer need it.")
 
 
 @secrets.command(name="import")
@@ -291,53 +199,6 @@ def secrets_import(env: _SecretsContext, file: Path) -> None:
     click.echo(f"Delete {file} once you no longer need it.")
 
 
-def _run_transfer(
-    action: Callable[[], list[SecretTransferOutcome]],
-) -> list[SecretTransferOutcome]:
-    """Run one transfer, reporting a hub failure as a command error."""
-    desktop_help = t("app_api.errors.hub_desktop_required")
-    try:
-        outcomes = action()
-    except HubDesktopRequiredError as exc:
-        raise click.ClickException(desktop_help) from exc
-    except (HubSecretError, HubUnreachableError, OpenSshNotFoundError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    if any(outcome.status == "desktop_required" for outcome in outcomes):
-        click.echo(desktop_help, err=True)
-    return outcomes
-
-
-def _report(outcomes: list[SecretTransferOutcome]) -> None:
-    """Print one line per key: its name and what happened, never its value."""
-    for outcome in outcomes:
-        generation = (
-            "" if outcome.generation is None else f" (generation {outcome.generation})"
-        )
-        click.echo(f"{outcome.key}: {outcome.status}{generation}")
-
-
-def _refresh(root: Path) -> None:
-    """Take the current shared files before deciding what to send.
-
-    Best effort: a hub that cannot be reached, or a repository something else
-    is holding, leaves the decision on what this machine already has -- which
-    is where it would have been made anyway.
-    """
-    with suppress(SyncRepositoryBusyError, HubSecretError, HubUnreachableError):
-        synchronize_once(root, timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
-
-
-def _synchronize_generations(root: Path) -> None:
-    """Push the metadata this transfer wrote, on a machine with no service."""
-    try:
-        commit_and_push_once(root, timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
-    except SyncRepositoryBusyError:
-        click.echo(
-            "The generations were recorded and will be sent by the "
-            "synchronization already running on this machine."
-        )
-
-
 def _set_values(store: KeyringSecretStore, values: dict[str, str]) -> None:
     """Store values with safe CLI errors that never include secret contents."""
     try:
@@ -351,5 +212,3 @@ def _set_values(store: KeyringSecretStore, values: dict[str, str]) -> None:
                 limit=exc.limit,
             )
         ) from exc
-    except SecretStoreError as exc:
-        raise click.ClickException(t("cli.secrets.store_failed", error=exc)) from exc

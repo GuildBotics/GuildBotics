@@ -6,7 +6,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+from guildbotics.utils.shared_writes import SHARED_RECORD_SCHEMA_VERSION
 
 TaskRunExecutionMode = Literal["autonomous", "user_initiated", "remote"]
 TaskRunState = Literal[
@@ -63,11 +63,11 @@ class TaskRunRecord(BaseModel):
     member_id: str
     device_id: str
     #: The source of the trace the run is (``routine``, ``event_listener``, ...),
-    #: so another device can place the run on its timeline without the trace.
+    #: so the timeline can place the run without the trace.
     source: str = ""
     #: The trace's attributes as the run's boundary saw them -- the PR / issue
-    #: or chat thread the run targets. Mirrored so the run names its work on
-    #: every device, not only the one holding the trace.
+    #: or chat thread the run targets. Mirrored so the run names its work after
+    #: its trace is gone.
     attributes: dict[str, str] = Field(default_factory=dict)
     started_at: str
     finished_at: str | None = None

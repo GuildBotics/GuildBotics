@@ -1,18 +1,15 @@
 """Config reads and writes guarded by a Git blob ID compare-and-set.
 
-Config files are the shared state a person edits by hand, so two machines --
-or one machine with a stale editor open -- can plausibly submit conflicting
-edits. Every read therefore returns the content together with its Git blob ID,
+Config files are the state a person edits by hand, so two screens -- or one
+with a stale editor open -- can plausibly submit conflicting edits. Every
+read therefore returns the content together with its Git blob ID,
 and every save states the blob IDs it expects to replace. A save whose
 expectation no longer holds is refused rather than merged, and the caller
 redisplays the current content.
 
-The blob ID is the same value Git computes for that content, so shared files
-need no version field of their own and the identifier survives synchronization
-unchanged. The compare-and-set is a device-level mutex around read, compare,
-and replace, not a lock held for the length of an edit: a distributed lock
-would block local editing whenever the hub is unreachable, which the design
-refuses to trade away.
+The blob ID is the same value Git computes for that content, so config files
+need no version field of their own. The compare-and-set is a mutex around
+read, compare, and replace, not a lock held for the length of an edit.
 
 One screen's save writes several config files, so comparing, writing, and
 reporting where the write left them are one indivisible step:
@@ -24,8 +21,7 @@ them in the wrong order or leave one out, and there are as many such places as
 there are writers.
 
 This optimistic lock applies to config alone. Memory documents, conversation
-state, and task runs keep their existing save APIs; when two devices really do
-change the same file, the sync manager's first-committer-wins rule settles it.
+state, and task runs keep their existing save APIs.
 """
 
 from __future__ import annotations
@@ -37,7 +33,14 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.workspace.validation import SharedFileInvalidError
+
+
+class ConfigPathInvalidError(ValueError):
+    """Raised when a revision names something that is not a config file."""
+
+    def __init__(self, relative_path: str, reason: str) -> None:
+        super().__init__(f"{relative_path}: {reason}")
+
 
 #: Ends a revision key that stands for a directory's set of files rather than
 #: for one file's content. A config file's path never ends in a separator, so
@@ -150,7 +153,7 @@ class ConfigRepository:
         others -- are stale if any file they read has changed since, and just
         as stale if the directory now holds a file they never saw: saving would
         prune it. One entry therefore stands for the set of paths itself, so a
-        file another device added, and a directory that did not exist at all
+        file another writer added, and a directory that did not exist at all
         when the screen was read, are both changes there is something to
         compare against.
 
@@ -170,9 +173,9 @@ class ConfigRepository:
     ) -> ConfigWriteReceipt[T]:
         """Apply one config write as a unit: compare, write, and report.
 
-        All three happen under the workspace's shared-write lock, which
-        synchronization holds too. Comparing without it would let the hub's
-        content arrive between the comparison and the write; reporting without
+        All three happen under the workspace's shared-write lock, which every
+        other writer of these files holds too. Comparing without it would let
+        another write land between the comparison and the write; reporting without
         it would answer with a revision belonging to content the caller never
         wrote, and the screen would then save against it unchallenged.
 
@@ -184,14 +187,14 @@ class ConfigRepository:
                 path mapped to an empty string must still not exist; a path
                 ending in ``/`` constrains that directory's set of files. None
                 compares nothing -- which is not the same as needing no lock,
-                because the write still must not interleave with the hub's.
+                because the write still must not interleave with another.
             report (Callable[[], dict[str, str]] | None): Reads the revisions
                 to answer with, called while the lock is still held.
 
         Raises:
             StaleConfigWriteError: When one of the files changed since it was
                 read. Nothing has been written when this is raised.
-            SharedWriteBusyError: When synchronization held the workspace's
+            SharedWriteBusyError: When another writer held the workspace's
                 shared files for longer than this waited.
         """
         with shared_write_lock(self.workspace_root):
@@ -242,23 +245,23 @@ class ConfigRepository:
         """Resolve a config-relative path, refusing anything outside config/.
 
         Raises:
-            SharedFileInvalidError: When the path is absolute, walks up with
+            ConfigPathInvalidError: When the path is absolute, walks up with
                 ``..``, or otherwise lands outside the config directory.
         """
         candidate = PurePosixPath(relative_path)
         if not relative_path.strip():
-            raise SharedFileInvalidError(relative_path, "names no config file")
+            raise ConfigPathInvalidError(relative_path, "names no config file")
         if candidate.is_absolute() or PureWindowsPath(relative_path).is_absolute():
-            raise SharedFileInvalidError(relative_path, "is an absolute path")
+            raise ConfigPathInvalidError(relative_path, "is an absolute path")
         if ".." in candidate.parts:
-            raise SharedFileInvalidError(relative_path, "walks outside config/")
+            raise ConfigPathInvalidError(relative_path, "walks outside config/")
         path = self._config_dir / relative_path
         # Symlinks can leave the directory without a ``..`` in the path, so the
         # resolved location is what decides.
         if not path.resolve(strict=False).is_relative_to(
             self._config_dir.resolve(strict=False)
         ):
-            raise SharedFileInvalidError(relative_path, "resolves outside config/")
+            raise ConfigPathInvalidError(relative_path, "resolves outside config/")
         return path
 
     def _shared_path(self, relative_path: str) -> str:

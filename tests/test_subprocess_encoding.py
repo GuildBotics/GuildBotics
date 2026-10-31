@@ -12,9 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # Native console tools use the local code page; UTF-8 protocols do not.
 LOCALE_OUTPUT = {
     "guildbotics/environment/toolchain.py:device_nameservers": "PowerShell prints ASCII addresses and console-code-page diagnostics.",
-    "guildbotics/hub/connection.py:_scan_host_keys": "SSH diagnostics use the client locale; keys are read from a UTF-8 file.",
-    "guildbotics/hub/connection.py:_known_host_keys": "ssh-keygen prints ASCII key material with native comments and diagnostics.",
-    "guildbotics/hub/connection.py:_run": "OpenSSH tools use the client locale; Hub CLI output uses the byte stream.",
     "guildbotics/utils/os_language.py:_macos_ui_language_tag": "macOS defaults prints ASCII language tags in its native locale.",
     "guildbotics/utils/processes.py:launching_app_name": "macOS ps prints native process paths in its native locale.",
 }

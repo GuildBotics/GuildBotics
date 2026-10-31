@@ -208,7 +208,7 @@ def test_memory_redacts_local_names_before_sending(connected, tmp_path, monkeypa
     # would miss values whose provenance is the saved index.
     index = tmp_path / ".guildbotics/config/secrets.yml"
     index.parent.mkdir(parents=True, exist_ok=True)
-    index.write_text("keys:\n  DATABASE_URL: {}\n", encoding="utf-8")
+    index.write_text("keys:\n- DATABASE_URL\n", encoding="utf-8")
     monkeypatch.setenv("DATABASE_URL", "local-dummy-value")
     seen = []
     plans = []
@@ -428,22 +428,12 @@ def current_git(connected, tmp_path, monkeypatch):
     )
     monkeypatch.chdir(user)
     git = LocalGit(user)
-    events, prepares, syncs = [], [], []
+    events = []
 
     def event(kind, command, payload=None):
         events.append(kind)
 
-    def prepare():
-        prepares.append("prepare")
-
-        def sync(**kwargs):
-            syncs.append("sync")
-            return SimpleNamespace(failure=None)
-
-        return SimpleNamespace(commit_and_push_once=sync)
-
     monkeypatch.setattr(backend, "_record_member_command_event", event)
-    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
 
     def stage():
         (user / "a").write_text("change", encoding="utf-8")
@@ -469,8 +459,6 @@ def current_git(connected, tmp_path, monkeypatch):
         git=git,
         user=user,
         events=events,
-        prepares=prepares,
-        syncs=syncs,
         stage=stage,
         run=run,
     )
@@ -530,58 +518,8 @@ def test_current_command_has_one_boundary(current_git, monkeypatch, operation, c
     result = state.run(operation)
     assert result.exit_code == 0, result.output
     assert state.events == ["member.command.started", "member.command.finished"]
-    assert len(state.prepares) == len(state.syncs) == 1
     if operation != "commit" and case in {"push_retry", "tracking_retry"}:
         assert len(retries) == 2
-
-
-def test_commit_returns_sync_pending(current_git, monkeypatch):
-    state = current_git
-    state.stage()
-
-    def prepare():
-        return SimpleNamespace(
-            commit_and_push_once=lambda **kwargs: SimpleNamespace(failure="offline")
-        )
-
-    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
-    result = state.run("commit")
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["sync"] == "pending"
-
-
-def test_invalid_device_identity_is_refused_before_local_commit(current_git):
-    from guildbotics.workspace.identity import device_identity_path
-
-    state = current_git
-    state.stage()
-    before = state.git("rev-parse", "HEAD").stdout
-    path = device_identity_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"device_id":"invalid"}', encoding="utf-8")
-    result = state.run("publish")
-    assert result.exit_code == 1
-    assert str(path) in result.stderr
-    assert state.git("rev-parse", "HEAD").stdout == before
-    assert state.prepares == state.events == []
-
-
-def test_failed_preparation_never_starts_the_push(current_git, monkeypatch):
-    state = current_git
-
-    def prepare():
-        raise MemberCapabilityError("not ready")
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("push must not start")
-
-    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
-    monkeypatch.setattr(MemberGitWorkspaceService, "_push", forbidden)
-    result = state.run("push")
-    assert result.exit_code == 1
-    assert "not ready" in result.stderr
-    assert "Traceback" not in result.stderr
-    assert state.events == state.syncs == []
 
 
 def test_tracking_uses_the_history_fetched_for_the_push(current_git, monkeypatch):
@@ -614,7 +552,6 @@ def test_auxiliary_phase_failure_is_a_short_error(current_git, monkeypatch, phas
     assert result.exit_code == 1
     assert "auxiliary refused" in result.stderr
     assert "Traceback" not in result.stderr
-    assert len(current_git.prepares) == (0 if phase == "known" else 1)
 
 
 @pytest.mark.parametrize("failure", ["push", "domain_event", "close"])
@@ -652,8 +589,6 @@ def test_publication_failures_stay_inside_the_boundary(
     result = state.run("publish")
     assert result.exit_code == 1
     assert state.events == ["member.command.started", "member.command.failed"]
-    assert len(state.prepares) == 1
-    assert state.syncs == []
 
 
 @pytest.mark.parametrize("locale", ["en", "ja"])

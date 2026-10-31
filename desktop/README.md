@@ -63,14 +63,6 @@ GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
 
 ---
 
-## 同期後のメンバー設定を確認
-
-他のマシンの変更を同期で取り込むと、メンバー一覧は画面を切り替えずに更新されます。
-同期状態は 5 秒ごとに確認します。開いているメンバーの設定が変わった場合は、
-フォームに「このメンバーの設定が変更されました」と表示し、未保存の入力を保持します。
-「最新の設定を再読込」を押すと、入力を現在の設定へ置き換え、再び保存できるようになります。
-同じ画面で開いた AI 設定などの入力も再読込時に置き換わるため、残したい内容は先に控えてください。
-
 ## 最後の turn のモデル記録を確認
 
 メンバー設定の「デフォルトの AI CLIツール」のカードには、このマシンに保持された
@@ -146,7 +138,6 @@ npm run e2e
 | `e2e/members.spec.ts`     | ② member 追加 → `identity.yml`（identity root）と `member.yml`（workspace）の実永続                                                                                                                                                                                                            |
 | `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                                                                                                                                |
 | `e2e/decisions.spec.ts`   | チャット判定の共通 brain 割り当て → 保存 → reload 後も復元                                                                                                                                                                                                                                     |
-| `e2e/sync.spec.ts`        | ⑦ 既存ワークスペースの同期を有効化 → 複製の取得、⑧ Hub に先に届いた変更が勝ち後着は退避、⑨ 別の場所に再構築した Hub への再接続、⑩ Hub へ直接 push された変更の取り込み                                                                                                                         |
 | `e2e/environment.spec.ts` | ⑪ 実 microVM でコマンドを実行: 自力作成 → source 保存 → 画像の貼り付け（隔離環境の綴りのパス）→ 実行 → `/events` で成功と出力が届く。`.sh` の step は貼り付けたファイルを読み、出力を握ったままのプロセスを残してもコマンドは終わる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ走る |
 | `e2e/failure.spec.ts`     | ⑥ 画面を開いたまま backend が止まる → 「届かない」通知 → 再起動 → retry で復帰                                                                                                                                                                                                                                              |
 

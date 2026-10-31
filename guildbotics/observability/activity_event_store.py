@@ -7,16 +7,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability.event_types import (
-    COMMAND_LIFECYCLE_EVENT_TYPES,
-    SYNC_UPDATE_REJECTED,
-)
+from guildbotics.observability.event_types import COMMAND_LIFECYCLE_EVENT_TYPES
 from guildbotics.utils.fileio import get_workspace_state_path, iter_json_objects
 from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
     redact_for_sharing,
 )
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     write_shared_json,
 )
@@ -42,7 +39,6 @@ _DOMAIN_EVENT_TYPES = frozenset(
         "pull_request.review_limit",
         "chat_dispatch.retry_scheduled",
         "chat_dispatch.abandoned",
-        SYNC_UPDATE_REJECTED,
     }
 )
 
@@ -74,19 +70,8 @@ class ActivityEventStore:
         self.root = root if root is not None else default_events_root()
         self.workspace_root = workspace_root
 
-    @classmethod
-    def of(cls, workspace_root: Path) -> ActivityEventStore:
-        """Return the events of one workspace root, named rather than selected.
-
-        The identities' root has the same shape, so it is named the same way.
-        """
-        return cls(
-            get_workspace_state_path("events", workspace_root=workspace_root),
-            workspace_root=workspace_root,
-        )
-
     def record(self, record: dict[str, Any]) -> Path:
-        """Write one event and announce it.
+        """Write one event.
 
         Every event gets its own file under a fresh identifier, so nothing
         here is read before being written and the write helper's own span is

@@ -35,12 +35,12 @@ Hub のマシン                                ほかのマシン
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
-- Branvil は GuildBotics の Hub を置くマシンで 1 つだけ動かし、loopback でだけ待ち受けます。
+- Branvil は Hub（GuildBotics が動くマシン）で 1 つだけ動かし、loopback でだけ待ち受けます。
 - すべてのマシンが同じベース URL（既定 `http://127.0.0.1:7878`）で Branvil に届きます。
   Hub のマシンでは Branvil そのものです。ほかのマシンでは、下記の
   [SSH 転送サービス](#hub-以外のマシンで-ssh-転送を設定する)を一度設定します。OpenSSH が
   ログイン時に起動し、1 本の接続で loopback のポートを転送します。GuildBotics や Branvil の
-  クライアントとは独立して動くので、GuildBotics を閉じてもブラウザ、git、CLI から使えます。
+  クライアントとは独立して動き、そのマシンのブラウザ、git、Branvil の CLI がこれを使います。
 - どのマシンでも同じベース URL であることで、記録した URL がどこでも有効になります。チケットは
   `{base}/{repository}/-/tickets/{n}`、pull request は `{base}/{repository}/-/pulls/{n}` で、
   GuildBotics の Branvil への接続が持つベース URL は 1 つです。リポジトリはチケット（`#1`）を
@@ -64,8 +64,6 @@ context の作り直しや別メンバーの巡回でも待ち直しません。
 応答を受ければ解除し、失敗した admin・health の確認ではこの印を付けません。
 Branvil がすでに受け取ったかもしれない要求は送り直さないので、書き込みが二重に
 なることはありません。設定画面と、Branvil が応答するかの確認は待たず、いま応答するかを報告します。
-Hub 以外のマシンの SSH の転送越しでは、接続を拒む Branvil は「受け付けたあとに切れた接続」に
-見えるので、そこでは待ちません。
 
 接続できなかったことが確定した場合は、provider 共通の `ServiceUnavailable` を返します。
 自動巡回と定期実行はその回の作業を見送り、ワークフローの失敗コメントを残さず、開始済みの実行は
@@ -79,7 +77,7 @@ Hub 以外のマシンの SSH の転送越しでは、接続を拒む Branvil �
 
 Branvil の README に従って、次を行います。
 
-1. Hub のマシンで Branvil を動かす。ほかのマシンでは、下記の SSH 転送を設定する。
+1. Hub で Branvil を動かす。ほかのマシンでは、下記の SSH 転送を設定する。
    `branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
    GuildBotics の人間のメンバーです。オーナーは何でもでき、マージし、Branvil の GUI を使います。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
@@ -93,15 +91,17 @@ Branvil の README に従って、次を行います。
 
 Hub 以外の各マシンで、チェックアウトに同梱されたスクリプトを実行します。必要なのは
 OpenSSH と OS のサービス管理だけで、Python や GuildBotics の CLI は使いません。
-Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はありません。
+Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はありません。同じサービスで、
+[ブラウザ](../README.ja.md#ブラウザから使う)のための GuildBotics サーバーのポート（8765）も
+転送します。転送するポートをすべて指定してください。
 
 1. 手動や OS のサービスで `branvil tunnel` を動かしていれば止める。
 2. `ssh my-hub` で一度接続し、確認済みのホスト鍵を受け入れる。`my-hub` は自分の SSH 設定の
    別名か `[user@]host` に置き換える。鍵やホスト名は既存の OpenSSH の設定を使う。
    そのホストの項目に **`LocalForward` を書かない**。通常の `ssh my-hub` もサービスと
    ポートを取り合うためである。
-3. パスフレーズのない鍵か、ssh-agent に読み込み済みの鍵を使う。Hub 同期用に作られた
-   `~/.ssh/id_ed25519`（パスフレーズなし）があれば、そのまま使える。サービスは
+3. パスフレーズのない鍵か、ssh-agent に読み込み済みの鍵を使う。パスフレーズなしの
+   `~/.ssh/id_ed25519` がよく使われる。サービスは
    `BatchMode=yes` と厳密なホスト鍵確認を使い、入力を求めない。Windows では OpenSSH
    クライアントを有効にし、agent を使うなら OpenSSH Authentication Agent サービスも有効にする。
 4. 次のコマンドで登録し、状態を確認する。
@@ -109,7 +109,7 @@ Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はあり�
 macOS（launchd のユーザーエージェント）と Linux（systemd のユーザーサービス）:
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765
 sh scripts/hub-forward.sh status
 # 更新は、必要なすべてのポートを指定して install をもう一度実行する。
 sh scripts/hub-forward.sh uninstall
@@ -120,7 +120,7 @@ Linux のユーザーサービスには、ログインシェルの `SSH_AUTH_SOC
 agent を使う場合は、その**固定の絶対パス**を指定します。
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765 --agent-socket "$SSH_AUTH_SOCK"
 ```
 
 スクリプトがサービスの環境変数 `SSH_AUTH_SOCK` に設定します。ログインのたびに socket の
@@ -130,9 +130,9 @@ macOS では、OS が launchd に渡す agent を使います。
 Windows（タスクスケジューラー、Windows PowerShell 5.1。管理者権限は不要）:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port 7878
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878,8765"
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
-# 更新は -Port "7878,12345" のように、必要な全ポートを指定して install する。
+# 更新は、必要なすべてのポートを指定して install をもう一度実行する。
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
 ```
 
@@ -145,7 +145,7 @@ ssh の失敗時も 15 秒あけて起動し直します。実行時間の上限
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service`（ログは
 `journalctl --user -u hub-forward.service`）です。SSH 設定、鍵、known_hosts は変更しません。
 サービスはユーザーごとに 1 つです。install は Hub とポート一覧を丸ごと置き換えます。
-複数ポートは POSIX で `--port` を繰り返し、PowerShell では `-Port "7878,12345"` と指定します。
+複数ポートは POSIX で `--port` を繰り返し、PowerShell では `-Port "7878,8765"` と指定します。
 
 転送はすべて `127.0.0.1` だけで待ち受け、Hub の `127.0.0.1` の同じポートにつなぎます。
 切断は SSH の keepalive で検出して張り直します。Linux と Windows は終了から 15 秒あけ、
@@ -154,13 +154,8 @@ macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えない�
 タスクが実行中でも SSH の再試行待ちの場合があります。Branvil も確かめるには、ブラウザで
 `http://127.0.0.1:7878` を開いてください。
 
-バックエンドを Hub に集約するまでは、GuildBotics 自身の転送も残ります。サービスが先に
-ポートを取ればバックエンドは待ちます。バックエンドが先に使っている場合、サービスの ssh は
-`ExitOnForwardFailure=yes` で終了し、間隔をあけて再試行します。状態確認では停止中や
-再起動中に見えても、その間はバックエンド経由で Branvil に届きます。バックエンドの転送を
-止めれば、サービスが次の再試行で引き継ぎます。同じポートの転送サービスを複数動かさないでください。
-GuildBotics サーバーのポートは固定後にクライアントのインストーラーが追加します。
-スクリプト自体はアプリの名前や既定ポートを持ちません。
+同じポートの転送サービスを複数動かさないでください。スクリプト自体はアプリの名前や既定ポートを
+持ちません。
 
 複数の GuildBotics のワークスペースで 1 つの Branvil を使えます。Branvil への接続と、メンバーごとの
 エージェントとトークンは、すべてのワークスペースで共有するメンバーのアイデンティティの側に
@@ -169,7 +164,7 @@ GuildBotics サーバーのポートは固定後にクライアントのイン�
 
 ## GuildBotics を Branvil に接続する
 
-Branvil が動いている Hub のマシンで、デスクトップアプリの **設定 → 連携** から:
+Hub で、デスクトップアプリ（またはブラウザの同じ画面）の **設定 → 連携** から:
 
 1. コードホストとチケットに **Branvil** を選ぶ。どちらも GuildBotics が接続している
    1 つの Branvil を使います。
@@ -190,13 +185,7 @@ GuildBotics はこれを `BRANVIL_ADMIN_TOKEN` として、すべてのワーク
 隔離環境には渡しません。取り消すには、Branvil の **設定 → メンバー → オーナー → トークン** で
 そのトークンを削除し、もう一度接続します。
 
-ほかのマシンでは接続し直す必要はありません。接続のファイルはメンバーのアイデンティティと一緒に届き、
-シークレットは Hub のマシンから送って **このマシンのメンバーの認証情報** で取得します
-（管理トークンもメンバーのトークンも同じです）。
-どのマシンも発行し直しません。
-
-接続の横の **Branvil を開く** は、どのマシンからでも Branvil の GUI をシステムのブラウザで
-開きます。GuildBotics が管理トークンで Branvil に一度だけ使える入口のリンクを求めます。
+接続の横の **Branvil を開く** は、Branvil の GUI をブラウザで開きます。GuildBotics が管理トークンで Branvil に一度だけ使える入口のリンクを求めます。
 サイドメニューの **設定** の下にある **Branvil** も、外部リンクのアイコンから同じ方法で開きます。
 保存済みのコードホスティングかチケットのどちらかが Branvil のときに表示され、連携設定を保存すると
 その場で表示が切り替わります。開けなかった場合は、項目の下に理由を表示します。
@@ -228,7 +217,7 @@ GuildBotics はこれを `BRANVIL_ADMIN_TOKEN` として、すべてのワーク
   そのエージェントの `guildbotics` のトークンを取り消します。エージェントは履歴が名前を指すので
   Branvil に残ります。
 
-AI メンバーの保存と削除は Branvil に届く必要があるため、そのマシンから Branvil に届き、
+AI メンバーの保存と削除は Branvil に届く必要があるため、Branvil に届き、
 GuildBotics が接続している必要があります。そうでなければ何も保存・削除せず、画面が理由を
 示します。
 
@@ -253,13 +242,13 @@ account_info:
 
 と書きます。
 
-**設定 → 検証** の **設定を検証** で、Branvil が応答すること、このマシンが GuildBotics の
+**設定 → 検証** の **設定を検証** で、Branvil が応答すること、GuildBotics が
 接続を持ち Branvil がそれをオーナー（人間のメンバー）のものとして受け付けること、各 AI メンバーの
 トークンが本人のものとして受け付けられること、ワークスペースを読み取れることを確かめられます。
 
 ## 自分のチェックアウトで Branvil を使う
 
-人のメンバー（あなた）は Branvil のオーナーです。GuildBotics が動いているマシンなら、自分の
+人のメンバー（あなた）は Branvil のオーナーです。Hub では、自分の
 チェックアウトの `origin` を Branvil にできます。Branvil の git はメンバーの名前とトークンを
 求めます。GuildBotics があなたの名前とトークンを git に渡すので、git がユーザー名やパスワードを
 聞いてくることはありません:
@@ -280,26 +269,21 @@ account_info:
    インストーラが CLI を `PATH` に入れるので、helper は `!guildbotics git-credential` です。
 3. これで `git fetch origin` と `git push origin <branch>` が、何も聞かれずに通ります。
 
-あるマシンで最初に求められたとき、GuildBotics は接続を使って、そのマシンのオーナーのトークンを
-発行します。トークンのラベルは `git:<デバイス名> (<デバイス ID の末尾 8 文字>)` で、そのマシンの
-OS のキーチェーンにだけ保存します。URL、git の設定、シェルの履歴、Hub が共有するものには書きません。
-トークンはマシンごとに別なので、Branvil の **設定 → メンバー → オーナー → トークン** で、
-1 台のマシンのトークンだけを取り消せます。Branvil がそのマシンのトークンを受け付けなくなると、
-次に求められたときに代わりのトークンを発行し、そのマシンのほかのトークン（名前を変える前の
-ラベルのものなど）を取り消します。
+最初に求められたとき、GuildBotics は接続を使って、そのマシンのオーナーのトークンを発行します。
+トークンのラベルは `git:<デバイス名> (<デバイス ID の末尾 8 文字>)` で、そのマシンの OS の
+キーチェーンにだけ保存します。URL、git の設定、シェルの履歴、ワークスペースのファイルには書きません。
+Branvil の **設定 → メンバー → オーナー → トークン** で取り消せます。Branvil がそのトークンを
+受け付けなくなると、次に求められたときに代わりのトークンを発行し、そのマシンのほかの `git:` の
+トークンを取り消します。
 
-このトークンはオーナーのトークンそのもので、そのマシンがすでに持っている接続と同じだけの権限が
-あります。マシンのトークンを取り消しても、そのマシンの GuildBotics が新しく発行するので、締め出す
-ことにはなりません。マシンを手放すときは、そのマシンを Hub から外し、`app:GuildBotics` の
-トークンを取り消して接続し直してから（ほかのマシンは新しい接続を Hub から取得します）、
-そのマシンの `git:` のトークンを取り消してください。
+このトークンはオーナーのトークンそのもので、GuildBotics がすでに持っている接続と同じだけの権限が
+あります。取り消しても、GuildBotics が接続している間は次に求められたときに新しく発行します。
 
-helper がトークンを渡せないとき（Branvil が応答しない、そのマシンに接続のトークンがない、
-キーチェーンを使えない）は、git はそこで止まり、パスワードを聞かずに理由を表示します。
-そのマシンの GuildBotics が remote の Branvil にそもそも接続していないときは、helper がそのことを
-表示し、git はユーザー名とパスワードの入力に切り替わります。入力せずに、接続するか、Hub から接続を
-取得してください。メンバーの git はこの helper を使いません。GuildBotics はメンバーの git にエージェントのトークンを
-渡し、設定された helper をすべて外します。
+helper がトークンを渡せないとき（Branvil が応答しない、接続のトークンがない、キーチェーンを
+使えない）は、git はそこで止まり、パスワードを聞かずに理由を表示します。GuildBotics が remote の
+Branvil にそもそも接続していないときは、helper がそのことを表示し、git はユーザー名とパスワードの
+入力に切り替わります。入力せずに接続してください。メンバーの git はこの helper を使いません。
+GuildBotics はメンバーの git にエージェントのトークンを渡し、設定された helper をすべて外します。
 
 ## メンバーの動き
 

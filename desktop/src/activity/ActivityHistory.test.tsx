@@ -28,7 +28,6 @@ import {
   getIntelligenceConfig,
   getSchedulerStatus,
   getTraceDetail,
-  getWorkspaceLive,
 } from "../api/client";
 import type {
   ActivityHistoryLink,
@@ -39,7 +38,6 @@ import type {
   RuntimeStatus,
   RuntimeUnitStatus,
   TraceRecord,
-  WorkspaceLiveState,
 } from "../api/client";
 import i18n from "../i18n";
 import { TestMantineProvider } from "../test/TestMantineProvider";
@@ -55,7 +53,6 @@ vi.mock("../api/client", async (importOriginal) => {
     getIntelligenceConfig: vi.fn(),
     getSchedulerStatus: vi.fn(),
     getTraceDetail: vi.fn(),
-    getWorkspaceLive: vi.fn(),
     memberAvatarUrl: (personId: string) => `http://avatar.test/${personId}`,
   };
 });
@@ -180,33 +177,6 @@ const ALICE_ROUTINE = {
   next_routine_at: "2026-07-01T11:59:00Z",
 };
 
-const REMOTE_LIVE: WorkspaceLiveState = {
-  schema_version: 1,
-  workspace_id: "workspace-1",
-  device_id: "device-2",
-  publisher_id: "publisher-2",
-  observed_at: "2026-07-01T11:59:30Z",
-  status: "delayed",
-  works: [
-    {
-      work_id: "remote-work",
-      run_id: "remote-run",
-      member_id: "alice",
-      workflow_name: "workflows/ticket_driven_workflow",
-      presentation: {
-        label_key: "",
-        label_fallback: "",
-        message_key: "",
-        message: "remote step",
-        message_params: {},
-        tone: "info",
-        effort: "",
-      },
-      retry_at: null,
-    },
-  ],
-};
-
 function liveTraceRecord(message: string): TraceRecord {
   return {
     kind: "event",
@@ -304,7 +274,6 @@ beforeEach(() => {
     summary: null,
     records: [],
   });
-  vi.mocked(getWorkspaceLive).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -462,90 +431,6 @@ describe("ActivityHistoryPage", () => {
 
     const status = await screen.findByRole("link", { name: "Current work" });
     expect(status).toHaveTextContent("workflows/ticket_driven_workflow");
-  });
-
-  it("shows remote current work and its delayed device status", async () => {
-    vi.mocked(getWorkspaceLive).mockResolvedValue([REMOTE_LIVE]);
-    renderActivity();
-
-    expect(await screen.findByText("Updates delayed: remote step")).toBeInTheDocument();
-    expect(
-      await screen.findByText("Updates from device device-2 are delayed."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows remote current work without a status prefix while the device is online", async () => {
-    vi.mocked(getWorkspaceLive).mockResolvedValue([{ ...REMOTE_LIVE, status: "online" }]);
-    renderActivity();
-
-    expect(await screen.findByText("remote step")).toBeInTheDocument();
-    expect(screen.queryByText("Live: remote step")).toBe(null);
-  });
-
-  it("does not flicker the delayed-device warning while a healthy publisher stays online", async () => {
-    vi.mocked(getWorkspaceLive).mockResolvedValue([{ ...REMOTE_LIVE, status: "online" }]);
-    renderActivity();
-
-    expect(await screen.findByText("remote step")).toBeInTheDocument();
-    expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
-
-    for (let poll = 0; poll < 12; poll += 1) {
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
-    }
-  });
-
-  it("keeps the delayed-device warning up until the publisher expires", async () => {
-    vi.mocked(getWorkspaceLive).mockResolvedValue([REMOTE_LIVE]);
-    renderActivity();
-
-    expect(
-      await screen.findByText("Updates from device device-2 are delayed."),
-    ).toBeInTheDocument();
-
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(screen.getByText("Updates from device device-2 are delayed.")).toBeInTheDocument();
-
-    vi.mocked(getWorkspaceLive).mockResolvedValue([]);
-    await vi.advanceTimersByTimeAsync(1000);
-    await waitFor(() => {
-      expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
-    });
-  });
-
-  it("shows the works of every publisher on the same device at once", async () => {
-    vi.mocked(getActivityHistory).mockResolvedValue({
-      ...ACTIVITY_FIXTURE,
-      members: [
-        { person_id: "alice", name: "Alice", person_type: "agent", roles: ["developer"] },
-        { person_id: "bob", name: "Bob", person_type: "agent", roles: ["developer"] },
-      ],
-    });
-    vi.mocked(getWorkspaceLive).mockResolvedValue([
-      { ...REMOTE_LIVE, status: "online", observed_at: "2026-07-01T11:59:00Z" },
-      {
-        ...REMOTE_LIVE,
-        status: "online",
-        publisher_id: "publisher-3",
-        observed_at: "2026-07-01T11:59:30Z",
-        works: [
-          {
-            ...REMOTE_LIVE.works[0],
-            work_id: "remote-work-2",
-            run_id: "remote-run-2",
-            member_id: "bob",
-            presentation: {
-              ...REMOTE_LIVE.works[0].presentation,
-              message: "second publisher step",
-            },
-          },
-        ],
-      },
-    ]);
-    renderActivity();
-
-    expect(await screen.findByText("remote step")).toBeInTheDocument();
-    expect(await screen.findByText("second publisher step")).toBeInTheDocument();
   });
 
   it("shows no running-work status for idle members", async () => {
@@ -1957,103 +1842,4 @@ it("shows a PR handed over at the review limit as Activity without a session", a
   expect(await screen.findByText(i18n.t("activity.eventTypes.pr_draft"))).toBeInTheDocument();
   expect(screen.getByText("Fix login")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: event.url })).toHaveAttribute("href", event.url);
-});
-
-describe("a change the hub did not accept", () => {
-  const rejectionEvent = {
-    id: "rejection-1",
-    timestamp: "2026-07-01T11:00:00+00:00",
-    person_id: "",
-    type: "sync_rejected" as const,
-    title: "Update not applied: 2 file(s)",
-    detail: "config/team/project.yml, state/devices/d1.json",
-    url: "",
-    links: [],
-    rejection: {
-      rejection_id: "01932a7c-0000-7000-8000-00000000000f",
-      paths: ["config/team/project.yml", "state/devices/d1.json"],
-      source_device_id: "1f0a0000-0000-7000-8000-0000000000d1",
-      scope: "workspace" as const,
-    },
-  };
-
-  it("shows the paths, the device that made it, and the recovery id", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getActivityHistory).mockResolvedValue({
-      ...ACTIVITY_FIXTURE,
-      sessions: [],
-      events: [rejectionEvent],
-    });
-    renderActivity();
-
-    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
-
-    expect(
-      await screen.findByText(i18n.t("activity.rejection.title.workspace")),
-    ).toBeInTheDocument();
-    expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
-    expect(screen.getByText("state/devices/d1.json")).toBeInTheDocument();
-    expect(screen.getByText("1f0a0000-0000-7000-8000-0000000000d1")).toBeInTheDocument();
-    expect(screen.getByText("01932a7c-0000-7000-8000-00000000000f")).toBeInTheDocument();
-  });
-
-  it("stays reachable in the week view, where it has no member row to sit in", async () => {
-    // Events with no member of their own were drawn only in the day view, so a
-    // week's worth of rejections could be reached from nowhere.
-    const user = userEvent.setup();
-    vi.mocked(getActivityHistory).mockResolvedValue({
-      ...ACTIVITY_FIXTURE,
-      sessions: [],
-      events: [rejectionEvent],
-    });
-    renderActivity();
-    await user.click(await screen.findByText("1 week"));
-
-    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
-
-    expect(
-      await screen.findByText(i18n.t("activity.rejection.title.workspace")),
-    ).toBeInTheDocument();
-  });
-
-  it("points recovery at the machine that made the change, not at this screen", async () => {
-    // The held-back content exists on one device only, and nothing here fetches
-    // it, so the guidance has to say where to go instead of offering a button.
-    const user = userEvent.setup();
-    vi.mocked(getActivityHistory).mockResolvedValue({
-      ...ACTIVITY_FIXTURE,
-      sessions: [],
-      events: [rejectionEvent],
-    });
-    renderActivity();
-
-    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
-
-    expect(await screen.findByText(i18n.t("activity.rejection.recovery"))).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /restore|recover/i })).not.toBeInTheDocument();
-    expect(
-      screen.queryByText(i18n.t("activity.rejection.identitiesLocation")),
-    ).not.toBeInTheDocument();
-  });
-
-  it("names a change to the members, and the repository its recovery runs in", async () => {
-    // The members' identities are a repository of their own, shared by every
-    // workspace, so the README procedure has to be pointed there instead.
-    const user = userEvent.setup();
-    vi.mocked(getActivityHistory).mockResolvedValue({
-      ...ACTIVITY_FIXTURE,
-      sessions: [],
-      events: [
-        { ...rejectionEvent, rejection: { ...rejectionEvent.rejection, scope: "identities" } },
-      ],
-    });
-    renderActivity();
-
-    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
-
-    expect(
-      await screen.findByText(i18n.t("activity.rejection.title.identities")),
-    ).toBeInTheDocument();
-    expect(screen.getByText(i18n.t("activity.rejection.identitiesLocation"))).toBeInTheDocument();
-  });
 });

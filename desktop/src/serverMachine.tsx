@@ -5,16 +5,13 @@ import { useTranslation } from "react-i18next";
 
 import { getServerMachineName } from "./api/client";
 
-/** Where the server machine's name is cached; a rename invalidates it. */
-export const SERVER_MACHINE_QUERY_KEY = ["server-machine-name"];
-
 /**
  * The name of the machine the server runs on. "This machine" on these screens
  * is that machine, which a browser on another one would otherwise take for
  * its own.
  */
 export function useServerMachineName(): string | undefined {
-  return useQuery({ queryKey: SERVER_MACHINE_QUERY_KEY, queryFn: getServerMachineName }).data;
+  return useQuery({ queryKey: ["server-machine-name"], queryFn: getServerMachineName }).data;
 }
 
 /** The server machine as a text names it: its name, or a word for it until that is known. */

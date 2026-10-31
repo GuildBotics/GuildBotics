@@ -31,7 +31,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from guildbotics.app_api import decisions, hub_secrets, ui
+from guildbotics.app_api import decisions, ui
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_images,
     evaluate_grant,
@@ -97,17 +97,11 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     DefaultPersonUpdateRequest,
-    DeviceRenameRequest,
-    DeviceSshKey,
     EnvironmentImagesResponse,
     GrantEvaluation,
     GrantScope,
     HealthResponse,
     HotkeySettings,
-    HubConnection,
-    HubStatus,
-    HubTarget,
-    HubTrustRequest,
     InferenceFailuresResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
@@ -125,8 +119,6 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
-    SecretTransferRequest,
-    SecretTransferResponse,
     ServiceKeepAwake,
     ShutdownResponse,
     SystemAlertDismissRequest,
@@ -140,15 +132,6 @@ from guildbotics.app_api.models import (
     TroubleshootingResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
-    WorkspaceDevices,
-    WorkspaceLiveState,
-    WorkspaceSecrets,
-    WorkspaceServiceOwner,
-    WorkspaceServiceOwnerTransferRequest,
-    WorkspaceSyncCloneRequest,
-    WorkspaceSyncEnableRequest,
-    WorkspaceSyncPreview,
-    WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.traces import (
@@ -159,7 +142,6 @@ from guildbotics.app_api.traces import (
     list_traces,
     trace_detail,
 )
-from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.entities.team import Service, Team
 from guildbotics.environment.spec import guest_path
 from guildbotics.integrations.factory import PROVIDERS
@@ -191,6 +173,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH, server_port
 from guildbotics.utils.person_id import (
     MemberConfigError,
@@ -200,7 +183,6 @@ from guildbotics.utils.person_id import (
 )
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
-from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 from guildbotics.utils.workspace_state import (
     registered_workspaces,
     unregister_workspace,
@@ -219,8 +201,7 @@ def _request_language(request: Request) -> str:
 # shutdown, so the two cannot disagree about when a teardown is still orderly.
 # It has to cover every wait the teardown can run into, each at its limit: a
 # forced runtime stop (event listener join, scheduler shutdown, scheduler join,
-# work drain), the sync queue stop, the relay stop, and the diagnostics
-# maintenance join.
+# work drain) and the diagnostics maintenance join.
 TEARDOWN_BUDGET_SECONDS = 60.0
 
 logger = logging.getLogger("guildbotics.app_api")
@@ -262,15 +243,7 @@ def create_app(
     system_service_run_id = app_runtime.system_service_run_id
     input_file_store = command_input_file_store or CommandInputFileStore()
     app_runtime.command_inputs = lambda: input_file_store.directory
-    # The runtime owns the common execution boundary; the sync service only
-    # attaches/detaches its relay publisher there.
-    sync_service = app_runtime.workspace_sync_service
-    # Secrets travel between OS secret stores rather than through Git, but the
-    # machine they travel to is the workspace's hub, so the two services share
-    # one answer to "where is the hub" instead of resolving it twice.
     member_api = MemberApi(app_runtime)
-    secret_service = WorkspaceSecretService(sync_service)
-    identity_secret_service = WorkspaceSecretService(sync_service, identities=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -284,7 +257,6 @@ def create_app(
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
-            sync_service.activate()
             if not any(
                 isinstance(handler, EventBusLogHandler) for handler in logger.handlers
             ):
@@ -299,7 +271,6 @@ def create_app(
                 try:
                     await member_api.close()
                     app_runtime.stop_scheduler(force=True)
-                    sync_service.shutdown()
                     await app_runtime.close_cli_agent_usage()
                 finally:
                     if added_app_handler:
@@ -348,6 +319,22 @@ def create_app(
     ) -> JSONResponse:
         return _error_response(400, "unsafe_host_path", str(exc), {})
 
+    @app.exception_handler(SecretStoreError)
+    async def secret_store_error_handler(
+        request: Request, exc: SecretStoreError
+    ) -> JSONResponse:
+        # A locked keychain or an index that cannot be read stops every route
+        # that reaches the store the same way; the reason names the file or
+        # the keychain's answer, never a value.
+        return _error_response(
+            503,
+            "secret_store_unavailable",
+            api_error_message(
+                "secret_store_unavailable", _request_language(request), {"reason": exc}
+            ),
+            {},
+        )
+
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
         # The one place a message becomes text: rendered from the error's
@@ -370,28 +357,11 @@ def create_app(
         request: Request, exc: SharedWriteBusyError
     ) -> JSONResponse:
         # One handler rather than one translation per route: every config
-        # change and every enrollment step can meet a busy lock, and none of
-        # them should have to name it.
+        # change can meet a busy lock, and none of them should have to name it.
         return _error_response(
             503,
             "config_busy",
             api_error_message("config_busy", _request_language(request), {}),
-            {},
-        )
-
-    @app.exception_handler(SyncRepositoryBusyError)
-    async def sync_repository_busy_handler(
-        request: Request, exc: SyncRepositoryBusyError
-    ) -> JSONResponse:
-        # Same shape as SharedWriteBusyError: any endpoint that pauses or
-        # joins synchronization can outwait the repository lock, and none of
-        # them should have to name it.
-        return _error_response(
-            409,
-            "workspace_sync_busy",
-            api_error_message(
-                "workspace_sync_busy.repository", _request_language(request), {}
-            ),
             {},
         )
 
@@ -456,12 +426,6 @@ def create_app(
                 raise UnsafePathError(t("safe_paths.active_workspace"))
         unregister_workspace(request.workspace_dir)
         return [str(path) for path in registered_workspaces()]
-
-    @router.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
-    async def hub_secret_transfer(
-        request: Request, workspace_id: str, operation: str
-    ) -> Response:
-        return await hub_secrets.transfer(request, workspace_id, operation)
 
     @router.post("/member/plan")
     async def member_plan(body: MemberRequest) -> Response:
@@ -538,7 +502,7 @@ def create_app(
         """Ask the hosting server to exit through its normal shutdown path.
 
         The desktop host calls this before it would kill the sidecar, so the
-        lifespan teardown (scheduler stop, sync deactivation, session finish)
+        lifespan teardown (scheduler stop, session finish)
         runs no matter which route the app took to quit. The answer tells the
         host how long that teardown may take, so it does not kill one that is
         still within its own limits.
@@ -558,142 +522,6 @@ def create_app(
     @router.post("/workspace")
     def workspace_change(request: WorkspaceChangeRequest) -> ConfigStatus:
         return app_runtime.set_workspace(request.workspace_dir)
-
-    @router.get("/hub")
-    def hub_status() -> HubStatus:
-        return sync_service.get_hub()
-
-    @router.post("/hub")
-    def hub_create() -> HubStatus:
-        return sync_service.create_hub()
-
-    @router.post("/hub/inspect")
-    def hub_inspect(request: HubTarget) -> HubConnection:
-        return sync_service.inspect_hub(request)
-
-    @router.post("/hub/trust")
-    def hub_trust(request: HubTrustRequest) -> HubConnection:
-        return sync_service.trust_hub(request)
-
-    @router.get("/hub/ssh-key")
-    def hub_ssh_key() -> DeviceSshKey:
-        return sync_service.get_ssh_key()
-
-    @router.post("/hub/ssh-key")
-    def hub_ssh_key_create() -> DeviceSshKey:
-        return sync_service.create_ssh_key()
-
-    @router.get("/workspace/devices")
-    def workspace_devices() -> WorkspaceDevices:
-        return sync_service.get_devices()
-
-    @router.post("/workspace/devices/self")
-    def workspace_device_rename(request: DeviceRenameRequest) -> WorkspaceDevices:
-        return sync_service.rename_device(request)
-
-    @router.get("/workspace/live")
-    def workspace_live() -> list[WorkspaceLiveState]:
-        return sync_service.get_live_states()
-
-    @router.get("/workspace/service-owner")
-    def workspace_service_owner() -> WorkspaceServiceOwner:
-        return sync_service.get_service_owner()
-
-    @router.post("/workspace/service-owner/transfer")
-    def workspace_service_owner_transfer(
-        request: WorkspaceServiceOwnerTransferRequest,
-    ) -> WorkspaceServiceOwner:
-        return sync_service.transfer_service_owner(request.device_id)
-
-    @router.get("/workspace/sync")
-    def workspace_sync_status() -> WorkspaceSyncStatus:
-        return sync_service.get_status()
-
-    @router.post("/workspace/sync/preview")
-    def workspace_sync_preview(
-        request: WorkspaceSyncEnableRequest,
-    ) -> WorkspaceSyncPreview:
-        return sync_service.preview(request)
-
-    @router.post("/workspace/sync/enable")
-    def workspace_sync_enable(
-        request: WorkspaceSyncEnableRequest,
-    ) -> WorkspaceSyncStatus:
-        return sync_service.enable(request)
-
-    @router.post("/workspace/sync/hub")
-    def workspace_sync_change_hub(
-        request: WorkspaceSyncEnableRequest,
-    ) -> WorkspaceSyncStatus:
-        return sync_service.change_hub(request)
-
-    @router.post("/workspace/sync/retry")
-    def workspace_sync_retry() -> WorkspaceSyncStatus:
-        return sync_service.retry()
-
-    @router.post("/workspace/sync/rejections/{rejection_id}/discard")
-    def workspace_sync_discard_rejection(rejection_id: str) -> WorkspaceSyncStatus:
-        """Drop one displaced commit the user has finished with."""
-        return sync_service.discard_rejection(rejection_id)
-
-    @router.get("/identities/sync")
-    def identity_sync_status() -> WorkspaceSyncStatus:
-        """Report the synchronization state of the members' identities."""
-        return sync_service.get_identity_status()
-
-    @router.post("/identities/sync/retry")
-    def identity_sync_retry() -> WorkspaceSyncStatus:
-        """Connect the identities to the workspace's hub and try again."""
-        return sync_service.retry_identities()
-
-    @router.post("/identities/sync/rejections/{rejection_id}/discard")
-    def identity_sync_discard_rejection(rejection_id: str) -> WorkspaceSyncStatus:
-        """Drop one of the identities' displaced commits the user has finished with."""
-        return sync_service.discard_identity_rejection(rejection_id)
-
-    @router.get("/workspace/secrets")
-    def workspace_secrets() -> WorkspaceSecrets:
-        """Report which keys this device holds, and which the hub holds."""
-        return secret_service.get_secrets()
-
-    @router.post("/workspace/secrets/send")
-    def workspace_secrets_send(
-        request: SecretTransferRequest,
-    ) -> SecretTransferResponse:
-        """Hand this device's values to the hub, because the user asked."""
-        return secret_service.send(request)
-
-    @router.post("/workspace/secrets/fetch")
-    def workspace_secrets_fetch(
-        request: SecretTransferRequest,
-    ) -> SecretTransferResponse:
-        """Take values from the hub into this device's own secret store."""
-        return secret_service.fetch(request)
-
-    @router.get("/identities/secrets")
-    def identity_secrets() -> WorkspaceSecrets:
-        """Report which of the identities' keys this device and the hub hold."""
-        return identity_secret_service.get_secrets()
-
-    @router.post("/identities/secrets/send")
-    def identity_secrets_send(
-        request: SecretTransferRequest,
-    ) -> SecretTransferResponse:
-        """Hand this device's values of the identities' keys to the hub."""
-        return identity_secret_service.send(request)
-
-    @router.post("/identities/secrets/fetch")
-    def identity_secrets_fetch(
-        request: SecretTransferRequest,
-    ) -> SecretTransferResponse:
-        """Take the identities' values from the hub into this device's store."""
-        return identity_secret_service.fetch(request)
-
-    @router.post("/workspace/sync/clone")
-    def workspace_sync_clone(request: WorkspaceSyncCloneRequest) -> ConfigStatus:
-        """Take a copy of a hub's workspace and switch to it."""
-        destination = sync_service.clone(request)
-        return app_runtime.set_workspace(destination)
 
     @router.get("/team")
     def team() -> TeamSummary:
@@ -1079,9 +907,8 @@ def create_app(
 
     @router.post("/config/init")
     def config_init(request: ProjectSetupInput) -> ConfigWriteResponse:
-        # Nothing to compare against on a first setup, but the workspace may
-        # already be synchronized -- taking a copy from a hub creates one, and
-        # its queue is running while this writes.
+        # Nothing to compare against on a first setup, but the write still
+        # serializes with every other writer of the workspace's files.
         receipt = apply_config_write(
             request.config_dir,
             lambda: SimpleProjectSetupService().write_project(request),
@@ -1149,7 +976,7 @@ def create_app(
             update={"config_dir": status.config_dir or request.config_dir}
         )
         # Whatever the form did not read must still not exist: a member of the
-        # same ID made meanwhile, here or on another machine, is not replaced.
+        # same ID made meanwhile, from another screen, is not replaced.
         absent = dict.fromkeys(
             (
                 *member_config_paths(member.person_id),

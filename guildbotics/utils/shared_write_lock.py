@@ -1,31 +1,27 @@
 """The one lock that serializes writes to a workspace's shared files.
 
-Several things write those files, and none of them knows about the others. A
-config save compares the revisions it was composed against and then writes
-several files; a member's memory reads a document and writes it back; the
-synchronization queue checks the hub's content out over the same files and
-commits whatever the working tree holds. Each is careful on its own terms, and
-that is not enough: a save whose comparison has just passed can land on top of
-content the queue adopted while the save was running, and because that
-overwrite is an ordinary local write, the next cycle commits and pushes it.
-Nothing in the sync history records the other device's change as lost -- which
-is exactly the outcome the comparison exists to prevent.
+Several things write those files, and none of them knows about the others: the
+scheduler's member threads, the API handlers, the member commands the backend
+runs in process, and a ``guildbotics run`` or ``guildbotics secrets`` running
+as a process of its own. A config save compares the revisions it was composed
+against and then writes several files; a member's memory reads a document and
+writes it back. Each is careful on its own terms, and that is not enough: a
+save whose comparison has just passed can land on top of what another writer
+wrote while the save was running, and nothing records that change as lost.
 
 Writers do not take this lock one by one. Every write to a shared path goes
-through :mod:`guildbotics.utils.workspace_sync_port`, and those helpers take
-it, so a write that reads nothing is already serialized against the queue with
-nothing to declare. What the helpers cannot infer is how far back a write's
-span reaches: a value derived from a file's current contents has to exclude the
-queue from the read as well, or the read is of content the checkout is about to
-replace and the write puts it back. That is what
-:func:`~guildbotics.utils.workspace_sync_port.update_shared_text` and its JSON
-form are for -- they take the lock, read, and write inside it, so the span
-starts at the read by construction. An operation whose span is wider still --
-several files that have to land together, a decision made by scanning a
-directory -- takes this lock itself, which is the one case left where a writer
-has to know it is doing something the helpers cannot see.
-
-Nothing holds it across the network, so a save never waits on a hub.
+through :mod:`guildbotics.utils.shared_writes`, and those helpers take it, so a
+write that reads nothing is already serialized with nothing to declare. What
+the helpers cannot infer is how far back a write's span reaches: a value
+derived from a file's current contents has to exclude the other writers from
+the read as well, or the read is of content about to be replaced and the write
+puts it back. That is what
+:func:`~guildbotics.utils.shared_writes.update_shared_text` and its JSON form
+are for -- they take the lock, read, and write inside it, so the span starts
+at the read by construction. An operation whose span is wider still -- several
+files that have to land together, a decision made by scanning a directory --
+takes this lock itself, which is the one case left where a writer has to know
+it is doing something the helpers cannot see.
 
 Within one thread the lock re-enters, so a writer declares its own span without
 having to know whether a caller already declared a wider one. A config save
@@ -59,9 +55,8 @@ from guildbotics.utils.fileio import (
 
 _KEY_PREFIX = "shared-write"
 
-#: How long each side waits for the other. Generous on purpose: a first copy
-#: from a hub restores thousands of files inside this lock, and a save refused
-#: there would be reported as an error the user can do nothing about.
+#: How long each side waits for the other. Generous on purpose: a save refused
+#: here is reported as an error the user can do nothing about.
 LOCK_TIMEOUT_SECONDS = 30.0
 
 
@@ -69,10 +64,9 @@ class SharedWriteBusyError(RuntimeError):
     """Raised when the other writer held the lock for the whole wait.
 
     Deliberately outside the ``OSError`` family that :class:`TimeoutError`
-    belongs to. Synchronization catches that family to mean "the cycle
-    failed" and stops in a failed state until the cause is fixed; a save
-    holding the lock is not a failure at all, and a caller that has to tell
-    the two apart should not have to name a lock timeout to do it.
+    belongs to: a writer holding the lock is not an environment failure, and
+    a caller that catches I/O errors should not have to name a lock timeout to
+    tell the two apart.
     """
 
 
@@ -90,8 +84,7 @@ def shared_write_lock(
     """Hold a workspace's shared-write lock for the duration of the block.
 
     With no workspace selected there is nothing to serialize: no file is
-    shared, and no queue exists to adopt a hub's content over one. Writers
-    that resolve the workspace the way the sync port does reach this state
+    shared. Writers that resolve the selected workspace reach this state
     normally, so the exception is answered here rather than by each of them.
 
     Args:

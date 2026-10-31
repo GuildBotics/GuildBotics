@@ -1,11 +1,9 @@
 """Refusing a config save that was composed against superseded content.
 
-A config screen is a form over files that another machine can change while it
-sits open: synchronization writes an incoming edit straight into the workspace,
-and the form knows nothing about it. Saving would then send the whole form
-back, quietly replacing the other machine's edit with values read before it
-arrived -- and because that is an ordinary local write, nothing in the sync
-history records it as a conflict.
+A config screen is a form over files that another screen, browser tab, or CLI
+can change while it sits open, and the form knows nothing about it. Saving
+would then send the whole form back, quietly replacing the other edit with
+values read before it arrived, and nothing would record it as a conflict.
 
 So every config read reports the revision of each file it was built from, and
 every config save sends those revisions back. This module is the one place
@@ -16,7 +14,7 @@ rather than retry.
 Every endpoint that changes config goes through :func:`apply_config_write`,
 including the ones with nothing to compare against. Comparing is optional;
 being the only writer while writing is not, and an endpoint that took its own
-route would be writing underneath whatever synchronization was doing.
+route would be writing underneath whatever another writer was doing.
 """
 
 from __future__ import annotations
@@ -27,11 +25,11 @@ from pathlib import Path
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.utils.fileio import workspace_root_from_config_dir
 from guildbotics.workspace.config_repository import (
+    ConfigPathInvalidError,
     ConfigRepository,
     ConfigWriteReceipt,
     StaleConfigWriteError,
 )
-from guildbotics.workspace.validation import SharedFileInvalidError
 
 #: Reported to the frontend when a save was composed against older content.
 CONFIG_CHANGED = "config_changed"
@@ -81,9 +79,9 @@ def apply_config_write[T](
         return config_repository(config_dir).write(
             apply, expected=expected, report=report
         )
-    except SharedFileInvalidError as exc:
+    except ConfigPathInvalidError as exc:
         # The caller named something that is not a config file at all, so this
-        # is a malformed request rather than a race with another machine.
+        # is a malformed request rather than a race with another writer.
         raise AppApiError(
             "config_revision_invalid", reason=str(exc), status_code=400
         ) from exc

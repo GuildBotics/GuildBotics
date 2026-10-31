@@ -4,9 +4,8 @@ Branvil with on this machine.
 Branvil's Smart HTTP takes a member's token as the password of the member's
 name, and GuildBotics keeps no token of the owner, who is the human member.
 So each machine issues the owner a token of its own with GuildBotics'
-connection, labelled with the machine, and keeps it in its OS keychain: never
-in the identities' store, whose Secrets the Hub hands to every machine. A
-token revoked under Branvil's Settings → Members → owner → Tokens is that
+connection, labelled with the machine, and keeps it in its OS keychain rather
+than in the identities' store. A token revoked under Branvil's Settings → Members → owner → Tokens is that
 machine's only, and the machine issues itself another on the next request
 while the connection still has the owner's rights.
 """

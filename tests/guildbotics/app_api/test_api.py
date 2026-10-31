@@ -43,10 +43,8 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.traces import list_traces
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers import service_lock as service_lock_module
-from guildbotics.drivers.relay_runtime import RelayRuntime
 from guildbotics.drivers.service_lock import ServiceLock
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.environment.spec import guest_path
@@ -68,12 +66,11 @@ from guildbotics.intelligences.agent_runtime.wire import (
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup.setup_service import SimpleProjectSetupService
-from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
-from guildbotics.workspace.identity import set_device_display_name
+from guildbotics.workspace.identity import ensure_device_identity
 from tests.guildbotics.members import write_member
 
 HTTP_OK = 200
@@ -313,7 +310,6 @@ class RuntimeStub:
             project_file_exists=False,
             storage_dir=tmp_path,
         )
-        self.workspace_sync_service = WorkspaceSyncService()
         self.event_bus = EventBus()
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
@@ -597,13 +593,35 @@ def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
 
     stop_timeout = default(RuntimeLifecycleService.__init__, "stop_timeout_seconds")
     forced_runtime_stop = 4 * stop_timeout  # listener join, shutdown, join, drain
-    sync_queue_stop = default(GitSyncManager.stop, "timeout")
-    relay_stop = default(RelayRuntime.stop, "timeout")
     maintenance_join = 1.0
 
-    assert (
-        forced_runtime_stop + sync_queue_stop + relay_stop + maintenance_join
-        <= TEARDOWN_BUDGET_SECONDS
+    assert forced_runtime_stop + maintenance_join <= TEARDOWN_BUDGET_SECONDS
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_a_secret_store_that_cannot_be_used_is_a_503_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: str
+) -> None:
+    from guildbotics.app_api.auth import LANGUAGE_HEADER
+    from guildbotics.utils.i18n_tool import t
+    from guildbotics.utils.keychain import SecretStoreError
+
+    runtime = RuntimeStub(tmp_path)
+
+    def refuse() -> TeamSummary:
+        raise SecretStoreError("secrets.yml cannot be read")
+
+    monkeypatch.setattr(runtime, "get_team_summary", refuse)
+
+    with owner_client(create_app(runtime=runtime)) as client:
+        response = client.get("/team", headers={LANGUAGE_HEADER: language})
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "secret_store_unavailable"
+    assert response.json()["message"] == t(
+        "app_api.errors.secret_store_unavailable",
+        locale=language,
+        reason="secrets.yml cannot be read",
     )
 
 
@@ -611,7 +629,7 @@ def test_health_reports_the_service_its_workspace_and_its_machine(
     tmp_path: Path,
 ) -> None:
     app = create_app(runtime=RuntimeStub(tmp_path))
-    set_device_display_name("Studio Mac")
+    machine = ensure_device_identity().display_name
 
     with owner_client(app) as client:
         response = client.get("/health")
@@ -624,7 +642,7 @@ def test_health_reports_the_service_its_workspace_and_its_machine(
     )
     # What the screens mean by "this machine", whichever machine the browser
     # runs on.
-    assert response.json()["machine_name"] == "Studio Mac"
+    assert response.json()["machine_name"] == machine
 
 
 def test_workspace_change_updates_runtime_workspace(tmp_path: Path) -> None:
@@ -1803,7 +1821,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
             "has_bot_token": True,
             "has_app_token": True,
         }
-        assert payload["secret_env_keys"]["SLACK_BOT_TOKEN"] == "ALICE_SLACK_BOT_TOKEN"
         assert payload["chat_channels"] == ["C01234567"]
         assert payload["chat_channel_participation"] == {"C01234567": "social"}
         assert "token-a" not in get_response.text

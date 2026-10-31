@@ -58,11 +58,11 @@ def test_service_api_preserves_error_reason_and_requested_language(
 ):
     settings, connections, requests = api
     message = (
-        "サービスオーナーが異なります。明示的に引き継いでください。"
+        "ほかのサービスがすでに動いています。"
         if language == "ja"
         else settings["body"]["message"]
     )
-    settings["body"] = {"code": "service_owner_conflict", "message": message}
+    settings["body"] = {"code": "service_already_running", "message": message}
     settings["status"] = status_code
     monkeypatch.setattr(service, "get_language", lambda: language, raising=False)
     with pytest.raises(httpx.HTTPStatusError) as caught:
