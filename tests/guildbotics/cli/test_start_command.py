@@ -96,7 +96,9 @@ def test_start_handles_the_race_after_its_lock_precheck(monkeypatch, owner):
         service._wait_for_port(SimpleNamespace(poll=lambda: None), notices)
 
 
-def test_two_signals_escalate_without_waiting_for_the_first_api_request(monkeypatch):
+def test_two_signals_escalate_without_waiting_for_the_first_api_request(
+    monkeypatch, capsys
+):
     signals = []
     stages = []
     graceful = threading.Event()
@@ -134,6 +136,12 @@ def test_two_signals_escalate_without_waiting_for_the_first_api_request(monkeypa
     monkeypatch.setattr(service, "_stop_requested", lambda pid: False)
     service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
     assert stages == [False, True]
+    output = capsys.readouterr().out
+    graceful_message = t("runtime.service_lock.stopping_after_work")
+    force_message = t("runtime.service_lock.cancelling")
+    assert output.count(graceful_message) == 1
+    assert output.count(force_message) == 1
+    assert output.index(graceful_message) < output.index(force_message)
 
 
 def test_interrupt_before_listening_does_not_wait_for_the_startup_deadline():
@@ -141,6 +149,45 @@ def test_interrupt_before_listening_does_not_wait_for_the_startup_deadline():
         service._wait_for_port(
             SimpleNamespace(poll=lambda: None), queue.Queue(), [signal.SIGINT]
         )
+
+
+def test_interrupted_launch_explains_the_stop_before_exiting(capsys):
+    with pytest.raises(service.StartupInterruptedError):
+        service._wait_for_port(
+            SimpleNamespace(poll=lambda: None), queue.Queue(), [signal.SIGINT]
+        )
+    assert capsys.readouterr().out.strip() == t(
+        "runtime.service_lock.stopping_after_work"
+    )
+
+
+def test_start_completion_does_not_repeat_an_already_reported_stop(monkeypatch, capsys):
+    starting = Future()
+    signals = [signal.SIGINT]
+    calls = 0
+
+    def background(call):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return starting
+        finished = Future()
+        finished.set_result(status(False))
+        return finished
+
+    monkeypatch.setattr(service, "_background", background)
+    monkeypatch.setattr(
+        service.time,
+        "sleep",
+        lambda seconds: None if starting.done() else starting.set_result(status()),
+    )
+    monkeypatch.setattr(service, "_call", lambda *args, **kwargs: status(False))
+    monkeypatch.setattr(service, "_stop_requested", lambda pid: True)
+    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
+    assert (
+        capsys.readouterr().out.count(t("runtime.service_lock.stopping_after_work"))
+        == 1
+    )
 
 
 def test_second_interrupt_can_end_a_blocked_start_request(monkeypatch):
@@ -151,6 +198,20 @@ def test_second_interrupt_can_end_a_blocked_start_request(monkeypatch):
     )
     service._supervise(process, {}, [signal.SIGINT, signal.SIGINT])
     assert calls == ["kill", "wait"]
+
+
+def test_signal_notices_are_visible_even_while_start_is_blocked(monkeypatch, capsys):
+    signals = [signal.SIGINT]
+    monkeypatch.setattr(service, "_background", lambda call: Future())
+
+    def interrupt_again(seconds):
+        assert t("runtime.service_lock.stopping_after_work") in capsys.readouterr().out
+        signals.append(signal.SIGINT)
+
+    monkeypatch.setattr(service.time, "sleep", interrupt_again)
+    process = SimpleNamespace(kill=lambda: None, wait=lambda: None, poll=lambda: None)
+    service._supervise(process, {}, signals)
+    assert t("runtime.service_lock.cancelling") in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("failed", [True, False])

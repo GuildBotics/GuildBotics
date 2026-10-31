@@ -1,4 +1,6 @@
 en:
+  stopping_after_work: "Waiting for in-flight work to finish (send the signal again to cancel it)..."
+  cancelling: "Cancelling in-flight work..."
   desktop_start: "Desktop is running. Start the service from Desktop's Service screen."
   api_unavailable: "The local backend API could not be authenticated. Check that this machine's backend is running."
   start_failed: "The backend could not start. Check the backend output."

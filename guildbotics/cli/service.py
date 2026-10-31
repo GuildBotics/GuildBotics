@@ -27,7 +27,7 @@ from guildbotics.drivers.app_api_lock import (
     read_backend_metadata,
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.i18n_tool import get_language, t
 from guildbotics.utils.local_api import connect_local_api, server_port
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
 
@@ -51,10 +51,23 @@ def _call(
     timeout: float | None = None,
     method: str = "POST",
 ) -> dict[str, Any]:
-    with connect_local_api(timeout=timeout) as client:
+    with connect_local_api(
+        headers={"Accept-Language": get_language()}, timeout=timeout
+    ) as client:
         if client is None:
             raise BackendUnavailableError(t("runtime.service_lock.api_unavailable"))
         response = client.request(method, path, json=payload)
+        if response.is_error:
+            try:
+                error = response.json()
+            except ValueError:
+                error = None
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and message:
+                # Keep the HTTP error type: callers still own retry/cleanup.
+                raise httpx.HTTPStatusError(
+                    message, request=response.request, response=response
+                )
         response.raise_for_status()
         return dict(response.json())
 
@@ -68,7 +81,9 @@ def _background(call: Callable[[], dict[str, Any]]) -> Future[dict[str, Any]]:
         except Exception as exc:
             result.set_exception(exc)
 
-    threading.Thread(target=run, daemon=True).start()
+    threading.Thread(
+        target=run, name="guildbotics-cli-service-api", daemon=True
+    ).start()
     return result
 
 
@@ -106,7 +121,9 @@ def _launch_backend(workspace: Path) -> tuple[subprocess.Popen[str], queue.Queue
             else:
                 click.echo(line, nl=False, err=True)
 
-    threading.Thread(target=drain, daemon=True).start()
+    threading.Thread(
+        target=drain, name="guildbotics-cli-backend-output", daemon=True
+    ).start()
     return process, notices
 
 
@@ -118,6 +135,7 @@ def _wait_for_port(
     deadline = time.monotonic() + STARTUP_TIMEOUT
     while time.monotonic() < deadline:
         if signals:
+            _report_interrupts(signals, 0)
             raise StartupInterruptedError
         try:
             notice = notices.get(timeout=POLL_SECONDS)
@@ -158,11 +176,23 @@ def _start_service(
     raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
 
 
+def _report_interrupts(signals: list[int], reported: int) -> int:
+    """Describe each stop stage once, outside the signal handler."""
+    stages = min(len(signals), STOP_STAGES)
+    while reported < stages:
+        key = "stopping_after_work" if reported == 0 else "cancelling"
+        click.echo(t(f"runtime.service_lock.{key}"))
+        reported += 1
+    return reported
+
+
 def _supervise(
     process: subprocess.Popen[str], payload: dict[str, Any], signals: list[int]
 ) -> None:
     starting = _background(lambda: _start_service(process, payload))
+    reported = 0
     while not starting.done():
+        reported = _report_interrupts(signals, reported)
         if len(signals) >= STOP_STAGES:
             # Startup can be waiting on synchronization or a keychain prompt.
             # No successful service start to drain yet; the second interrupt
@@ -177,6 +207,7 @@ def _supervise(
     sent = 0
     stopping: list[Future[dict[str, Any]]] = []
     while True:
+        reported = _report_interrupts(signals, reported)
         # A handler never performs I/O or waits, so a second signal can
         # escalate while the graceful API request is blocked.
         if len(signals) > sent and sent < STOP_STAGES:
@@ -225,7 +256,8 @@ def _close_backend(process: subprocess.Popen[str], *, announced: bool) -> None:
             try:
                 reply = _call("/shutdown", timeout=5)
                 budget += float(reply["teardown_budget_seconds"])
-            except BackendUnavailableError, httpx.HTTPError:
+            except (BackendUnavailableError, httpx.HTTPError) as exc:
+                click.echo(str(exc), err=True)
                 process.terminate()
         else:
             process.terminate()

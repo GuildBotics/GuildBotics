@@ -844,7 +844,9 @@ def create_app(
                 except Exception:
                     logger.exception("Background service stop failed")
 
-            threading.Thread(target=stop_in_background, daemon=True).start()
+            threading.Thread(
+                target=stop_in_background, name="guildbotics-service-stop", daemon=True
+            ).start()
             return app_runtime.get_scheduler_status()
         return app_runtime.stop_scheduler(force=request.force if request else False)
 
