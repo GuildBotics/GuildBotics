@@ -75,6 +75,10 @@ const resources = {
           closed: "GuildBotics is not running",
           restart: "Restart GuildBotics",
           reasons: {
+            cli_managed:
+              "The backend is running through the CLI. Run guildbotics stop in a terminal, then choose Restart GuildBotics.",
+            backend_in_use:
+              "Another Desktop backend is already running. Close it, then choose Restart GuildBotics.",
             exited: "The backend exited ({{detail}}).",
             timeout: "The backend did not start within {{detail}} seconds.",
             invalid_notice: "The backend reported an invalid port ({{detail}}).",
@@ -1988,6 +1992,10 @@ const resources = {
           closed: "GuildBotics が動いていません",
           restart: "GuildBotics を再起動",
           reasons: {
+            cli_managed:
+              "CLI のバックエンドが動いています。ターミナルで guildbotics stop を実行してから「GuildBotics を再起動」を押してください。",
+            backend_in_use:
+              "別の Desktop のバックエンドが動いています。閉じてから「GuildBotics を再起動」を押してください。",
             exited: "バックエンドが終了しました（{{detail}}）。",
             timeout: "バックエンドが {{detail}} 秒以内に起動しませんでした。",
             invalid_notice: "バックエンドから不正なポートが通知されました（{{detail}}）。",

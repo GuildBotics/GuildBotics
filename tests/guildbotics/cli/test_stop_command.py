@@ -1,168 +1,116 @@
 from __future__ import annotations
 
-from pathlib import Path
+from contextlib import contextmanager
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
-from guildbotics.cli import main as cli_main
-from guildbotics.drivers.service_lock import ServiceLock
+from guildbotics.cli import main
+from guildbotics.cli import service
+from guildbotics.drivers.app_api_lock import BackendMetadata
 from guildbotics.utils.i18n_tool import t
 
 
-def _setup_stop(monkeypatch, tmp_path: Path, *, dies_after_stage: str | None):
-    """Wire a fake scheduler process behind the stop command."""
-    lock_path = tmp_path / "service.lock"
-    monkeypatch.setattr("guildbotics.drivers.service_lock.os.getpid", lambda: 4242)
-    service_lock = ServiceLock(lock_path)
-    service_lock.acquire(owner="cli", workspace=tmp_path)
-    monkeypatch.setattr("guildbotics.cli.service._service_lock_path", lambda: lock_path)
-    monkeypatch.setattr(
-        "guildbotics.cli.service._stop_request_path",
-        lambda: tmp_path / "stop-request.json",
-    )
-    monkeypatch.setattr(
-        "guildbotics.cli.service.selected_workspace", lambda: Path.cwd()
-    )
-    monkeypatch.setattr("guildbotics.cli.service.time.sleep", lambda _s: None)
-
-    state = {"running": True}
-    requests: list[str] = []
-
-    def _write_stop_request(instance_id, stage, path):
-        assert instance_id == service_lock._metadata.service_instance_id
-        assert path == tmp_path / "stop-request.json"
-        requests.append(stage)
-        if stage == dies_after_stage:
-            state["running"] = False
-
-    def _force_terminate(pid):
-        assert pid == 4242
-        requests.append("force")
-        state["running"] = False
-
-    monkeypatch.setattr(
-        "guildbotics.cli.service.write_stop_request", _write_stop_request
-    )
-    monkeypatch.setattr("guildbotics.cli.service.force_terminate_pid", _force_terminate)
-    monkeypatch.setattr(
-        "guildbotics.cli.service.pid_exists", lambda _pid: state["running"]
-    )
-    return service_lock, lock_path, requests
-
-
-def test_stop_force_cancels_in_flight_work_before_force_kill(monkeypatch, tmp_path):
-    service_lock, lock_path, requests = _setup_stop(
-        monkeypatch, tmp_path, dies_after_stage="cancel"
-    )
-    try:
-        result = CliRunner().invoke(cli_main, ["stop", "--force", "--timeout", "0"])
-
-        assert result.exit_code == 0, result.output
-        assert requests == ["graceful", "cancel"]
-        assert "cancelling in-flight work" in result.output.lower()
-        assert lock_path.exists()
-    finally:
-        service_lock.release()
-
-
-def test_stop_force_terminates_as_last_resort(monkeypatch, tmp_path):
-    service_lock, lock_path, requests = _setup_stop(
-        monkeypatch, tmp_path, dies_after_stage=None
-    )
-    try:
-        result = CliRunner().invoke(cli_main, ["stop", "--force", "--timeout", "0"])
-
-        assert result.exit_code == 0, result.output
-        assert requests == ["graceful", "cancel", "force"]
-        assert t("runtime.service_lock.force_killed") in result.output
-        assert lock_path.exists()
-    finally:
-        service_lock.release()
-
-
-def test_stop_without_force_hints_at_escalation_on_timeout(monkeypatch, tmp_path):
-    service_lock, lock_path, requests = _setup_stop(
-        monkeypatch, tmp_path, dies_after_stage=None
-    )
-    try:
-        result = CliRunner().invoke(cli_main, ["stop", "--timeout", "0"])
-
-        assert result.exit_code == 0, result.output
-        assert requests == ["graceful"]
-        assert t("runtime.service_lock.stop_timeout") in result.output
-        assert lock_path.exists()
-    finally:
-        service_lock.release()
-
-
-def test_stop_reports_stopped_when_process_exits_gracefully(monkeypatch, tmp_path):
-    service_lock, lock_path, requests = _setup_stop(
-        monkeypatch, tmp_path, dies_after_stage="graceful"
-    )
-    try:
-        result = CliRunner().invoke(cli_main, ["stop", "--timeout", "0"])
-
-        assert result.exit_code == 0, result.output
-        assert requests == ["graceful"]
-        assert t("runtime.service_lock.stopped") in result.output
-        assert lock_path.exists()
-    finally:
-        service_lock.release()
-
-
 @pytest.mark.parametrize(
-    ("failed_stage", "force", "expected_requests"),
-    [
-        ("graceful", False, ["graceful"]),
-        ("cancel", True, ["graceful", "cancel"]),
-    ],
+    "exit_stage,expected",
+    [(False, [False]), (True, [False, True]), (None, [False, True, "kill"])],
 )
-def test_stop_reports_control_lock_timeout_without_traceback(
-    monkeypatch,
-    tmp_path,
-    failed_stage,
-    force,
-    expected_requests,
+def test_stop_escalates_through_api_then_native_termination(
+    monkeypatch, exit_stage, expected
 ):
-    service_lock, _lock_path, requests = _setup_stop(
-        monkeypatch, tmp_path, dies_after_stage=None
-    )
-
-    def _write_stop_request(_instance_id, stage, _path):
-        requests.append(stage)
-        if stage == failed_stage:
-            raise TimeoutError("lock timeout")
-
+    alive = True
+    requests = []
     monkeypatch.setattr(
-        "guildbotics.cli.service.write_stop_request", _write_stop_request
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
     )
-    arguments = ["stop", "--timeout", "0"]
-    if force:
-        arguments.append("--force")
-    try:
-        result = CliRunner().invoke(cli_main, arguments)
-    finally:
-        service_lock.release()
+    monkeypatch.setattr(service, "pid_exists", lambda pid: alive)
 
-    assert result.exit_code == 1
-    assert requests == expected_requests
-    assert t("runtime.service_lock.control_timeout", pid=4242) in result.output
-    assert "Traceback" not in result.output
+    def call(path, *, payload, **kwargs):
+        nonlocal alive
+        assert path == "/scheduler/stop"
+        requests.append(payload["force"])
+        if exit_stage is not None and payload["force"] is exit_stage:
+            alive = False
+        return {}
 
-
-def test_stop_rejects_desktop_managed_service(monkeypatch, tmp_path):
-    lock_path = tmp_path / "service.lock"
-    service_lock = ServiceLock(lock_path)
-    service_lock.acquire(owner="desktop", workspace=tmp_path)
-    monkeypatch.setattr("guildbotics.cli.service._service_lock_path", lambda: lock_path)
+    monkeypatch.setattr(service, "_call", call)
     monkeypatch.setattr(
-        "guildbotics.cli.service.selected_workspace", lambda: Path.cwd()
+        service, "force_terminate_pid", lambda pid: requests.append("kill")
     )
-    try:
-        result = CliRunner().invoke(cli_main, ["stop"])
-    finally:
-        service_lock.release()
+    result = CliRunner().invoke(main, ["stop", "--force", "--timeout", "0"])
+    assert result.exit_code == 0, result.output
+    assert requests == expected
 
+
+def test_stop_timeout_leaves_work_draining(monkeypatch):
+    requests = []
+    monkeypatch.setattr(
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
+    )
+    monkeypatch.setattr(service, "pid_exists", lambda pid: True)
+
+    def call(*args, **kwargs):
+        requests.append(kwargs["payload"])
+        return {}
+
+    monkeypatch.setattr(service, "_call", call)
+    result = CliRunner().invoke(main, ["stop", "--timeout", "0"])
+    assert result.exit_code == 0
+    assert requests == [{"force": False, "wait": False}]
+    assert t("runtime.service_lock.stop_timeout") in result.output
+
+
+@pytest.mark.parametrize("command", ["stop", "kill"])
+def test_stop_and_kill_reject_desktop_even_with_no_service(monkeypatch, command):
+    monkeypatch.setattr(
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata("desktop", 42))
+    )
+    result = CliRunner().invoke(main, [command])
     assert result.exit_code == 1
     assert t("runtime.service_lock.desktop_managed") in result.output
+
+
+def test_stop_without_a_backend_is_a_noop(monkeypatch):
+    monkeypatch.setattr(service, "inspect_backend_lock", lambda: (False, None))
+    result = CliRunner().invoke(main, ["stop"])
+    assert result.exit_code == 0
+    assert t("runtime.service_lock.not_running") in result.output
+
+
+def test_stop_never_terminates_without_authenticating_the_local_api(monkeypatch):
+    monkeypatch.setattr(
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
+    )
+    monkeypatch.setattr(service, "pid_exists", lambda pid: True)
+
+    @contextmanager
+    def unavailable(**kwargs):
+        assert "consent" not in kwargs
+        yield None
+
+    monkeypatch.setattr(service, "connect_local_api", unavailable)
+    result = CliRunner().invoke(main, ["kill"])
+    assert result.exit_code == 1
+    assert t("runtime.service_lock.api_unavailable") in result.output
+
+
+def test_api_call_sends_requests_only_through_the_owner_client(monkeypatch):
+    sent = []
+
+    @contextmanager
+    def connect(**kwargs):
+        assert "consent" not in kwargs
+        transport = httpx.MockTransport(
+            lambda request: (sent.append(request), httpx.Response(200, json={}))[1]
+        )
+        with httpx.Client(
+            base_url="http://127.0.0.1:8765/api", transport=transport
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(service, "connect_local_api", connect)
+    service._call("/scheduler/stop", payload={"force": True})
+    assert sent[0].url.path == "/api/scheduler/stop"
+    assert sent[0].content == b'{"force":true}'

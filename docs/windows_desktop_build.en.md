@@ -34,8 +34,8 @@ Run the Windows-specific Python behavior and the Rust unit tests before building
 ```bash
 uv run --no-sync python -m pytest \
   tests/guildbotics/utils/test_processes.py \
-  tests/guildbotics/runtime/test_service_control.py \
-  tests/guildbotics/runtime/test_service_lock.py \
+  tests/guildbotics/drivers/test_app_api_lock.py \
+  tests/guildbotics/drivers/test_service_lock.py \
   tests/guildbotics/cli/test_start_command.py \
   tests/guildbotics/cli/test_stop_command.py \
   tests/guildbotics/cli/test_member_command.py \

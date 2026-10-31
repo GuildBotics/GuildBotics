@@ -53,7 +53,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 | [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
 | [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
+| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
@@ -123,8 +123,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
-| [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
@@ -151,13 +151,13 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
+| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 
@@ -717,7 +717,7 @@ guildbotics hub workspace list [OPTIONS]
 
 ## `guildbotics kill`
 
-Immediately force kill a CLI-managed background service.
+Cancel CLI services and force terminate the backend if needed.
 
 Equivalent to: `guildbotics stop --force --timeout 0`.
 
@@ -1979,7 +1979,7 @@ guildbotics secrets status [OPTIONS]
 
 ## `guildbotics start`
 
-Start GuildBotics runtimes (scheduler and event listener runner).
+Start the backend and its services; Desktop must be closed.
 
 ```text
 guildbotics start [OPTIONS]
@@ -1987,13 +1987,13 @@ guildbotics start [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--only [scheduler\|events]` | Start only one runtime instead of both scheduler and event listener runner. |
-| `--max-consecutive-errors INTEGER` | Stop a worker after this many consecutive workflow errors. [default: 3] |
+| `--only [scheduler\|events]` | Start only scheduled/routine work or event reception and work. |
+| `--max-consecutive-errors INTEGER RANGE` | Stop a worker after this many consecutive workflow errors. [default: 3; x\>=1] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics stop`
 
-Gracefully stop a CLI-managed background service.
+Stop CLI services through the local backend API and wait for its exit.
 
 ```text
 guildbotics stop [OPTIONS]
@@ -2001,7 +2001,7 @@ guildbotics stop [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--timeout INTEGER` | Seconds to wait at each stop stage [default: 30] |
+| `--timeout INTEGER RANGE` | Seconds to wait at each stop stage [default: 30; x\>=0] |
 | `--force` | Cancel in-flight work after timeout, then force terminate as a last resort |
 | `--help` | Show this message and exit. |
 

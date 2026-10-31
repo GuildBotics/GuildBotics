@@ -1628,7 +1628,6 @@ def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
     metadata = ServiceLockMetadata(
         pid=4242,
         service_instance_id="service-1",
-        owner="cli",
         workspace="/tmp/other-workspace",
         started_at="2026-07-12T10:00:00+09:00",
     )
@@ -1644,7 +1643,6 @@ def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
     assert caught.value.code == "service_already_running"
     assert caught.value.status_code == HTTP_CONFLICT
     assert caught.value.context == {
-        "owner": "cli",
         "pid": 4242,
         "workspace": "/tmp/other-workspace",
         "started_at": "2026-07-12T10:00:00+09:00",

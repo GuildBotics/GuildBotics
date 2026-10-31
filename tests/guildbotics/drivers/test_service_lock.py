@@ -28,19 +28,18 @@ def test_service_lock_is_exclusive_and_records_owner(tmp_path) -> None:
     first = ServiceLock(path)
     second = ServiceLock(path)
 
-    metadata = first.acquire(owner="cli", workspace=tmp_path / "workspace")
+    metadata = first.acquire(workspace=tmp_path / "workspace")
     try:
         status = inspect_service_lock(path)
         assert status.locked is True
         assert status.metadata == metadata
 
         with pytest.raises(ServiceLockUnavailableError) as caught:
-            second.acquire(owner="desktop", workspace=tmp_path / "other")
+            second.acquire(workspace=tmp_path / "other")
         assert caught.value.metadata == metadata
     finally:
         first.release()
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "owner": "cli",
         "pid": metadata.pid,
         "service_instance_id": metadata.service_instance_id,
         "started_at": metadata.started_at,
@@ -51,7 +50,7 @@ def test_service_lock_is_exclusive_and_records_owner(tmp_path) -> None:
 def test_service_lock_release_keeps_file_but_makes_it_available(tmp_path) -> None:
     path = tmp_path / "service.lock"
     service_lock = ServiceLock(path)
-    service_lock.acquire(owner="desktop", workspace=tmp_path)
+    service_lock.acquire(workspace=tmp_path)
 
     service_lock.release()
 
@@ -62,13 +61,13 @@ def test_service_lock_release_keeps_file_but_makes_it_available(tmp_path) -> Non
 def test_service_lock_can_be_reacquired_by_another_owner(tmp_path) -> None:
     path = tmp_path / "service.lock"
     first = ServiceLock(path)
-    first.acquire(owner="cli", workspace=tmp_path / "first")
+    first.acquire(workspace=tmp_path / "first")
     first.release()
 
     second = ServiceLock(path)
-    metadata = second.acquire(owner="desktop", workspace=tmp_path / "second")
+    metadata = second.acquire(workspace=tmp_path / "second")
     try:
-        assert metadata.owner == "desktop"
+        assert metadata.workspace == str((tmp_path / "second").resolve())
         assert inspect_service_lock(path).metadata == metadata
     finally:
         second.release()
@@ -90,28 +89,10 @@ def test_service_lock_retries_one_transient_conflict(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(service_lock_module.time, "sleep", lambda _seconds: None)
     service_lock = ServiceLock(path)
 
-    metadata = service_lock.acquire(owner="cli", workspace=tmp_path)
+    metadata = service_lock.acquire(workspace=tmp_path)
     try:
-        assert metadata.owner == "cli"
+        assert metadata.pid == os.getpid()
         assert attempts == 1
-    finally:
-        service_lock.release()
-
-
-def test_service_lock_runs_cleanup_after_lock_before_metadata_publish(tmp_path) -> None:
-    path = tmp_path / "service.lock"
-    request_path = tmp_path / "stop-request.json"
-    request_path.write_text("stale", encoding="utf-8")
-    service_lock = ServiceLock(path)
-
-    metadata = service_lock.acquire(
-        owner="cli",
-        workspace=tmp_path,
-        before_publish=lambda: request_path.unlink(),
-    )
-    try:
-        assert not request_path.exists()
-        assert inspect_service_lock(path).metadata == metadata
     finally:
         service_lock.release()
 
@@ -172,7 +153,7 @@ def test_the_service_lets_the_machine_sleep_unless_set_otherwise(
 ) -> None:
     service_lock = ServiceLock(tmp_path / "service.lock")
 
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     held = wakepy.modecount()
     service_lock.release()
 
@@ -186,7 +167,7 @@ def test_the_service_keeps_the_machine_awake_while_held_when_set(
     set_service_keeps_awake(True)
     service_lock = ServiceLock(tmp_path / "service.lock")
 
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     held = wakepy.modecount()
     service_lock.release()
 
@@ -229,7 +210,7 @@ def test_a_held_service_follows_the_setting_however_it_is_written(
             )
 
     service_lock = ServiceLock(tmp_path / "service.lock")
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     try:
         switch(True)
         turned_on = _wait_until(lambda: wakepy.modecount() == 1)
@@ -247,7 +228,7 @@ def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
     set_service_keeps_awake(True)
     settings = workspace / ".guildbotics" / "local" / "service.yml"
     service_lock = ServiceLock(tmp_path / "service.lock")
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     try:
         with caplog.at_level(logging.WARNING):
             _replace(settings, "keep_awake: [")
@@ -303,7 +284,7 @@ def test_a_held_service_reads_the_setting_only_when_it_changes(
     monkeypatch.setattr(service_lock_module, "service_keeps_awake", counting)
     monkeypatch.setattr(service_lock_module, "_signature", polled)
     service_lock = ServiceLock(tmp_path / "service.lock")
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     try:
         assert _wait_until(lambda: len(polls) >= 3)
         unchanged = len(reads)
@@ -325,7 +306,7 @@ def test_a_released_service_no_longer_follows_the_setting(
     tmp_path, workspace, quick_poll
 ) -> None:
     service_lock = ServiceLock(tmp_path / "service.lock")
-    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.acquire(workspace=workspace)
     service_lock.release()
 
     set_service_keeps_awake(True)
@@ -347,7 +328,7 @@ def test_an_unreadable_setting_fails_the_start_without_holding_the_lock(
     settings.write_text("keep_awake: [", encoding="utf-8")
 
     with pytest.raises(yaml.YAMLError):
-        ServiceLock(path).acquire(owner="cli", workspace=workspace)
+        ServiceLock(path).acquire(workspace=workspace)
 
     assert inspect_service_lock(path).locked is False
     assert wakepy.modecount() == 0

@@ -942,6 +942,7 @@ class SchedulerStartRequest(BaseModel):
 
 class SchedulerStopRequest(BaseModel):
     force: bool = False
+    wait: bool = True
 
 
 class RuntimeActiveWork(BaseModel):

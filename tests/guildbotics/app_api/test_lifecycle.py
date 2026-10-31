@@ -163,8 +163,8 @@ class FakeServiceLock:
         self.release_calls = 0
         FakeServiceLock.instances.append(self)
 
-    def acquire(self, *, owner: str, workspace: Any) -> None:
-        self.acquire_calls.append({"owner": owner, "workspace": workspace})
+    def acquire(self, *, workspace: Any) -> None:
+        self.acquire_calls.append({"workspace": workspace})
         self.locked = True
 
     def release(self) -> None:
@@ -365,7 +365,6 @@ def test_service_lock_is_shared_by_scheduler_and_events(context_factory: Any) ->
 
     service_lock = FakeServiceLock.instances[0]
     assert len(service_lock.acquire_calls) == 1
-    assert service_lock.acquire_calls[0]["owner"] == "desktop"
 
     service.stop()
 

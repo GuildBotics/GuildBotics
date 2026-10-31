@@ -539,7 +539,7 @@ guildbotics stop               # stop accepting new work and exit after in-fligh
 guildbotics kill               # force stop immediately
 ```
 
-Running `guildbotics stop` a second time cancels the in-flight work (equivalent to **Force stop** in the GUI). For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
+`guildbotics start` launches the same backend as Desktop and starts its services. Close Desktop first. The first Ctrl-C waits for in-flight work; a second Ctrl-C cancels it. Use `guildbotics stop --force` to request cancellation after a timeout, or `guildbotics kill` for an immediate forced stop. For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
 
 By default `guildbotics start` starts both the member workers (patrol / scheduled / queued events) and the event listener. `--only` narrows what runs, but the member workers start in either case.
 
@@ -557,7 +557,9 @@ echo "Hello" | guildbotics run translate
 
 Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
-The CLI and the desktop app share a lock file (`~/.guildbotics/data/run/service.lock`), so the service can never start twice on the same machine.
+The backend holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so Desktop and `guildbotics start` cannot run together. When Desktop is open, start services from its Service screen. When the CLI backend is running, Desktop asks you to run `guildbotics stop` before opening it again. Services hold `service.lock`, including the keep-awake setting, only while running.
+
+The CLI backend also serves the API and browser screens, so `guildbotics run` can delegate commands to it. `guildbotics start` always starts services; it is not an API-only mode. Before updating Desktop, stop `guildbotics start` and any active `guildbotics run` processes. Restart the CLI service after the update, or use Desktop's Service screen.
 
 When a workspace is synchronized, the service also has one persistent owner on
 the Hub. `guildbotics start` and the desktop service screen must reach the Hub

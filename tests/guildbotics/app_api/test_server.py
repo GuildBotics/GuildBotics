@@ -223,6 +223,41 @@ def test_main_lets_the_app_ask_the_server_to_exit(
     assert captured_launch["should_exit"] is True
 
 
+def test_main_holds_backend_lock_until_the_server_exits(monkeypatch, captured_launch):
+    from guildbotics.drivers.app_api_lock import (
+        inspect_backend_lock,
+        read_backend_metadata,
+    )
+
+    def run(runner, **kwargs):
+        locked, metadata = inspect_backend_lock()
+        assert locked and metadata.owner == "desktop"
+        runner.config.app.state.on_service_stop()
+        assert read_backend_metadata().stop_requested is True
+
+    monkeypatch.setattr(server.uvicorn.Server, "run", run)
+    server.main()
+    assert inspect_backend_lock() == (False, None)
+
+
+def test_losing_backend_never_binds_or_opens_server_records(
+    monkeypatch, captured_launch
+):
+    from guildbotics.drivers.app_api_lock import (
+        BackendAlreadyRunningError,
+        hold_backend_lock,
+    )
+
+    def bind(port):
+        pytest.fail("A second backend must not bind")
+
+    monkeypatch.setattr(server, "_bind", bind)
+    with hold_backend_lock():
+        with pytest.raises(BackendAlreadyRunningError):
+            server.main()
+    assert captured_launch == {}
+
+
 def test_main_pins_the_standard_event_loop(
     monkeypatch, captured_launch: dict[str, Any]
 ) -> None:

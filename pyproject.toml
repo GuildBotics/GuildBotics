@@ -293,7 +293,6 @@ type = "protected"
 protected_modules = ["guildbotics.sync"]
 allowed_importers = [
   "guildbotics.app_api.workspace_sync",
-  "guildbotics.cli.service",
   "guildbotics.cli.member",
   "guildbotics.cli.secrets",
 ]

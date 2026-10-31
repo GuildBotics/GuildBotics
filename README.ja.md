@@ -537,7 +537,7 @@ guildbotics stop               # 新規受付を止め、実行中の作業の�
 guildbotics kill               # 即座に強制停止
 ```
 
-`guildbotics stop` をもう一度実行すると、実行中の作業をキャンセルします（GUI の **強制停止** に相当）。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。
+`guildbotics start` は Desktop と同じバックエンドを起動し、サービスを開始します。先に Desktop を閉じてください。1 回目の Ctrl-C は作業の完了を待ち、2 回目は作業をキャンセルします。別のターミナルからは `guildbotics stop --force` でタイムアウト後のキャンセル、`guildbotics kill` で即時の強制停止を要求します。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。
 
 `guildbotics start` は既定でメンバーワーカー（巡回 / 定期 / キュー済みイベント）とイベントリスナーの両方を起動します。`--only` で実行内容を絞れますが、どちらの場合もメンバーワーカー自体は起動します。
 
@@ -555,7 +555,9 @@ echo "Hello" | guildbotics run translate
 
 `--person` または `<command>@<person_id>` で実行メンバーを指定できます。
 
-CLI とデスクトップアプリは共通のロックファイル（`~/.guildbotics/data/run/service.lock`）を使うため、同じマシンでサービスが二重起動することはありません。
+バックエンドは生存期間中ずっとマシン共通の lock（`~/.guildbotics/data/run/app-api.lock`）を持つため、Desktop と `guildbotics start` は同時に動かせません。Desktop を開いているときはサービス画面から開始します。CLI のバックエンドが動いているときに Desktop を開くと、`guildbotics stop` で止めてから開くよう案内します。`service.lock` とスリープ抑止は、サービスの稼働中だけ保持します。
+
+CLI のバックエンドも API とブラウザの画面を提供するため、`guildbotics run` の委譲先になります。`guildbotics start` は必ずサービスを開始し、API だけを動かすモードはありません。Desktop の更新前には `guildbotics start` と実行中の `guildbotics run` を止めてください。更新後に CLI サービスを起動し直すか、Desktop のサービス画面から開始します。
 
 ワークスペースを同期している場合、サービスには Hub 上の永続的な owner も 1 台だけ存在します。
 `guildbotics start` とデスクトップのサービス画面は、サービスの仕事を受け付ける前に Hub へ接続して

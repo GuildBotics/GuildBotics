@@ -864,7 +864,6 @@ class AppRuntime:
                 status_code=409,
                 context=(
                     {
-                        "owner": metadata.owner,
                         "pid": metadata.pid,
                         "workspace": metadata.workspace,
                         "started_at": metadata.started_at,

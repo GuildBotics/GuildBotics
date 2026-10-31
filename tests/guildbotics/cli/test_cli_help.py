@@ -87,7 +87,7 @@ def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> N
 
     result = runner.invoke(main, ["stop", "--help"])
     assert result.exit_code == 0
-    assert "[default: 30]" in result.output
+    assert "[default: 30; x>=0]" in " ".join(result.output.split())
 
 
 def test_windows_cli_configures_standard_streams_as_utf8(

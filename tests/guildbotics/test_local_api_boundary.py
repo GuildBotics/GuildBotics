@@ -52,6 +52,7 @@ LOCAL_API_IMPORTS = {
     "integrations/provider.py": {"base_url", "server_port"},
     # Proof-gated clients: the token is attached only after the proof.
     "cli/desktop_commands.py": {"connect_local_api"},
+    "cli/service.py": {"connect_local_api", "server_port"},
     "hub/secret_transport.py": {"connect_local_api"},
     # ``open`` through the proof-gated client; ``connect`` keeps the token the
     # consent exchange answers, which it posted only the code and verifier for.

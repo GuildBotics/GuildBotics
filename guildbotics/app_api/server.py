@@ -6,12 +6,14 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.auth import ServerAuth
+from guildbotics.drivers.app_api_lock import PORT_NOTICE_PREFIX, hold_backend_lock
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
@@ -28,17 +30,13 @@ from guildbotics.utils.workspace_state import (
     register_workspace,
 )
 
-#: The one stdout line that tells the launcher this process listens on the
-#: port. Every other stdout line is plain log output.
-PORT_NOTICE_PREFIX = "GUILDBOTICS_APP_API_PORT="
-
 
 def _parent_is_alive(parent_pid: int) -> bool:
     return pid_exists(parent_pid)
 
 
 def _watch_parent(parent_pid: int) -> None:
-    """Exit the sidecar once the parent (desktop app) process is gone.
+    """Exit the sidecar once the parent (Desktop or CLI) process is gone.
 
     A force-killed desktop app cannot stop its sidecar, which would otherwise
     survive as an orphan holding the API port. Watching the desktop app PID
@@ -136,6 +134,12 @@ def _bind(port: int) -> socket.socket:
 
 
 def main() -> None:
+    _start_parent_watchdog()
+    with hold_backend_lock() as backend:
+        _serve(backend.request_stop)
+
+
+def _serve(on_service_stop: Callable[[], None]) -> None:
     config = uvicorn.Config(
         "",  # Built once the port is announced, below.
         # Loopback only: other machines reach the server through SSH
@@ -172,8 +176,8 @@ def main() -> None:
             restore_workspace_environment=True,
             workspace_problem=workspace_problem,
         )
+        app.state.on_service_stop = on_service_stop
         config.app = app
-        _start_parent_watchdog()
         uvicorn_server = uvicorn.Server(config)
         app.state.request_shutdown = lambda: setattr(
             uvicorn_server, "should_exit", True
