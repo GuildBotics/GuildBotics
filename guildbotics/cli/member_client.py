@@ -7,7 +7,7 @@ import os
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import IO, Any
 
 import click
 import httpx
@@ -102,7 +102,7 @@ def _exchange(
     client: httpx.Client,
     path: str,
     body: dict[str, Any],
-    target: BinaryIO,
+    target: IO[bytes],
     bundle: Path | None = None,
 ) -> dict[str, Any]:
     """Send once; a failed POST may already have executed its write."""
