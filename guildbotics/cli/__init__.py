@@ -44,7 +44,7 @@ def _configure_windows_standard_streams() -> None:
         "git-credential": "guildbotics.cli.git_credential:git_credential",
         "hub": "guildbotics.cli.hub:hub",
         "kill": "guildbotics.cli.service:kill",
-        "member": "guildbotics.cli.member:member",
+        "member": "guildbotics.cli.member_client:member",
         "open": "guildbotics.cli.server:open_screens",
         "run": "guildbotics.cli.run:run",
         "secrets": "guildbotics.cli.secrets:secrets",

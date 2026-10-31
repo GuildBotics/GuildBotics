@@ -8,7 +8,10 @@ is completed against, what each command reports -- is exercised here on
 
 from __future__ import annotations
 
+from tests.guildbotics.member_services import download_on_client as _download_on_client
+
 import io
+from pathlib import Path
 import json
 import re
 import subprocess
@@ -473,8 +476,8 @@ async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
     head = store.branch_tip(REPOSITORY, "feature")
     _artifact(head, "report", {"report.md": "details"})
 
-    result = await member_repository.artifact_download(
-        member, url, " report ", tmp_path / "out"
+    result = await _download_on_client(
+        member_repository.artifact_download(member, url, " report ", tmp_path / "out")
     )
 
     assert (result["name"], result["id"]) == ("report", f"{head}/report")
@@ -495,8 +498,8 @@ async def test_attachment_download_writes_the_file_by_its_name(
     written by its id instead, inside the destination."""
     url = ticket(1, body=f"![screen]({attachment('screen-1', b'png', name=name)})")
 
-    result = await member_repository.attachment_download(
-        member, url, "screen-1", tmp_path / "out"
+    result = await _download_on_client(
+        member_repository.attachment_download(member, url, "screen-1", tmp_path / "out")
     )
 
     path = (tmp_path / "out" / written).resolve()
@@ -519,7 +522,9 @@ async def test_attachment_download_leaves_a_file_already_there(member, tmp_path)
     (tmp_path / "screen.png").write_bytes(b"mine")
 
     with pytest.raises(MemberCapabilityError, match="already exists"):
-        await member_repository.attachment_download(member, url, "screen-1", tmp_path)
+        await _download_on_client(
+            member_repository.attachment_download(member, url, "screen-1", tmp_path)
+        )
     assert (tmp_path / "screen.png").read_bytes() == b"mine"
 
 

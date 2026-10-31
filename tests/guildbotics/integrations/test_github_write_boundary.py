@@ -121,6 +121,7 @@ TOKEN_USES = {
     ("capabilities/member_git.py", "show"): "fetch only; a read",
     ("capabilities/member_git.py", "prepare"): "fetch only; a read",
     ("capabilities/member_git.py", "push"): "checked",
+    ("capabilities/member_git.py", "client_git"): "checked",
 }
 #: Where GitHub makes the credential git is handed.
 GITHUB_TOKENS = {("integrations/github/code_hosting_service.py", "git_credential")}

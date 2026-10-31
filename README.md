@@ -148,17 +148,20 @@ The first launch of the desktop app installs the **guildbotics skill** into the 
 
 The skill lives in the user skill directory each tool reads (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and so on), so the same skill is used whether you start the tool from its CLI or from its app. To check that it is installed, see each tool's skill status under **Setup → LLM / AI CLI tools** in the desktop app.
 
-There are three prerequisites:
+There are four prerequisites:
 
 - The AI CLI tool is installed on your machine and you are logged in to it there. This is the one place a host install is needed: it is you working interactively, not a member's turn, which runs inside the isolated agent environment
 - You have launched the desktop app once (this installs the guildbotics skill and the managed CLI)
 - A member is configured
+- Desktop or `guildbotics start` is running. All member commands, including `--help`, use that backend; the CLI and backend must be the same version
 
 Start your AI CLI tool in the repository you want to work in and ask for work, **naming the skill and the member**. That phrase is what invokes the skill.
 
 ```text
 Use the guildbotics skill and commit and push this change as the member alice
 ```
+
+Member commands use the workspace selected by the backend. `member --workspace <path>` selects a local workspace ID; it does not switch the backend. Finish active work and switch Desktop's workspace first, or use `guildbotics stop`, `guildbotics workspace use <path>`, and `guildbotics start`. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the backend.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 

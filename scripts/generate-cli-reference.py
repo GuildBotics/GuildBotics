@@ -68,6 +68,9 @@ def _iter_contexts(
     Each command's ``context_settings`` are applied like ``make_context`` does,
     so settings such as ``show_default`` render exactly as in ``--help``.
     """
+    if info_name == "member" and parent is not None:
+        from guildbotics.cli.member import member
+        command = member
     ctx = click.Context(
         command, info_name=info_name, parent=parent, **command.context_settings
     )

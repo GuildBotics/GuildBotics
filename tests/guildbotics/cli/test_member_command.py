@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import logging
 import os
@@ -840,9 +841,11 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     async def failing():
         raise RuntimeError("boom")
 
-    member_module._run_interactive(inspect_pr(), session, "member pr read")
+    asyncio.run(member_module._run_interactive(inspect_pr(), session, "member pr read"))
     with pytest.raises(RuntimeError):
-        member_module._run_interactive(failing(), session, "member git push")
+        asyncio.run(
+            member_module._run_interactive(failing(), session, "member git push")
+        )
 
     record = json.loads(
         (tmp_path / ".guildbotics/state/sessions/trace-target.json").read_text(
@@ -891,7 +894,11 @@ def test_interrupted_interactive_command_records_its_end(monkeypatch):
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
-        member_module._run_interactive(interrupted(), session, "member memory recall")
+        asyncio.run(
+            member_module._run_interactive(
+                interrupted(), session, "member memory recall"
+            )
+        )
 
     assert [event_type for event_type, _command, _payload in recorded] == [
         "member.command.started",
@@ -1373,102 +1380,6 @@ def test_content_command_help_exposes_shared_content_sources(command):
         assert removed not in result.output
 
 
-def test_required_content_option_reads_utf8_file(tmp_path):
-    content_file = tmp_path / "message.txt"
-    content_file.write_text("日本語\n$ `value`\n", encoding="utf-8")
-
-    @click.command()
-    @member_module._required_content_stdin_option
-    def command():
-        click.echo(member_module._read_stdin("body"), nl=False)
-
-    result = CliRunner().invoke(
-        command,
-        ["--content-file", str(content_file)],
-    )
-
-    assert result.exit_code == 0
-    assert result.output == "日本語\n$ `value`\n"
-
-
-def test_content_sources_are_mutually_exclusive(tmp_path):
-    content_file = tmp_path / "message.txt"
-    content_file.write_text("body", encoding="utf-8")
-
-    @click.command()
-    @member_module._required_content_stdin_option
-    def command():
-        pass
-
-    result = CliRunner().invoke(
-        command,
-        ["--content-stdin", "--content-file", str(content_file)],
-        input="stdin",
-    )
-
-    assert result.exit_code != 0
-    assert "exactly one" in result.output
-
-
-def test_content_file_must_exist(tmp_path):
-    @click.command()
-    @member_module._required_content_stdin_option
-    def command():
-        pass
-
-    result = CliRunner().invoke(
-        command,
-        ["--content-file", str(tmp_path / "missing.txt")],
-    )
-
-    assert result.exit_code != 0
-    assert "does not exist" in result.output
-
-
-def test_content_file_must_be_utf8(tmp_path):
-    content_file = tmp_path / "message.txt"
-    content_file.write_bytes(b"\xff\xfe")
-
-    @click.command()
-    @member_module._required_content_stdin_option
-    def command():
-        pass
-
-    result = CliRunner().invoke(
-        command,
-        ["--content-file", str(content_file)],
-    )
-
-    assert result.exit_code != 0
-    assert "valid UTF-8" in result.output
-
-
-def test_content_file_read_failure_is_reported(monkeypatch, tmp_path):
-    content_file = tmp_path / "message.txt"
-    content_file.write_text("body", encoding="utf-8")
-    real_read_text = member_module.Path.read_text
-
-    def read_text(path, *args, **kwargs):
-        if path == content_file:
-            raise OSError("read failed")
-        return real_read_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(member_module.Path, "read_text", read_text)
-
-    @click.command()
-    @member_module._required_content_stdin_option
-    def command():
-        pass
-
-    result = CliRunner().invoke(
-        command,
-        ["--content-file", str(content_file)],
-    )
-
-    assert result.exit_code != 0
-    assert "Could not read content file" in result.output
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -1764,137 +1675,6 @@ def test_member_write_outside_the_configured_owner_is_never_sent(monkeypatch):
     assert sent == []
 
 
-def test_member_git_publish_current_mode_uses_current_workspace_service(
-    monkeypatch, tmp_path
-):
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    calls = {}
-
-    context = FakeContext(person)
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeResult:
-        def to_dict(self):
-            return {
-                "repo_path": str(repo_path),
-                "branch": "main",
-                "commit_sha": "abc",
-                "pushed": True,
-                "has_changes": True,
-                "status": "published",
-            }
-
-    class FakeService:
-        def __init__(self, *_args):
-            pass
-
-        async def publish_current_workspace(self, repo_path, message, cwd):
-            calls["repo_path"] = repo_path
-            calls["message"] = message
-            calls["cwd"] = cwd
-            return FakeResult()
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "git",
-            "publish",
-            "--person",
-            "aiko",
-            "--repo-path",
-            str(repo_path),
-            "--content-stdin",
-            "--workspace-mode",
-            "current",
-        ],
-        input="publish\n",
-    )
-
-    assert result.exit_code == 0
-    assert calls["repo_path"] == repo_path
-    assert calls["message"] == "publish\n"
-    assert calls["cwd"].is_absolute()
-    assert context.closed
-    assert '"status": "published"' in result.output
-
-
-def test_member_git_commit_current_mode_uses_current_workspace_service(
-    monkeypatch, tmp_path
-):
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    calls = {}
-
-    context = FakeContext(person)
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeResult:
-        def to_dict(self):
-            return {
-                "repo_path": str(repo_path),
-                "branch": "main",
-                "commit_sha": "abc",
-                "has_changes": True,
-                "status": "committed",
-            }
-
-    class FakeService:
-        def __init__(self, *_args):
-            pass
-
-        async def commit(self, repo_path, message, workspace_mode, cwd):
-            calls["repo_path"] = repo_path
-            calls["message"] = message
-            calls["workspace_mode"] = workspace_mode
-            calls["cwd"] = cwd
-            return FakeResult()
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "git",
-            "commit",
-            "--person",
-            "aiko",
-            "--repo-path",
-            str(repo_path),
-            "--content-stdin",
-            "--workspace-mode",
-            "current",
-        ],
-        input="commit\n",
-    )
-
-    assert result.exit_code == 0
-    assert calls["repo_path"] == repo_path
-    assert calls["message"] == "commit\n"
-    assert calls["workspace_mode"] == "current"
-    assert calls["cwd"].is_absolute()
-    assert context.closed
-    assert '"status": "committed"' in result.output
-
-
 def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     repo_path = tmp_path / "repo"
@@ -1943,7 +1723,7 @@ def test_member_git_commit_reads_message_from_stdin(monkeypatch, tmp_path):
             str(repo_path),
             "--content-stdin",
             "--workspace-mode",
-            "current",
+            "member",
         ],
         input="日本語のコミットメッセージ\n",
     )
@@ -2154,91 +1934,6 @@ def test_member_git_commit_rejects_removed_message_options(tmp_path):
 
     assert result.exit_code != 0
     assert f"No such option '{removed_option}'" in result.output
-
-
-def test_member_git_push_current_mode_uses_current_workspace_service(
-    monkeypatch, tmp_path
-):
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    calls = {}
-
-    context = FakeContext(person)
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeResult:
-        def to_dict(self):
-            return {
-                "repo_path": str(repo_path),
-                "branch": "main",
-                "pushed": True,
-                "status": "pushed",
-                "commits": [
-                    {
-                        "id": "abc1234",
-                        "message": "Improve activity",
-                        "url": "https://github.com/owner/repo/commit/abc1234",
-                    }
-                ],
-            }
-
-    class FakeService:
-        def __init__(self, *_args):
-            pass
-
-        async def push(self, repo_path, workspace_mode, cwd):
-            calls["repo_path"] = repo_path
-            calls["workspace_mode"] = workspace_mode
-            calls["cwd"] = cwd
-            return FakeResult()
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberGitWorkspaceService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "git",
-            "push",
-            "--person",
-            "aiko",
-            "--repo-path",
-            str(repo_path),
-            "--workspace-mode",
-            "current",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert calls["repo_path"] == repo_path
-    assert calls["workspace_mode"] == "current"
-    assert calls["cwd"].is_absolute()
-    assert context.closed
-    assert '"status": "pushed"' in result.output
-    assert _domain_event_records("type", "person_id", "payload") == [
-        {
-            "type": "repository.push",
-            "person_id": "aiko",
-            "payload": {
-                "action": "push",
-                "ref": "refs/heads/main",
-                "commits": [
-                    {
-                        "id": "abc1234",
-                        "message": "Improve activity",
-                        "url": "https://github.com/owner/repo/commit/abc1234",
-                    }
-                ],
-            },
-        }
-    ]
 
 
 def test_member_git_push_rejected_by_remote_exits_non_zero(monkeypatch, tmp_path):

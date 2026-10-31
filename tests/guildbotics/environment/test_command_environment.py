@@ -1130,7 +1130,17 @@ def test_every_command_runs_in_an_environment() -> None:
     )
 
     assert starters == {("guildbotics/guest/entry.py", "run")}
-    assert entries == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+    # These execute fixed member API phases, rather than a user command.
+    member_phases = {
+        ("guildbotics/app_api/api.py", "member_plan"),
+        ("guildbotics/app_api/api.py", "member_run"),
+        ("guildbotics/app_api/member.py", "exchange"),
+    }
+    assert (
+        entries
+        == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+        | member_phases
+    )
 
 
 def test_every_host_entry_names_the_working_directory_of_its_command() -> None:

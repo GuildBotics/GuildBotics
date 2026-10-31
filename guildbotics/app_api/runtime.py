@@ -1416,6 +1416,7 @@ class AppRuntime:
         expected_workspace: Path | None = None,
         *,
         exclusive: bool = True,
+        expected_workspace_id: str | None = None,
     ) -> None:
         """Accept a command run for the selected workspace.
 
@@ -1437,6 +1438,25 @@ class AppRuntime:
         if not self._lock.acquire(blocking=False):
             raise AppApiError("command_workspace_changing", status_code=409)
         try:
+            if expected_workspace_id is not None:
+                from guildbotics.workspace.identity import read_workspace_identity
+
+                workspace = self.get_config_status().workspace
+                identity = (
+                    read_workspace_identity(workspace)
+                    if workspace is not None
+                    else None
+                )
+                if identity is None or identity.workspace_id != expected_workspace_id:
+                    raise AppApiError(
+                        "member_workspace_mismatch",
+                        status_code=409,
+                        params={
+                            "workspace": str(workspace)
+                            if workspace is not None
+                            else "—"
+                        },
+                    )
             if (
                 expected_workspace is not None
                 and self.get_config_status().workspace != expected_workspace.resolve()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import subprocess
 import uuid
@@ -22,7 +21,7 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
     load_yaml_file,
 )
-from guildbotics.utils.secret_store import is_secret_env_key
+from guildbotics.utils.secret_redaction import redact_secrets as _redact_secrets
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
     shared_write_lock,
@@ -39,7 +38,6 @@ from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
 DEFAULT_DIGEST_N = 20
-MIN_SECRET_VALUE_LENGTH = 4
 RG_NO_MATCH_EXIT_CODE = 1
 BODY_FILE = "body.md"
 META_FILE = "meta.yml"
@@ -876,16 +874,6 @@ def _positive_int(value: Any, default: int) -> int:
 def _is_autonomous_run() -> bool:
     invocation = current_member_invocation()
     return bool(invocation.task_run_id or invocation.run_id)
-
-
-def _redact_secrets(text: str) -> str:
-    redacted = text
-    for key, value in os.environ.items():
-        if not is_secret_env_key(key):
-            continue
-        if len(value) >= MIN_SECRET_VALUE_LENGTH:
-            redacted = redacted.replace(value, "***")
-    return redacted
 
 
 def _redact_meta(meta: dict[str, Any]) -> dict[str, Any]:

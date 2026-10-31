@@ -77,6 +77,7 @@ BOUNDARY_LIMITS = {
 
 #: Limits on content that never reaches a shared file, and what each bounds.
 NOT_SHARED = {
+    "guildbotics/environment/member_execution.py:_MAX_OUTPUT_BYTES": "member worker output on the transport; no shared file",
     "guildbotics/runtime/resources.py:MAX_PAGE_BYTES": (
         "one page of a service read transported through the member broker"
     ),

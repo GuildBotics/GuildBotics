@@ -78,7 +78,10 @@ def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> N
     runner = CliRunner()
 
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(main, ["member", "memory", "recall", "--help"])
+        # Member help is produced by the backend's Click definitions.
+        from guildbotics.cli.member import member
+
+        result = runner.invoke(member, ["memory", "recall", "--help"])
     assert result.exit_code == 0
     assert "[default: 20; 1<=x<=200]" in result.output
     assert "[default: json]" in result.output

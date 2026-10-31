@@ -86,6 +86,8 @@ class ApiError(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    version: str = ""
+    workspace_id: str | None = None
     status: str
     service_instance_id: str
     workspace: Path | None

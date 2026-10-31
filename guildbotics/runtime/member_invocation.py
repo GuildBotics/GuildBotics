@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
@@ -157,6 +157,9 @@ class MemberInvocation:
     turn belongs to; outside a command there is none.
     """
 
+    interactive_host: str | None = None
+    interactive_thread_key: str | None = None
+    download: Callable[[IO[bytes], str, tuple[str, ...]], None] | None = None
     run_id: str = ""
     task_run_id: str = ""
     work: Work | None = None

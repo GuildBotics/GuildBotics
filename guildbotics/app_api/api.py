@@ -69,6 +69,7 @@ from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
     intelligence_config_dir,
 )
+from guildbotics.app_api.member import MemberApi, MemberRequest
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentEnvironmentStatusResponse,
@@ -267,6 +268,7 @@ def create_app(
     # Secrets travel between OS secret stores rather than through Git, but the
     # machine they travel to is the workspace's hub, so the two services share
     # one answer to "where is the hub" instead of resolving it twice.
+    member_api = MemberApi(app_runtime)
     secret_service = WorkspaceSecretService(sync_service)
     identity_secret_service = WorkspaceSecretService(sync_service, identities=True)
 
@@ -295,6 +297,7 @@ def create_app(
                 yield
             finally:
                 try:
+                    await member_api.close()
                     app_runtime.stop_scheduler(force=True)
                     sync_service.shutdown()
                     await app_runtime.close_cli_agent_usage()
@@ -460,12 +463,34 @@ def create_app(
     ) -> Response:
         return await hub_secrets.transfer(request, workspace_id, operation)
 
+    @router.post("/member/plan")
+    async def member_plan(body: MemberRequest) -> Response:
+        return await member_api.execute(body, describe=True)
+
+    @router.post("/member/run")
+    async def member_run(body: MemberRequest) -> Response:
+        return await member_api.execute(body)
+
+    @router.post("/member/git")
+    async def member_git(request: Request) -> Response:
+        return await member_api.exchange(request)
+
     @router.get("/health")
     def health() -> HealthResponse:
-        from guildbotics.workspace.identity import ensure_device_identity
+        from guildbotics.cli import _resolve_version
+        from guildbotics.workspace.identity import (
+            ensure_device_identity,
+            ensure_workspace_identity,
+        )
 
         return HealthResponse(
             status="ok",
+            version=_resolve_version(),
+            workspace_id=(
+                ensure_workspace_identity().workspace_id
+                if app_runtime.get_config_status().workspace is not None
+                else None
+            ),
             service_instance_id=system_service_run_id,
             workspace=app_runtime.get_config_status().workspace,
             machine_name=ensure_device_identity().display_name,

@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import re
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
@@ -60,6 +59,7 @@ from guildbotics.cli._options import (
     format_option,
     workspace_option,
 )
+from guildbotics.cli.member_output import to_markdown as _to_markdown
 from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
@@ -106,6 +106,8 @@ from guildbotics.workspace.identity import (
     DeviceIdentity,
     WorkspaceIdentity,
     device_identity_path,
+    read_device_identity,
+    read_workspace_identity,
     workspace_identity_path,
 )
 
@@ -159,7 +161,7 @@ def _content_option(
 
             context = click.get_current_context()
             if selected:
-                context.meta[_CONTENT_META_KEY] = _read_content_source(content_file)
+                context.meta[_CONTENT_META_KEY] = _read_call_stdin()
             if not required:
                 kwargs["content_stdin"] = selected
             try:
@@ -170,7 +172,11 @@ def _content_option(
         with_file = click.option(
             "--content-file",
             type=_HostPath(
-                read_on_host=True, exists=True, dir_okay=False, readable=True
+                client_kind="content",
+                read_on_host=True,
+                exists=True,
+                dir_okay=False,
+                readable=True,
             ),
             help=t("cli.member.content.file_help"),
         )(wrapped)
@@ -231,19 +237,26 @@ class _HostPath(click.Path):
     such a command names no ``read_on_host`` file, one the host itself reads.
     """
 
-    def __init__(self, *, read_on_host: bool = False, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        client_kind: Literal["content", "download", "git"],
+        read_on_host: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(path_type=Path, **kwargs)
         self._read_on_host = read_on_host
+        self.client_kind = client_kind
 
     def convert(
         self, value: Any, param: click.Parameter | None, ctx: click.Context | None
     ) -> Any:
-        path = _call(ctx).cwd / value
-        if current_member_invocation().guest is None:
-            return super().convert(path, param, ctx)
+        if self.client_kind == "download" and current_member_invocation().guest is None:
+            return str(value)
+        path = Path(value)
         if self._read_on_host:
             self.fail(t("cli.member.content.file_in_environment"), param, ctx)
-        return path
+        return _call(ctx).cwd / path if current_member_invocation().guest else path
 
 
 def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -1052,7 +1065,7 @@ async def _git_prepare(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    type=_HostPath(client_kind="git"),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1122,7 +1135,7 @@ async def _git(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    type=_HostPath(client_kind="git"),
     help="Path to the member repository workspace.",
 )
 @_workspace_mode_option
@@ -1149,7 +1162,7 @@ def git_push(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    type=_HostPath(client_kind="git"),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1172,13 +1185,7 @@ def git_publish(
         person,
         workspace_mode,
         "git_publish",
-        lambda service: (
-            service.publish_current_workspace(
-                repo_path=repo_path, message=message, cwd=_call().cwd
-            )
-            if workspace_mode == "current"
-            else service.publish(repo_path=repo_path, message=message)
-        ),
+        lambda service: service.publish(repo_path=repo_path, message=message),
         pushes=True,
     )
 
@@ -1188,9 +1195,7 @@ def _reject_current_workspace_mode_in_task_run(
 ) -> None:
     # A command of an isolated environment, run or not: the current mode runs
     # git on the host in a repository that environment can write.
-    if workspace_mode == "current" and (
-        task_run_id or current_member_invocation().guest is not None
-    ):
+    if workspace_mode == "current":
         raise click.ClickException(
             "workspace-mode=current is only for interactive use and cannot be "
             "used inside a workflow task run or a command of an isolated "
@@ -1809,7 +1814,7 @@ def artifact() -> None:
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
     "--dest",
-    type=_HostPath(file_okay=False),
+    type=_HostPath(client_kind="download", file_okay=False),
     default=Path("."),
     help=(
         "Directory to extract into. Defaults to the current directory. Remove "
@@ -1849,7 +1854,7 @@ def ticket_attachment() -> None:
 )
 @click.option(
     "--dest",
-    type=_HostPath(file_okay=False),
+    type=_HostPath(client_kind="download", file_okay=False),
     default=Path("."),
     help=(
         "Directory to write the file into. Defaults to the current directory. "
@@ -2111,21 +2116,6 @@ def _read_call_stdin() -> str:
     return click.get_text_stream("stdin").read() if stdin is None else stdin
 
 
-def _read_content_source(content_file: Path | None) -> str:
-    if content_file is None:
-        return _read_call_stdin()
-    try:
-        return content_file.read_text(encoding="utf-8")
-    except UnicodeError as exc:
-        raise click.ClickException(
-            t("cli.member.content.file_not_utf8", path=content_file)
-        ) from exc
-    except OSError as exc:
-        raise click.ClickException(
-            t("cli.member.content.file_read_failed", path=content_file, error=exc)
-        ) from exc
-
-
 def _validate_title(title: str) -> str:
     if "\n" in title or "\r" in title:
         raise click.ClickException("title must not contain newlines.")
@@ -2167,20 +2157,26 @@ def _parse_scalar(value: str) -> Any:
 
 
 def _run(coro: _CommandWork, *, output_format: str) -> Any:
-    interactive_session = _interactive_session_for_current_command()
-    command = _current_command_path()
-    needs_sync = _member_command_writes()
+    result = asyncio.run(_run_async(coro))
+    _emit(result, output_format)
+    return result
+
+
+async def _run_async(coro: _CommandWork) -> Any:
     prepared_sync = None
     started = False
     try:
+        interactive_session = _interactive_session_for_current_command()
+        command = _current_command_path()
+        needs_sync = _member_command_writes()
         _validate_member_delegation()
         if needs_sync:
             prepared_sync = _prepare_member_sync()
         started = True
         if interactive_session is None:
-            result = _run_in_owner_trace(coro, command)
+            result = await _run_in_owner_trace(coro, command)
         else:
-            result = _run_interactive(coro, interactive_session, command)
+            result = await _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
         ServiceError,
@@ -2190,6 +2186,8 @@ def _run(coro: _CommandWork, *, output_format: str) -> Any:
         KeyError,
         SyncRepositoryBusyError,
     ) as exc:
+        if not started:
+            coro.close()
         raise click.ClickException(str(exc) or type(exc).__name__) from exc
     except BaseException:
         if not started:
@@ -2197,7 +2195,6 @@ def _run(coro: _CommandWork, *, output_format: str) -> Any:
         raise
     if needs_sync:
         result = _sync_member_result(result, prepared_sync)
-    _emit(result, output_format)
     return result
 
 
@@ -2245,10 +2242,125 @@ def run_in_process(
     return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
+def run_client_git(
+    arguments: list[str],
+    invocation: MemberInvocation,
+    phase: str,
+    data: dict[str, Any],
+    incoming: Path | None,
+    outgoing: Path,
+) -> tuple[int, str, str]:
+    """Run a current-git data exchange inside the member execution boundary."""
+    stdout, stderr = io.StringIO(), io.StringIO()
+    try:
+        with member_invocation_scope(invocation):
+            command: click.Command = member
+            parent = None
+            remaining = arguments[:]
+            name = ""
+            while True:
+                ctx = command.make_context(
+                    "guildbotics member" if parent is None else name,
+                    remaining[:],
+                    parent=parent,
+                    obj=MemberCall(cwd=Path("/"), stdin="", stdout=stdout),
+                )
+                if not isinstance(command, click.Group):
+                    break
+                tail: list[str] = [*ctx._protected_args, *ctx.args]
+                name, remaining = tail[0], tail[1:]
+                sub = command.get_command(ctx, name)
+                if sub is None:
+                    raise click.UsageError("Unknown member command.")
+                parent, command = ctx, sub
+            with ctx:
+                if (
+                    ctx.command_path.split()[-2:]
+                    not in [["git", "commit"], ["git", "push"], ["git", "publish"]]
+                    or ctx.params.get("workspace_mode") != "current"
+                ):
+                    raise click.UsageError("Expected a current git command.")
+
+                async def action() -> dict[str, Any]:
+                    context, person = _resolve(ctx.params["person"])
+                    closed = False
+
+                    async def within_command(work: _CommandWork) -> dict[str, Any]:
+                        async def owned() -> dict[str, Any]:
+                            nonlocal closed
+                            try:
+                                result = await work
+                                record_member_push_event(
+                                    person,
+                                    result,
+                                    provider=context.team.project.get_service_name(
+                                        Service.CODE_HOSTING_SERVICE
+                                    ),
+                                )
+                                return result
+                            finally:
+                                closed = True
+                                await context.aclose()
+
+                        try:
+                            return await _run_async(owned())
+                        finally:
+                            if not closed:
+                                work.close()
+
+                    try:
+                        if phase == "identity":
+                            with _identity_validation():
+                                read_workspace_identity()
+                                read_device_identity()
+                        return await _git_service(context, person).client_git(
+                            phase,
+                            data,
+                            incoming,
+                            outgoing,
+                            within_command=within_command if phase == "push" else None,
+                        )
+                    finally:
+                        if not closed:
+                            await context.aclose()
+
+                work = action()
+                result = asyncio.run(
+                    _run_async(work) if phase == "record" and name == "commit" else work
+                )
+                _emit(result, "json")
+        code = 0
+    except click.ClickException as exc:
+        exc.show(stderr)
+        code = exc.exit_code
+    except (
+        MemberCapabilityError,
+        ServiceError,
+        MemberMemoryError,
+        ChatUpdatesRequired,
+        TaskRunError,
+        KeyError,
+        SyncRepositoryBusyError,
+    ) as exc:
+        click.ClickException(str(exc) or type(exc).__name__).show(stderr)
+        code = 1
+    except Exception:
+        stderr.write(traceback.format_exc())
+        code = 1
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
 def _prepare_member_sync() -> PreparedOneShotSync | None:
     """Prepare one-shot sync and turn identity damage into an actionable error."""
-    try:
+    with _identity_validation():
         return prepare_commit_and_push_once()
+
+
+@contextmanager
+def _identity_validation():
+    """Present invalid sync identity records consistently, before local writes."""
+    try:
+        yield
     except ValidationError as exc:
         identity_paths = {
             WorkspaceIdentity.__name__: workspace_identity_path(),
@@ -2305,7 +2417,7 @@ def _member_command_writes() -> bool:
     return not bool(getattr(callback, _READ_ONLY_COMMAND_ATTRIBUTE, False))
 
 
-def _run_interactive(
+async def _run_interactive(
     coro, session: InteractiveTraceSession, command: str
 ) -> dict[str, Any]:
     """Run one member command inside its interactive session.
@@ -2337,7 +2449,7 @@ def _run_interactive(
         ):
             _record_member_command_event("member.command.started", command)
             try:
-                result = asyncio.run(coro)
+                result = await coro
             except BaseException as exc:
                 # Ctrl-C ends the session's command too, and it is classified
                 # like any other command failure so the session that recorded
@@ -2372,7 +2484,7 @@ def _record_interactive_session(
         )
 
 
-def _run_in_owner_trace(coro, command: str) -> Any:
+async def _run_in_owner_trace(coro, command: str) -> Any:
     """Run a command an agent turn asked for inside that turn's trace.
 
     The broker hands the trace over in the invocation; without it (a plain
@@ -2380,11 +2492,11 @@ def _run_in_owner_trace(coro, command: str) -> Any:
     """
     trace_id = current_member_invocation().trace_id
     if not trace_id:
-        return asyncio.run(coro)
+        return await coro
     person = _current_person()
     person_id = _resolve(person)[1].person_id if person else ""
     with join_trace(trace_id, person_id=person_id, command=command):
-        return asyncio.run(coro)
+        return await coro
 
 
 def _interactive_session_for_current_command() -> InteractiveTraceSession | None:
@@ -2397,11 +2509,16 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
         _context, member_person = _resolve(person)
     except click.ClickException, FileNotFoundError:
         return None
+    invocation = current_member_invocation()
     return InteractiveTraceStore().start_or_touch(
         person_id=member_person.person_id,
         workspace=str(get_workspace_root()),
-        host=interactive_host(),
-        thread_key=interactive_thread_key(),
+        host=invocation.interactive_host or interactive_host(),
+        thread_key=(
+            invocation.interactive_thread_key
+            if invocation.interactive_thread_key is not None
+            else interactive_thread_key()
+        ),
     )
 
 
@@ -2445,59 +2562,6 @@ def _emit(payload: dict[str, Any], output_format: str) -> None:
         )
         return
     click.echo(_to_markdown(payload), file=_call().stdout)
-
-
-def _to_markdown(payload: dict[str, Any]) -> str:
-    lines = []
-    for key, value in payload.items():
-        if key == "communication_style" and isinstance(value, dict):
-            lines.append("## Communication Style")
-            for style_key in (
-                "active_member_instruction",
-                "voice_basis",
-                "interactive_replies",
-                "comments",
-                "neutral_documents",
-                "machine_outputs",
-            ):
-                if style_key in value:
-                    lines.append(f"- **{style_key}**: {value[style_key]}")
-            continue
-        if key == "capabilities" and isinstance(value, str):
-            lines.append("## Member Capabilities")
-            lines.append(value)
-            continue
-        if key == "failed_logs" and isinstance(value, list):
-            lines.append("## Failed job logs")
-            if not value:
-                lines.append("_No failed CI job logs found._")
-                continue
-            for item in value:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "Unnamed job")
-                conclusion = str(item.get("conclusion") or "unknown")
-                lines.append(f"### {name} ({conclusion})")
-                metadata = {
-                    item_key: item_value
-                    for item_key, item_value in item.items()
-                    if item_key != "log"
-                }
-                lines.append(json.dumps(metadata, ensure_ascii=False, sort_keys=True))
-                log = str(item.get("log") or "")
-                longest_ticks = max(
-                    (len(match.group(0)) for match in re.finditer(r"`+", log)),
-                    default=0,
-                )
-                fence = "`" * max(3, longest_ticks + 1)
-                lines.extend((f"{fence}text", log.rstrip("\n"), fence))
-            continue
-        if isinstance(value, (dict, list)):
-            rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        else:
-            rendered = str(value)
-        lines.append(f"- **{key}**: {rendered}")
-    return "\n".join(lines)
 
 
 def _fill_help_from_catalog(group: click.Group, path: tuple[str, ...] = ()) -> None:

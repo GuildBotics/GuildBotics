@@ -1,4 +1,7 @@
 en:
+  client:
+    backend_required: "Start Desktop or `guildbotics start` before using member commands, including --help."
+    workspace_required: "Select a workspace with --workspace or `guildbotics workspace use <path>` first."
   content:
     exclusive: "Use exactly one of --content-stdin and --content-file."
     required: "One of --content-stdin or --content-file is required."

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import logging
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
 from guildbotics.entities.team import Person, Team
 from guildbotics.runtime.code_hosting_service import CodeHostingService
-from guildbotics.runtime.member_invocation import GuestResult
+from guildbotics.runtime.member_invocation import (
+    GuestResult,
+    MemberInvocation,
+    member_invocation_scope,
+)
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.runtime.ticket_service import TicketService
 
 
@@ -66,3 +72,28 @@ class GuestDouble:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+async def download_on_client(operation):
+    from guildbotics.capabilities.artifact_archive import (
+        write_download,
+        unpacked,
+        ArtifactError,
+    )
+
+    buffer = io.BytesIO()
+    received = {}
+
+    def receive(source, destination, attachment):
+        buffer.write(source.read())
+        received.update(destination=destination, attachment=attachment)
+
+    with member_invocation_scope(MemberInvocation(download=receive)):
+        result = await operation
+    buffer.seek(0)
+    destination = Path(received["destination"])
+    try:
+        files = write_download(buffer, destination, *received["attachment"])
+    except ArtifactError as exc:
+        raise MemberCapabilityError(str(exc)) from exc
+    return {**result, **unpacked(destination, files)}
