@@ -11,7 +11,7 @@ This skill only defines the interactive envelope: how to work side by side with 
 
 ## Required First Step
 
-Before any member command, keep Desktop or `guildbotics start` running. The member CLI delegates to that backend, including `--help`; it cannot run alone. Use the CLI installed by the same Desktop version. Member commands use the backend's selected workspace. `member --workspace <path>` resolves a local workspace ID, and refuses another selection: switch Desktop's workspace after stopping active work, or run `guildbotics stop`, `guildbotics workspace use <path>`, then `guildbotics start`.
+Before any member command, keep Desktop or `guildbotics start` running. The member CLI delegates to that backend, including `--help`; it cannot run alone. Use the CLI installed by the same Desktop version. Member commands use the backend's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch Desktop's workspace after stopping active work, or run `guildbotics stop`, `guildbotics workspace use <path>`, then `guildbotics start`.
 
 On macOS or Linux, run the desktop-managed CLI by absolute path:
 

@@ -30,8 +30,8 @@ _BUILDERS = {
 }
 
 #: The modules whose ``Context`` is not GuildBotics' (``contextvars.Context``
-#: runs a call in a copy of the context variables).
-_OTHER_CONTEXTS = {"contextvars"}
+#: runs a call in a copy of the context variables; click.Context parses options).
+_OTHER_CONTEXTS = {"contextvars", "click"}
 
 
 def _builders(source: str, relative: str) -> set[tuple[str, str]]:
@@ -102,6 +102,13 @@ def test_a_context_is_built_only_by_the_host_builder_and_the_environment_entry()
 )
 def test_a_context_is_found_however_it_is_imported(source):
     assert _builders(source, "m.py") == {("m.py", "build")}
+
+
+@pytest.mark.parametrize("module", ["click", "contextvars"])
+def test_third_party_context_is_not_an_execution_context(module):
+    assert (
+        _builders(f"import {module}\ndef parse(): {module}.Context()", "m.py") == set()
+    )
 
 
 def test_a_subclass_of_context_is_found():

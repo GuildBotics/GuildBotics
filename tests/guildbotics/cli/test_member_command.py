@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import logging
 import os
@@ -840,9 +841,11 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     async def failing():
         raise RuntimeError("boom")
 
-    member_module._run_interactive(inspect_pr(), session, "member pr read")
+    asyncio.run(member_module._run_interactive(inspect_pr(), session, "member pr read"))
     with pytest.raises(RuntimeError):
-        member_module._run_interactive(failing(), session, "member git push")
+        asyncio.run(
+            member_module._run_interactive(failing(), session, "member git push")
+        )
 
     record = json.loads(
         (tmp_path / ".guildbotics/state/sessions/trace-target.json").read_text(
@@ -891,7 +894,11 @@ def test_interrupted_interactive_command_records_its_end(monkeypatch):
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
-        member_module._run_interactive(interrupted(), session, "member memory recall")
+        asyncio.run(
+            member_module._run_interactive(
+                interrupted(), session, "member memory recall"
+            )
+        )
 
     assert [event_type for event_type, _command, _payload in recorded] == [
         "member.command.started",

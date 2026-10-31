@@ -33,19 +33,21 @@ from guildbotics.observability.interactive_sessions import (
 from guildbotics.utils.fileio import (
     get_identity_config_dir,
     get_workspace_root,
+    host_temporary_directory,
+    host_temporary_root,
     workspace_root_from_config_dir,
 )
 from guildbotics.utils.i18n_tool import get_language, t
 from guildbotics.utils.local_api import connect_local_api
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.secret_redaction import redact_secrets, register_secret_names
-from guildbotics.utils.workspace_state import read_active_workspace
+from guildbotics.utils.workspace_state import read_active_workspace, workspace_state
 from guildbotics.workspace.identity import read_workspace_identity
 
 
 def _workspace(arguments: list[str]) -> tuple[Path, list[str]]:
     chosen = None
-    result = []
+    result: list[str] = []
     tokens = iter(arguments)
     for token in tokens:
         if token == "--workspace":
@@ -58,7 +60,8 @@ def _workspace(arguments: list[str]) -> tuple[Path, list[str]]:
         elif token.startswith("--workspace="):
             chosen = token.partition("=")[2]
         else:
-            result.append(token)
+            result.extend((token, *tokens))
+            break
     configured = os.environ.get("GUILDBOTICS_CONFIG_DIR", "")
     root = (
         Path(chosen)
@@ -76,7 +79,10 @@ def _workspace(arguments: list[str]) -> tuple[Path, list[str]]:
         root = state.workspace if state else None
     if root is None:
         raise click.ClickException(t("cli.member.client.workspace_required"))
-    return root.expanduser().resolve(), result
+    try:
+        return workspace_state(root).workspace, result
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _read_content(path: Path) -> str:
@@ -180,7 +186,7 @@ def _current_git(
     root = current_repository(Path(plan["repo_path"]), cwd or Path.cwd())
     git = LocalGit(root)
     operation = plan["operation"]
-    with tempfile.TemporaryDirectory(prefix="guildbotics-client-git-") as directory:
+    with host_temporary_directory("guildbotics-client-git-") as directory:
         incoming, outgoing = (
             Path(directory) / "in.bundle",
             Path(directory) / "out.bundle",
@@ -197,9 +203,9 @@ def _current_git(
             commit = commit_staged(
                 git, root, stdin, identity["user"], identity["email"]
             )
-            call("record", commit)
+            recorded = call("record", commit)
             if operation == "commit":
-                return commit
+                return recorded
         branch = (
             git("symbolic-ref", "--quiet", "--short", "HEAD").stdout.decode().strip()
         )
@@ -285,11 +291,11 @@ def member(ctx: click.Context) -> None:
     }
     try:
         with connect_local_api(
-            headers={"Accept-Language": get_language()}, timeout=None
+            headers={"X-GuildBotics-Language": get_language()}, timeout=None
         ) as client:
             if client is None:
                 raise click.ClickException(t("cli.member.client.backend_required"))
-            with tempfile.TemporaryFile() as output:
+            with tempfile.TemporaryFile(dir=host_temporary_root()) as output:
                 described = _exchange(client, "/member/plan", body, output)
             _result(described)
             plan = described["plan"]
@@ -299,7 +305,7 @@ def member(ctx: click.Context) -> None:
                 and arguments != original_arguments
             ):
                 body["arguments"] = original_arguments
-                with tempfile.TemporaryFile() as output:
+                with tempfile.TemporaryFile(dir=host_temporary_root()) as output:
                     described = _exchange(client, "/member/plan", body, output)
                 _result(described)
                 plan = described["plan"]
@@ -329,7 +335,7 @@ def member(ctx: click.Context) -> None:
                     else to_markdown(result)
                 )
                 return
-            with tempfile.TemporaryFile() as output:
+            with tempfile.TemporaryFile(dir=host_temporary_root()) as output:
                 result = _exchange(client, "/member/run", body, output)
                 if "download" in result and result["exit_code"] == 0:
                     output.seek(0)

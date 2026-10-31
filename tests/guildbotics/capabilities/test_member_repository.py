@@ -8,6 +8,8 @@ is completed against, what each command reports -- is exercised here on
 
 from __future__ import annotations
 
+from tests.guildbotics.member_services import download_on_client as _download_on_client
+
 import io
 from pathlib import Path
 import json
@@ -430,31 +432,6 @@ async def test_a_ticket_and_a_pull_request_of_one_number_are_two_items(member):
             member, resource, subject, parameters={}, continuation=""
         )
         assert [c["body"] for c in page["items"]] == [body]
-
-
-async def _download_on_client(operation):
-    from guildbotics.capabilities.artifact_archive import (
-        write_download,
-        unpacked,
-        ArtifactError,
-    )
-
-    buffer = io.BytesIO()
-    received = {}
-
-    def receive(source, destination, attachment):
-        buffer.write(source.read())
-        received.update(destination=destination, attachment=attachment)
-
-    with member_invocation_scope(MemberInvocation(download=receive)):
-        result = await operation
-    buffer.seek(0)
-    destination = Path(received["destination"])
-    try:
-        files = write_download(buffer, destination, *received["attachment"])
-    except ArtifactError as exc:
-        raise MemberCapabilityError(str(exc)) from exc
-    return {**result, **unpacked(destination, files)}
 
 
 def _artifact(sha: str, name: str, files: dict[str, str]) -> None:

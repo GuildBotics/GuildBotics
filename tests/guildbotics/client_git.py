@@ -55,6 +55,11 @@ def tracking(member, origin, path):
     git = LocalGit(path)
     with tempfile.TemporaryDirectory() as directory:
         outgoing = Path(directory) / "out.bundle"
+        asyncio.run(
+            member.service.client_git(
+                "known", {"remotes": [member.url("owner")]}, None, outgoing
+            )
+        )
         for known in (sorted(member_client.known_commits(git)), []):
             refs = asyncio.run(
                 member.service.client_git(

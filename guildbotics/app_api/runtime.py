@@ -1448,7 +1448,15 @@ class AppRuntime:
                     else None
                 )
                 if identity is None or identity.workspace_id != expected_workspace_id:
-                    raise AppApiError("command_workspace_changed", status_code=409)
+                    raise AppApiError(
+                        "member_workspace_mismatch",
+                        status_code=409,
+                        params={
+                            "workspace": str(workspace)
+                            if workspace is not None
+                            else "—"
+                        },
+                    )
             if (
                 expected_workspace is not None
                 and self.get_config_status().workspace != expected_workspace.resolve()

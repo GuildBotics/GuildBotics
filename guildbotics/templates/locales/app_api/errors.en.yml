@@ -1,4 +1,6 @@
 en:
+  member_workspace_mismatch: "This CLI uses a different workspace from the running backend (%{workspace}). In Desktop, stop the service and select the workspace in the app. With `guildbotics start`, switch using `guildbotics stop`, `guildbotics workspace use <path>`, then `guildbotics start`."
+  member_backend_closing: "The GuildBotics backend is shutting down. Start Desktop or `guildbotics start` after it has stopped, then run the command again."
   member_invalid_request: "The member transport request is invalid."
   member_version_mismatch: "CLI and backend versions differ. Update Desktop, restart the backend, and use the CLI installed by that version."
   member_workspace_argument: "Pass a workspace ID; --workspace is resolved by the client."

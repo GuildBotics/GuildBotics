@@ -5,7 +5,7 @@ import io
 import json
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
@@ -106,6 +106,8 @@ from guildbotics.workspace.identity import (
     DeviceIdentity,
     WorkspaceIdentity,
     device_identity_path,
+    read_device_identity,
+    read_workspace_identity,
     workspace_identity_path,
 )
 
@@ -2155,20 +2157,26 @@ def _parse_scalar(value: str) -> Any:
 
 
 def _run(coro: _CommandWork, *, output_format: str) -> Any:
-    interactive_session = _interactive_session_for_current_command()
-    command = _current_command_path()
-    needs_sync = _member_command_writes()
+    result = asyncio.run(_run_async(coro))
+    _emit(result, output_format)
+    return result
+
+
+async def _run_async(coro: _CommandWork) -> Any:
     prepared_sync = None
     started = False
     try:
+        interactive_session = _interactive_session_for_current_command()
+        command = _current_command_path()
+        needs_sync = _member_command_writes()
         _validate_member_delegation()
         if needs_sync:
             prepared_sync = _prepare_member_sync()
         started = True
         if interactive_session is None:
-            result = _run_in_owner_trace(coro, command)
+            result = await _run_in_owner_trace(coro, command)
         else:
-            result = _run_interactive(coro, interactive_session, command)
+            result = await _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
         ServiceError,
@@ -2178,6 +2186,8 @@ def _run(coro: _CommandWork, *, output_format: str) -> Any:
         KeyError,
         SyncRepositoryBusyError,
     ) as exc:
+        if not started:
+            coro.close()
         raise click.ClickException(str(exc) or type(exc).__name__) from exc
     except BaseException:
         if not started:
@@ -2185,7 +2195,6 @@ def _run(coro: _CommandWork, *, output_format: str) -> Any:
         raise
     if needs_sync:
         result = _sync_member_result(result, prepared_sync)
-    _emit(result, output_format)
     return result
 
 
@@ -2274,27 +2283,67 @@ def run_client_git(
 
                 async def action() -> dict[str, Any]:
                     context, person = _resolve(ctx.params["person"])
-                    try:
-                        result = await _git_service(context, person).client_git(
-                            phase, data, incoming, outgoing
-                        )
-                        if phase == "push" and not result.get("retry"):
-                            record_member_push_event(
-                                person,
-                                result,
-                                provider=context.team.project.get_service_name(
-                                    Service.CODE_HOSTING_SERVICE
-                                ),
-                            )
-                        return result
-                    finally:
-                        await context.aclose()
+                    closed = False
 
-                _run(action(), output_format="json")
+                    async def within_command(work: _CommandWork) -> dict[str, Any]:
+                        async def owned() -> dict[str, Any]:
+                            nonlocal closed
+                            try:
+                                result = await work
+                                record_member_push_event(
+                                    person,
+                                    result,
+                                    provider=context.team.project.get_service_name(
+                                        Service.CODE_HOSTING_SERVICE
+                                    ),
+                                )
+                                return result
+                            finally:
+                                closed = True
+                                await context.aclose()
+
+                        try:
+                            return await _run_async(owned())
+                        finally:
+                            if not closed:
+                                work.close()
+
+                    try:
+                        if phase == "identity":
+                            with _identity_validation():
+                                read_workspace_identity()
+                                read_device_identity()
+                        return await _git_service(context, person).client_git(
+                            phase,
+                            data,
+                            incoming,
+                            outgoing,
+                            within_command=within_command if phase == "push" else None,
+                        )
+                    finally:
+                        if not closed:
+                            await context.aclose()
+
+                work = action()
+                result = asyncio.run(
+                    _run_async(work) if phase == "record" and name == "commit" else work
+                )
+                _emit(result, "json")
         code = 0
     except click.ClickException as exc:
         exc.show(stderr)
         code = exc.exit_code
+    except (
+        MemberCapabilityError,
+        ServiceError,
+        MemberMemoryError,
+        ChatUpdatesRequired,
+        TaskRunError,
+        KeyError,
+        SyncRepositoryBusyError,
+    ) as exc:
+        click.ClickException(str(exc) or type(exc).__name__).show(stderr)
+        code = 1
     except Exception:
         stderr.write(traceback.format_exc())
         code = 1
@@ -2303,8 +2352,15 @@ def run_client_git(
 
 def _prepare_member_sync() -> PreparedOneShotSync | None:
     """Prepare one-shot sync and turn identity damage into an actionable error."""
-    try:
+    with _identity_validation():
         return prepare_commit_and_push_once()
+
+
+@contextmanager
+def _identity_validation():
+    """Present invalid sync identity records consistently, before local writes."""
+    try:
+        yield
     except ValidationError as exc:
         identity_paths = {
             WorkspaceIdentity.__name__: workspace_identity_path(),
@@ -2361,7 +2417,7 @@ def _member_command_writes() -> bool:
     return not bool(getattr(callback, _READ_ONLY_COMMAND_ATTRIBUTE, False))
 
 
-def _run_interactive(
+async def _run_interactive(
     coro, session: InteractiveTraceSession, command: str
 ) -> dict[str, Any]:
     """Run one member command inside its interactive session.
@@ -2393,7 +2449,7 @@ def _run_interactive(
         ):
             _record_member_command_event("member.command.started", command)
             try:
-                result = asyncio.run(coro)
+                result = await coro
             except BaseException as exc:
                 # Ctrl-C ends the session's command too, and it is classified
                 # like any other command failure so the session that recorded
@@ -2428,7 +2484,7 @@ def _record_interactive_session(
         )
 
 
-def _run_in_owner_trace(coro, command: str) -> Any:
+async def _run_in_owner_trace(coro, command: str) -> Any:
     """Run a command an agent turn asked for inside that turn's trace.
 
     The broker hands the trace over in the invocation; without it (a plain
@@ -2436,11 +2492,11 @@ def _run_in_owner_trace(coro, command: str) -> Any:
     """
     trace_id = current_member_invocation().trace_id
     if not trace_id:
-        return asyncio.run(coro)
+        return await coro
     person = _current_person()
     person_id = _resolve(person)[1].person_id if person else ""
     with join_trace(trace_id, person_id=person_id, command=command):
-        return asyncio.run(coro)
+        return await coro
 
 
 def _interactive_session_for_current_command() -> InteractiveTraceSession | None:

@@ -18,10 +18,11 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.cli import _resolve_version
 from guildbotics.cli.member import run_client_git, run_in_process
-from guildbotics.cli.member_plan import plan
+from guildbotics.cli.member_plan import contains_workspace_option, plan
 from guildbotics.environment.member_execution import MemberWorkers
 from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.utils.correlation import new_id
+from guildbotics.utils.fileio import host_temporary_directory, host_temporary_root
 
 MAX_BUNDLE = 1 << 30
 MAX_METADATA = 4 << 20
@@ -66,13 +67,10 @@ class MemberApi:
         if body.phase is not None and outgoing is None:
             raise AppApiError("member_invalid_request", status_code=422)
         if self.closing:
-            raise AppApiError("command_workspace_changing", status_code=409)
+            raise AppApiError("member_backend_closing", status_code=409)
         if body.version != _resolve_version():
             raise AppApiError("member_version_mismatch", status_code=409)
-        if any(
-            arg == "--workspace" or arg.startswith("--workspace=")
-            for arg in body.arguments
-        ):
+        if contains_workspace_option(body.arguments):
             raise AppApiError("member_workspace_argument", status_code=422)
         if sum(len(arg.encode()) for arg in body.arguments) > 64 << 10:
             raise AppApiError("member_request_too_large", status_code=413)
@@ -80,8 +78,8 @@ class MemberApi:
         self.runtime._reserve_command(
             trace, exclusive=False, expected_workspace_id=body.workspace_id
         )
-        # Ownership passes from the worker to the streaming response.
-        stream = tempfile.TemporaryFile()  # noqa: SIM115
+        # Allocation belongs to the worker too: every failure releases its reservation.
+        stream: IO[bytes] | None = None
         metadata: dict[str, Any] = {}
         deadline = time.monotonic() + 300.0
         invocation = MemberInvocation(
@@ -93,6 +91,7 @@ class MemberApi:
         def download(
             source: IO[bytes], destination: str, attachment: tuple[str, ...]
         ) -> None:
+            assert stream is not None
             metadata["download"] = {
                 "destination": destination,
                 "attachment": attachment,
@@ -101,6 +100,9 @@ class MemberApi:
             metadata["size"] = stream.tell()
 
         def run() -> tuple[int, str, str]:
+            nonlocal stream
+            # Ownership passes from the worker to the streaming response.
+            stream = tempfile.TemporaryFile(dir=host_temporary_root())  # noqa: SIM115
             if describe:
                 metadata["plan"] = plan(body.arguments)
                 return 0, "", ""
@@ -141,19 +143,19 @@ class MemberApi:
         async def chunks():
             try:
                 yield (json.dumps({**result.model_dump(), **metadata}) + "\n").encode()
-                if result.exit_code != TIMED_OUT:
+                if result.exit_code != TIMED_OUT and stream is not None:
                     stream.seek(0)
                     while chunk := stream.read(1 << 16):
                         yield chunk
             finally:
-                if result.exit_code != TIMED_OUT:
+                if result.exit_code != TIMED_OUT and stream is not None:
                     stream.close()
 
         return StreamingResponse(chunks(), media_type="application/octet-stream")
 
     async def exchange(self, request: Request) -> StreamingResponse:
         """Read one bounded metadata line followed by an optional raw bundle."""
-        temporary = tempfile.TemporaryDirectory(prefix="guildbotics-member-api-")
+        temporary = host_temporary_directory("guildbotics-member-api-")
         incoming, outgoing = (
             Path(temporary.name) / "in.bundle",
             Path(temporary.name) / "out.bundle",
@@ -182,7 +184,7 @@ class MemberApi:
                         raise AppApiError("member_request_too_large", status_code=413)
                     target.write(chunk)
             if parsed is None:
-                raise AppApiError("member_request_too_large", status_code=422)
+                raise AppApiError("member_invalid_request", status_code=422)
         except ValidationError as exc:
             temporary.cleanup()
             raise AppApiError("member_invalid_request", status_code=422) from exc

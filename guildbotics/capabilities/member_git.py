@@ -29,7 +29,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -916,6 +916,11 @@ class MemberGitWorkspaceService:
         data: dict[str, Any],
         incoming: Path | None,
         outgoing: Path,
+        *,
+        within_command: Callable[
+            [Coroutine[Any, Any, dict[str, Any]]], Awaitable[dict[str, Any]]
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         """Exchange data with a CLI; no caller path is ever opened here.
 
@@ -939,8 +944,10 @@ class MemberGitWorkspaceService:
         root = self.host_root / "current"
         with self._locked(root, _CURRENT_GIT_WAIT_SECONDS):
             origin = await self._origin(root, repository, None)
-            credential = await self.code.git_credential()
-            origin.fetch(credential)
+            credential = None
+            if phase != "tracking":
+                credential = await self.code.git_credential()
+                origin.fetch(credential)
             if phase == "known":
                 return {"known": sorted(known_commits(origin.git))}
             if phase == "tracking":
@@ -980,27 +987,31 @@ class MemberGitWorkspaceService:
                 if not origin.has_commit(data["head"]):
                     return {"retry": True}
                 origin.git("update-ref", ref, data["head"])
-            pushed, commits = self._push(origin, branch, credential)
-            sha = origin.head(branch)
-            origin.remember_public([sha])
-            origin.git("update-ref", f"refs/remotes/origin/{branch}", sha)
-        pull_requests: list[dict[str, Any]] = []
-        error = None
-        try:
-            pull_requests = await open_pull_request_readiness(
-                self.code, repository, branch
-            )
-        except ServiceError as exc:
-            error = str(exc)
-        return PushResult(
-            repo_path=data["repo_path"],
-            branch=branch,
-            pushed=pushed,
-            status="pushed" if pushed else "up_to_date",
-            commits=commits,
-            pull_requests=pull_requests,
-            pull_requests_error=error,
-        ).to_dict()
+
+            async def publish() -> dict[str, Any]:
+                pushed, commits = self._push(origin, branch, credential)
+                sha = origin.head(branch)
+                origin.remember_public([sha])
+                origin.git("update-ref", f"refs/remotes/origin/{branch}", sha)
+                pull_requests: list[dict[str, Any]] = []
+                error = None
+                try:
+                    pull_requests = await open_pull_request_readiness(
+                        self.code, repository, branch
+                    )
+                except ServiceError as exc:
+                    error = str(exc)
+                return PushResult(
+                    repo_path=data["repo_path"],
+                    branch=branch,
+                    pushed=pushed,
+                    status="pushed" if pushed else "up_to_date",
+                    commits=commits,
+                    pull_requests=pull_requests,
+                    pull_requests_error=error,
+                ).to_dict()
+
+            return await (within_command(publish()) if within_command else publish())
 
     def _commit(
         self,

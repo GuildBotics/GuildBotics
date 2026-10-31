@@ -1,6 +1,7 @@
 """GitHub as a member's code host: its pull requests, their reviews and CI, the
 git remote, and the member commands that write through it."""
 
+from tests.guildbotics.member_services import download_on_client
 import json
 from io import BytesIO
 from pathlib import Path
@@ -1354,8 +1355,10 @@ async def test_artifact_download_extracts_the_named_artifact_of_the_head(
     )
     service = _service(github, monkeypatch)
 
-    result = await member_repository.artifact_download(
-        _member(service), PULL, "playwright-report", tmp_path
+    result = await download_on_client(
+        member_repository.artifact_download(
+            _member(service), PULL, "playwright-report", tmp_path
+        )
     )
 
     assert result == {
@@ -1403,8 +1406,10 @@ async def test_artifact_download_rejects_path_traversal(monkeypatch, tmp_path):
     service = _service(github, monkeypatch)
 
     with pytest.raises(MemberCapabilityError, match="unsafe path"):
-        await member_repository.artifact_download(
-            _member(service), PULL, "report", tmp_path / "work"
+        await download_on_client(
+            member_repository.artifact_download(
+                _member(service), PULL, "report", tmp_path / "work"
+            )
         )
 
     assert not (tmp_path / "outside.txt").exists()

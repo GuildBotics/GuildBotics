@@ -1,4 +1,6 @@
 ja:
+  member_workspace_mismatch: "この CLI が使うワークスペースは、動いているバックエンドの選択 (%{workspace}) と異なります。Desktop ではサービスを止めてから画面で選択してください。`guildbotics start` では `guildbotics stop`、`guildbotics workspace use <パス>`、`guildbotics start` の順で切り替えてください。"
+  member_backend_closing: "GuildBotics のバックエンドは終了中です。終了後に Desktop または `guildbotics start` を起動してから、コマンドを実行してください。"
   member_invalid_request: "member の要求形式が正しくありません。"
   member_version_mismatch: "CLI とバックエンドの版が異なります。Desktop を更新してバックエンドを起動し直し、同じ版の CLI を使ってください。"
   member_workspace_argument: "ワークスペース ID を渡してください。--workspace は CLI が解決します。"

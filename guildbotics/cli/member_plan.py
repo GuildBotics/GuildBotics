@@ -12,6 +12,17 @@ import click
 from guildbotics.cli.member import MemberCall, _HostPath, member
 
 
+def contains_workspace_option(arguments: list[str]) -> bool:
+    """Recognize the root option without mistaking a subcommand's values."""
+    try:
+        options, _, _ = member.make_parser(click.Context(member)).parse_args(
+            arguments[:]
+        )
+    except click.ClickException:
+        return False
+    return "workspace_dir" in options
+
+
 def plan(arguments: list[str]) -> dict[str, Any]:
     """Parse without invoking callbacks or touching any caller path."""
     output = io.StringIO()

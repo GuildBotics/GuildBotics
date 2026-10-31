@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -30,6 +31,8 @@ from guildbotics.runtime.member_invocation import (
 )
 from guildbotics.workspace.identity import ensure_workspace_identity
 from guildbotics.utils.i18n_tool import t
+from guildbotics.capabilities.member_git import MemberGitWorkspaceService
+from guildbotics.capabilities.errors import MemberCapabilityError
 from tests.guildbotics.app_api.owner import owner_client
 from tests.guildbotics.local_code_host import attachment, local_member, ticket, tracker
 
@@ -400,6 +403,353 @@ def test_current_publication_crosses_api_with_bundles(connected, tmp_path, monke
         git("show", "-s", "--format=%ae", "HEAD").stdout.strip()
         == b"aiko@guildbotics.local"
     )
+
+
+@pytest.fixture
+def current_git(connected, tmp_path, monkeypatch):
+    from guildbotics.integrations.local import store
+    from guildbotics.local_git import LocalGit
+    from tests.guildbotics.local_code_host import REPOSITORY, remote_with
+
+    remote_with("extra")
+    user = tmp_path / "user"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--single-branch",
+            "--branch",
+            "main",
+            store.bare(REPOSITORY).as_uri(),
+            str(user),
+        ],
+        check=True,
+    )
+    monkeypatch.chdir(user)
+    git = LocalGit(user)
+    events, prepares, syncs = [], [], []
+
+    def event(kind, command, payload=None):
+        events.append(kind)
+
+    def prepare():
+        prepares.append("prepare")
+
+        def sync(**kwargs):
+            syncs.append("sync")
+            return SimpleNamespace(failure=None)
+
+        return SimpleNamespace(commit_and_push_once=sync)
+
+    monkeypatch.setattr(backend, "_record_member_command_event", event)
+    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
+
+    def stage():
+        (user / "a").write_text("change", encoding="utf-8")
+        git("add", "a")
+
+    def run(operation):
+        args = [
+            "member",
+            "git",
+            operation,
+            "--person",
+            "aiko",
+            "--repo-path",
+            str(user),
+            "--workspace-mode",
+            "current",
+        ]
+        if operation != "push":
+            args.append("--content-stdin")
+        return CliRunner().invoke(main, args, input="command")
+
+    return SimpleNamespace(
+        git=git,
+        user=user,
+        events=events,
+        prepares=prepares,
+        syncs=syncs,
+        stage=stage,
+        run=run,
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "case"),
+    [
+        (operation, case)
+        for operation in ("commit", "push", "publish")
+        for case in ("normal", "no_op", "push_retry", "tracking_retry")
+        if operation != "commit" or case in ("normal", "no_op")
+    ],
+)
+def test_current_command_has_one_boundary(current_git, monkeypatch, operation, case):
+    from guildbotics.local_git import LocalGit, commit_staged
+
+    state = current_git
+    if case != "no_op":
+        state.stage()
+        if operation == "push":
+            commit_staged(state.git, state.user, "local", "User", "user@example.com")
+    retries = []
+    if case == "push_retry" and operation != "commit":
+        # Make a commit which the first bundle requires but the backend lacks.
+        commit_staged(state.git, state.user, "prerequisite", "User", "user@example.com")
+        missing = state.git("rev-parse", "HEAD").stdout.decode().strip()
+        state.git(
+            "commit",
+            "--allow-empty",
+            "-m",
+            "tip",
+            env={
+                "GIT_AUTHOR_NAME": "User",
+                "GIT_AUTHOR_EMAIL": "u@example.com",
+                "GIT_COMMITTER_NAME": "User",
+                "GIT_COMMITTER_EMAIL": "u@example.com",
+            },
+        )
+        original = LocalGit.branch_bundle
+
+        def bundle(git, branch, known, path):
+            retries.append("bundle")
+            return original(
+                git, branch, [missing] if len(retries) == 1 else known, path
+            )
+
+        monkeypatch.setattr(LocalGit, "branch_bundle", bundle)
+    if case == "tracking_retry" and operation != "commit":
+        original_verify = LocalGit.verify_bundle
+
+        def verify(git, path):
+            retries.append("verify")
+            return False if len(retries) == 1 else original_verify(git, path)
+
+        monkeypatch.setattr(LocalGit, "verify_bundle", verify)
+    result = state.run(operation)
+    assert result.exit_code == 0, result.output
+    assert state.events == ["member.command.started", "member.command.finished"]
+    assert len(state.prepares) == len(state.syncs) == 1
+    if operation != "commit" and case in {"push_retry", "tracking_retry"}:
+        assert len(retries) == 2
+
+
+def test_commit_returns_sync_pending(current_git, monkeypatch):
+    state = current_git
+    state.stage()
+
+    def prepare():
+        return SimpleNamespace(
+            commit_and_push_once=lambda **kwargs: SimpleNamespace(failure="offline")
+        )
+
+    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
+    result = state.run("commit")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["sync"] == "pending"
+
+
+def test_invalid_device_identity_is_refused_before_local_commit(current_git):
+    from guildbotics.workspace.identity import device_identity_path
+
+    state = current_git
+    state.stage()
+    before = state.git("rev-parse", "HEAD").stdout
+    path = device_identity_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"device_id":"invalid"}', encoding="utf-8")
+    result = state.run("publish")
+    assert result.exit_code == 1
+    assert str(path) in result.stderr
+    assert state.git("rev-parse", "HEAD").stdout == before
+    assert state.prepares == state.events == []
+
+
+def test_failed_preparation_never_starts_the_push(current_git, monkeypatch):
+    state = current_git
+
+    def prepare():
+        raise MemberCapabilityError("not ready")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("push must not start")
+
+    monkeypatch.setattr(backend, "_prepare_member_sync", prepare)
+    monkeypatch.setattr(MemberGitWorkspaceService, "_push", forbidden)
+    result = state.run("push")
+    assert result.exit_code == 1
+    assert "not ready" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert state.events == state.syncs == []
+
+
+def test_tracking_uses_the_history_fetched_for_the_push(current_git, monkeypatch):
+    from guildbotics.capabilities.member_git import _Origin
+
+    fetches = []
+    original = _Origin.fetch
+
+    def fetch(origin, credential):
+        fetches.append(origin.repository)
+        return original(origin, credential)
+
+    monkeypatch.setattr(_Origin, "fetch", fetch)
+    result = current_git.run("push")
+    assert result.exit_code == 0, result.output
+    assert len(fetches) == 2  # Advertisement and push, without a third fetch on return.
+
+
+@pytest.mark.parametrize("phase", ["known", "tracking"])
+def test_auxiliary_phase_failure_is_a_short_error(current_git, monkeypatch, phase):
+    original = MemberGitWorkspaceService.client_git
+
+    async def exchange(service, selected, *args, **kwargs):
+        if selected == phase:
+            raise MemberCapabilityError("auxiliary refused")
+        return await original(service, selected, *args, **kwargs)
+
+    monkeypatch.setattr(MemberGitWorkspaceService, "client_git", exchange)
+    result = current_git.run("push")
+    assert result.exit_code == 1
+    assert "auxiliary refused" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert len(current_git.prepares) == (0 if phase == "known" else 1)
+
+
+@pytest.mark.parametrize("failure", ["push", "domain_event", "close"])
+def test_publication_failures_stay_inside_the_boundary(
+    current_git, connected, monkeypatch, failure
+):
+    state = current_git
+    state.stage()
+    context, _ = backend._resolve("aiko")
+    original = MemberGitWorkspaceService._push
+    pushed = []
+
+    def push(service, *args):
+        if failure == "push":
+            raise MemberCapabilityError("push refused")
+        result = original(service, *args)
+        pushed.append(True)
+        return result
+
+    monkeypatch.setattr(MemberGitWorkspaceService, "_push", push)
+    if failure == "domain_event":
+
+        def record(*args, **kwargs):
+            raise MemberCapabilityError("event refused")
+
+        monkeypatch.setattr(backend, "record_member_push_event", record)
+    if failure == "close":
+
+        async def close():
+            if pushed:
+                pushed.clear()
+                raise MemberCapabilityError("close refused")
+
+        monkeypatch.setattr(context, "aclose", close)
+    result = state.run("publish")
+    assert result.exit_code == 1
+    assert state.events == ["member.command.started", "member.command.failed"]
+    assert len(state.prepares) == 1
+    assert state.syncs == []
+
+
+@pytest.mark.parametrize("locale", ["en", "ja"])
+def test_member_workspace_and_shutdown_guidance(connected, locale):
+    client, runtime, workspace_id = connected
+    response = client.post(
+        "/member/plan",
+        json=request("other", ["help"]),
+        headers={"X-GuildBotics-Language": locale},
+    )
+    payload = response.json()
+    assert response.status_code == 409
+    assert payload["code"] == "member_workspace_mismatch"
+    assert payload["message"] == t(
+        "app_api.errors.member_workspace_mismatch",
+        locale=locale,
+        workspace=str(runtime.get_config_status().workspace),
+    )
+    assert "guildbotics stop" in payload["message"]
+    assert "guildbotics workspace use" in payload["message"]
+    from guildbotics.app_api.errors import AppApiError
+
+    api = transport.MemberApi(runtime)
+    api.closing = True
+    with pytest.raises(AppApiError) as stopped:
+        asyncio.run(
+            api.execute(transport.MemberRequest(**request(workspace_id, ["help"])))
+        )
+    assert stopped.value.code == "member_backend_closing"
+    assert stopped.value.localized(locale) == t(
+        "app_api.errors.member_backend_closing", locale=locale
+    )
+
+
+def test_empty_git_request_is_invalid(connected):
+    client, _, _ = connected
+    response = client.post("/member/git", content=b"")
+    assert response.status_code == 422
+    assert response.json()["code"] == "member_invalid_request"
+
+
+def test_temporary_file_failure_releases_the_workspace(connected, monkeypatch):
+    client, runtime, workspace_id = connected
+
+    def refused():
+        raise OSError("temporary storage unavailable")
+
+    monkeypatch.setattr(transport, "host_temporary_root", refused)
+    response = client.post("/member/run", json=request(workspace_id, ["help"]))
+    assert response.status_code == 500
+    assert not runtime._accepted_command_ids
+
+
+def test_session_resolution_failure_closes_the_unstarted_coroutine(monkeypatch):
+    import inspect
+
+    def refused():
+        raise OSError("session unavailable")
+
+    monkeypatch.setattr(backend, "_interactive_session_for_current_command", refused)
+
+    async def work():
+        raise AssertionError("must not run")
+
+    pending = work()
+    with pytest.raises(OSError, match="session unavailable"):
+        asyncio.run(backend._run_async(pending))
+    assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
+
+
+def test_workspace_tokens_used_as_values_are_preserved(connected, tmp_path):
+    from guildbotics.cli.member_plan import contains_workspace_option
+
+    arguments = [
+        "ticket",
+        "create",
+        "--person",
+        "aiko",
+        "--tracker",
+        "demo",
+        "--title",
+        "--workspace",
+        "--content-stdin",
+    ]
+    root, forwarded = member_client._workspace(
+        ["--workspace", str(tmp_path), *arguments]
+    )
+    assert root == tmp_path
+    assert forwarded == arguments
+    assert not contains_workspace_option(arguments)
+    assert contains_workspace_option(["--workspace", str(tmp_path), "help"])
+    client, _, workspace_id = connected
+    metadata, _ = decode(
+        client.post("/member/plan", json=request(workspace_id, arguments))
+    )
+    assert "result" not in metadata["plan"]
 
 
 def test_post_is_not_retried_after_disconnect():
