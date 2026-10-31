@@ -1,6 +1,9 @@
 ja:
+  desktop_start: "Desktop が動いています。Desktop のサービス画面から開始してください。"
+  api_unavailable: "このマシンのバックエンド API を認証できません。バックエンドが動いているか確認してください。"
+  start_failed: "バックエンドを起動できませんでした。バックエンドの出力を確認してください。"
+  service_failed: "サービスが予期せず停止しました。バックエンドの出力を確認してください。"
   already_running: "別のバックグラウンドサービスがすでに実行中です。"
-  already_running_with_owner: "別のバックグラウンドサービスがすでに実行中です (所有者: %{owner}、PID: %{pid}、ワークスペース: %{workspace})。"
   desktop_managed: "バックグラウンドサービスはDesktopによって管理されています。Desktopから停止してください。"
   invalid_metadata: "バックグラウンドサービスのロックは保持されていますが、所有者メタデータが不正です。"
   missing_process: "バックグラウンドサービスのロックは保持されていますが、プロセス %{pid} は実行されていません。"
@@ -9,6 +12,4 @@ ja:
   stopped_after_cancel: "実行中の作業をキャンセルしてバックグラウンドサービスを停止しました。"
   force_killed: "バックグラウンドサービスを強制終了しました。"
   stop_timeout: "タイムアウトしました。バックグラウンドサービスは実行中の作業を終了している可能性があります。キャンセルを要求し、必要なら強制終了するには `guildbotics stop --force` を実行してください。"
-  permission_denied: "プロセス %{pid} の停止要求を書き込む権限がありません。"
-  control_timeout: "プロセス %{pid} の停止要求を書き込むための待機がタイムアウトしました。"
   force_kill_failed: "プロセス %{pid} の強制終了に失敗しました: %{error}"

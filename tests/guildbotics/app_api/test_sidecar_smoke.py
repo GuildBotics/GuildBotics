@@ -24,6 +24,7 @@ import httpx
 import pytest
 
 from guildbotics.app_api.server import PORT_NOTICE_PREFIX
+from guildbotics.drivers.app_api_lock import CONFLICT_NOTICE_PREFIX
 from guildbotics.utils.local_api import PORT_ENV
 
 HTTP_OK = 200
@@ -193,6 +194,32 @@ def test_sidecar_health_returns_ok(sidecar: _Sidecar) -> None:
     assert response.status_code == HTTP_OK
     assert response.json()["status"] == "ok"
     assert response.json()["service_instance_id"]
+
+
+@pytest.mark.windows
+def test_second_backend_is_refused_even_on_a_different_port(sidecar, tmp_path):
+    port = _free_port()
+    environment = {**os.environ, PORT_ENV: str(port)}
+    for key in ("GUILDBOTICS_CONFIG_DIR", "GUILDBOTICS_WORKSPACE_ROOT"):
+        environment.pop(key, None)
+    second = subprocess.run(
+        [sys.executable, "-m", "guildbotics.app_api"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert second.returncode != 0
+    assert CONFLICT_NOTICE_PREFIX + "desktop" in second.stdout
+    assert PORT_NOTICE_PREFIX not in second.stdout
+    assert not (tmp_path / "home/.guildbotics/data/server" / str(port)).exists()
+    response = httpx.get(
+        sidecar.base_url + "/api/health",
+        headers=sidecar.headers,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    assert response.status_code == HTTP_OK
 
 
 def test_sidecar_rejects_invalid_token(sidecar: _Sidecar) -> None:

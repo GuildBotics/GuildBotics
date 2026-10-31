@@ -3234,6 +3234,46 @@ def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
     assert runtime.stop_force is True
 
 
+def test_scheduler_stop_acknowledges_before_waiting_and_can_escalate(
+    tmp_path, monkeypatch
+):
+    from guildbotics.drivers.app_api_lock import (
+        hold_backend_lock,
+        read_backend_metadata,
+    )
+
+    runtime = RuntimeStub(tmp_path)
+    entered = threading.Event()
+    cancelled = threading.Event()
+    completed = threading.Event()
+    stages = []
+
+    def stop(*, force=False):
+        stages.append(force)
+        if force:
+            cancelled.set()
+        else:
+            entered.set()
+            assert cancelled.wait(5)
+            completed.set()
+        return runtime.get_scheduler_status()
+
+    monkeypatch.setattr(runtime, "stop_scheduler", stop)
+    app = create_app(runtime=runtime)
+    client = owner_client(app)
+    with hold_backend_lock() as backend:
+        app.state.on_service_stop = backend.request_stop
+        graceful = client.post("/scheduler/stop", json={"wait": False})
+        assert graceful.status_code == HTTP_OK
+        assert entered.wait(5)
+        assert read_backend_metadata().stop_requested is True
+        assert not cancelled.is_set()
+        forced = client.post("/scheduler/stop", json={"force": True, "wait": False})
+        assert forced.status_code == HTTP_OK
+        assert completed.wait(5)
+    assert stages == [False, True]
+
+
 def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
@@ -3385,7 +3425,7 @@ def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     holder = lifecycle_lock if holder_owner == "desktop" else ServiceLock(lock_path)
     monkeypatch.setattr(lifecycle_module, "ServiceLock", lambda: lifecycle_lock)
     client = _client(AppRuntime(EventBus()))
-    holder.acquire(owner=holder_owner, workspace=workspace)
+    holder.acquire(workspace=workspace)
     try:
         before = client.get("/service/keep-awake")
         turned_on = client.put("/service/keep-awake", json={"enabled": True})

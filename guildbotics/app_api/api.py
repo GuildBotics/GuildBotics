@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -831,6 +832,20 @@ def create_app(
 
     @router.post("/scheduler/stop")
     def scheduler_stop(request: SchedulerStopRequest | None = None) -> RuntimeStatus:
+        on_stop = getattr(app.state, "on_service_stop", None)
+        if on_stop is not None:
+            on_stop()
+        if request is not None and not request.wait:
+            # CLI callers wait for the backend PID themselves. Acknowledge
+            # before draining, so they can escalate without a blocked request.
+            def stop_in_background() -> None:
+                try:
+                    app_runtime.stop_scheduler(force=request.force)
+                except Exception:
+                    logger.exception("Background service stop failed")
+
+            threading.Thread(target=stop_in_background, daemon=True).start()
+            return app_runtime.get_scheduler_status()
         return app_runtime.stop_scheduler(force=request.force if request else False)
 
     @router.get("/service/keep-awake")

@@ -79,8 +79,7 @@ the host's `create_context()` the calls themselves
 (`environment/inference_host.py`), the guest's entry the command's window
 (`guest/window.py`). The member brokers (`environment/member_broker.py`) take
 the member CLI they run the same way: the environment does not import the CLI
-above it, and each host entry that runs commands (`cli/run.py`,
-`cli/service.py`, the Desktop's `app_api/runtime.py`) installs it with
+above it, and each host entry that runs commands (`cli/run.py`, the backend's `app_api/runtime.py`) installs it with
 `install_member_cli()`.
 
 Dependency rules (the contracts in `[tool.importlinter]`, checked by `lint-imports`):
@@ -410,12 +409,20 @@ Invariants:
   undeclared commands fail closed as write-capable instead of being classified from
   command-name strings. Write-capable commands still perform one-shot synchronization
   after execution, independently of the execution lease.
-- The long-running background service is singleton per machine. CLI `guildbotics
-start` and the Desktop-managed service contend on the same OS advisory lock at
-  `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
-  event listener together. The persistent file contains owner metadata for status and
-  CLI stop handling, but file existence is not a liveness signal. Desktop-owned
-  services must be stopped from Desktop rather than by signalling the sidecar PID.
+- The backend is singleton per machine: Desktop and CLI `guildbotics start` launch
+  the same `guildbotics.app_api` child process. It holds
+  `<machine-state-root>/run/app-api.lock` from before binding through server exit.
+  The lock records owner (CLI/Desktop), PID and whether the API accepted a stop,
+  so the CLI parent can distinguish an intentional forced exit from a crash.
+  A failed contender reports the holder's owner to its launcher before exiting;
+  Desktop's Bootstrap asks a CLI owner to stop with `guildbotics stop`.
+  `service.lock` covers scheduler workers and event listeners only while active,
+  including keep-awake; it carries no CLI/Desktop owner. File existence alone
+  is never a liveness signal. CLI stop/kill use the local owner-token API and wait
+  for the backend lock's PID; a Desktop-owned backend is stopped from Desktop.
+  The CLI parent receives signals independently of the child process group: the
+  first requests a graceful drain, the second cancellation, then the parent shuts
+  the backend down. Failed startup and self-stopped services exit nonzero.
 - A member that finishes work while messages 3 and 5 arrive in one Slack thread
   reads the unread conversation through message 5 in its next run. The oldest
   queued event starts that run; selection combines queued messages with a fresh
@@ -853,7 +860,7 @@ the process cwd or a member working clone.
 
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/service.lock` — state needed _before_ a workspace is chosen                  |
+| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/app-api.lock`, `run/service.lock` — state needed _before_ a workspace is chosen                  |
 | Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json` (including `identity_id`, the identities' repository), and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
 | Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials and connection Secrets such as `BRANVIL_ADMIN_TOKEN`), `config/connections/branvil.yml` |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
@@ -1557,11 +1564,15 @@ a monorepo on purpose.
     taken before the client's next connection (later requests usually reuse the proved
     connection). A browser redirected back by GitHub App registration or Branvil's
     consent reaches the port even after the server exited, carrying a one-time code.
-- **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
-  its own process and reports states to the UI. Desktop and CLI `guildbotics start`
-  use the same machine-wide `service.lock`, so only one background service can own
-  scheduler workers / event listeners at a time. CLI `start` remains the headless
-  equivalent.
+- **Runtime lifecycle**: the backend is the sole composition root for service
+  synchronization, relay, member workers and event listeners. Both Desktop and CLI
+  `guildbotics start` launch it (the module in development, the sibling bundled
+  `guildbotics-app-api` when packaged), passing their parent PID to the watchdog.
+  The backend owns `app-api.lock` for its lifetime and `service.lock` only while
+  services run. The CLI waits for its child's port notice, then uses the local
+  owner-token API; `--only` selects scheduler sources. `/scheduler/stop` defaults
+  to waiting; CLI stop/kill use `wait=false` to acknowledge the stop before draining
+  and wait for the process themselves, escalating with `force=true` if needed.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
   (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
   shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.

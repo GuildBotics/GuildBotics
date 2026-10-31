@@ -122,6 +122,16 @@ describe("Bootstrap", () => {
     expect(await screen.findByText("Error: command backend_entry not found")).toBeInTheDocument();
   });
 
+  it.each(["cli_managed", "backend_in_use"])(
+    "explains the backend owner conflict: %s",
+    async (reason) => {
+      backendEntryMock.mockRejectedValue(new BackendClosedError({ reason, detail: "" }));
+      renderBootstrap();
+      expect(await screen.findByText(t(`app.loading.reasons.${reason}`))).toBeInTheDocument();
+      expect(replacePage).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not leave a page that was closed meanwhile", async () => {
     const entry = deferred<string>();
     backendEntryMock.mockReturnValue(entry.promise);

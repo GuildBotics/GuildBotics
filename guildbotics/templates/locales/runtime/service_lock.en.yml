@@ -1,6 +1,9 @@
 en:
+  desktop_start: "Desktop is running. Start the service from Desktop's Service screen."
+  api_unavailable: "The local backend API could not be authenticated. Check that this machine's backend is running."
+  start_failed: "The backend could not start. Check the backend output."
+  service_failed: "The service stopped unexpectedly. Check the backend output."
   already_running: "Another background service is already running."
-  already_running_with_owner: "Another background service is already running (owner: %{owner}, PID: %{pid}, workspace: %{workspace})."
   desktop_managed: "The background service is managed by Desktop. Stop it from Desktop."
   invalid_metadata: "The background service lock is held, but its owner metadata is invalid."
   missing_process: "The background service lock is held, but process %{pid} is not running."
@@ -9,6 +12,4 @@ en:
   stopped_after_cancel: "Background service stopped after cancelling in-flight work."
   force_killed: "Force killed background service."
   stop_timeout: "Timeout reached; the background service may still be finishing in-flight work. Run `guildbotics stop --force` to request cancellation and force termination if needed."
-  permission_denied: "Permission denied while writing the stop request for process %{pid}."
-  control_timeout: "Timed out waiting to write the stop request for process %{pid}."
   force_kill_failed: "Failed to force terminate %{pid}: %{error}"

@@ -67,6 +67,7 @@ fn closed(reason: &'static str, detail: impl Into<String>) -> Connection {
 /// The one stdout line through which the sidecar announces that it listens on
 /// its port; `PORT_NOTICE_PREFIX` in `guildbotics/app_api/server.py`.
 const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
+const CONFLICT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_CONFLICT=";
 /// Matches the frontend's former health deadline: the first launch after an
 /// install has the OS check every bundled library before the sidecar binds.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -133,6 +134,19 @@ impl Connection {
     /// say that this sidecar holds `port`.
     fn after_stdout(&self, line: &[u8], port: u16) -> Option<Connection> {
         let line = String::from_utf8_lossy(line);
+        if let Some(owner) = line
+            .trim_end_matches(['\r', '\n'])
+            .strip_prefix(CONFLICT_NOTICE_PREFIX)
+        {
+            return Some(closed(
+                if owner == "cli" {
+                    "cli_managed"
+                } else {
+                    "backend_in_use"
+                },
+                "",
+            ));
+        }
         let notice = line
             .trim_end_matches(['\r', '\n'])
             .strip_prefix(PORT_NOTICE_PREFIX)?;
@@ -1324,6 +1338,21 @@ mod tests {
     }
 
     #[test]
+    fn backend_conflicts_are_reported_from_the_lock_owner() {
+        for (owner, reason) in [
+            ("cli", "cli_managed"),
+            ("desktop", "backend_in_use"),
+            ("unknown", "backend_in_use"),
+        ] {
+            let notice = format!("{CONFLICT_NOTICE_PREFIX}{owner}\r\n");
+            assert_eq!(
+                Connection::Starting.after_stdout(notice.as_bytes(), 8765),
+                Some(closed(reason, ""))
+            );
+        }
+    }
+
+    #[test]
     fn boot_log_is_bounded_to_one_mebibyte() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
         let path = temp_dir.path().join("bootstrap.log");
@@ -1875,6 +1904,7 @@ pub fn run() {
             let command = app
                 .shell()
                 .command(programs.join(platform_executable_name("guildbotics-app-api")))
+                .env("GUILDBOTICS_APP_API_OWNER", "desktop")
                 // Hand the sidecar our PID so it can exit on its own if this app
                 // ever dies without a clean teardown.
                 .env(
