@@ -112,6 +112,9 @@ def test_public_commands_show_the_api_reason_without_retry(
     monkeypatch.setattr(service, "selected_workspace", lambda: tmp_path)
     monkeypatch.setattr(service, "pid_exists", lambda pid: True)
     if command == "start":
+        monkeypatch.setattr(
+            service, "read_backend_metadata", lambda: BackendMetadata("cli", 42)
+        )
         monkeypatch.setattr(service, "inspect_backend_lock", lambda: (False, None))
         monkeypatch.setattr(
             service,

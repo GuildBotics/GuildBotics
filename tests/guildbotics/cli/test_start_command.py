@@ -6,10 +6,12 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import nullcontext
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -21,6 +23,13 @@ from guildbotics.drivers.app_api_lock import (
     PORT_NOTICE_PREFIX,
 )
 from guildbotics.utils.i18n_tool import t
+
+
+@pytest.fixture(autouse=True)
+def announced_backend(monkeypatch):
+    monkeypatch.setattr(
+        service, "read_backend_metadata", lambda: BackendMetadata("cli", 42)
+    )
 
 
 def status(running=True, *, active=False, failed=False):
@@ -99,6 +108,14 @@ def test_start_handles_the_race_after_its_lock_precheck(monkeypatch, owner):
 def test_two_signals_escalate_without_waiting_for_the_first_api_request(
     monkeypatch, capsys
 ):
+    api_threads = []
+
+    def thread(**kwargs):
+        request = threading.Thread(**kwargs)
+        api_threads.append(request)
+        return request
+
+    monkeypatch.setattr(service, "threading", SimpleNamespace(Thread=thread))
     signals = []
     stages = []
     graceful = threading.Event()
@@ -134,7 +151,12 @@ def test_two_signals_escalate_without_waiting_for_the_first_api_request(
 
     monkeypatch.setattr(service, "_call", call)
     monkeypatch.setattr(service, "_stop_requested", lambda pid: False)
-    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
+    try:
+        service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
+    finally:
+        # Force may finish before the graceful request's thread returns.
+        for request in api_threads:
+            request.join(timeout=5)
     assert stages == [False, True]
     output = capsys.readouterr().out
     graceful_message = t("runtime.service_lock.stopping_after_work")
@@ -236,6 +258,63 @@ def test_start_waits_for_manual_work_to_drain_after_the_workers_exit(monkeypatch
     monkeypatch.setattr(service, "_call", call)
     service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, [])
     assert seen == ["/scheduler/start", "/scheduler/status"]
+
+
+@pytest.mark.parametrize("outcome", ["stopped", "unavailable", "http_error"])
+@pytest.mark.parametrize("record_pid", [42, 99])
+def test_stop_matches_backend_pid_even_while_its_launcher_is_alive(
+    monkeypatch, outcome, record_pid
+):
+    metadata = BackendMetadata("cli", 42)
+    monkeypatch.setattr(service, "read_backend_metadata", lambda: metadata)
+
+    def call(path, **kwargs):
+        nonlocal metadata
+        if path == "/scheduler/start":
+            return status(True)
+        metadata = BackendMetadata("cli", record_pid, stop_requested=True)
+        if outcome == "unavailable":
+            raise service.BackendUnavailableError("backend exited")
+        if outcome == "http_error":
+            raise httpx.ReadError("backend exited")
+        return status(False)
+
+    monkeypatch.setattr(service, "_call", call)
+    monkeypatch.setattr(service, "pid_exists", lambda pid: pid != 42)
+    expected = (
+        nullcontext()
+        if record_pid == 42
+        else pytest.raises((service.BackendUnavailableError, httpx.HTTPError))
+    )
+    with expected:
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
+
+
+@pytest.mark.parametrize("error", [service.BackendUnavailableError, httpx.ReadError])
+def test_stop_marker_does_not_hide_api_failure_while_backend_is_alive(
+    monkeypatch, error
+):
+    monkeypatch.setattr(
+        service,
+        "read_backend_metadata",
+        lambda: BackendMetadata("cli", 42, stop_requested=True),
+    )
+
+    def call(path, **kwargs):
+        if path == "/scheduler/start":
+            return status(True, active=True)
+        raise error("backend is still draining")
+
+    monkeypatch.setattr(service, "_call", call)
+    monkeypatch.setattr(service, "pid_exists", lambda pid: True)
+    with pytest.raises(error):
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
+
+
+def test_start_cannot_supervise_without_its_announced_backend_record(monkeypatch):
+    monkeypatch.setattr(service, "read_backend_metadata", lambda: None)
+    with pytest.raises(service.BackendUnavailableError):
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
 
 
 def test_start_failure_still_closes_its_child(monkeypatch, tmp_path):

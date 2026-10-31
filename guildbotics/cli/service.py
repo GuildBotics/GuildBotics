@@ -189,6 +189,12 @@ def _report_interrupts(signals: list[int], reported: int) -> int:
 def _supervise(
     process: subprocess.Popen[str], payload: dict[str, Any], signals: list[int]
 ) -> None:
+    # The port notice follows the backend's lock acquisition. On Windows a
+    # virtualenv launcher can have a different PID from the Python it runs.
+    metadata = read_backend_metadata()
+    if metadata is None:
+        raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
+    backend_pid = metadata.pid
     starting = _background(lambda: _start_service(process, payload))
     reported = 0
     while not starting.done():
@@ -216,7 +222,7 @@ def _supervise(
             stopping.append(
                 _background(partial(_call, "/scheduler/stop", payload={"force": force}))
             )
-        intentional = bool(signals) or _stop_requested(process.pid)
+        intentional = bool(signals) or _stop_requested(backend_pid)
         if process.poll() is not None:
             if intentional:
                 return
@@ -242,8 +248,8 @@ def _supervise(
         try:
             status = _call("/scheduler/status", timeout=5, method="GET")
         except BackendUnavailableError, httpx.HTTPError:
-            if process.poll() is not None and (
-                bool(signals) or _stop_requested(process.pid)
+            if (process.poll() is not None or not pid_exists(backend_pid)) and (
+                bool(signals) or _stop_requested(backend_pid)
             ):
                 return
             raise

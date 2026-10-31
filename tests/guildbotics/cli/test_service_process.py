@@ -41,21 +41,33 @@ def cli_process(tmp_path, monkeypatch):
     children = []
     helper = Path(__file__).with_name("backend_service_fixture.py")
 
-    def launch(mode="normal"):
+    def launch(mode="normal", *, indirect=False):
+        command = [sys.executable, str(helper)]
+        if indirect:
+            # Windows virtualenv Python keeps a launcher alive while a second
+            # process runs Python. Reproduce that PID boundary on every OS.
+            command = [
+                sys.executable,
+                "-c",
+                "import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))",
+                *command,
+            ]
         script = (
             "import sys; from guildbotics.cli import main, service; "
-            "service._backend_command=lambda: [sys.executable, sys.argv[1]]; "
+            "service._backend_command=lambda: sys.argv[1:]; "
             "main(['start','--only','scheduler'])"
         )
-        log = (tmp_path / f"cli-{len(children)}.log").open("w")
+        log_path = tmp_path / f"cli-{len(children)}.log"
+        log = log_path.open("w")
         process = subprocess.Popen(
-            [sys.executable, "-c", script, str(helper)],
+            [sys.executable, "-c", script, *command],
             cwd=workspace,
             env={**os.environ, "SERVICE_TEST_MODE": mode},
             stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
         )
+        process.log_path = log_path
         children.append((process, log))
         return process
 
@@ -84,27 +96,35 @@ def running():
 
 
 @pytest.mark.windows
+@pytest.mark.parametrize("indirect", [False, True], ids=["direct", "launcher"])
 @pytest.mark.parametrize("command,mode", [("stop", "normal"), ("kill", "hold")])
 def test_cli_stop_and_kill_end_start_successfully_and_close_the_backend(
-    cli_process, command, mode
+    cli_process, command, mode, indirect
 ):
     launch, _workspace = cli_process
-    process = launch(mode)
+    process = launch(mode, indirect=indirect)
     wait_for(running, process)
     metadata = read_backend_metadata()
     assert metadata.owner == "cli" and metadata.pid != process.pid
     result = CliRunner().invoke(main, [command])
     assert result.exit_code == 0, result.output
-    assert process.wait(timeout=15) == 0
+    assert process.wait(timeout=15) == 0, process.log_path.read_text(
+        encoding="utf-8", errors="replace"
+    )
     assert not inspect_backend_lock()[0]
     assert read_backend_metadata().stop_requested
 
 
 @pytest.mark.parametrize("mode", ["self_stop", "start_failure"])
-def test_service_failure_exits_nonzero_and_releases_backend_lock(cli_process, mode):
+@pytest.mark.parametrize("indirect", [False, True], ids=["direct", "launcher"])
+def test_service_failure_exits_nonzero_and_releases_backend_lock(
+    cli_process, mode, indirect
+):
     launch, _workspace = cli_process
-    process = launch(mode)
-    assert process.wait(timeout=30) != 0
+    process = launch(mode, indirect=indirect)
+    assert process.wait(timeout=30) != 0, process.log_path.read_text(
+        encoding="utf-8", errors="replace"
+    )
     assert not inspect_backend_lock()[0]
 
 
