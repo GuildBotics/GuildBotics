@@ -152,7 +152,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
-| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
+| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member through the running backend. |
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |

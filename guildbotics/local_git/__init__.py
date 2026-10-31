@@ -12,7 +12,7 @@ import os
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class GitError(RuntimeError):
@@ -157,3 +157,59 @@ class LocalGit:
                 f"update {ref} {name}\n" for ref, name in refs.items()
             ).encode(),
         )
+
+
+def current_repository(repo_path: Path, cwd: Path) -> Path:
+    """Require the caller's repository to be the one open in its cwd."""
+    found = LocalGit(cwd)("rev-parse", "--show-toplevel", ok=(0, 128))
+    if found.returncode:
+        raise GitError(
+            "current workspace mode requires running inside the target git repository."
+        )
+    root = Path(found.stdout.decode().strip()).resolve()
+    if root != repo_path.expanduser().resolve():
+        raise GitError(f"repo_path must match the current workspace repository: {root}")
+    return root
+
+
+def commit_staged(
+    git: Callable[..., GitResult],
+    repo_path: Path,
+    message: str,
+    user: str,
+    email: str,
+    branch_name: Callable[[str], str] = str,
+) -> dict[str, Any]:
+    """Commit staged changes or a pending merge under the supplied identity."""
+    if not message.strip():
+        raise GitError("Commit message must not be empty.")
+    branch = branch_name(
+        git("symbolic-ref", "--quiet", "--short", "HEAD").stdout.decode().strip()
+    )
+    staged = (
+        git("diff", "--cached", "--quiet", ok=(0, 1)).returncode == 1
+        or git("rev-parse", "-q", "--verify", "MERGE_HEAD", ok=(0, 1)).returncode == 0
+    )
+    sha = None
+    if staged:
+        git(
+            "commit",
+            "--no-gpg-sign",
+            "-F",
+            "-",
+            env={
+                "GIT_AUTHOR_NAME": user,
+                "GIT_AUTHOR_EMAIL": email,
+                "GIT_COMMITTER_NAME": user,
+                "GIT_COMMITTER_EMAIL": email,
+            },
+            stdin=f"{message.strip()}\n".encode(),
+        )
+        sha = git("rev-parse", "--verify", "HEAD").stdout.decode().strip()
+    return {
+        "repo_path": str(repo_path),
+        "branch": branch,
+        "commit_sha": sha,
+        "has_changes": staged,
+        "status": "committed" if sha else "nothing_staged",
+    }

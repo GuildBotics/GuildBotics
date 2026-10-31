@@ -1,4 +1,8 @@
 en:
+  member_invalid_request: "The member transport request is invalid."
+  member_version_mismatch: "CLI and backend versions differ. Update Desktop, restart the backend, and use the CLI installed by that version."
+  member_workspace_argument: "Pass a workspace ID; --workspace is resolved by the client."
+  member_request_too_large: "The member transport request exceeds its size limit or has no metadata."
   cli_agent_usage_failed: "Could not retrieve %{label} usage. The cause has not been identified. Check again or open the error details in the tool's settings."
   command_workspace_changing: "The Desktop workspace is being switched. Try again after it finishes."
   # One key per sentence. A code that answers several situations nests one

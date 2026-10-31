@@ -43,6 +43,11 @@ from guildbotics.runtime.member_invocation import (
 )
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from tests.git_seed import WorkerGitSeed
+from tests.guildbotics.client_git import (
+    current as client_current,
+    tracking as client_tracking,
+)
+from guildbotics.cli import member_client
 from tests.guildbotics.local_code_host import (
     REPOSITORY,
     TRACKER,
@@ -2137,8 +2142,8 @@ async def test_publish_current_workspace_commits_with_the_users_hooks_and_pushes
     (repo_path / "README.md").write_text("initial\ncurrent\n", encoding="utf-8")
     repo.git.add(A=True)
 
-    result = await member.service.publish_current_workspace(
-        repo_path, "publish current workspace", cwd=repo_path
+    result = await client_current(
+        member, repo_path, message="publish current workspace", cwd=repo_path
     )
 
     assert result.pushed is True
@@ -2169,9 +2174,7 @@ async def test_push_current_workspace_goes_where_git_would_push(
     contributor = member.remote("contributor").commit("main").hexsha
     sha = repo.index.commit("local").hexsha
 
-    result = await member.service.push(
-        repo_path, workspace_mode="current", cwd=repo_path
-    )
+    result = await client_current(member, repo_path, cwd=repo_path)
 
     assert result.pushed is True
     assert member.remote("owner").commit("main").hexsha == sha
@@ -2189,9 +2192,7 @@ async def test_push_current_workspace_publishes_a_branch_new_to_the_remote(
     repo.git.switch("-c", "feature/new")
     sha = repo.index.commit("new work").hexsha
 
-    result = await member.service.push(
-        repo_path, workspace_mode="current", cwd=repo_path
-    )
+    result = await client_current(member, repo_path, cwd=repo_path)
 
     assert result.pushed is True
     assert result.branch == "feature/new"
@@ -2222,7 +2223,7 @@ async def test_push_current_workspace_behind_the_remote_is_rejected_with_origin_
     repo.index.commit("local")
 
     with pytest.raises(MemberCapabilityError, match="Failed to push 'main'"):
-        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+        await client_current(member, repo_path, cwd=repo_path)
 
     assert remote.commit("main").hexsha == ahead
     assert repo.commit("refs/remotes/origin/main").hexsha == ahead
@@ -2238,7 +2239,7 @@ async def test_push_current_workspace_of_a_branch_without_commits_is_refused(
     repo.git.switch("--orphan", "empty")
 
     with pytest.raises(MemberCapabilityError, match="'empty' has no commit to push"):
-        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+        await client_current(member, repo_path, cwd=repo_path)
 
 
 @pytest.mark.asyncio
@@ -2260,15 +2261,13 @@ async def test_current_workspace_exchanges_bundles_and_reports_readiness(
     if operation == "publish":
         (repo_path / "README.md").write_text("published\n", encoding="utf-8")
         repo.git.add("README.md")
-        result = await member.service.publish_current_workspace(
-            repo_path, "bundle publication", cwd=repo_path
+        result = await client_current(
+            member, repo_path, message="bundle publication", cwd=repo_path
         )
     else:
         if operation == "push":
             repo.index.commit("bundle publication")
-        result = await member.service.push(
-            repo_path, workspace_mode="current", cwd=repo_path
-        )
+        result = await client_current(member, repo_path, cwd=repo_path)
 
     sha = repo.head.commit.hexsha
     assert remote.commit("main").hexsha == sha
@@ -2323,9 +2322,7 @@ async def test_current_workspace_retries_a_bundle_with_missing_prerequisites(
         return result
 
     monkeypatch.setattr(member_git.LocalGit, "branch_bundle", with_missing_prerequisite)
-    result = await member.service.push(
-        repo_path, workspace_mode="current", cwd=repo_path
-    )
+    result = await client_current(member, repo_path, cwd=repo_path)
 
     assert result.pushed
     assert member.remote().commit("main").hexsha == sha
@@ -2351,7 +2348,7 @@ def _remote_commit(remote, parent, message):
 
 def _return_history(mode, member, origin, path):
     if mode == "current":
-        member_git._send_current(origin, member_git._HostGit(path))
+        client_tracking(member, origin, path)
     else:
         clone = member_git._GuestGit(member.guest, str(path))
         member_git._send(origin, clone, origin.refs(*member_git._SHARED_REFS))
@@ -2429,7 +2426,7 @@ async def test_current_push_of_an_existing_ancestor_needs_no_bundle(
     repo.git.push("origin", "main")
     repo.git.switch("-c", "old", base)
 
-    result = await member.service.push(path, workspace_mode="current", cwd=path)
+    result = await client_current(member, path, cwd=path)
 
     assert result.pushed
     assert remote.commit("old").hexsha == base
@@ -2452,6 +2449,7 @@ def test_returned_bundle_retries_missing_prerequisites_once(
     origin.fetch(None)
     # Model a prerequisite lost after the receiver advertised it.
     monkeypatch.setattr(member_git, "known_commits", lambda git: {missing})
+    monkeypatch.setattr(member_client, "known_commits", lambda git: {missing})
     create = member_git.LocalGit.write_bundle
     headers = []
 
@@ -2481,12 +2479,16 @@ async def test_tracking_return_failure_preserves_the_push_failure(
         _advance(member.remotes["owner"], tmp_path, "diverged remote\n")
     sha = repo.index.commit("local").hexsha
 
-    def fail_return(*args):
-        raise MemberCapabilityError("tracking lock conflict")
+    original = member.service.client_git
 
-    monkeypatch.setattr(member_git, "_send_current", fail_return)
+    async def fail_return(phase, *args):
+        if phase == "tracking":
+            raise MemberCapabilityError("tracking lock conflict")
+        return await original(phase, *args)
+
+    monkeypatch.setattr(member.service, "client_git", fail_return)
     with pytest.raises(MemberCapabilityError) as error:
-        await member.service.push(path, workspace_mode="current", cwd=path)
+        await client_current(member, path, cwd=path)
     if rejected:
         assert "Failed to push 'main'" in str(error.value)
         assert "tracking lock conflict" in caplog.text
@@ -2589,9 +2591,7 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
         [("url.https://x.example/.insteadOf", "https://elsewhere.example/")],
     )
 
-    result = await member.service.push(
-        repo_path, workspace_mode="current", cwd=repo_path
-    )
+    result = await client_current(member, repo_path, cwd=repo_path)
 
     assert result.pushed is True
     assert member.remote().commit("main").hexsha == sha
@@ -2676,7 +2676,7 @@ async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote
     contributor = member.remote("contributor").commit("main").hexsha
 
     with pytest.raises((ServiceError, MemberCapabilityError), match=refused) as refusal:
-        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+        await client_current(member, repo_path, cwd=repo_path)
 
     assert _credentialed(host_git) == []
     assert not [call for call in host_git if {"fetch", "push"} & set(call.args)]
@@ -2694,4 +2694,4 @@ async def test_publish_current_workspace_rejects_repo_that_is_not_current_worksp
     git.Repo.init(other)
 
     with pytest.raises(MemberCapabilityError, match="current workspace repository"):
-        await member.service.publish_current_workspace(other, "message", cwd=current)
+        await client_current(member, other, message="message", cwd=current)

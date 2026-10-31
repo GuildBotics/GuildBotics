@@ -53,6 +53,15 @@ HTTP_SERVICE_UNAVAILABLE = 503
 #: is for is a route that saves over a revision a screen was holding, and this
 #: is not one.
 ELSEWHERE = {
+    ("POST", "/member/plan"): "parses Click inputs without executing a command",
+    (
+        "POST",
+        "/member/run",
+    ): "member capabilities write state/ or services; no edited config snapshot",
+    (
+        "POST",
+        "/member/git",
+    ): "exchanges bundles in private Git repositories and records interactive work",
     (
         "DELETE",
         "/device/workspaces",

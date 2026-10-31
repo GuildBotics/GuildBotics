@@ -49,29 +49,14 @@ def test_help_of_a_command_goes_to_the_command(capsys) -> None:
     assert capsys.readouterr() == ("", "")
 
 
-def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
-    """The member group runs without the root CLI whose settings it would
-    otherwise inherit, such as showing each option's default."""
-    from click.testing import CliRunner
+def test_help_run_in_process_matches_the_backend_plan(monkeypatch) -> None:
+    from guildbotics.cli.member_plan import plan
 
-    from guildbotics.cli import main
-
-    monkeypatch.setattr(main, "callback", None)
     arguments = ["pr", "read", "--help"]
-    through_cli = CliRunner().invoke(
-        main, ["member", *arguments], prog_name="guildbotics"
-    )
-
     exit_code, stdout, _stderr = _run(arguments)
-
     assert exit_code == 0
     assert "[default: json]" in stdout
-    # CliRunner forces its own width, so the text wraps differently; compare
-    # what the settings decide instead.
-    defaults = re.compile(r"\[default: [^\]]+\]")
-    assert defaults.findall(" ".join(stdout.split())) == defaults.findall(
-        " ".join(through_cli.output.split())
-    )
+    assert plan(arguments)["result"]["stdout"] == stdout
 
 
 #: The downloads a member command writes into a directory it names: the
@@ -116,12 +101,7 @@ def test_path_checks_read_from_the_commands_directory(
         cwd=tmp_path,
     )
 
-    if message:
-        assert exit_code == 2
-        assert message in stderr
-        assert seen == []
-    else:
-        assert (exit_code, seen) == (0, [tmp_path / "missing-dir"])
+    assert (exit_code, seen, stderr) == (0, [arguments[1]], "")
 
 
 def test_a_usage_error_is_reported_the_way_the_cli_reports_it(capsys) -> None:
@@ -183,33 +163,23 @@ def _record_git_commit(monkeypatch) -> None:
     monkeypatch.setattr(member_module, "_member_command_writes", lambda: False)
 
 
-def test_relative_paths_and_content_are_the_commands_own(monkeypatch, tmp_path) -> None:
+def test_backend_rejects_files_and_accepts_transferred_content(
+    monkeypatch, tmp_path
+) -> None:
     _record_git_commit(monkeypatch)
-    (tmp_path / "message.txt").write_text("from a file", encoding="utf-8")
     base = ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
-
-    from_file = _run(
-        [*base, "--content-file", "message.txt"],
-        MemberInvocation(task_run_id="run-1"),
-        cwd=tmp_path,
+    code, _, error = _run([*base, "--content-file", "message.txt"], cwd=tmp_path)
+    assert code == 2
+    assert t("cli.member.content.file_in_environment") in " ".join(error.split())
+    code, output, error = _run(
+        [*base, "--content-stdin"], cwd=tmp_path, stdin="transferred"
     )
-    from_stdin = _run(
-        [*base, "--content-stdin"],
-        MemberInvocation(task_run_id="run-1"),
-        cwd=tmp_path,
-        stdin="from stdin",
-    )
-
-    for (exit_code, stdout, _stderr), message in (
-        (from_file, "from a file"),
-        (from_stdin, "from stdin"),
-    ):
-        assert exit_code == 0
-        assert member_module.json.loads(stdout) == {
-            "repo_path": str(tmp_path / "repo"),
-            "message": message,
-            "cwd": str(tmp_path),
-        }
+    assert code == 0
+    assert member_module.json.loads(output) == {
+        "repo_path": "repo",
+        "message": "transferred",
+        "cwd": str(tmp_path),
+    }
 
 
 def test_markdown_output_goes_to_the_command(monkeypatch, tmp_path, capsys) -> None:
@@ -226,7 +196,7 @@ def test_markdown_output_goes_to_the_command(monkeypatch, tmp_path, capsys) -> N
     )
 
     assert exit_code == 0
-    assert stdout.startswith(f"- **repo_path**: {tmp_path / 'repo'}\n")
+    assert stdout.startswith("- **repo_path**: repo\n")
     assert capsys.readouterr() == ("", "")
 
 
@@ -505,19 +475,20 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
     assert looked == []
 
 
-def test_outside_a_turn_a_command_opens_what_it_is_named(monkeypatch, tmp_path) -> None:
-    _record_git_commit(monkeypatch)
-    (tmp_path / "message.txt").write_text("the user's own", encoding="utf-8")
-
-    exit_code, stdout, _stderr = _run(
-        ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
-        + ["--content-file", str(tmp_path / "message.txt")],
-        MemberInvocation(task_run_id="run-1"),
-        cwd=tmp_path / "elsewhere",
+def test_outside_a_turn_the_backend_still_rejects_files(monkeypatch, tmp_path):
+    code, _, _ = _run(
+        [
+            "git",
+            "commit",
+            "--person",
+            "aiko",
+            "--repo-path",
+            "repo",
+            "--content-file",
+            str(tmp_path / "absent"),
+        ]
     )
-
-    assert exit_code == 0
-    assert member_module.json.loads(stdout)["message"] == "the user's own"
+    assert code == 2
 
 
 @pytest.mark.parametrize("invocation", ["task run", "chat run", "no run"])

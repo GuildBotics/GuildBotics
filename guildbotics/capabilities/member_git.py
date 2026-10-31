@@ -14,7 +14,7 @@ Reading the default branch needs no clone or command environment: the host
 fetches into that same private repository and reads immutable git objects.
 
 The repository open in the user's own session (``--workspace-mode current``)
-is theirs: its commit runs on the host, under their configuration and hooks.
+is theirs: its commit runs in the CLI process, under their configuration and hooks.
 Its push does not: the host takes the branch's history into its own
 repository and pushes from there, so the member's credential never goes where
 the repository's configuration would send it (and a ``pre-push`` hook does not
@@ -42,7 +42,13 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.repository_scope import valid_path
-from guildbotics.local_git import GitError, GitResult, LocalGit, known_commits
+from guildbotics.local_git import (
+    GitError,
+    GitResult,
+    LocalGit,
+    commit_staged,
+    known_commits,
+)
 from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
@@ -196,8 +202,7 @@ class _Git(Protocol):
 
 
 class _HostGit(LocalGit):
-    """git run on the host, in a repository the host may trust: the user's
-    own, or one of the host's own that nothing else writes."""
+    """git in a private backend repository that the caller cannot write."""
 
     def __call__(
         self,
@@ -670,13 +675,6 @@ class MemberGitWorkspaceService:
     async def publish(self, repo_path: Path, message: str) -> PublishResult:
         return await self._publish(repo_path, message, workspace_mode="member")
 
-    async def publish_current_workspace(
-        self, repo_path: Path, message: str, cwd: Path | None = None
-    ) -> PublishResult:
-        return await self._publish(
-            repo_path, message, workspace_mode="current", cwd=cwd
-        )
-
     async def commit(
         self,
         repo_path: Path,
@@ -688,8 +686,7 @@ class MemberGitWorkspaceService:
         if not message.strip():
             raise MemberCapabilityError("Commit message must not be empty.")
         if workspace_mode == "current":
-            repo_path = self._current_repo(repo_path, cwd or Path.cwd())
-            return self._commit(_HostGit(repo_path), repo_path, message, str)
+            raise MemberCapabilityError("Current git must run in the CLI process.")
         guest = self._guest()
         repo_path = self._clone_path(repo_path)
         with self._locked(self.host_root, guest.remaining()):
@@ -719,58 +716,26 @@ class MemberGitWorkspaceService:
         ``credential.helper``, ...), so it only supplies the branch's history.
         """
         if workspace_mode == "current":
-            repo_path = self._current_repo(repo_path, cwd or Path.cwd())
-            source: _GuestGit | _HostGit = _HostGit(repo_path)
-            # Repositories of its own, so that the user's push and a
-            # command's git never wait for each other.
-            root = self.host_root / "current"
-            wait, timeout = _CURRENT_GIT_WAIT_SECONDS, None
-        else:
-            guest = self._guest()
-            repo_path = self._clone_path(repo_path)
-            source = _GuestGit(guest, guest.path(repo_path))
-            root, wait, timeout = self.host_root, guest.remaining(), guest.remaining
+            raise MemberCapabilityError("Current git must run in the CLI process.")
+        guest = self._guest()
+        repo_path = self._clone_path(repo_path)
+        source = _GuestGit(guest, guest.path(repo_path))
+        root, wait, timeout = self.host_root, guest.remaining(), guest.remaining
         with self._locked(root, wait):
-            repository = (
-                self._checkout_of(source)
-                if isinstance(source, _GuestGit)
-                else self._push_destination(source)
-            )
+            repository = self._checkout_of(source)
             self.code.check_push(repository)
             branch = self._branch_name(timeout, _current_branch(source))
             origin = await self._origin(root, repository, timeout)
             ensure_chat_current(self.person.person_id)
             credential = await self.code.git_credential()
             origin.fetch(credential)
-            push_failed = False
-            try:
-                sha = (
-                    _receive(source, origin, branch)
-                    if isinstance(source, _GuestGit)
-                    else _receive_current(origin, source, branch)
-                )
-                pushed, commits = self._push(origin, branch, credential)
-                # Retain confirmed publication after squash or branch deletion.
-                origin.remember_public([sha])
-                if pushed:
-                    tracking = f"refs/remotes/origin/{branch}"
-                    origin.git("update-ref", tracking, sha)
-                    if isinstance(source, _GuestGit):
-                        source("update-ref", tracking, sha)
-            except Exception:
-                push_failed = True
-                raise
-            finally:
-                if isinstance(source, _HostGit):
-                    # A rejected push still reports the fetched remote history.
-                    try:
-                        _send_current(origin, source)
-                    except Exception as exc:
-                        if not push_failed:
-                            raise
-                        self.logger.warning(
-                            "Could not return origin tracking refs: %s", exc
-                        )
+            sha = _receive(source, origin, branch)
+            pushed, commits = self._push(origin, branch, credential)
+            origin.remember_public([sha])
+            if pushed:
+                tracking = f"refs/remotes/origin/{branch}"
+                origin.git("update-ref", tracking, sha)
+                source("update-ref", tracking, sha)
         pull_requests: list[dict[str, Any]] = []
         pull_requests_error = None
         try:
@@ -851,25 +816,6 @@ class MemberGitWorkspaceService:
     ) -> _Origin:
         url = await self.code.clone_url(repository)
         return _Origin(root, repository, url, timeout)
-
-    def _push_destination(self, git: LocalGit) -> str:
-        """The repository the user's ``origin`` pushes to, as git resolves it
-        (``pushurl``, ``pushInsteadOf``). Only that name is taken from it.
-
-        Raises:
-            MemberCapabilityError: If it pushes elsewhere than to one
-                repository of the code host.
-        """
-        remotes = git.push_urls()
-        repository = (
-            self.code.repository_from_remote(remotes[0]) if len(remotes) == 1 else None
-        )
-        if repository is None:
-            raise MemberCapabilityError(
-                "origin does not push to one repository of the configured code"
-                " host, so the member's credential is not sent."
-            )
-        return repository
 
     def _branch_name(self, timeout: Callable[[], float] | None, value: str) -> str:
         """``value`` if git takes it as a branch name as it stands.
@@ -953,22 +899,6 @@ class MemberGitWorkspaceService:
             )
         return assignment
 
-    def _current_repo(self, repo_path: Path, cwd: Path) -> Path:
-        repo_path = repo_path.expanduser().resolve()
-        found = _HostGit(cwd.expanduser().resolve())(
-            "rev-parse", "--show-toplevel", ok=(0, 128)
-        )
-        if found.returncode != 0:
-            raise MemberCapabilityError(
-                "current workspace mode requires running inside the target git repository."
-            )
-        current_root = Path(found.stdout.decode().strip()).resolve()
-        if repo_path != current_root:
-            raise MemberCapabilityError(
-                f"repo_path must match the current workspace repository: {current_root}"
-            )
-        return repo_path
-
     def _git_identity(self) -> tuple[str, str]:
         git_user = str(
             self.person.account_info.get("git_user", self.person.name or "GuildBotics")
@@ -979,6 +909,98 @@ class MemberGitWorkspaceService:
             )
         )
         return git_user, git_email
+
+    async def client_git(
+        self,
+        phase: str,
+        data: dict[str, Any],
+        incoming: Path | None,
+        outgoing: Path,
+    ) -> dict[str, Any]:
+        """Exchange data with a CLI; no caller path is ever opened here.
+
+        Each phase owns its lock. Advertisements may become stale between
+        phases; missing prerequisites request a full bundle before any push.
+        """
+        if phase == "identity":
+            user, email = self._git_identity()
+            return {"user": user, "email": email}
+        if phase == "record":
+            return CommitResult(**data).to_dict()
+        remotes = data["remotes"]
+        repository = (
+            self.code.repository_from_remote(remotes[0]) if len(remotes) == 1 else None
+        )
+        if repository is None:
+            raise MemberCapabilityError(
+                "origin does not push to one repository of the configured code host, so the member's credential is not sent."
+            )
+        self.code.check_push(repository)
+        root = self.host_root / "current"
+        with self._locked(root, _CURRENT_GIT_WAIT_SECONDS):
+            origin = await self._origin(root, repository, None)
+            credential = await self.code.git_credential()
+            origin.fetch(credential)
+            if phase == "known":
+                return {"known": sorted(known_commits(origin.git))}
+            if phase == "tracking":
+                refs = origin.refs("refs/remotes/origin/")
+                known = _present(origin.git, data.get("known", []))
+                wanted = sorted(ref for ref, sha in refs.items() if sha not in known)
+                if (
+                    wanted
+                    and origin.git(
+                        "rev-list",
+                        "--max-count=1",
+                        *wanted,
+                        "--not",
+                        *sorted(known),
+                        "--",
+                    ).stdout
+                ):
+                    origin.git.write_bundle(
+                        outgoing, (*wanted, *(f"^{sha}" for sha in sorted(known)))
+                    )
+                return {"refs": refs}
+            branch = self._branch_name(None, data["branch"])
+            ref = f"refs/heads/{branch}"
+            if incoming is not None:
+                if origin.git(
+                    "bundle", "verify", str(incoming), ok=range(256)
+                ).returncode:
+                    return {"retry": True}
+                origin.git(
+                    "fetch", "-q", "--no-tags", "--", str(incoming), f"+{ref}:{ref}"
+                )
+                if origin.head(branch) != data["head"]:
+                    raise MemberCapabilityError(
+                        "The bundle does not contain the requested branch head."
+                    )
+            else:
+                if not origin.has_commit(data["head"]):
+                    return {"retry": True}
+                origin.git("update-ref", ref, data["head"])
+            pushed, commits = self._push(origin, branch, credential)
+            sha = origin.head(branch)
+            origin.remember_public([sha])
+            origin.git("update-ref", f"refs/remotes/origin/{branch}", sha)
+        pull_requests: list[dict[str, Any]] = []
+        error = None
+        try:
+            pull_requests = await open_pull_request_readiness(
+                self.code, repository, branch
+            )
+        except ServiceError as exc:
+            error = str(exc)
+        return PushResult(
+            repo_path=data["repo_path"],
+            branch=branch,
+            pushed=pushed,
+            status="pushed" if pushed else "up_to_date",
+            commits=commits,
+            pull_requests=pull_requests,
+            pull_requests_error=error,
+        ).to_dict()
 
     def _commit(
         self,
@@ -996,34 +1018,9 @@ class MemberGitWorkspaceService:
         ``commit.gpgsign`` must not start pinentry.
         """
         branch = branch_name(_current_branch(git))
-        staged = (
-            git("diff", "--cached", "--quiet", ok=(0, 1)).returncode == 1
-            or git("rev-parse", "-q", "--verify", "MERGE_HEAD", ok=(0, 1)).returncode
-            == 0
-        )
-        commit_sha = None
-        if staged:
-            git_user, git_email = self._git_identity()
-            git(
-                "commit",
-                "--no-gpg-sign",
-                "-F",
-                "-",
-                env={
-                    "GIT_AUTHOR_NAME": git_user,
-                    "GIT_AUTHOR_EMAIL": git_email,
-                    "GIT_COMMITTER_NAME": git_user,
-                    "GIT_COMMITTER_EMAIL": git_email,
-                },
-                stdin=f"{message.strip()}\n".encode(),
-            )
-            commit_sha = _object_name(git("rev-parse", "--verify", "HEAD").stdout)
+        user, email = self._git_identity()
         return CommitResult(
-            repo_path=str(repo_path),
-            branch=branch,
-            commit_sha=commit_sha,
-            has_changes=staged,
-            status="committed" if commit_sha else "nothing_staged",
+            **commit_staged(git, repo_path, message, user, email, lambda _name: branch)
         )
 
     def _push(
@@ -1220,57 +1217,6 @@ def _reusable_checkout(
         # An unreadable checkout is retained for its owner, never discarded
         # or allowed to prevent another work from getting a slot.
         return False
-
-
-def _receive_current(origin: _Origin, user: LocalGit, branch: str) -> str:
-    """Receive a local branch as a bundle, retrying missing prerequisites."""
-    ref = f"refs/heads/{branch}"
-    with host_temporary_directory("guildbotics-bundle-") as tmp:
-        bundle = Path(tmp, "receive.bundle")
-        try:
-            transferred = user.branch_bundle(branch, origin.refs().values(), bundle)
-            if transferred:
-                verified = origin.git("bundle", "verify", str(bundle), ok=range(256))
-                if verified.returncode:
-                    bundle.unlink()
-                    user.branch_bundle(branch, (), bundle)
-                    origin.git("bundle", "verify", str(bundle))
-                # Take only the validated branch, never arbitrary refs or tags.
-                origin.git(
-                    "fetch", "-q", "--no-tags", "--", str(bundle), f"+{ref}:{ref}"
-                )
-            else:
-                sha = _object_name(
-                    user("rev-parse", "--verify", "-q", f"{ref}^{{commit}}").stdout
-                )
-                origin.git("update-ref", ref, sha)
-        except GitError as exc:
-            raise MemberCapabilityError(str(exc)) from exc
-    return origin.head(branch)
-
-
-def _send_current(origin: _Origin, user: LocalGit) -> None:
-    """Return tracking refs and only the history the user's repository lacks."""
-    refs = origin.refs("refs/remotes/origin/")
-    if not refs:
-        return
-    held = _present(user, refs.values())
-    wanted = sorted(ref for ref, name in refs.items() if name not in held)
-    with host_temporary_directory("guildbotics-bundle-") as tmp:
-        try:
-            bundle = None
-            if wanted:
-                known = _present(origin.git, known_commits(user))
-                bundle = Path(tmp, "send.bundle")
-                origin.git.write_bundle(
-                    bundle, (*wanted, *(f"^{name}" for name in sorted(known)))
-                )
-                if not user.verify_bundle(bundle):
-                    bundle.unlink()
-                    origin.git.write_bundle(bundle, wanted)
-            user.update_tracking(bundle, refs)
-        except GitError as exc:
-            raise MemberCapabilityError(str(exc)) from exc
 
 
 def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:

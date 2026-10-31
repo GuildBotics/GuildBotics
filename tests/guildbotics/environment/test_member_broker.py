@@ -498,7 +498,9 @@ async def test_cancel_calls_stops_all_queued_workers_before_yielding(
 
 @pytest.mark.asyncio
 async def test_output_beyond_the_limit_is_truncated(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(member_broker, "_MAX_OUTPUT_BYTES", 4)
+    from guildbotics.environment import member_execution
+
+    monkeypatch.setattr(member_execution, "_MAX_OUTPUT_BYTES", 4)
     broker = _active_broker(
         _context(tmp_path), lambda *_args, **_kwargs: (0, "abcdef", "ab")
     )

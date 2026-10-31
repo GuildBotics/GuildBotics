@@ -32,12 +32,13 @@ from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
-from pydantic import AnyHttpUrl, BaseModel
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from guildbotics.environment.command_guest import EnvironmentGuest
 from guildbotics.environment.loopback_server import LOOPBACK_HOST, LoopbackServer
+from guildbotics.environment.member_execution import MemberCommandResult, MemberWorkers
 from guildbotics.environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
@@ -108,14 +109,6 @@ class MemberCapabilityBrokerError(RuntimeError):
     """Report a trusted broker lifecycle failure to the native adapter."""
 
 
-class MemberCommandResult(BaseModel):
-    """Structured result returned to the native agent."""
-
-    exit_code: int
-    stdout: str
-    stderr: str
-
-
 @dataclass(frozen=True, slots=True)
 class MemberBrokerEndpoint:
     """Provider-neutral connection details for the trusted MCP endpoint.
@@ -178,7 +171,8 @@ class MemberCapabilityBroker:
         #: The calls of the command's environment being answered now.
         self._calls: set[asyncio.Task[Any]] = set()
         #: Member CLI threads, including those whose requests already ended.
-        self._workers: dict[asyncio.Future[tuple[int, str, str]], threading.Event] = {}
+        self._execution = MemberWorkers()
+        self._workers = self._execution.workers
         self._server: LoopbackServer | None = None
         self._url = ""
         self._port = 0
@@ -332,42 +326,10 @@ class MemberCapabilityBroker:
             guest=self._guest.until(deadline) if self._guest is not None else None,
         )
         run = partial(self._run, arguments, invocation, cwd=cwd, stdin=stdin)
-        cancelled = threading.Event()
-
-        def command() -> tuple[int, str, str]:
-            if cancelled.is_set():
-                return (
-                    125,
-                    "",
-                    "Member capability command was cancelled before it started.",
-                )
-            return run()
-
-        work = asyncio.get_running_loop().run_in_executor(
-            None, contextvars.Context().run, command
-        )
-        self._workers[work] = cancelled
-        work.add_done_callback(self._worker_finished)
-
-        async def answer() -> MemberCommandResult:
-            try:
-                exit_code, stdout, stderr = await asyncio.wait_for(
-                    asyncio.shield(work), timeout=max(0.0, deadline - time.monotonic())
-                )
-            except TimeoutError:
-                cancelled.set()
-                return MemberCommandResult(
-                    exit_code=124,
-                    stdout="",
-                    stderr="Member capability command timed out; it may still complete.",
-                )
-            return MemberCommandResult(
-                exit_code=exit_code, stdout=_bounded(stdout), stderr=_bounded(stderr)
-            )
-
         # Track both member transports through normal settlement too: otherwise
         # an unexpired MCP request can reach teardown before it even starts.
-        call = asyncio.create_task(answer())
+        answer, cancelled = self._execution.submit(run, deadline)
+        call = asyncio.create_task(answer)
         self._calls.add(call)
         call.add_done_callback(self._calls.discard)
         try:
@@ -375,12 +337,6 @@ class MemberCapabilityBroker:
         except asyncio.CancelledError:
             cancelled.set()
             raise
-
-    def _worker_finished(self, work: asyncio.Future[tuple[int, str, str]]) -> None:
-        """Forget a finished thread and retrieve failures of expired requests."""
-        self._workers.pop(work, None)
-        if not work.cancelled():
-            work.exception()
 
     async def call_host(self, request: Request) -> Response:
         """Answer one call of the command's environment.
@@ -635,10 +591,3 @@ def _rejection_reason(arguments: list[str], person_id: str) -> str | None:
     if not people and arguments != ["help"]:
         return "Member commands must name the active person with --person."
     return None
-
-
-def _bounded(value: str) -> str:
-    encoded = value.encode()
-    if len(encoded) <= _MAX_OUTPUT_BYTES:
-        return value
-    return encoded[:_MAX_OUTPUT_BYTES].decode(errors="ignore") + "\n[output truncated]"

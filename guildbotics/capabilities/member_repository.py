@@ -22,10 +22,7 @@ from pydantic import TypeAdapter, ValidationError
 from guildbotics.capabilities.artifact_archive import (
     MAX_ARTIFACT_BYTES,
     MAX_ATTACHMENT_BYTES,
-    ArtifactError,
     Unpacked,
-    unpacked,
-    write_download,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
@@ -545,12 +542,11 @@ def _validate_review_comment_location(
 _UNPACKED = TypeAdapter(Unpacked)
 
 
-def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked:
+def _write(download: IO[bytes], destination: Path | str, *attachment: str) -> Unpacked:
     """Write ``download`` where the command that asked for it reads it:
     unpacked as an artifact, or, given an attachment's name and id, as that
-    attachment; on the host, or, for a command of an isolated environment, in
-    that environment (:mod:`.artifact_archive`), which the host writes
-    nothing of.
+    attachment. An isolated command writes in its guest; otherwise the raw
+    download is returned to the CLI transport. No caller path is opened here.
 
     Raises:
         MemberCapabilityError: When it cannot be written safely, or the
@@ -558,11 +554,11 @@ def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked
     """
     guest = current_member_invocation().guest
     if guest is None:
-        try:
-            files = write_download(download, destination, *attachment)
-        except ArtifactError as exc:
-            raise MemberCapabilityError(str(exc)) from exc
-        return unpacked(destination, files)
+        send = current_member_invocation().download
+        if send is None:
+            raise MemberCapabilityError("No download transport is installed.")
+        send(download, str(destination), attachment)
+        return {"destination": str(destination), "files": []}
     # A process that ran out of time may still hold the copy open (on Windows
     # it cannot be deleted then); the failure is what the command reports.
     with host_temporary_directory("guildbotics-download-") as held:
@@ -573,7 +569,7 @@ def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked
             result = guest.run(
                 guest.python(
                     "guildbotics.capabilities.artifact_archive",
-                    guest.path(destination),
+                    guest.path(Path(destination)),
                     *attachment,
                 ),
                 cwd="/",

@@ -9,6 +9,7 @@ is completed against, what each command reports -- is exercised here on
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import json
 import re
 import subprocess
@@ -431,6 +432,31 @@ async def test_a_ticket_and_a_pull_request_of_one_number_are_two_items(member):
         assert [c["body"] for c in page["items"]] == [body]
 
 
+async def _download_on_client(operation):
+    from guildbotics.capabilities.artifact_archive import (
+        write_download,
+        unpacked,
+        ArtifactError,
+    )
+
+    buffer = io.BytesIO()
+    received = {}
+
+    def receive(source, destination, attachment):
+        buffer.write(source.read())
+        received.update(destination=destination, attachment=attachment)
+
+    with member_invocation_scope(MemberInvocation(download=receive)):
+        result = await operation
+    buffer.seek(0)
+    destination = Path(received["destination"])
+    try:
+        files = write_download(buffer, destination, *received["attachment"])
+    except ArtifactError as exc:
+        raise MemberCapabilityError(str(exc)) from exc
+    return {**result, **unpacked(destination, files)}
+
+
 def _artifact(sha: str, name: str, files: dict[str, str]) -> None:
     archive = store.artifact(REPOSITORY, sha, name)
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -473,8 +499,8 @@ async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
     head = store.branch_tip(REPOSITORY, "feature")
     _artifact(head, "report", {"report.md": "details"})
 
-    result = await member_repository.artifact_download(
-        member, url, " report ", tmp_path / "out"
+    result = await _download_on_client(
+        member_repository.artifact_download(member, url, " report ", tmp_path / "out")
     )
 
     assert (result["name"], result["id"]) == ("report", f"{head}/report")
@@ -495,8 +521,8 @@ async def test_attachment_download_writes_the_file_by_its_name(
     written by its id instead, inside the destination."""
     url = ticket(1, body=f"![screen]({attachment('screen-1', b'png', name=name)})")
 
-    result = await member_repository.attachment_download(
-        member, url, "screen-1", tmp_path / "out"
+    result = await _download_on_client(
+        member_repository.attachment_download(member, url, "screen-1", tmp_path / "out")
     )
 
     path = (tmp_path / "out" / written).resolve()
@@ -519,7 +545,9 @@ async def test_attachment_download_leaves_a_file_already_there(member, tmp_path)
     (tmp_path / "screen.png").write_bytes(b"mine")
 
     with pytest.raises(MemberCapabilityError, match="already exists"):
-        await member_repository.attachment_download(member, url, "screen-1", tmp_path)
+        await _download_on_client(
+            member_repository.attachment_download(member, url, "screen-1", tmp_path)
+        )
     assert (tmp_path / "screen.png").read_bytes() == b"mine"
 
 
