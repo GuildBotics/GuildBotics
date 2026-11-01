@@ -1,4 +1,4 @@
-"""The ``run`` command: one custom command, on the Desktop when open, else locally."""
+"""The ``run`` command: one custom command, on the running server, else locally."""
 
 from __future__ import annotations
 
@@ -51,7 +51,8 @@ def run(
     custom_command: str,
     command_args: tuple[str, ...],
 ) -> None:
-    """Run a command through the matching Desktop when open, otherwise locally."""
+    """Run a command on the server of the same workspace when it runs, otherwise
+    locally."""
     workspace = selected_workspace()
     from guildbotics.utils.safe_paths import normalize_host_path
 
@@ -89,7 +90,7 @@ async def _run_custom_command(
     cwd: Path,
 ) -> None:
     """Run one command here as manual work, inside the same boundary the
-    Desktop opens for one: a trace, the task-run record and, unless the
+    server opens for one: a trace, the task-run record and, unless the
     command declares itself read-only, the member's execution lease."""
     command_name, inline_person = _parse_command_spec(command_spec)
     context = create_context(message)

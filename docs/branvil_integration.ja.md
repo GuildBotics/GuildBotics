@@ -164,7 +164,7 @@ macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えない�
 
 ## GuildBotics を Branvil に接続する
 
-Hub で、デスクトップアプリ（またはブラウザの同じ画面）の **設定 → 連携** から:
+Hub の画面の **設定 → 連携** から:
 
 1. コードホストとチケットに **Branvil** を選ぶ。どちらも GuildBotics が接続している
    1 つの Branvil を使います。
@@ -265,8 +265,7 @@ account_info:
 
    空の `helper =` があると、git は Branvil の資格情報を、それより前に設定された
    helper（OS のキーチェーン、Git Credential Manager）に尋ねません。この行より後に
-   設定した helper にはトークンの保存が頼まれてしまうので、最後に置いてください。Windows では
-   インストーラが CLI を `PATH` に入れるので、helper は `!guildbotics git-credential` です。
+   設定した helper にはトークンの保存が頼まれてしまうので、最後に置いてください。
 3. これで `git fetch origin` と `git push origin <branch>` が、何も聞かれずに通ります。
 
 最初に求められたとき、GuildBotics は接続を使って、そのマシンのオーナーのトークンを発行します。

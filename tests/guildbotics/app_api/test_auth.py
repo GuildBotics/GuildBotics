@@ -66,7 +66,7 @@ def _consented(app: FastAPI, **changes: str) -> dict[str, str]:
 # -- the guard ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/api/health", "/", "/-/enter", "/quick.html"])
+@pytest.mark.parametrize("path", ["/api/health", "/", "/-/enter", "/index.html"])
 @pytest.mark.parametrize("host", ["evil.example:8765", "127.0.0.1:1420", "127.0.0.1"])
 def test_a_request_for_another_host_is_misdirected(app, path, host):
     answer = TestClient(app, base_url=f"http://{host}").get(
@@ -158,10 +158,10 @@ def test_an_entry_link_names_the_page_to_land_on_and_keeps_the_code_in_its_fragm
 ):
     plain = owner_client(app).post("/session/links").json()["url"]
     assert urlsplit(plain)._replace(fragment="").geturl() == f"{ORIGIN}/-/enter"
-    quick = owner_client(app).post("/session/links", json={"next": "/quick.html"})
-    parts = urlsplit(quick.json()["url"])
+    page = owner_client(app).post("/session/links", json={"next": "/index.html"})
+    parts = urlsplit(page.json()["url"])
     assert parts.path == "/-/enter"
-    assert parse_qs(parts.query) == {"next": ["/quick.html"]}
+    assert parse_qs(parts.query) == {"next": ["/index.html"]}
     assert parts.fragment
 
 

@@ -297,7 +297,9 @@ class SchedulerLifecycle(_RuntimeLifecycle):
                 }
             )
             status = self._transition_locked("running", running=True)
-        thread.start()
+            # Started inside the lock: a status read in between would take the
+            # thread that has not started yet for one that has ended.
+            thread.start()
         return status.model_copy()
 
     def stop(self, *, force: bool = False) -> RuntimeUnitStatus:

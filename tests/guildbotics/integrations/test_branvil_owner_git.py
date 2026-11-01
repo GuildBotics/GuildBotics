@@ -216,22 +216,14 @@ async def test_a_keychain_that_cannot_be_used_is_a_service_failure(
     )
 
 
-@pytest.mark.parametrize(
-    ("platform", "helper"),
-    [
-        ("win32", "!guildbotics git-credential"),
-        # Quoted for the shell, then for the git configuration's value.
-        ("darwin", "!'{home}/.guildbotics/bin/guildbotics' git-credential"),
-    ],
-)
 def test_git_is_configured_to_ask_only_this_helper_for_branvil(
-    fake_platform, monkeypatch: pytest.MonkeyPatch, platform: str, helper: str
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(managed_cli.Path, "home", lambda: managed_cli.Path("/my home"))
-    fake_platform(managed_cli, platform)
 
+    # Quoted for the shell, then for the git configuration's value.
     assert git_config(BASE) == (
         f'[credential "{BASE}"]\n'
         "\thelper =\n"
-        f'\thelper = "{helper.format(home="/my home")}"\n'
+        "\thelper = \"!'/my home/.guildbotics/bin/guildbotics' git-credential\"\n"
     )

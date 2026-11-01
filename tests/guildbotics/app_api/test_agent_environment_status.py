@@ -171,7 +171,7 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         "held": "",
         "problem": "",
         "warning": "",
-        "load_command": image_load_command(platform="darwin"),
+        "load_command": image_load_command(),
     }
     assert (status.dns.declared, status.dns.nameservers) == ("host", ["192.168.3.1"])
     assert (status.problem, status.problem_setting) == (
@@ -219,7 +219,7 @@ def test_a_declared_image_this_device_lacks_is_the_devices_problem(
         ),
     )
 
-    status = agent_environment_status(["aiko"], platform="win32")
+    status = agent_environment_status(["aiko"])
 
     expected = t(
         "intelligences.agent_environment.image.missing",
@@ -235,9 +235,7 @@ def test_a_declared_image_this_device_lacks_is_the_devices_problem(
         status.image.present,
     ) == ("local/agent:1", "arm64", digest, {"arm64": digest}, False)
     assert status.image.problem == expected
-    assert (
-        status.image.load_command == "guildbotics environment image load <archive.tar>"
-    )
+    assert status.image.load_command == image_load_command()
     assert (status.problem, status.problem_setting) == (expected, "image")
     assert agent_environment_problems(["aiko"]) == [("", "", "image", expected)]
 
@@ -583,22 +581,18 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     assert bad_scope.status_code == 422
 
 
-@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
-def test_login_instructions_use_desktop_managed_cli(monkeypatch, home, platform):
+def test_login_instructions_use_the_managed_cli(monkeypatch, home):
     import shlex
 
     special_home = home / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: special_home))
-    for tool in agent_environment_status([], platform=platform).tools:
-        if platform == "win32":
-            assert tool.login_command == f"guildbotics environment login {tool.name}"
-        else:
-            assert shlex.split(tool.login_command) == [
-                str(special_home / ".guildbotics/bin/guildbotics"),
-                "environment",
-                "login",
-                tool.name,
-            ]
+    for tool in agent_environment_status([]).tools:
+        assert shlex.split(tool.login_command) == [
+            str(special_home / ".guildbotics/bin/guildbotics"),
+            "environment",
+            "login",
+            tool.name,
+        ]
 
 
 def test_device_authentication_failure_drives_card_and_alert_then_recovers(

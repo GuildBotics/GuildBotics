@@ -216,21 +216,17 @@ def test_an_archive_built_for_another_architecture_is_not_loaded(
     assert loads == [archive, archive]
 
 
-def test_load_guidance_quotes_unix_paths_and_uses_windows_path(
+def test_load_guidance_quotes_the_managed_cli_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     home = tmp_path / "my home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
-    unix = image_load_command(platform="darwin")
-    assert unix.endswith(" <archive.tar>")
-    assert shlex.split(unix[: -len(" <archive.tar>")]) == [
+    command = image_load_command()
+    assert command.endswith(" <archive.tar>")
+    assert shlex.split(command[: -len(" <archive.tar>")]) == [
         str(home / ".guildbotics/bin/guildbotics"),
         "environment",
         "image",
         "load",
     ]
-    assert (
-        image_load_command(platform="win32")
-        == "guildbotics environment image load <archive.tar>"
-    )

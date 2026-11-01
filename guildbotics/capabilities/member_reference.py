@@ -630,8 +630,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "exact content with a file-editing capability instead of an inline shell literal, pass the "
     "path as one argv value, and delete the directory with the file even when the command "
     "fails. Titles are single-line `--title` values and never belong in the content file.",
-    "Files the user hands over from the Desktop are read-only copies GuildBotics keeps for "
-    "the app session, so never leave a result beside them. Unless the request names a "
+    "Files the user uploads from the GuildBotics screens are read-only copies GuildBotics "
+    "keeps until its server restarts, so never leave a result beside them. Unless the "
+    "request names a "
     "destination, put what you produce for the user -- a converted document, a resized "
     "image, anything that does not belong in the repository you are working in -- under "
     "`~/Documents/GuildBotics/`.",

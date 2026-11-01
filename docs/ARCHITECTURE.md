@@ -19,8 +19,8 @@ perform a narrow set of orchestration/status writes of their own (see §3).
 
 Users interact with the system through:
 
-- **Desktop app** (`desktop/`, Tauri v2 + React): setup, service runtime control,
-  activity history, and diagnostics over a Local API.
+- **Screens** (`desktop/`, React, served by the server to a browser): setup, service
+  runtime control, activity history, and diagnostics over a Local API.
 - **CLI** (`guildbotics ...`): headless start/run/stop, workspace selection, secrets
   migration, and the member capability entry point.
 - **Interactive skill** (`skills/guildbotics/SKILL.md`): lets a user-driven coding agent
@@ -35,7 +35,7 @@ both, never a mix:
 ```
 guildbotics/
 │  host
-├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
+├── app_api/         # The server: Local API for the screens and the CLI (FastAPI + EventBus + normalizers)
 ├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
 ├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control
 ├── setup/           # Workspace and member setup (setup_service) used by the GUI; per-provider setup lives in integrations/<provider>/setup.py
@@ -86,7 +86,7 @@ Dependency rules (the contracts in `[tool.importlinter]`, checked by `lint-impor
   `app_api` → `cli` → `drivers | setup` → `environment` → `capabilities` →
   `integrations` → `workspace | observability`. The
   shared packages: `commands` → `intelligences` → `runtime` → `loader` →
-  `entities` → `utils`. `app_api` sits above `cli` because the Desktop runs
+  `entities` → `utils`. `app_api` sits above `cli` because the server runs
   the member CLI in its own process for the member brokers of its commands.
 - `app_api` is the top layer: no other guildbotics package may import it. Knowledge
   needed by both app_api and core (e.g. LLM provider / AI CLI tool catalogs) lives in
@@ -134,8 +134,8 @@ workflow (orchestration)
   directly. Every native provider session instead receives one authenticated MCP tool,
   served on the host and reached from the isolated environment, that can invoke only
   the fixed member CLI for the active person, workspace, and turn. The broker runs each
-  command inside the host's GuildBotics process that runs the command (Desktop,
-  `guildbotics start`, or a local `guildbotics run`), on a worker
+  command inside the host's GuildBotics process that runs the command (the server,
+  or a local `guildbotics run`), on a worker
   thread with its own working directory, streams, and invocation, instead of starting
   a CLI process per call. The broker, not the provider process, holds the turn's
   execution lease and a separately rotated per-turn grant; a command that outlasts
@@ -339,7 +339,7 @@ purpose:
   `@login` mentions; agent tokens continue to work on assigned tickets. Assignment and
   unanswered mentions are rechecked before dispatch.
   Every route that runs it — the patrol, a scheduled command, a manual run
-  (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
+  (`guildbotics run`, the screens) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the
   AI CLI turn: moving the ticket to the working lane, the run id and completion
   budget (`GUILDBOTICS_TICKET_MAX_ATTEMPTS`), the trace attributes that name the
@@ -360,7 +360,7 @@ purpose:
   Behavior that belongs to a run answering a chat event keys on that event, not on
   the work's kind, since a resumed run in a chat thread's work answers none.
 - **Manual runs**: a command a person starts runs inside one boundary, whether the
-  Desktop runs it (`AppRuntime._execute_command`) or a local `guildbotics run` does
+  screens run it (`AppRuntime._execute_command`) or a local `guildbotics run` does
   (`cli/run.py`): a `manual` trace, `TaskRunCoordinator.track_work(source="manual")`
   (the task-run record's start and finish, and the member's lease unless the command
   declares itself read-only), and the command's `command.started` /
@@ -388,7 +388,7 @@ Invariants:
   clone across manual commands and separate GuildBotics processes with one OS advisory
   lease per person. Only `track_work` in `drivers/execution.py` takes the lease;
   every host run goes through it (the scheduler's work, and a manual command whether
-  the Desktop or a local `guildbotics run` starts it). Interactive `member` commands
+  the screens or a local `guildbotics run` starts it). Interactive `member` commands
   take no execution lease: shared state and git operations have their own locks,
   and interactive sessions cannot use the member's clone. Nested `member` writes
   require the exact delegated lease/run identity; environment-variable presence alone
@@ -396,20 +396,18 @@ Invariants:
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
   command-name strings.
-- The backend is singleton per machine: Desktop and CLI `guildbotics start` launch
-  the same `guildbotics.app_api` child process. It holds
-  `<machine-state-root>/run/app-api.lock` from before binding through server exit.
-  The lock records owner (CLI/Desktop), PID and whether the API accepted a stop,
-  so the CLI parent can distinguish an intentional forced exit from a crash.
-  A failed contender reports the holder's owner to its launcher before exiting;
-  Desktop's Bootstrap asks a CLI owner to stop with `guildbotics stop`.
+- The server is singleton per machine: `guildbotics start` runs the checkout's
+  `guildbotics.app_api` as a child in its own process group and exits with its code.
+  The server holds `<machine-state-root>/run/app-api.lock` from before binding through
+  its exit, and records its PID there; a second server refuses to start.
   `service.lock` covers scheduler workers and event listeners only while active,
-  including keep-awake; it carries no CLI/Desktop owner. File existence alone
-  is never a liveness signal. CLI stop/kill use the local owner-token API and wait
-  for the backend lock's PID; a Desktop-owned backend is stopped from Desktop.
-  The CLI parent receives signals independently of the child process group: the
-  first requests a graceful drain, the second cancellation, then the parent shuts
-  the backend down. Failed startup and self-stopped services exit nonzero.
+  including keep-awake. File existence alone is never a liveness signal.
+  The server ends only on `guildbotics stop` / `kill` (`POST /api/shutdown` with
+  `force`) or a signal: the first SIGINT drains in-flight work, a second cancels it,
+  and SIGTERM, which an OS sends to stop its service, cancels at once. Stopping the
+  services from the Service screen (`POST /api/scheduler/stop`) leaves the server
+  serving. CLI stop/kill use the local owner-token API and wait for the lock's PID.
+  An exit that was asked for is a successful one.
 - A member that finishes work while messages 3 and 5 arrive in one Slack thread
   reads the unread conversation through message 5 in its next run. The oldest
   queued event starts that run; selection combines queued messages with a fresh
@@ -539,7 +537,7 @@ Invariants:
   enumerates the boundary functions and requires them to catch `BaseException`.
   How the failure is classified belongs to
   `capabilities/command_failures.command_failure_payload()` alone, because the
-  `code` decides what the Desktop does with it: `cancelled` and
+  `code` decides what the screens do with it: `cancelled` and
   `cli_agent_authentication` open no generic execution alert.
 
 ### Native agent runtime
@@ -553,7 +551,7 @@ and redacted diagnostics. Provider adapters own only protocol translation.
 Logical conversations are keyed by person, adapter, work kind, and stable work identity
 (ticket URL or Slack bot/channel/thread root), not by scheduler run. The work is the
 host's to settle: the ticket selector and the chat selector fix it with its subject
-when they select the trigger, a Desktop assistant names its conversation, and any other
+when they select the trigger, an assistant of the screens names its conversation, and any other
 command does its own run's manual work. The command's grant holds every turn and member
 command to it, so nothing in the isolated environment names another subject or another
 work's conversation. The versioned
@@ -580,17 +578,13 @@ is absent rather than forbidden. (3) Hand-overs go through the exchange director
 `~/Documents/GuildBotics`, which every turn is granted read-write by GuildBotics itself
 (`EXCHANGE_GRANT` in `environment/contract.py`; the grants file adds
 to it and cannot remove it).
-What the Desktop hands a command -- a pasted image, a copy of a dropped file the
-environment could not reach -- is placed in its `tmp/` for one App API session and
-removed when the session ends (`app_api/command_input_files.py`); a Desktop run that
-names no working directory runs in the exchange directory; and what an agent makes for
-the user goes under it unless the request names a destination (a cross-cutting rule of
-the member reference). Before a dropped path enters the input field the Desktop asks
-`POST /commands/input-paths` whether a turn would reach it, and when it would not, the
-user chooses between handing over a copy (enough for reading) and allowing the file's
-directory (the path stays in the input, and the grants screen opens with that directory
-in its path field, from the quick-run window too via the host's `open_main_window`), or
-dismisses the file.
+What the screens hand a command -- a pasted image, or a file dropped on the input,
+which the browser uploads as a copy -- is kept under the machine state root for one App
+API session, that is until the server restarts, mounted read-only into the commands
+that session runs, and removed when the session ends (`app_api/command_input_files.py`);
+a run from the screens that names no working directory runs in the exchange directory;
+and what an agent makes for the user goes under it unless the request names a
+destination (a cross-cutting rule of the member reference).
 
 Host bind sources are judged in `utils/safe_paths.py` and
 `environment/contract.py`: directory-relative no-follow
@@ -602,16 +596,12 @@ working directories and grants also refuse descendants. Explicit host-owned chil
 clones remain mountable. `spec.py` checks every host mount and `runtime._volumes`
 checks again before passing the same name to `Volume.bind`, without resolving
 links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
-(`data/workspaces.json`); Desktop lists and unregisters entries through
+(`data/workspaces.json`); the screens list and unregister entries through
 `/device/workspaces`. Workspace admission rejects locations under the target's grants
 or the exchange directory before registration or initialization.
 Admission permits unavailable grant configuration so editing can repair it; command contract loading remains strict. Protected link names and
 intermediate links and actual destinations share one component-wise interpretation
-for mounts and input previews; loops protect every traversed name. Copy sources
-must remain outside protected state. Leaf links are refused. Ancestor links are
-accepted only when their parent contains fixed credential state and therefore
-cannot be shared with a turn; writable grants and working directories also refuse
-such links. Final reads use no-follow opens. `HostPathPermissionError` keeps the
+for mounts; loops protect every traversed name. Final reads use no-follow opens. `HostPathPermissionError` keeps the
 absolute denied component, its protected owner when relevant, and localized guidance
 within the common `UnsafePathError` contract.
 Input-store failures belong to the store, separate from workspace selection,
@@ -732,8 +722,8 @@ The generic execution substrate used by workflows and custom commands:
   member in person ID order, so only a team without any command-capable member
   raises `PersonSelectionRequiredError`. The default is treated exactly like an
   explicitly named member, so a stale one fails the same way. The App API
-  reports the resolved value as `TeamSummary.default_person_id` — the Desktop
-  app never picks a fallback member itself, and its default-executor select is
+  reports the resolved value as `TeamSummary.default_person_id` — the screens
+  never pick a fallback member themselves, and their default-executor select is
   therefore never empty while the team has a candidate.
 - Command types (`commands/registry.py`): `.md` (LLM prompt), `.py`, `.sh`,
   `.yml`/`.yaml` (definition), plus inline commands `print`, `to_html`, `to_pdf`.
@@ -751,7 +741,7 @@ The generic execution substrate used by workflows and custom commands:
   file. `commands/metadata.py` owns `inputs` / argument / Python-signature /
   placeholder parsing (domain models, not wire models); `commands/validation.py`
   validates source per format. The App API only converts these to wire models.
-- Editing shared commands from the Desktop app goes through the Local API, never
+- Editing shared commands from the screens goes through the Local API, never
   the filesystem plugin. `app_api/command_files.py` owns the editable shared root,
   opaque file IDs (URL-safe relative path; re-validated for root containment /
   extension / symlink on every call), SHA-256 revisions with optimistic
@@ -765,13 +755,13 @@ The generic execution substrate used by workflows and custom commands:
   dictionary. Catalog and validation code read it through the AST without
   importing the command, so a Python command, its metadata, its editor revision,
   and its save operation remain one physical file.
-- The Desktop command editor's AI assistant separates conversation from mutation.
+- The command editor's AI assistant separates conversation from mutation.
   Each read-only `/commands/author` request sends the complete current editor buffer,
   latest instruction, permitted operations and effective shared command sources.
   A question returns `action=answer` with no changes and bypasses source validation;
   an explicit modification request returns a reviewed `create`/`update` proposal.
   Existing-file authoring can update only the current command without renaming or
-  changing its format, but may create new shared helper/wrapper commands. Desktop
+  changing its format, but may create new shared helper/wrapper commands. The screen
   does not change the editor when either response arrives. Chat retains only a
   short proposal notice; a separate read-only editor workspace displays one
   scrollable tab per current, created, or updated file with its relative path.
@@ -848,7 +838,7 @@ the process cwd or a member working clone.
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project YAML, each member's participation (`team/members/<person_id>/member.yml`), `secrets.yml` (key names), transcript settings                                                                 |
 | Workspace state    | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
-| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this machine's keychain namespace), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this machine's keychain namespace), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, `debug.env` |
 
 Invariants:
 
@@ -867,8 +857,7 @@ Invariants:
 - `config/` and `state/` are the workspace's shared files, written only through the
   helpers of section 8; `local/` is this machine's own. Anything
   whose value is decided by the machine rather than the workspace belongs in `local/` —
-  absolute paths, but also hotkeys, since which combinations are free depends on the OS,
-  the other applications installed, and the keyboard layout.
+  absolute paths, for example.
 - `GUILDBOTICS_WORKSPACE_ROOT` is published at the workspace application boundary.
   Agent execution copies that resolved value into `AgentExecutionContext`.
 - There is no `GUILDBOTICS_DATA_DIR` override and no workspace `.env` file.
@@ -1105,9 +1094,9 @@ access and member key spelling in the package.
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed
   over in the member invocation), records a `target.recorded`. A read
   (`inspect`) declares the target too but, like a memory read, never becomes an
-  activity link. Manual command runs (`source: manual`, from the Desktop or a local
+  activity link. Manual command runs (`source: manual`, from the screens or a local
   `guildbotics run`) are excluded from the session timeline because they fire constantly; anything they
-  changed still appears as an activity event. The Desktop AI assistants are such runs
+  changed still appears as an activity event. The screens' AI assistants are such runs
   too — the agent work kind scopes the provider conversation, not the trace — so they
   are filterable in diagnostics and absent from the timeline. Diagnostics keeps every source.
 - **System health alerts**: successful and failed verify/scenario-diagnostics runs are
@@ -1160,25 +1149,26 @@ access and member key spelling in the package.
   cannot rotate or prune what it reads, and it carries no display normalization — record
   meaning is taught to its consumers instead. `--query` searches each candidate's full
   transcript, not just the index, because the text a failure describes itself with lives
-  in log and I/O records that the index never stores. Desktop assistant traces are excluded by
+  in log and I/O records that the index never stores. The assistants' traces are excluded by
   default so the troubleshooting agent does not investigate its own conversations.
 
-## 11. Desktop App
+## 11. Screens and Server
 
-`desktop/` is a Tauri v2 + React (Mantine, TanStack Query) frontend; the repository is
-a monorepo on purpose.
+`desktop/` is a React (Mantine, TanStack Query) frontend that the server serves to a
+browser; the repository is a monorepo on purpose. The server runs from a checkout on the
+Hub: `guildbotics start` in a terminal, or on macOS the LaunchAgent that
+`scripts/hub-server.sh` installs. There is no packaged program.
 
 - **Local API boundary**: the GUI never reimplements the Python engine. The backend
   (`python -m guildbotics.app_api`, FastAPI) serves both the API under `/api` (REST,
   and the `/api/events` WebSocket) and the screens themselves (the Vite build of
-  `desktop/`: `/`, `/quick.html`, `/assets/*`, and `/-/enter` and `/-/authorize`, which
+  `desktop/`: `/`, `/assets/*`, and `/-/enter` and `/-/authorize`, which
   the main page tells apart by path; `app_api/ui.py`). It listens on loopback only, on
   one fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default), which every program of
-  the machine reads from the environment: the server, its CLI clients, the Desktop
-  that launches it, and the Vite dev server that proxies `/api` to it. GuildBotics runs
+  the machine reads from the environment: the server, its CLI clients, and the Vite dev
+  server that proxies `/api` to it. GuildBotics runs
   on one machine, the Hub; other machines reach it from a browser through SSH forwarding
-  to the same port (`scripts/hub-forward.sh` / `.ps1`, plain OpenSSH user services). The
-  screens therefore work the same in any browser and in the Desktop windows.
+  to the same port (`scripts/hub-forward.sh` / `.ps1`, plain OpenSSH user services).
 - **Authentication** (`app_api/auth.py`, as Branvil's "Entering the GUI"): there is one
   person, the owner, and no sign-in screen.
   - The server keeps its records in `~/.guildbotics/data/server/<port>/` (`0700`):
@@ -1200,7 +1190,7 @@ a monorepo on purpose.
     used, and the screen then says how to enter again. Every non-GET
     request made with the cookie must carry `X-GuildBotics-CSRF`, else
     `403 csrf_mismatch`. `guildbotics open [--print]` is that client on the command
-    line; the Desktop host is another.
+    line.
   - A machine that cannot read `owner.token` gets an owner token of its own through the
     consent screen: `guildbotics connect` listens on a loopback port and opens
     `/-/authorize` with its name, that `redirect_uri`, a `state`, and a PKCE `S256`
@@ -1227,33 +1217,12 @@ a monorepo on purpose.
     site, which act on their unguessable `state`.
 - **Who receives a token**: a loopback port is not owned by an OS user, so a token goes
   only to a process that showed it holds the port or knows the token.
-  - Desktop starts the sidecar on the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by
-    default), which the sidecar reads from the environment it inherits. The sidecar
-    binds, listens, writes its owner token file, and then announces the port as the
-    only line its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards
-    stdout is stderr. It announces before loading the workspace, whose secrets can wait
-    on a keychain prompt, so the host's deadline measures binding only. The host keeps
-    one connection state (`Starting` / `Ready` / `Closed`) that only a notice for the
-    port it asked for makes `Ready`; only then does it read
-    `~/.guildbotics/data/server/<port>/owner.token` and send it as
-    `Authorization: Bearer` (`/api/session/links`, `/api/shutdown`,
-    `/api/scheduler/status`). A missing notice after 45 seconds, a notice for another
-    port or a second one, or the sidecar's exit closes it for good, kills the sidecar,
-    and sends every window back to its bundled bootstrap page.
-  - Both windows first load that page (`bootstrap.html`; the quick window with
-    `?next=/quick.html`). It calls `backend_entry`: `null` while the sidecar starts, a
-    fresh entry link once it is ready (an entry link works once, so the host asks for
-    one each time), or why there is none. The page replaces itself with the link, so
-    the windows show the UI the backend serves and hold a session cookie like any
-    browser. Tauri treats that origin as remote: the host grants it what
-    `capabilities/default.json` grants the bundled UI (a runtime capability for
-    `http://127.0.0.1:<port>/*`), while the bootstrap page's own commands
-    (`backend_entry`, `bootstrap_log`, `restart_app`) stay with the bundled page. The
-    sidecar starts again only with the app, so the bootstrap page shows why it stopped
-    and offers to restart the app (`restart_app`). A window whose session has ended
-    goes back to its bootstrap page (`enter_again`, which navigates only to the page the
-    host recorded for that window) and enters again. While the App is not shown, quit
-    requests go straight to `quit_app`.
+  - The server binds the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default),
+    listens, writes its owner token file, and then announces the port as the only line
+    its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is
+    stderr. A launcher that waits for the line (the E2E harness, for example) addresses
+    the port only once its own child holds it. The server announces before loading the
+    workspace, whose secrets can wait on a keychain prompt.
   - Host clients (`guildbotics run` delegation and `guildbotics open`) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
     offers, it first posts the token's id and a fresh 32-byte nonce to
     `/api/local-api/proof`, which takes no
@@ -1266,72 +1235,40 @@ a monorepo on purpose.
     taken before the client's next connection (later requests usually reuse the proved
     connection). A browser redirected back by GitHub App registration or Branvil's
     consent reaches the port even after the server exited, carrying a one-time code.
-- **Runtime lifecycle**: the backend is the sole composition root for member workers
-  and event listeners. Both Desktop and CLI
-  `guildbotics start` launch it (the module in development, the sibling bundled
-  `guildbotics-app-api` when packaged), passing their parent PID to the watchdog.
-  The backend owns `app-api.lock` for its lifetime and `service.lock` only while
-  services run. The CLI waits for its child's port notice, then uses the local
-  owner-token API. `/scheduler/start` takes no body: every start, from any screen or
-  the CLI, runs with the service settings saved in `local/service.yml`
+- **Runtime lifecycle**: the server is the sole composition root for member workers
+  and event listeners. `guildbotics start` runs it as a child in its own process group
+  with `GUILDBOTICS_START_SERVICES=1` and its own PID for the watchdog
+  (`GUILDBOTICS_APP_API_PARENT_PID`); the server starts its services once it listens,
+  and stays up when they fail to start, so the screens and its output show why. The
+  server owns `app-api.lock` for its lifetime and `service.lock` only while services
+  run. `/scheduler/start` takes no body: every start, from any screen or
+  `guildbotics start`, runs with the service settings saved in `local/service.yml`
   (`drivers/service_settings.py`), which screens change one setting at a time with
-  `PATCH /service/settings`. `/scheduler/stop` defaults
-  to waiting; CLI stop/kill use `wait=false` to acknowledge the stop before draining
-  and wait for the process themselves, escalating with `force=true` if needed.
-- **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
-  (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
-  shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.
-  It carries the screens the Local API serves, the Vite build of `desktop/`, in
-  `_internal/desktop/dist` (beside `_internal/guildbotics/` as in a checkout), so the
-  screens are built first.
-  Tauri bundles it as a resource and the app starts the Local API from it. The CLI is
-  copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
-  afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on
-  Windows). While a process still runs from an older build the switch waits for the next
-  launch, and an old build is removed only on a launch after the switch, once nothing
-  runs from it (a program just started through `bin` may not hold its lock yet): the CLI holds a shared lock on its executable (the PyInstaller runtime hook
-  `desktop/sidecar/hold_program_lock.py`), and on Windows a running executable cannot be
-  opened for writing. A one-file build unpacks everything on every start, which cost
-  seconds per CLI call. The
-  app also installs a `~/.local/bin/guildbotics` shim and the GuildBotics skill for
-  interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
-  verifies, and configures them only.
+  `PATCH /service/settings`. `/scheduler/stop` stops the services only; `/shutdown`
+  (`guildbotics stop` / `kill`) ends the server, after in-flight work or, with
+  `force`, cancelling it. On SIGTERM the server cancels at once, and its lifespan
+  teardown has `TEARDOWN_BUDGET_SECONDS`, which the LaunchAgent's `ExitTimeOut`
+  covers with a margin.
+- **Installing the CLI and the skill**: `scripts/install_cli_assets.py` (run by
+  `scripts/hub-server.sh install` and `update`) writes `~/.guildbotics/bin/guildbotics`,
+  a shim that runs the checkout's `.venv/bin/guildbotics` (the path instructions, the
+  skill, and the git credential helper of human members name;
+  `utils/managed_cli.py`), and a `~/.local/bin/guildbotics` shim. It copies
+  `skills/guildbotics/SKILL.md` to where each AI CLI of the catalog found on the
+  machine reads user skills (`CliAgentProvision.user_skills`), and records the hash of
+  what it wrote in `.guildbotics-managed.json` beside it, so a copy the user edited is
+  left alone. External AI CLI tools are _not_ installed on the host for turns — they run
+  inside the isolated environment.
 - **This machine**: the settings section for what belongs to the machine rather than to a
   workspace — the registered workspaces (`/device/workspaces`) — listed in the settings nav
   under its own "This machine" group and reachable before any workspace is selected.
 - **Config saves are explicit and revision-checked**: every settings screen saves on a
   button, and sends back the revisions its read reported. A refused save reloads the screen
   instead of resending, since resending is exactly the overwrite that was refused.
-- **Global hotkeys and the quick-run window**: assignments are device-local
-  (`.guildbotics/local/hotkeys.yml`, served by `GET`/`PUT /hotkeys`) because which
-  combinations are free is a property of the machine, not of the workspace.
-  `guildbotics/app_api/hotkeys.py`
-  owns the accelerator grammar and the conflict rules; the Tauri host only registers
-  what the frontend hands it. Pressing a combination reads clipboard text or an image
-  and opens a resizable frameless window (`quick.html`); clipboard images are persisted
-  through the same session-scoped input-file store used by paste. The generic hotkey
-  offers a command picker, while a per-command hotkey runs straight away unless a
-  required input is missing, in which case the window waits. Because hotkeys only fire
-  while the process lives, closing a window hides it and the app stays resident in the
-  menu bar. Every Quit the app owns (the tray item, and on macOS the app menu with its
-  Cmd+Q, which replaces Tauri's default menu because that one sends `terminate:`) asks
-  the frontend's "work still running" guard first; a failed status read asks too
-  rather than quitting. Quits that arrive from outside the app on macOS (the Dock's
-  Quit, logout) come as a quit Apple Event, which tao's delegate does not get to
-  refuse, so the host adds `applicationShouldTerminate:` to it: the quit is cancelled
-  and handed to the same guard while the backend reports work (or cannot be read), and
-  let through when it is idle, so an idle app never holds up a logout. "Is there work"
-  has one answer, `RuntimeStatus.has_active_work`, which the workspace switch, the
-  frontend guard, and the host all read. A force quit or a crash still bypasses all of
-  this, so the guard is not what protects the backend: on `RunEvent::Exit`, which every
-  orderly route passes through, the host requests `POST /shutdown`, waits for the
-  sidecar to finish its lifespan teardown, and kills it only if that fails. How long
-  that wait is comes from the backend (`TEARDOWN_BUDGET_SECONDS`, returned with the
-  accepted shutdown), so the host never cuts short a teardown still within its limits.
 - **AI assistants**: the command editor and the diagnostics screen each host a
   conversational assistant. Each is a bundled command (`assistants/author_command`,
-  `assistants/troubleshoot`) that runs through the same path as any command the Desktop
-  runs (`AppRuntime._execute_command` → `prepare_command` → `run_main_command`): once
+  `assistants/troubleshoot`) that runs through the same path as any command the screens
+  run (`AppRuntime._execute_command` → `prepare_command` → `run_main_command`): once
   the run is accepted for the workspace, the API resolves the command exactly once,
   decides its slot and tracking on that runner, builds the command's JSON input from
   what it declares, and runs that same runner under a fresh trace labelled
@@ -1365,10 +1302,10 @@ a monorepo on purpose.
   recorded before the frontend turns it into a link. The record detail and the assistant
   share one mutually exclusive right-edge panel, so two drawers never fight over the same
   strip; the assistant is non-modal, so the executions list behind it stays clickable.
-- **Support targets**: macOS Apple Silicon (DMG) and Linux x86_64 (`.deb` / AppImage).
-  The CLI remains the fallback everywhere else.
+- **Support targets**: the service script targets a macOS Hub; on Linux the server
+  runs with `guildbotics start` in a terminal.
 
-See `desktop/README.md` for build, development, and test instructions.
+See `desktop/README.md` for build, development, and test instructions of the screens.
 
 ## 12. Domain Model Notes
 

@@ -16,8 +16,6 @@ import "../i18n";
 import { DeviceAccessCard, DocumentsCard } from "./GrantsCards";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
-vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn(async () => "/Users/me/") }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   evaluateGrant: vi.fn(),
@@ -45,25 +43,15 @@ const macStatus: EnvironmentAccessStatus = {
   problem: "",
 };
 
-/** A Windows device spells the same rows with backslashes after `$HOME`. */
-const windowsStatus: EnvironmentAccessStatus = {
-  documents: [],
-  paths: [],
-  denied: [{ path: "$HOME\\.ssh", builtin: true }],
-  problem: "",
-};
-
 function Harness({
   shared: initialShared = { documents: [] },
   local: initialLocal = { paths: [], deny: [] },
-  status = macStatus,
   prefill,
   onShared,
   onLocal,
 }: {
   shared?: SharedGrants;
   local?: LocalGrants;
-  status?: EnvironmentAccessStatus;
   prefill?: { card: string; path: string };
   onShared?: (shared: SharedGrants) => void;
   onLocal?: (local: LocalGrants) => void;
@@ -76,7 +64,7 @@ function Harness({
       <TestMantineProvider>
         <DocumentsCard
           documents={shared.documents}
-          status={status}
+          status={macStatus}
           initialPath={prefill?.card === "grants-documents" ? prefill.path : undefined}
           onChange={(documents) => {
             const next = { ...shared, documents };
@@ -86,7 +74,7 @@ function Harness({
         />
         <DeviceAccessCard
           local={local}
-          status={status}
+          status={macStatus}
           initialPath={prefill?.card === "grants-device" ? prefill.path : undefined}
           onChange={(next) => {
             setLocal(next);
@@ -307,87 +295,14 @@ describe("directory access cards", () => {
     });
   });
 
-  it("offers no folder dialog in the browser, where the server path is typed", async () => {
+  it("takes the server path as it is typed", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     const device = within(screen.getByTestId("grants:device"));
     const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
 
-    expect(
-      screen.queryByRole("button", { name: t("setup.intelligence.grants.choose") }),
-    ).not.toBeInTheDocument();
     await user.type(path, ".cache/pnpm");
     expect(path).toHaveValue(".cache/pnpm");
-  });
-
-  it("picks a shared document directory inside the home and shows it relative to it", async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    vi.mocked(open).mockResolvedValueOnce("/Users/me/Documents/shared");
-    Object.assign(window, { __TAURI_INTERNALS__: {} });
-    try {
-      const user = userEvent.setup();
-      render(<Harness />);
-      const documents = within(screen.getByTestId("grants:document"));
-      const path = documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
-
-      await user.click(
-        documents.getByRole("button", { name: t("setup.intelligence.grants.choose") }),
-      );
-      await waitFor(() => expect(path).toHaveValue("Documents/shared"));
-      expect(open).toHaveBeenCalledWith({
-        directory: true,
-        multiple: false,
-        defaultPath: "/Users/me",
-      });
-    } finally {
-      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-    }
-  });
-
-  it("fills the path from the directory picker, relative to the home when under it", async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    vi.mocked(open).mockResolvedValueOnce("/Users/me/.cache/pnpm").mockResolvedValueOnce("/opt/x");
-    Object.assign(window, { __TAURI_INTERNALS__: {} });
-    try {
-      const user = userEvent.setup();
-      render(<Harness />);
-      const device = within(screen.getByTestId("grants:device"));
-      const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
-      const choose = device.getByRole("button", {
-        name: t("setup.intelligence.grants.choose"),
-      });
-
-      await user.click(choose);
-      await waitFor(() => expect(path).toHaveValue(".cache/pnpm"));
-      await user.click(choose);
-      await waitFor(() => expect(path).toHaveValue("/opt/x"));
-      expect(open).toHaveBeenCalledWith({
-        directory: true,
-        multiple: false,
-        defaultPath: undefined,
-      });
-    } finally {
-      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-    }
-  });
-
-  it("relativizes a picked directory to a Windows home directory", async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const { homeDir } = await import("@tauri-apps/api/path");
-    vi.mocked(homeDir).mockResolvedValueOnce("C:\\Users\\me\\");
-    vi.mocked(open).mockResolvedValueOnce("C:\\Users\\me\\AppData\\Local\\uv\\cache");
-    Object.assign(window, { __TAURI_INTERNALS__: {} });
-    try {
-      const user = userEvent.setup();
-      render(<Harness status={windowsStatus} />);
-      const device = within(screen.getByTestId("grants:device"));
-      const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
-
-      await user.click(device.getByRole("button", { name: t("setup.intelligence.grants.choose") }));
-      await waitFor(() => expect(path).toHaveValue("AppData\\Local\\uv\\cache"));
-    } finally {
-      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-    }
   });
 
   it("lists the exchange directory GuildBotics grants itself, fixed and not addable again", async () => {

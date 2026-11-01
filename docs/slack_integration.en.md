@@ -7,7 +7,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 - [Slack App Setup](#slack-app-setup)
 - [Creating the Slack App Manually](#creating-the-slack-app-manually)
 - [Adding Multiple Agents](#adding-multiple-agents)
-- [Configuring in the Desktop App](#configuring-in-the-desktop-app)
+- [Configuring on the Screens](#configuring-on-the-screens)
 - [Chat Judgment Engine](#chat-judgment-engine)
 - [Scheduled Posts](#scheduled-posts)
 - [Member Settings Reference](#member-settings-reference)
@@ -32,11 +32,11 @@ Whether to reply is decided by whether the member's role adds something new. Whe
 
 Posts, replies, reactions, and completion records in Slack all go through the member-only CLI (`guildbotics member chat ...`), where they are executed and recorded.
 
-To receive chat events, start the service with **Event triggers** included on the **Service** screen in the desktop app (from the CLI, `guildbotics start`). Scheduled posts go through a separate path: configure them as scheduled commands, as described in [Scheduled Posts](#scheduled-posts).
+To receive chat events, start the service with **Event triggers** included on the **Service** screen (`guildbotics start` starts it with the saved settings). Scheduled posts go through a separate path: configure them as scheduled commands, as described in [Scheduled Posts](#scheduled-posts).
 
 ## Slack App Setup
 
-Create a Slack App (send + receive) in Slack that acts as the AI agent. The default path is the semi-automatic registration in the desktop app: the required scopes, Socket Mode and event subscriptions all come pre-configured from an App Manifest that GuildBotics generates.
+Create a Slack App (send + receive) in Slack that acts as the AI agent. The default path is the semi-automatic registration on the screens: the required scopes, Socket Mode and event subscriptions all come pre-configured from an App Manifest that GuildBotics generates.
 
 First choose Slack under **Setup → Integrations → Chat**; the members then have a Slack tab. Under **Setup → Members → Slack**, choose **Register a new app** and do the following.
 
@@ -50,19 +50,19 @@ First choose Slack under **Setup → Integrations → Chat**; the members then h
 4. Copy the **Bot User OAuth Token** (`xoxb-...`) from that same page
 5. Open **Basic Information** → **App-Level Tokens** and copy the token (`xapp-...`)
    - This is the same value shown as the App token on the confirmation screen; the app token is unaffected by the scope issue, so copying it there works too
-6. Paste both tokens into the desktop app's fields and press **Verify app**
+6. Paste both tokens into the screen's fields and press **Verify app**
    - Success shows the bot display name, bot user ID and workspace name, plus **Bot permissions** as OK
    - A failing **Bot permissions** line means the token was not re-copied after the reinstall in step 3
    - Swapping `xoxb-` and `xapp-` is reported as an explicit error
 7. Invite the bot to the target channels (run `/invite @<bot name>` in the channel)
    - Without the invite, **Verify settings** reports it as `not_in_channel`
-8. Register the channels and participation policies as described in [Configuring in the Desktop App](#configuring-in-the-desktop-app)
+8. Register the channels and participation policies as described in [Configuring on the Screens](#configuring-on-the-screens)
 
 Copying those two tokens is the only manual step left: Slack's OAuth redirect does not allow `http://localhost`, so the local API cannot receive a callback that would collect them.
 
 ## Creating the Slack App Manually
 
-When you are not using the desktop app (on a server, for example), build the same configuration by hand.
+To build the same configuration without the semi-automatic registration, do it by hand.
 
 1. Create a Slack App at https://api.slack.com/apps
 2. Grant the required permissions (scopes)
@@ -94,7 +94,7 @@ When you are not using the desktop app (on a server, for example), build the sam
      - For DMs: `message.im`, `message.mpim`
    - Issue an App-Level Token (`xapp-...`) under `Basic Information` and note it down
 6. Invite the bot to the target channels
-7. Register the two tokens and the target channels as described in [Configuring in the Desktop App](#configuring-in-the-desktop-app)
+7. Register the two tokens and the target channels as described in [Configuring on the Screens](#configuring-on-the-screens)
 
 ## Adding Multiple Agents
 
@@ -104,7 +104,7 @@ To share the receiving connection, set the same App-Level Token as the existing 
 
 If you want a separate receiving path (for example, a separate workspace or a separate Slack App), create an additional Slack App and configure Socket Mode / Event Subscriptions / App-Level Token for it.
 
-## Configuring in the Desktop App
+## Configuring on the Screens
 
 Configure this per member under **Setup → Members → Slack**.
 
@@ -175,7 +175,7 @@ If the channel is not specified or `channel_name` cannot be resolved (check the 
 
 ## Member Settings Reference
 
-The project's chat is Slack when `team/project.yml` names it, which the desktop app's project setup writes:
+The project's chat is Slack when `team/project.yml` names it, which the project setup screen writes:
 
 ```yaml
 # team/project.yml
@@ -185,7 +185,7 @@ services:
     # base_url: https://slack.com/api   # only to reach Slack through a proxy
 ```
 
-The channels and schedules you save in the desktop app are written to the workspace's `team/members/<person_id>/member.yml` in the following form. On a server without the GUI, edit this file directly.
+The channels and schedules you save on the screens are written to the workspace's `team/members/<person_id>/member.yml` in the following form. On a server without the GUI, edit this file directly.
 
 ```yaml
 # team/members/alice/member.yml

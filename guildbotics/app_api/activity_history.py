@@ -45,7 +45,7 @@ from guildbotics.observability.trace_title import (
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 type ActivitySessionMode = Literal["interactive", "workflow"]
-# Desktop command runs (commands page and hotkey quick run) fire far too often
+# Manual command runs (the commands page, `guildbotics run`) fire far too often
 # to belong on the activity timeline, so they never become sessions. Whatever
 # such a run actually changed still surfaces through activity events.
 MANUAL_SESSION_SOURCE = "manual"

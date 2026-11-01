@@ -22,8 +22,8 @@ import httpx
 from guildbotics.utils.fileio import get_machine_state_path
 
 DEFAULT_PORT = 8765
-#: Moves the port for every program on this machine at once: the server, its
-#: clients, and the Desktop that launches it.
+#: Moves the port for every program on this machine at once: the server and
+#: its clients.
 PORT_ENV = "GUILDBOTICS_SERVER_PORT"
 API_PREFIX = "/api"
 PROOF_PATH = "/local-api/proof"

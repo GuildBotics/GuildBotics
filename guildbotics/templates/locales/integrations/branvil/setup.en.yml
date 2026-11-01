@@ -1,8 +1,8 @@
 en:
   connected: "GuildBotics is connected to Branvil."
-  close: "Close this page and go back to the GuildBotics app."
+  close: "Close this page and go back to the GuildBotics screen."
   failed: "GuildBotics could not connect to Branvil."
-  retry: "Close this page and connect again from the GuildBotics app."
+  retry: "Close this page and connect again from the GuildBotics screen."
   expired: "This connection was not started here, or it has expired."
   denied: "The connection was not allowed on Branvil's consent screen."
   not_kept: "The admin token Branvil gave could not be kept on this machine. Branvil has revoked the earlier admin token, so connect again."

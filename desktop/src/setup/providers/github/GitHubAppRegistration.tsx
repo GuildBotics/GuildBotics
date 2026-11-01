@@ -288,9 +288,12 @@ export function GitHubAppRegistrationPanel({
         <Group gap="xs">
           <Text size="sm">{t("setup.members.githubAppRegistration.pending")}</Text>
           <Button
+            component="a"
+            href={registration?.start_url}
+            target="_blank"
+            rel="noopener noreferrer"
             variant="subtle"
             size="compact-sm"
-            onClick={() => void openExternal(registration?.start_url ?? "")}
           >
             {t("setup.members.githubAppRegistration.reopen")}
           </Button>
@@ -305,9 +308,12 @@ export function GitHubAppRegistrationPanel({
               })}
             </Text>
             <Button
+              component="a"
+              href={registration?.installation_page_url}
+              target="_blank"
+              rel="noopener noreferrer"
               variant="subtle"
               size="compact-sm"
-              onClick={() => void openExternal(registration?.installation_page_url ?? "")}
             >
               {t("setup.members.githubAppRegistration.openInstall")}
             </Button>

@@ -82,7 +82,7 @@ describe("parseAppRequest", () => {
 
 describe("samePagePath", () => {
   it("keeps only a page of this server", () => {
-    expect(samePagePath("/quick.html")).toBe("/quick.html");
+    expect(samePagePath("/index.html")).toBe("/index.html");
     expect(samePagePath("/-/authorize?client=a%20b")).toBe("/-/authorize?client=a%20b");
     expect(samePagePath(null)).toBeNull();
     expect(samePagePath("")).toBeNull();
@@ -100,7 +100,7 @@ describe("samePagePath", () => {
     expect(samePagePath(new URLSearchParams("next=%09/attacker.example").get("next"))).toBeNull();
     expect(samePagePath("/ /attacker.example")).toBeNull();
     expect(samePagePath("/#/service")).toBeNull();
-    expect(samePagePath("quick.html")).toBeNull();
+    expect(samePagePath("index.html")).toBeNull();
   });
 });
 

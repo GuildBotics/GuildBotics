@@ -273,7 +273,7 @@ def _current_git(
 )
 @click.pass_context
 def member(ctx: click.Context) -> None:
-    """Operate as a configured GuildBotics member through the running backend."""
+    """Operate as a configured GuildBotics member through the running server."""
     workspace, arguments = _workspace(ctx.args)
     identity = read_workspace_identity(workspace)
     if identity is None:

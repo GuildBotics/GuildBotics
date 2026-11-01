@@ -469,7 +469,7 @@ class SimpleProjectSetupService:
 
     That decorator locks the selected workspace, while these methods take the
     config directory as an argument. The two are the same workspace for every
-    caller today -- the Desktop backend selects it before calling, and the CLI
+    caller today -- the server selects it before calling, and the CLI
     resolves it the same way -- and a caller that means a different one has to
     take the lock for that workspace itself.
     """
@@ -707,7 +707,7 @@ class SimplePersonSetupService:
 
     The workspace's lock is the selected workspace's, while these methods take
     the workspace's config directory as an argument. The two are
-    the same workspace for every caller today -- the Desktop backend selects it
+    the same workspace for every caller today -- the server selects it
     before calling -- and a caller that means a different one has to take the
     lock for that workspace itself.
     """

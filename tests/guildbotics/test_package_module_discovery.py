@@ -1,14 +1,8 @@
 """Every module of the ``guildbotics`` package must be reachable by package walking.
 
-GuildBotics resolves brains and commands from config strings through
-``guildbotics.utils.import_utils.load_class``, so the desktop programs cannot rely
-on PyInstaller's static import graph: ``desktop/sidecar/guildbotics.spec``
-collects the package with ``collect_submodules("guildbotics")`` instead. That
-walk, like ``pkgutil.walk_packages``, descends only into regular packages. A
-directory without ``__init__.py`` is a namespace package whose modules are
-bundled only while some static import happens to reach them, so removing that
-import drops them from the build without any test noticing. ``pylint guildbotics``
-expands the package the same way, so it never lints such modules either.
+``pylint guildbotics`` expands the package like ``pkgutil.walk_packages``, which
+descends only into regular packages. A directory without ``__init__.py`` is a
+namespace package whose modules pylint never lints, without any test noticing.
 """
 
 from __future__ import annotations

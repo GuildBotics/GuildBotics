@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.server import _restore_active_workspace
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.local_api import PORT_ENV, owner_token_path
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
@@ -224,37 +226,142 @@ def test_main_lets_the_app_ask_the_server_to_exit(
 
 
 def test_main_holds_backend_lock_until_the_server_exits(monkeypatch, captured_launch):
-    from guildbotics.drivers.app_api_lock import (
-        inspect_backend_lock,
-        read_backend_metadata,
-    )
+    from guildbotics.drivers.app_api_lock import BackendMetadata, inspect_backend_lock
 
     def run(runner, **kwargs):
-        locked, metadata = inspect_backend_lock()
-        assert locked and metadata.owner == "desktop"
-        runner.config.app.state.on_service_stop()
-        assert read_backend_metadata().stop_requested is True
+        assert inspect_backend_lock() == (True, BackendMetadata(os.getpid()))
 
     monkeypatch.setattr(server.uvicorn.Server, "run", run)
     server.main()
     assert inspect_backend_lock() == (False, None)
 
 
+@pytest.mark.parametrize("value,starts", [("1", True), (None, False)])
+def test_main_starts_the_services_only_when_its_launcher_asks(
+    monkeypatch, captured_launch, value, starts
+):
+    from guildbotics.drivers.app_api_lock import START_SERVICES_ENV
+
+    seen = []
+    monkeypatch.setattr(
+        server.uvicorn.Server,
+        "run",
+        lambda runner, **kwargs: seen.append(runner._start_services),
+    )
+    if value is None:
+        monkeypatch.delenv(START_SERVICES_ENV, raising=False)
+    else:
+        monkeypatch.setenv(START_SERVICES_ENV, value)
+    server.main()
+    assert seen == [starts]
+    # Not passed on to what the server runs.
+    assert START_SERVICES_ENV not in os.environ
+
+
+def _exit_server(shut_downs: list[bool]) -> server._Server:
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            shut_down=lambda *, force: shut_downs.append(force),
+        )
+    )
+    return server._Server(server.uvicorn.Config(app), app, start_services=False)
+
+
+def test_ctrl_c_drains_then_cancels_then_skips_the_teardown(capsys):
+    shut_downs: list[bool] = []
+    runner = _exit_server(shut_downs)
+
+    runner.handle_exit(server.signal.SIGINT, None)
+    assert shut_downs == [False]
+    assert not runner.should_exit
+    runner.handle_exit(server.signal.SIGINT, None)
+    assert shut_downs == [False, True]
+    runner.handle_exit(server.signal.SIGINT, None)
+    assert runner.force_exit
+    assert shut_downs == [False, True]
+    err = capsys.readouterr().err
+    assert t("runtime.service_lock.stopping_after_work") in err
+    assert t("runtime.service_lock.cancelling") in err
+
+
+def test_sigterm_cancels_at_once_and_nothing_is_raised_again():
+    shut_downs: list[bool] = []
+    runner = _exit_server(shut_downs)
+
+    runner.handle_exit(server.signal.SIGTERM, None)
+    runner.handle_exit(server.signal.SIGTERM, None)
+
+    assert shut_downs == [True]
+    assert not runner.force_exit
+    # uvicorn would raise each captured signal again after the exit, which
+    # would turn an exit asked for into a death by that signal.
+    assert runner._captured_signals == []
+
+
+def test_an_exit_asked_through_the_api_leaves_ctrl_c_its_stages():
+    """`guildbotics stop` also ends the server; a Ctrl-C meanwhile still lets
+    the teardown run instead of skipping it."""
+    shut_downs: list[bool] = []
+    runner = _exit_server(shut_downs)
+    runner.should_exit = True
+
+    runner.handle_exit(server.signal.SIGINT, None)
+
+    assert shut_downs == [False]
+    assert not runner.force_exit
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_the_services_start_once_the_server_listens_and_failing_leaves_it_up(
+    monkeypatch, caplog, capsys, fails
+):
+    started = []
+
+    def start_scheduler():
+        started.append(True)
+        if fails:
+            raise RuntimeError("no members")
+
+    async def listening(self, sockets=None):
+        started.append("listening")
+
+    monkeypatch.setattr(server.uvicorn.Server, "startup", listening)
+    app = SimpleNamespace(
+        state=SimpleNamespace(runtime=SimpleNamespace(start_scheduler=start_scheduler))
+    )
+    runner = server._Server(server.uvicorn.Config(app), app, start_services=True)
+    threads = []
+    monkeypatch.setattr(
+        server.threading,
+        "Thread",
+        lambda target, **kwargs: SimpleNamespace(start=lambda: threads.append(target)),
+    )
+
+    asyncio.run(runner.startup())
+    assert started == ["listening"]
+    threads[0]()
+
+    assert started == ["listening", True]
+    assert not runner.should_exit
+    assert ("The services did not start" in caplog.text) is fails
+    assert (
+        "The services did not start: no members" in capsys.readouterr().err
+    ) is fails
+
+
 def test_losing_backend_never_binds_or_opens_server_records(
     monkeypatch, captured_launch
 ):
-    from guildbotics.drivers.app_api_lock import (
-        BackendAlreadyRunningError,
-        hold_backend_lock,
-    )
+    from guildbotics.drivers.app_api_lock import hold_backend_lock
 
     def bind(port):
         pytest.fail("A second backend must not bind")
 
     monkeypatch.setattr(server, "_bind", bind)
     with hold_backend_lock():
-        with pytest.raises(BackendAlreadyRunningError):
+        with pytest.raises(SystemExit) as refused:
             server.main()
+    assert refused.value.code == t("runtime.service_lock.already_running")
     assert captured_launch == {}
 
 

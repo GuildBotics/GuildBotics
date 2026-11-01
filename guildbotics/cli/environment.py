@@ -2,8 +2,8 @@
 
 Building the snapshot the shared declaration asks for, loading the base image
 it names, logging in to an AI CLI tool inside it, showing what this device
-holds, and removing it. A device without a Desktop -- a headless Linux box
-that joined the workspace -- has only these; the Desktop shows the same state.
+holds, and removing it. The Agent execution environment screen shows the
+same state.
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ def image_list_command(output_format: str) -> None:
 
     Those loaded here, by the name they were loaded under, and whether the
     declaration names each for this device's architecture; the same list the
-    Desktop's declaration picks from.
+    Agent execution environment screen picks from.
     """
     _require_runtime()
     declaration = _declaration()

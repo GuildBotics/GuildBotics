@@ -15,7 +15,6 @@ def _served(tmp_path: Path) -> TestClient:
     (tmp_path / "assets").mkdir()
     (tmp_path / "index.html").write_text("main")
     (tmp_path / "quick.html").write_text("quick")
-    (tmp_path / "bootstrap.html").write_text("bootstrap")
     (tmp_path / "assets" / "app.js").write_text("js")
     app = FastAPI()
     ui.serve(app, tmp_path)
@@ -27,13 +26,12 @@ def test_the_main_page_answers_its_own_paths(tmp_path):
     for path in ("/", "/index.html", "/-/enter", "/-/authorize"):
         answer = client.get(path)
         assert answer.text == "main" and answer.headers["cache-control"] == "no-cache"
-    assert client.get("/quick.html").text == "quick"
     assert client.get("/assets/app.js").text == "js"
 
 
 def test_only_the_pages_are_served(tmp_path):
     client = _served(tmp_path)
-    for path in ("/bootstrap.html", "/service", "/assets/../index.html.bak"):
+    for path in ("/quick.html", "/service", "/assets/../index.html.bak"):
         assert client.get(path).status_code == 404
 
 

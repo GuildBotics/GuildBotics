@@ -23,13 +23,13 @@ def test_stop_escalates_through_api_then_native_termination(
     alive = True
     requests = []
     monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
     )
     monkeypatch.setattr(service, "pid_exists", lambda pid: alive)
 
     def call(path, *, payload, **kwargs):
         nonlocal alive
-        assert path == "/scheduler/stop"
+        assert path == "/shutdown"
         requests.append(payload["force"])
         if exit_stage is not None and payload["force"] is exit_stage:
             alive = False
@@ -47,7 +47,7 @@ def test_stop_escalates_through_api_then_native_termination(
 def test_stop_timeout_leaves_work_draining(monkeypatch):
     requests = []
     monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
     )
     monkeypatch.setattr(service, "pid_exists", lambda pid: True)
 
@@ -58,18 +58,8 @@ def test_stop_timeout_leaves_work_draining(monkeypatch):
     monkeypatch.setattr(service, "_call", call)
     result = CliRunner().invoke(main, ["stop", "--timeout", "0"])
     assert result.exit_code == 0
-    assert requests == [{"force": False, "wait": False}]
+    assert requests == [{"force": False}]
     assert t("runtime.service_lock.stop_timeout") in result.output
-
-
-@pytest.mark.parametrize("command", ["stop", "kill"])
-def test_stop_and_kill_reject_desktop_even_with_no_service(monkeypatch, command):
-    monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata("desktop", 42))
-    )
-    result = CliRunner().invoke(main, [command])
-    assert result.exit_code == 1
-    assert t("runtime.service_lock.desktop_managed") in result.output
 
 
 def test_stop_without_a_backend_is_a_noop(monkeypatch):
@@ -81,7 +71,7 @@ def test_stop_without_a_backend_is_a_noop(monkeypatch):
 
 def test_stop_never_terminates_without_authenticating_the_local_api(monkeypatch):
     monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata("cli", 42))
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
     )
     monkeypatch.setattr(service, "pid_exists", lambda pid: True)
 
@@ -111,6 +101,6 @@ def test_api_call_sends_requests_only_through_the_owner_client(monkeypatch):
             yield client
 
     monkeypatch.setattr(service, "connect_local_api", connect)
-    service._call("/scheduler/stop", payload={"force": True})
-    assert sent[0].url.path == "/api/scheduler/stop"
+    service._call("/shutdown", payload={"force": True}, timeout=5)
+    assert sent[0].url.path == "/api/shutdown"
     assert sent[0].content == b'{"force":true}'

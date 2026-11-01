@@ -2,5 +2,5 @@ en:
   continue: "Create the GitHub App on GitHub."
   submit: "Continue to GitHub"
   error_title: "GitHub App registration failed."
-  error_hint: "Close this page and retry from the GuildBotics app."
+  error_hint: "Close this page and retry from the GuildBotics screen."
   missing_code: "The callback from GitHub is missing the one-time code."

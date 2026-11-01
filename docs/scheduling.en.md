@@ -7,14 +7,14 @@ The scheduler supports two ways of running commands.
 - **Patrol commands** (`routine_commands`): commands repeated at a fixed interval while the service is running
 - **Scheduled commands** (`task_schedules`): commands run at the times given in cron notation
 
-- [Configuring in the Desktop App](#configuring-in-the-desktop-app)
+- [Configuring on the Screens](#configuring-on-the-screens)
 - [Patrol Commands](#patrol-commands)
 - [Scheduled Commands](#scheduled-commands)
 - [Cron Expression Format](#cron-expression-format)
 - [How Scheduling Works Internally](#how-scheduling-works-internally)
 - [Configuration Examples](#configuration-examples)
 
-## Configuring in the Desktop App
+## Configuring on the Screens
 
 Per-member settings live under **Setup → Members → Patrol**.
 
@@ -209,7 +209,7 @@ task_schedules:
 
 **Starting both agents**:
 
-Press **Run** on the **Service** screen in the desktop app (on a server without the GUI, run `guildbotics start`). Both agents run in parallel, each repeating its patrol commands and running its scheduled commands at the configured times.
+Press **Run** on the **Service** screen (`guildbotics start` starts it as well). Both agents run in parallel, each repeating its patrol commands and running its scheduled commands at the configured times.
 
 ### Multiple Schedule Patterns
 

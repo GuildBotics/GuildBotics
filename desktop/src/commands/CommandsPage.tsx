@@ -51,7 +51,6 @@ import {
   type TraceDetailResponse,
 } from "../api/client";
 import { commandTraceRefetchInterval } from "../App";
-import { isTauriRuntime, openLocalFile } from "../desktopWindow";
 import { setNavigationGuard } from "../navigationGuard";
 import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
 import { useAssistantConversation } from "../assistant/useAssistantConversation";
@@ -782,17 +781,10 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
                 files={files}
                 selectedFileId={selectedFileId}
                 onSelectFile={selectFile}
-                command={detail?.command ?? null}
                 saveStatus={saveStatus}
                 path={displayPath}
                 pathLabel={detail ? `commands/${detail.relative_path}` : ""}
                 disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
-                onOpenExternal={
-                  // The file is the server machine's: a browser has nothing to open it with.
-                  displayPath && isTauriRuntime()
-                    ? () => void openLocalFile(displayPath).catch(() => {})
-                    : undefined
-                }
               />
               {detail ? (
                 editorProposal ? (

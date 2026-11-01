@@ -1,6 +1,6 @@
 ja:
   client:
-    backend_required: "member コマンド（--help を含む）の前に、Desktop または `guildbotics start` を起動してください。"
+    backend_required: "member コマンド（--help を含む）の前に、GuildBotics のサーバー（`guildbotics start` または OS のサービス）を起動してください。"
     workspace_required: "先に --workspace または `guildbotics workspace use <パス>` でワークスペースを選んでください。"
   content:
     exclusive: "--content-stdin と --content-file のどちらか一方だけを指定してください。"

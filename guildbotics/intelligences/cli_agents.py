@@ -274,6 +274,10 @@ class CliAgentProvision(BaseModel):
     install: str = ""
     state_root: str = ""
     state_root_env: str = ""
+    #: Where the tool on this machine reads user skills from, relative to the
+    #: home directory; one under the state root moves with ``state_root_env``.
+    #: GuildBotics puts its skill there (``scripts/install_cli_assets.py``).
+    user_skills: str = ""
     auth: str = ""
     #: The variable that points the tool at ``auth``, for a tool whose
     #: credentials do not stay at their default place under the state root.
@@ -375,6 +379,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             package="@openai/codex@0.164.0",
             state_root=".codex",
+            user_skills=".agents/skills",
             state_root_env="CODEX_HOME",
             auth="auth.json",
             persisted=("sessions/",),
@@ -452,6 +457,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             package="@anthropic-ai/claude-code@2.1.310",
             state_root=".claude",
+            user_skills=".claude/skills",
             state_root_env="CLAUDE_CONFIG_DIR",
             auth=".credentials.json",
             persisted=(".claude.json", "projects/"),
@@ -511,6 +517,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 "grok --version"
             ),
             state_root=".grok",
+            user_skills=".grok/skills",
             state_root_env="GROK_HOME",
             auth="auth/auth.json",
             auth_env="GROK_AUTH_PATH",
@@ -561,6 +568,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             package="@github/copilot@1.0.103",
             state_root=".copilot",
+            user_skills=".copilot/skills",
             state_root_env="COPILOT_HOME",
             auth="config.json",
             persisted=("session-state/",),
@@ -626,6 +634,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             # Conversations span the per-conversation databases and the brain
             # transcripts; the project they belong to lives under config.
             state_root=".gemini",
+            user_skills=".gemini/config/skills",
             auth="antigravity-cli/antigravity-oauth-token",
             persisted=(
                 "antigravity-cli/conversations/",

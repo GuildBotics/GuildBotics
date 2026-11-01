@@ -259,7 +259,7 @@ def test_get_primary_config_path_requires_workspace(monkeypatch):
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
 
     with pytest.raises(WorkspaceNotConfiguredError):
-        get_primary_config_path(Path("hotkeys.yml"))
+        get_primary_config_path(Path("transcripts.yml"))
 
 
 def test_get_config_path_uses_template_without_workspace(monkeypatch):

@@ -1,4 +1,5 @@
-"""Send a host CLI command to the matching Desktop, before local execution."""
+"""Send a host CLI command to the server of the same workspace, before local
+execution."""
 
 from pathlib import Path
 
@@ -17,7 +18,7 @@ def run_on_desktop(
     message: str,
     cwd: Path,
 ) -> str | None:
-    """Return output, or None only when no matching Desktop accepted work.
+    """Return output, or None only when no matching server accepted work.
 
     Probing is bounded. Execution has no timeout and is never retried locally:
     after POST, even a lost connection may mean the work already ran.

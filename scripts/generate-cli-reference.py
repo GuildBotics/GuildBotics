@@ -23,9 +23,7 @@ from guildbotics.cli import main as root_command
 
 PROG_NAME = "guildbotics"
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
-REGENERATE_COMMAND = (
-    "uv run --no-sync python scripts/generate-cli-reference.py"
-)
+REGENERATE_COMMAND = "uv run --no-sync python scripts/generate-cli-reference.py"
 HEADER = f"""# GuildBotics CLI Reference
 
 <!-- AUTO-GENERATED FILE. DO NOT EDIT BY HAND. -->
@@ -50,9 +48,7 @@ def _escape_cell(text: str) -> str:
     parsed as HTML tags by GitHub.
     """
     collapsed = " ".join(text.split())
-    return (
-        collapsed.replace("|", "\\|").replace("<", "\\<").replace(">", "\\>")
-    )
+    return collapsed.replace("|", "\\|").replace("<", "\\<").replace(">", "\\>")
 
 
 def _anchor(command_path: str) -> str:
@@ -70,6 +66,7 @@ def _iter_contexts(
     """
     if info_name == "member" and parent is not None:
         from guildbotics.cli.member import member
+
         command = member
     ctx = click.Context(
         command, info_name=info_name, parent=parent, **command.context_settings

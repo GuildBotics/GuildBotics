@@ -21,7 +21,7 @@ from guildbotics.cli._options import (
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
-# Traces recorded by the Desktop assistants themselves. They run as ordinary
+# Traces recorded by the screens' AI assistants themselves. They run as ordinary
 # manual work, so the command label is what identifies them. They are hidden by
 # default so the troubleshooting agent neither reads its own conversation back
 # nor reports it as a failure worth investigating.
@@ -61,7 +61,7 @@ _limit_option = click.option(
 @click.option(
     "--include-assistant/--no-include-assistant",
     default=False,
-    help="Include the Desktop AI assistants' own traces.",
+    help="Include the traces of the screens' AI assistants.",
 )
 @_format_option
 def traces_cmd(
@@ -162,7 +162,7 @@ def _store() -> DiagnosticsStore:
 
 
 def _is_assistant_trace(summary: dict[str, Any]) -> bool:
-    """Report whether a trace was recorded by a Desktop AI assistant."""
+    """Report whether a trace was recorded by an AI assistant of the screens."""
     return str(summary.get("command", "")).startswith(ASSISTANT_COMMAND_PREFIXES)
 
 

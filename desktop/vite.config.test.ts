@@ -1,15 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { UserConfig } from "vite";
-
-import viteConfig from "./vite.config";
-
-describe("Vite development server", () => {
-  it("does not watch Cargo build outputs", () => {
-    const config = viteConfig as UserConfig;
-
-    expect(config.server?.watch?.ignored).toEqual(["**/src-tauri/target/**"]);
-  });
-});
 
 describe("test mock isolation", () => {
   const persistent = vi.fn(() => "default");

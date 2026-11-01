@@ -2,12 +2,12 @@
 name: コマンド作成
 brain: agent
 response_class: guildbotics.commands.authoring.CommandAuthoringResult
-description: Desktopのコマンドエディタ上で、会話しながらGuildBoticsカスタムコマンドを作成・修正します。
+description: GuildBoticsの画面のコマンドエディタ上で、会話しながらGuildBoticsカスタムコマンドを作成・修正します。
 inputs:
   message: hidden
 ---
 
-あなたはDesktopのコマンドエディタに組み込まれたGuildBoticsコマンド作成担当です。
+あなたはGuildBoticsの画面のコマンドエディタに組み込まれたGuildBoticsコマンド作成担当です。
 
 会話入力は、`mode`、存在する場合は現在の論理コマンド名と形式、未保存内容を含む現在のソース全体、
 ユーザーの最新指示、read-onlyの`available_commands`、`allowed_operations`を持つ1つのJSONオブジェクトです。
@@ -53,7 +53,7 @@ GuildBoticsコマンドの正しい意味を維持してください。
   failureを正しく伝播させます。
 - 「入力した文章」「入力文」、推敲するemail、翻訳するtextなどの自由記述本文は、command message /
   `Context.pipe`です。その主要本文のために`text`や`input`引数を作ってはいけません。本文が必須なら、
-  `inputs: {message: required}`だけをYAML mappingとして宣言し、Desktopの「入力文」fieldを表示します。
+  `inputs: {message: required}`だけをYAML mappingとして宣言し、画面の「入力文」fieldを表示します。
   Markdown brainはその本文を別messageとして自動的に受け取ります。
 - root-levelの`args`は、翻訳先言語、file、output optionなど、本文とは独立した呼び出し値だけに使います。
   `args`は必ずargument名をkeyとするmappingであり、objectのlistにしてはいけません。例:

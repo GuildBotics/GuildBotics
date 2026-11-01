@@ -12,7 +12,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [2.1. Named arguments](#21-named-arguments)
     - [2.2. Jinja2 examples](#22-jinja2-examples)
     - [2.3. Using the `context` variable](#23-using-the-context-variable)
-    - [2.4. Configuring Desktop inputs](#24-configuring-desktop-inputs)
+    - [2.4. Configuring the manual-run inputs](#24-configuring-the-manual-run-inputs)
   - [3. Using the AI CLI tool](#3-using-the-ai-cli-tool)
     - [3.1. Declaring a command read-only](#31-declaring-a-command-read-only)
   - [4. Using built-in commands](#4-using-built-in-commands)
@@ -93,7 +93,7 @@ Specify the member that runs a command with the `<command>@<person_id>` form (or
 
 Example: `guildbotics run translate@yuki`
 
-When no member is named, the command runs as the team default: the member stored in `default_person_id` of `team/project.yml` (set it from the Members screen of the GuildBotics Desktop app). Without that setting, the first active agent member in person ID order is used, so a command runs even before anything is configured. Only a team with no member that can execute commands asks you to select one.
+When no member is named, the command runs as the team default: the member stored in `default_person_id` of `team/project.yml` (set it from the Members screen). Without that setting, the first active agent member in person ID order is used, so a command runs even before anything is configured. Only a team with no member that can execute commands asks you to select one.
 
 ### 1.4. Where a command runs
 
@@ -134,7 +134,7 @@ args:
     default: English
 ```
 
-An argument is required when it has neither `default` nor `required: false`. A declared default makes the argument optional and is applied by both CLI and Desktop execution. `required: true` and `default` cannot be combined. Placeholders that are not listed under `args` continue to be discovered as required arguments.
+An argument is required when it has neither `default` nor `required: false`. A declared default makes the argument optional and is applied by both CLI and screen execution. `required: true` and `default` cannot be combined. Placeholders that are not listed under `args` continue to be discovered as required arguments.
 
 ### 2.2. Jinja2 examples
 You can leverage Jinja2 for more complex expansion. For example, reference variables with `{{ variable_name }}`.
@@ -192,9 +192,9 @@ Team members:
 
 - With `brain: none`, the LLM is not called; only subcommand outputs are used as the final result.
 
-### 2.4. Configuring Desktop inputs
+### 2.4. Configuring the manual-run inputs
 
-Use `inputs` in Markdown front matter or YAML command metadata to control fields on the Desktop manual-run screen. Python commands put the same mapping in the static module-level `COMMAND_METADATA` mapping.
+Use `inputs` in Markdown front matter or YAML command metadata to control fields on the manual-run screen. Python commands put the same mapping in the static module-level `COMMAND_METADATA` mapping.
 
 ```python
 COMMAND_METADATA = {
@@ -212,9 +212,9 @@ COMMAND_METADATA = {
 | `extra_args` | `hidden`, `optional` | `hidden` |
 | `message` | `hidden`, `optional`, `required` | `optional` |
 
-`defined_args: auto` displays arguments declared under `args`, arguments discovered from `${...}` placeholders, or parameters from a Python `main` signature. The Desktop marks declared or discovered required arguments with `*` and shows declared defaults as field placeholders. `extra_args: optional` enables the free-form additional-arguments field. A required message prevents execution while the input text is empty.
+`defined_args: auto` displays arguments declared under `args`, arguments discovered from `${...}` placeholders, or parameters from a Python `main` signature. The screen marks declared or discovered required arguments with `*` and shows declared defaults as field placeholders. `extra_args: optional` enables the free-form additional-arguments field. A required message prevents execution while the input text is empty.
 
-Use `inputs.message` for the command's primary free-form text, such as a sentence to translate or an email to polish. For required caller text, declare `inputs.message: required`; Desktop then presents its Input text field and supplies the value as the command message / `Context.pipe`. Use `args` only for independent values such as a target language, file, or output option.
+Use `inputs.message` for the command's primary free-form text, such as a sentence to translate or an email to polish. For required caller text, declare `inputs.message: required`; the screen then presents its Input text field and supplies the value as the command message / `Context.pipe`. Use `args` only for independent values such as a target language, file, or output option.
 
 Omit default values. For example, a command that does not use caller text needs only:
 
@@ -223,7 +223,7 @@ inputs:
   message: hidden
 ```
 
-Desktop saves invalid work-in-progress source, but disables execution until the source passes command validation. This lets you keep and continue editing an incomplete draft without making it runnable.
+The Edit Command screen saves invalid work-in-progress source, but disables execution until the source passes command validation. This lets you keep and continue editing an incomplete draft without making it runnable.
 
 ## 3. Using the AI CLI tool
 
@@ -255,7 +255,7 @@ GuildBotics is an alpha tool for collaborating with AI agents and a task board; 
 The AI CLI tool works in the command's working directory, which is decided by how the command is run:
 
 - `guildbotics run`: the directory given by `--cwd`; without it, the shell's current directory
-- A manual run from the Desktop app: the directory specified on the screen; without one, the exchange folder (`~/Documents/GuildBotics`)
+- A manual run from the screens: the directory specified on the screen; without one, the exchange folder (`~/Documents/GuildBotics`)
 - A command the scheduler runs (a routine or scheduled command): the exchange folder ([8. Declaring a routine (patrol) command](#8-declaring-a-routine-patrol-command))
 - A subcommand: the `cwd:` key of its `commands:` entry ([5. Using subcommands](#5-using-subcommands)), or `cwd=` of `context.invoke` ([7.2. Invoking other commands](#72-invoking-other-commands)). A relative path is resolved against the calling command's working directory; without either, the subcommand works in the calling command's working directory.
 
@@ -280,19 +280,19 @@ Only the declaration of the command you run counts; a subcommand's own declarati
 ## 4. Using built-in commands
 You can use [built-in commands](../guildbotics/templates/commands/) shipped with GuildBotics.
 
-`ask` delegates the request on stdin to a member in the directory specified by `--cwd`. For example, to ask alice to review the current working tree, write the request into a UTF-8 file in a directory of your own made with `mktemp -d` (on Windows, a new randomly named directory under your user's temporary directory), then run this on macOS/Linux:
+`ask` delegates the request on stdin to a member in the directory specified by `--cwd`. For example, to ask alice to review the current working tree, write the request into a UTF-8 file in a directory of your own made with `mktemp -d` then run:
 
 ```shell
 "$HOME/.guildbotics/bin/guildbotics" run ask --person alice --cwd "/path/to/repo" < "/path/to/temporary-request.txt"
 ```
 
-On Windows, use `guildbotics` and pipe the file's UTF-8 text to stdin. Delete that directory after the command exits, including on failure. In a skill session, the active member handles this invocation for you.
+Delete that directory after the command exits, including on failure. In a skill session, the active member handles this invocation for you.
 
 `ask` uses `brain: agent` and requires a message. It reads uncommitted changes in the same working tree and returns text on stdout. A review request permits reading only; a fix request permits the requested edits and verification. Unless a read/write grant contains the working tree, the member works on a copy, and only the changes to regular files are written back to the working tree when the task ends well. The delegate does not commit or push; the requester reviews the written-back changes and publishes them. Select the GuildBotics workspace first (`--cwd` selects the working tree, not the workspace configuration), and prepare the receiving member's isolated agent environment and AI CLI login on this machine. Start it from the host (the command itself runs in the isolated environment, with `--cwd` as its working directory), allow several minutes with a longer caller timeout or background execution, and wait for the result. Environment/login failures return the existing runtime refusal reason.
 
-Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs.
+Host `guildbotics run` commands execute on the GuildBotics server when it runs with the same workspace; when no server runs, or it has a different workspace selected, they run locally. Once the server receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. A command run on the server returns output only when it finishes and does not forward progress logs.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 Invocation examples:
 
@@ -728,7 +728,7 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
-If a required `main()` argument is missing, GuildBotics reports the argument name before entering the function. This also applies to your own Python commands. For example, if `repository/security_alerts` reports that `repo` is missing, pass `repo=GuildBotics/GuildBotics`. Desktop shows the reason, and the CLI displays `Error: <reason>`. A `TypeError` raised inside your function remains an implementation error.
+If a required `main()` argument is missing, GuildBotics reports the argument name before entering the function. This also applies to your own Python commands. For example, if `repository/security_alerts` reports that `repo` is missing, pass `repo=GuildBotics/GuildBotics`. The screen shows the reason, and the CLI displays `Error: <reason>`. A `TypeError` raised inside your function remains an implementation error.
 
 ### 7.2. Invoking other commands
 
@@ -779,7 +779,7 @@ async def main(context, channel_id):
         raise CommandError(str(exc)) from exc
 ```
 
-Every service a command reaches -- the chat, the code host, the tickets -- reports an anticipated failure as `ServiceError` (`ServiceNotFound` when what it names is not there, `ServiceUnsupported` when the service cannot do it at all). Converting it to `CommandError` makes Desktop show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
+Every service a command reaches -- the chat, the code host, the tickets -- reports an anticipated failure as `ServiceError` (`ServiceNotFound` when what it names is not there, `ServiceUnsupported` when the service cannot do it at all). Converting it to `CommandError` makes the screen show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
 
 API-key inference failures show the exception type and the reported status when available, without the provider's raw error text. A reported status may be an SDK default even when no HTTP response was received; for example, Agno defaults to 502. Window failures retain their own reasons, such as a timeout or an oversized result. The bundled `examples/reports/tools/fetch_ai_news` command reports request failures with guidance to allow `news.google.com` in `intelligences/agent_environment.yml`.
 
@@ -814,7 +814,7 @@ async def main(context) -> None:
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.
 
-A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started from the Desktop app or with `guildbotics start`: a file it writes to a relative path lands there.
+A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen or by `guildbotics start`: a file it writes to a relative path lands there.
 
 
 ## 9. Specifying model effort
@@ -877,7 +877,7 @@ Slots live at `models/<provider>/<slot>.yml`, but only `default.yml` is packaged
 
 #### `effort_fields:` (optional)
 
-The same file may declare which settings the provider accepts. The desktop settings screen builds typed controls from this declaration alone, and rejects unknown keys or wrong types on save. A provider that declares nothing falls back to editing raw JSON, with no validation.
+The same file may declare which settings the provider accepts. The settings screen builds typed controls from this declaration alone, and rejects unknown keys or wrong types on save. A provider that declares nothing falls back to editing raw JSON, with no validation.
 
 ```yaml
 effort_fields:

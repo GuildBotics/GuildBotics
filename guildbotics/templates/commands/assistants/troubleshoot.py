@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 COMMAND_METADATA = {
-    "description": "Answer a troubleshooting question from the Desktop diagnostics screen.",
+    "description": "Answer a troubleshooting question from the diagnostics screen.",
     "read_only": True,
     "inspects": ["diagnostics", "config"],
     "inputs": {"message": "required"},

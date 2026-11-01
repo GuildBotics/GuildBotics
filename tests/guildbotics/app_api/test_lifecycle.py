@@ -380,6 +380,37 @@ def test_status_poll_does_not_release_lock_during_start(context_factory: Any) ->
     assert not start_thread.is_alive()
 
 
+def test_a_status_read_while_the_scheduler_starts_finds_it_running(
+    context_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server starts its services as it starts listening, while a screen
+    may already be asking for their status."""
+    service, _bus = _make_service(context_factory)
+    seen: list[bool] = []
+    real_thread = threading.Thread
+
+    class ReadFirst(real_thread):
+        def start(self) -> None:
+            reader = real_thread(
+                target=lambda: seen.append(service.get_status().scheduler.running)
+            )
+            reader.start()
+            # A reader not kept out by the start reads the state before the
+            # scheduler thread runs.
+            reader.join(timeout=0.2)
+            super().start()
+            reader.join(timeout=2.0)
+
+    monkeypatch.setattr(lifecycle.threading, "Thread", ReadFirst)
+    try:
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
+        assert _wait_until(lambda: len(seen) == 1)
+        assert seen == [True]
+        assert service.get_status().scheduler.running is True
+    finally:
+        _stop_quietly(service)
+
+
 def test_event_runner_natural_stop_releases_lock_without_status_poll(
     context_factory: Any,
 ) -> None:

@@ -32,7 +32,7 @@ def workspace() -> None:
 )
 @_format_option
 def use_workspace(workspace_dir: Path, output_format: str) -> None:
-    """Persist the active workspace for desktop and external AI CLI tools."""
+    """Persist the active workspace for the server and external AI CLI tools."""
     try:
         state = write_active_workspace(validate_workspace_location(workspace_dir))
     except NotADirectoryError as exc:

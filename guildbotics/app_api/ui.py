@@ -1,7 +1,6 @@
-"""The screens the server hands to a browser and to the Desktop windows.
+"""The screens the server hands to a browser.
 
-They are the Vite build of ``desktop/``, which the packaged programs carry at
-the same place relative to the package (``desktop/sidecar/guildbotics.spec``).
+They are the Vite build of ``desktop/`` in the checkout the server runs from.
 The pages hold no data: what they show, they read from the API with the
 session the entry link gave the browser.
 """
@@ -38,12 +37,6 @@ def serve(app: FastAPI, directory: Path = UI_DIRECTORY) -> None:
         app.add_api_route(
             path, lambda: page("index.html"), methods=["GET"], include_in_schema=False
         )
-    app.add_api_route(
-        "/quick.html",
-        lambda: page("quick.html"),
-        methods=["GET"],
-        include_in_schema=False,
-    )
     app.mount(
         "/assets",
         StaticFiles(directory=directory / "assets", check_dir=False),

@@ -11,7 +11,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 どちらの働き方でも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
 
-設定・実行・監視は GuildBotics デスクトップアプリ（GUI）で行います。設定はワークスペース内のプレーンテキストファイルに保存されるため、そのまま GUI の無いサーバーへ移して `guildbotics` CLI だけで運用することもできます（→ [サーバーで運用する](#サーバーで運用する)）。
+設定・実行・監視は、手元の GuildBotics のサーバーがブラウザへ配る画面で行います。設定はワークスペース内のプレーンテキストファイルに保存されるため、そのまま GUI の無いサーバーへ移して `guildbotics` CLI だけで運用することもできます（→ [サーバーで運用する](#サーバーで運用する)）。
 
 ---
 
@@ -45,7 +45,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - **スケジュール実行**: メンバーごとの巡回実行コマンドと、cron ベースの定期実行コマンド
 - **カスタムコマンド**: Markdown プロンプト / Python / Shell / YAML で独自の作業を定義し、メンバーや役割ごとに再利用
 - **LLM / AI CLI ツールの切り替え**: LLM プロバイダーの切り替え、または AI CLI ツール（Codex、Claude Code、Grok Build、Antigravity など、ローカル CLI から起動する AI 実行ツール）への委譲
-- **Desktop AI アシスタント**: コマンドエディタでの質問応答・変更提案の適用と、診断画面での実行失敗の原因調査
+- **画面の AI アシスタント**: コマンドエディタでの質問応答・変更提案の適用と、診断画面での実行失敗の原因調査
 - **多言語対応**: 英語 / 日本語
 
 ## はじめる
@@ -53,8 +53,9 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 ### 必要なもの
 
 - **OS**: Linux（Ubuntu 24.04 で動作確認）、macOS（Sequoia で動作確認）、または Windows 11
-  - デスクトップアプリは macOS Apple Silicon (arm64)、Linux x86_64、Windows x86_64 を対象とします
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: GuildBotics のビルドと CLI のインストールに使います
+  - Hub でサーバーを OS のサービスとして動かすスクリプトは macOS 向けです（→ [インストール](#インストール)）
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: チェックアウトに GuildBotics の Python 環境を入れます
+- **[Node.js](https://nodejs.org/) 24 以上**: サーバーが配る画面をビルドします
 - **LLM API キー**（いずれか 1 つを事前に取得）:
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
@@ -74,20 +75,42 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 ### インストール
 
-現在、デスクトップアプリの一般向けインストーラーは配布していません。リポジトリを取得し、ローカルでビルドします。ビルドには uv に加えて **Node.js 24 以上**と **Rust (rustup) stable 1.88 以上**（Linux では WebKitGTK 4.1 開発パッケージ）が必要です。macOS / Linux の手順は [desktop/README.md](desktop/README.md#1-前提ツール)、Windows 実機のセットアップ・NSIS build・smoke checklist は [Windows で GuildBotics Desktop をビルドする](docs/windows_desktop_build.ja.md)を参照してください。
+GuildBotics にインストーラーはありません。サーバーは Hub にあるこのリポジトリのチェックアウトから動かします。リポジトリを取得し、依存を入れて、画面をビルドします。
 
-デスクトップアプリの初回起動時に、以下が配置されます。
+```bash
+git clone https://github.com/GuildBotics/GuildBotics.git
+cd GuildBotics
+uv sync --locked --extra test --extra dev
+(cd desktop && npm ci && npx vite build)
+```
 
-- macOS / Linux の `~/.guildbotics/bin/guildbotics`、または Windows の `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`: AI CLI ツール / スキルが使う管理用 GuildBotics CLI
-- macOS / Linux の `~/.local/bin/guildbotics`: 上記 CLI へ転送する小さな実行ファイル（shim）。Windows では代わりに NSIS installer が managed bin を user PATH へ追加し、uninstall 時は自分が追加した entry だけを削除します
-- 検出済みの Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません
-- `~/.guildbotics/data/msb`: エージェント隔離環境の runtime。最初に必要になったときに、GuildBotics に同梱された複製から配置します（ダウンロードはしません）。Windows ではこの固定パスに対する firewall 規則を、昇格の確認 1 回で作成します
+macOS では、続けてサーバーをユーザーのサービス（LaunchAgent）として登録します。
 
-デスクトップアプリを使わない環境（ヘッドレスサーバーなど）では、`uv tool install guildbotics` で CLI を単体インストールできます（→ [サーバーで運用する](#サーバーで運用する)）。
+```bash
+scripts/hub-server.sh install
+```
+
+実行する前に、次のことを済ませてください。
+
+- 以前の GuildBotics デスクトップアプリが入っていれば、終了してアンインストールします。デスクトップアプリが残した `~/.guildbotics/programs/` は手で削除してかまいません
+- ほかの GuildBotics サーバーを止めます（`guildbotics stop`）。サーバーが動いている間、`install` は登録を断ります
+- 既にワークスペースがあれば、`.venv/bin/guildbotics workspace use <パス>` で選びます。サーバーは起動時に、選ばれたワークスペースを開きます
+- このマシンのキーチェーンに GuildBotics のシークレットが既にあれば（デスクトップアプリで登録したものなど）、ターミナルで一度 `.venv/bin/guildbotics start` を実行し、キーチェーンの確認に「常に許可」で答えてから Ctrl-C で止めます。サービスにはこの確認に答えるウィンドウがありません
+
+`install` は以下を配置して、サーバーを起動します。
+
+- `~/.guildbotics/bin/guildbotics`: 管理用 GuildBotics CLI。チェックアウトの `.venv/bin/guildbotics` を呼ぶ小さなスクリプトです。AI CLI ツール・スキル・人のメンバーの git の credential helper がこのパスを使います
+- `~/.local/bin/guildbotics`: 上記 CLI へ転送します。`~/.local/bin` が PATH にあれば `guildbotics` で呼べます（GuildBotics が書いたものでない `guildbotics` がそこにあれば、そのままにします）
+- このマシンにある Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが編集したスキルは上書きしません
+- LaunchAgent `local.guildbotics`。チェックアウトの `guildbotics start` を、すぐに、ログインのたびに、予期せず止まったときにも起動します（→ [サーバーを OS のサービスで動かす](#サーバーを-os-のサービスで動かす)）
+
+Linux では、ターミナルで `.venv/bin/guildbotics start` を実行してサーバーを動かし、`.venv/bin/python scripts/install_cli_assets.py` で CLI とスキルを配置します。
+
+エージェント隔離環境の runtime は、最初に必要になったときに `~/.guildbotics/data/msb` へ、GuildBotics に同梱された複製から配置します（ダウンロードはしません）。Windows ではこの固定パスに対する firewall 規則を、昇格の確認 1 回で作成します。
 
 ### 初期セットアップ
 
-デスクトップアプリを起動すると **プロジェクト** 設定が開くので、以下を設定します。
+Hub で `guildbotics open` を実行して画面を開きます。ブラウザに **プロジェクト** 設定が開くので、以下を設定します。
 
 - エージェントの既定言語（英語/日本語）。コマンド、ロール定義、LLM への指示で使う
 - ワークスペースフォルダの選択。作業するリポジトリの外に置いてください。たとえば作業リポジトリを `~/repos/myproject`、ワークスペースを `~/teams/myproject` に分けます。受け渡しフォルダ `~/Documents/GuildBotics` の中にも置けません
@@ -110,7 +133,7 @@ GuildBotics では、プロジェクトの設定と状態を置くフォルダ�
 
 API キーやアカウントトークンの値は、利用可能な場合は OS キーチェーンに保存され、上記ファイルにはキー名だけが記録されます（→ [API キーとトークンの保存](#api-キーとトークンの保存)）。
 
-プロジェクト設定に続けて、デスクトップアプリで以下を設定します。
+プロジェクト設定に続けて、画面で以下を設定します。
 
 - **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択、LLM API キーの設定
 - **エージェント実行環境**: **ビルド** でこのマシンに環境を作り、表示されるコマンドで選んだツールへログインします。どちらもマシンごとの作業です
@@ -120,7 +143,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 ### クイックスタート
 
-セットアップが完了したことを、カスタムコマンドの実行で確認します。デスクトップアプリの **コマンド編集** 画面を開いてください。
+セットアップが完了したことを、カスタムコマンドの実行で確認します。**コマンド編集** 画面を開いてください。
 
 初期セットアップの際、ワークスペースの `.guildbotics/config/commands/` にサンプルコマンドが配置されています。ここではそのうちの `translate` を使います。
 
@@ -129,11 +152,6 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 2. 実行パネルの **入力文** に `Hello` と入力し、**保存して実行** を押します。
 
 **出力** に翻訳結果（「こんにちは」など）が表示されれば成功です。設定したデフォルト LLM が呼び出され、カスタムコマンドが動作しています。
-
-日常的に使うコマンドには、ホットキーを割り当てられます。
-
-- **設定 → ショートカット**: **コマンド実行ウィンドウ** を開くホットキー。翻訳したい文字列をコピーしてから押せば、そのまま入力文として実行できます
-- **コマンド編集画面のコマンドバーのホットキーチップ**: 押すとそのコマンドを直接実行します。入力が足りない場合はコマンド実行ウィンドウが開きます
 
 ### 次にやること
 
@@ -144,16 +162,16 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 ## メンバーと一緒に作業する
 
-デスクトップアプリの初回起動時に、検出された Claude Code / Codex などのユーザースキル用ディレクトリへ **guildbotics スキル**が配置されます（→ [インストール](#インストール)）。このスキルを使って、いま開いているリポジトリでメンバーと一緒に作業します。
+`scripts/hub-server.sh install`（と `update`）が、このマシンにある Claude Code / Codex などのユーザースキル用ディレクトリへ **guildbotics スキル**を配置します（→ [インストール](#インストール)）。このスキルを使って、いま開いているリポジトリでメンバーと一緒に作業します。
 
-スキルは各ツールが読み込むユーザースキル用ディレクトリ（Claude Code なら `~/.claude/skills`、Codex なら `~/.agents/skills` など）に置かれるため、CLI から起動しても、そのツールのアプリから起動しても同じスキルが使われます。スキルが配置されているかは、デスクトップアプリの **設定 → LLM・AI CLIツール** で各ツールのスキル状態から確認できます。
+スキルは各ツールが読み込むユーザースキル用ディレクトリ（Claude Code なら `~/.claude/skills`、Codex なら `~/.agents/skills` など）に置かれるため、CLI から起動しても、そのツールのアプリから起動しても同じスキルが使われます。どのツールのどこへ配置したか、編集されていたので残した写しはどれかは、導入時に表示されます。
 
 前提は 4 つです。
 
 - AI CLI ツールが手元のマシンにインストールされ、そこでログイン済みであること。host へのインストールが必要なのはここだけで、これはメンバーの turn（エージェント隔離環境の中で動く）ではなく、あなた自身が対話的に使うためです
-- デスクトップアプリを一度起動していること（guildbotics スキルと管理用 CLI が配置されます）
+- guildbotics スキルと管理用 CLI が配置されていること（→ [インストール](#インストール)）
 - メンバーが設定済みであること
-- Desktop または `guildbotics start` が動いていること。`--help` を含む member コマンドはすべて同じ版のバックエンドへ任せます
+- GuildBotics のサーバーが、OS のサービスまたは `guildbotics start` で動いていること。`--help` を含む member コマンドはすべてそのサーバーへ任せます。CLI とサーバーは同じチェックアウトのものを使います
 
 作業したいリポジトリで AI CLI ツールを起動し、**スキル名とメンバーを挙げて**作業を依頼します。この一言がスキルを呼び出す合図になります。
 
@@ -161,7 +179,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 guildbotics スキルを使い、メンバーの alice としてこの変更をコミットして push してください
 ```
 
-member コマンドは、バックエンドで選択中のワークスペースを使います。`member --workspace <パス>` は手元のワークスペースの ID を選ぶ指定で、バックエンドは切り替えません。作業を終えてから Desktop で切り替えるか、`guildbotics stop`、`guildbotics workspace use <パス>`、`guildbotics start` の順に実行してください。本文のファイル読み取り、ダウンロードの保存、手元のリポジトリでの commit は CLI が扱い、サービスの資格情報はバックエンドに残ります。
+member コマンドは、サーバーで選択中のワークスペースを使います。`member --workspace <パス>` は手元のワークスペースの ID を選ぶ指定で、サーバーは切り替えません。作業を終えてから **設定 → プロジェクト** で切り替えるか、`guildbotics stop` でサーバーを止め、`guildbotics workspace use <パス>` を実行してから、サーバーを起動し直してください（サービスなら `scripts/hub-server.sh restart`）。本文のファイル読み取り、ダウンロードの保存、手元のリポジトリでの commit は CLI が扱い、サービスの資格情報はサーバーに残ります。
 
 AI CLI ツールはメンバーのプロフィール（役割、判断基準、話し方）と記憶を読み込み、以降はそのメンバーとして応答します。コミット、push、PR 作成、Slack 投稿などの外部操作はメンバー本人の名義で実行されます。
 
@@ -177,9 +195,9 @@ bob に、未コミットの編集も含めて現在の変更をレビューし�
 
 対話中のメンバーが組み込みコマンド `ask` を実行し、bob の結果を伝えます。bob は同じ作業ツリーを読み、修正を依頼した場合はその編集も同じ場所へ反映されます。あらかじめ GuildBotics でワークスペースを選び、**設定 → エージェント実行環境**で、このマシン上の bob のエージェント隔離環境と AI CLI のログインを準備してください。対話で使う host 側の CLI ログインとは別です。レビューには数分かかることがあり、隔離環境やログインが使えない場合は、その理由が対話へ返ります。
 
-依頼する前に、同じワークスペースを選んだ GuildBotics Desktop を開いてください。host の `guildbotics run` は利用可能な Desktop で実行されます。Desktop が閉じている場合や別のワークスペースを選んでいる場合は手元で実行します。Desktop へ送った後のエラーや通信切断では手元で再実行せず終了し、メンバーが実行中の場合はその拒否理由を返します。 Desktop 経由では完了時にまとめて結果が返り、途中のログと呼び出し元シェルの環境変数は転送されません。
+host の `guildbotics run` は、同じワークスペースを選んだサーバーが動いていればそこで実行されます。サーバーが動いていない場合や別のワークスペースを選んでいる場合は手元で実行します。サーバーへ送った後のエラーや通信切断では手元で再実行せず終了し、メンバーが実行中の場合はその拒否理由を返します。サーバーで実行したときは完了時にまとめて結果が返り、途中のログと呼び出し元シェルの環境変数は転送されません。
 
-macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください。開発中（`tauri dev`）は、起動に使ったターミナルや Visual Studio Code が対象です。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と Desktop に同じ拒否理由を表示します。
+macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
 
 ## GitHub チケットを任せる
 
@@ -226,7 +244,7 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
 5. マシンアカウントでログインし、**Settings → Developer settings → Personal access tokens → Fine-grained tokens** を開き、**Generate new token** を押してください
 6. 以下を設定します
    - **Token name**: 任意（例: `guildbotics-alice`）
-   - **Expiration**: 任意（期限が切れたら再発行し、デスクトップアプリに再登録してください）
+   - **Expiration**: 任意（期限が切れたら再発行し、画面でもう一度登録してください）
    - **Resource owner**: マシンアカウント自身ではなく、対象の **organization** を選択します
    - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します（これだけでは公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。上記の「前提」のとおり、設定した owner の外へは GuildBotics が書き込ませません）
    - **Repository permissions**:
@@ -243,13 +261,13 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
      - **Projects**: Read and write（Projects v2 のボード読み取りと、`Agent` フィールドの作成・更新）
 
 7. **Generate token** を押し、表示されたトークンをコピーしてください（この画面を離れると再表示できません）。発行後にトークン名の横へ **Pending** と表示された場合は承認待ちの状態で、organization の owner が手順 2 の **Pending requests** で承認するまでそのトークンは機能しません。承認を済ませてから次へ進んでください
-8. デスクトップアプリの **設定 → メンバー → GitHub** タブで「マシンアカウント（マシンユーザー）」を選び、**アクセストークン** に貼り付けて保存してください
+8. 画面の **設定 → メンバー → GitHub** タブで「マシンアカウント（マシンユーザー）」を選び、**アクセストークン** に貼り付けて保存してください
 
-既存の fine-grained PAT は、手順 5 の **Fine-grained tokens** で対象トークンを開き、権限を編集して **Repository permissions → Dependabot alerts → Read-only** を追加してください。同じトークンの権限だけを更新する場合、デスクトップアプリへの再登録は不要です。organization が承認を必須にしている場合は、編集後の権限も owner に承認してもらってから再試行してください。対象リポジトリが **Repository access** に含まれていることも確認します。[GitHub の必要権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts)と[承認リクエストの管理](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization)も参照してください。
+既存の fine-grained PAT は、手順 5 の **Fine-grained tokens** で対象トークンを開き、権限を編集して **Repository permissions → Dependabot alerts → Read-only** を追加してください。同じトークンの権限だけを更新する場合、画面での再登録は不要です。organization が承認を必須にしている場合は、編集後の権限も owner に承認してもらってから再試行してください。対象リポジトリが **Repository access** に含まれていることも確認します。[GitHub の必要権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts)と[承認リクエストの管理](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization)も参照してください。
 
 **GitHub App を利用する場合**:
 
-デスクトップアプリのメンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで App ID とインストール ID が自動で取り込まれ、メンバーを保存すると App の秘密鍵がキーチェーンに保存されるため、以下の手動手順は不要です。登録を始めてから 30 分以内にメンバーを保存してください。過ぎると登録の有効期限が切れ、App の登録をやり直すことになります。
+メンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで App ID とインストール ID が自動で取り込まれ、メンバーを保存すると App の秘密鍵がキーチェーンに保存されるため、以下の手動手順は不要です。登録を始めてから 30 分以内にメンバーを保存してください。過ぎると登録の有効期限が切れ、App の登録をやり直すことになります。
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
@@ -267,7 +285,7 @@ GitHub App 作成後に以下の作業を行ってください。
 
 ### 認証情報と実行環境を準備する
 
-- 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、デスクトップアプリのメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
+- 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、画面のメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
 - チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/local/clones/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
 - このディレクトリの git はすべて隔離環境の中で動き、host では動きません。メンバーのトークンを使うのは host の GuildBotics だけです（→ [member git とメンバーの clone](docs/native_agent_runtime.ja.md#member-git-とメンバーの-clone)）。そのため、プロジェクトの git hooks は環境の中で image にあるツールを使って動き、Git LFS は扱いません
 - AI CLI ツールを対話的にも使う場合は、`gh`、直接のトークン / API 書き込み、`git push` を拒否または承認必須にすることを推奨します。これは利用者自身の GitHub アカウントへフォールバックすることを避けるための防止策であり、トークン流出を完全に技術的に封じ込めるサンドボックスではありません
@@ -279,7 +297,7 @@ GitHub App 作成後に以下の作業を行ってください。
 
 ### 設定を検証する
 
-デスクトップアプリの **設定 → 検証** で **設定を検証** を押すと、各アクティブメンバーの LLM・AI CLI ツール・GitHub・Slack・Git 設定が実際に利用可能かをチェックできます（GitHub / Slack へは読み取り専用でアクセスします）。
+**設定 → 検証** で **設定を検証** を押すと、各アクティブメンバーの LLM・AI CLI ツール・GitHub・Slack・Git 設定が実際に利用可能かをチェックできます（GitHub / Slack へは読み取り専用でアクセスします）。
 
 ### タスクボードの取り決め
 
@@ -290,11 +308,11 @@ GitHub App 作成後に以下の作業を行ってください。
 - 既定では `Todo` が着手可能、`In Progress` が作業中、`Done` が完了です。標準的なボードなら設定は不要です
 - 着手可能と完了の**間**にあるステータス（例: `In Review`）は、自動的に作業中として扱われます
 - 着手可能より**前**のステータス（例: `Backlog`）と、完了**以降**のステータス（例: `Icebox`）は無視されます。途中レーンや保留レーンは、ボード列の並び順だけで追加できます
-- 独自のステータス名を使っている場合は、デスクトップアプリの **設定 → 連携** の **チケット** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_service.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
+- 独自のステータス名を使っている場合は、**設定 → 連携** の **チケット** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_service.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
 
 ### サービスを起動して作業を依頼する
 
-デスクトップアプリの **サービス実行** 画面を開き、**実行** を押します。有効メンバーごとにワーカーが起動し、選択した経路の作業を順に実行します。
+**サービス実行** 画面を開き、**実行** を押します。有効メンバーごとにワーカーが起動し、選択した経路の作業を順に実行します。サービスは GuildBotics のサーバーの中で動きます。`guildbotics start`（または OS のサービス）で起動したサーバーは、サービスを自分で開始します。
 
 画面には 3 つの実行経路があり、それぞれ **サービス実行に含める** で個別に切り替えられます（少なくとも 1 つは含めます）。含める経路・巡回間隔・連続失敗で停止する回数はこのマシンのサーバーに保存され、どの画面から開始しても、`guildbotics start` でも、保存した設定で動きます。稼働中に変えた場合は、次の開始から反映されます。
 
@@ -319,7 +337,7 @@ GitHub App 作成後に以下の作業を行ってください。
 - タスクが完了すると、メンバーがコメント / PR URL / レビュー返信 / リアクションを残します
 - チケットから作成された PR へのレビューは PR 上で書き込んでください。Pull Request の巡回が PR 上の会話を追います（→ [Pull Request の巡回](#pull-request-の巡回)）。チケットのコメントとメンションに回答したあとは、開いた PR があれば待機し、マージ済みなら「完了」に移します。メンバー自身の失敗・レート制限の状態が最後なら、チケットは保留します
 
-止めるときは **停止** を押します。新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。待たずに終了する場合は **強制停止** を押すと、実行中の作業をキャンセルします。
+止めるときは **停止** を押します。新しい作業の受付を止め、実行中の作業の完了を待ってから止まります。待たずに止める場合は **強制停止** を押すと、実行中の作業をキャンセルします。サーバーは動き続けて画面を配ります。サーバーが終わるのは `guildbotics stop` のときだけです（→ [サーバーで運用する](#サーバーで運用する)）。
 
 コマンドの実行中は、操作がないことによるスリープ（アイドルスリープ）を常に抑止します。サービスの待機中もスリープさせたくない場合は、**サービス実行** 画面の **このマシンをスリープさせない** をオンにします（既定はオフ）。稼働中に切り替えても 1 秒ほどで反映され、`guildbotics start` で起動したサービスにも効きます。設定はこのマシンだけのもので、ワークスペースの `.guildbotics/local/service.yml` に保存されます。
 
@@ -335,7 +353,7 @@ CLI からサービスを起動・停止する方法は [サーバーで運用�
 どちらの役割でも、メンバーは他の人の発言をすべて読み、対応するかどうかは読んだうえで判断し、発言ごとに必ず応答を残します。対応したら何をしたかを返信し、採らない指摘には理由を返信し、対応するものが無ければ（お礼や LGTM など）リアクションします。発言とは、最後の発言が他の人の未解決 review thread、本文のある review（承認も含む）、conversation comment です。メンバーが後から書いたコメント・review・thread 返信か、その発言へのリアクションがあれば応答済みです。本文の無い review とワークフローの状態通知は拾いません。
 
 - **メンバーが作成した PR**: まだ応答していない発言を拾います。メンバーは妥当な指摘についてコードを修正します
-- **CI 待ち**: メンバーは実行の中で CI を待ちません。チケット・チャットのスレッド・定期または手動のコマンドのどれから始まった実行でも、PR の完了を妨げているのが終わっていないチェックだけなら、PR に告知を残して実行を終え（チケットとチャットのスレッドの実行は Desktop で「CI 待ち」と表示）、チェックが終わるか新しいコミットが積まれると、巡回が同じ作業を再開します。再開した実行は失敗を直すか、PR と作業の入口（チケット、スレッド、コマンドの報告先）に結果を報告します。マージ・クローズされた PR は拾い直しません
+- **CI 待ち**: メンバーは実行の中で CI を待ちません。チケット・チャットのスレッド・定期または手動のコマンドのどれから始まった実行でも、PR の完了を妨げているのが終わっていないチェックだけなら、PR に告知を残して実行を終え（チケットとチャットのスレッドの実行は画面で「CI 待ち」と表示）、チェックが終わるか新しいコミットが積まれると、巡回が同じ作業を再開します。再開した実行は失敗を直すか、PR と作業の入口（チケット、スレッド、コマンドの報告先）に結果を報告します。マージ・クローズされた PR は拾い直しません
 - **メンバーがレビューする PR**: レビューを依頼されたとき（personal token のメンバーのみ。GitHub Apps にはレビュー依頼ができません）、前回のレビュー後に新しいコミットが積まれたとき、まだ応答していない発言があるとき（thread は参加中のものだけ）に起動します。発言だけで起動して結論が変わらないときは、review を submit し直しません（本文付きの review は作成者の巡回を起こすため）。依頼によらない自動再レビューは、レビューした head が 3 つに達したあと、そのメンバーがまだレビューしていない head が積まれた時点で止まります。このとき、host の ticket selector が候補を選ぶ時点でその PR を Draft にし、Activity に記録して、PR とレビュワーの `notify_work_stops: true` のチャットチャンネルに告知します（下の Draft の扱いのとおり、作成者側の巡回も止まります）。レビュー済み head のまま発言・thread 返信に応える run は上限後も起動します（force push で戻った head や、回数を数え直す前にレビューした head も含みます）。明示的なレビュー依頼は上限の対象外です。そのまま続けてよければ **Ready for review** に戻してください。回数は Ready for review に戻した時点より後のレビューから、どのレビュワーも数え直します。進め方を見直すなら、Slack か対話セッションで指示し、区切りがついたら Ready for review に戻してください
 - 結論は GitHub の review（approve か request changes）として submit します。これがレビュー依頼を消化し、メンバーをその PR のレビュワーにします。最初のレビューは Slack か対話セッションで依頼してください（→ [Slack で作業を依頼する](#slack-で作業を依頼する)）。以降は巡回がその PR を追います
 - **Draft の PR はどちらの役割でも巡回しません。** Draft にするのは人と、自動再レビューの上限に達したときの host の ticket selector だけで、Ready for review に戻すのは人だけです（メンバーの作業からは変えられません）。ある PR をしばらく自分の手で進めたいとき（例: 対話セッションで方針を練り直す間、他のメンバーの再レビューを止めたいとき）は、その PR を Draft に変換してください。サービスはそれ以外の作業を続けます。終わったら **Ready for review** に戻すと、次の巡回から再び拾われ、新しいコミットには再レビューが走ります（自動再レビューの回数も、失敗で止まっていたメンバーの保留も、そこから数え直します）
@@ -348,9 +366,9 @@ Slack でどう振る舞うか（本文で返信する / リアクションだ�
 
 必要な設定は 2 つです。
 
-まずデスクトップアプリの **設定 → 連携** の **チャット** で Slack を選びます。メンバーに Slack タブが表示されます。
+まず **設定 → 連携** の **チャット** で Slack を選びます。メンバーに Slack タブが表示されます。
 
-1. **Slack App の作成**: デスクトップアプリの **設定 → メンバー → Slack** タブで **新規に App を登録** を選び、**Slack で App を作成** を押します。必要な scope・Socket Mode・イベント購読を設定済みの状態でブラウザが開くので、ワークスペースを選んで作成したあと、**OAuth & Permissions** で **Reinstall to Workspace** を実行してから 2 つのトークン（`xoxb-...` / `xapp-...`）をコピーします（作成直後の Bot トークンには scope が付与されないため、再インストールが必要です）
+1. **Slack App の作成**: **設定 → メンバー → Slack** タブで **新規に App を登録** を選び、**Slack で App を作成** を押します。必要な scope・Socket Mode・イベント購読を設定済みの状態でブラウザが開くので、ワークスペースを選んで作成したあと、**OAuth & Permissions** で **Reinstall to Workspace** を実行してから 2 つのトークン（`xoxb-...` / `xapp-...`）をコピーします（作成直後の Bot トークンには scope が付与されないため、再インストールが必要です）
 2. **メンバーへの登録**: 同じ Slack タブで、以下を設定します
    - **Slack Bot トークン**（`xoxb-...`）と **Slack App トークン**（`xapp-...`）を貼り付け、**App を検証** で bot 名・ワークスペース・権限・チャンネルへの参加状況を確認します
    - **チャンネル**: 監視するチャンネル名または ID を追加します
@@ -368,14 +386,14 @@ Slack App を手動で作成する場合の手順（必要な scope の一覧）
 
 ## 決まった作業を自動で実行する
 
-デスクトップアプリの **設定 → メンバー → 巡回** タブで、メンバーごとに 2 種類の自動実行を設定します。どちらも **サービス実行** 画面で開始したサービスが実行します。
+**設定 → メンバー → 巡回** タブで、メンバーごとに 2 種類の自動実行を設定します。どちらも **サービス実行** 画面で開始したサービスが実行します。
 
 - **巡回実行コマンド**: サービスの稼働中、ラウンドロビンで繰り返し実行します（例: タスクボードの巡回）。**巡回間隔（分）** は巡回作業が残っていないときの待ち時間です。チケット巡回は候補をすべて処理するまで、候補間でこの間隔を待ちません。「このメンバーの巡回実行コマンドを設定する」をオンにして、保存済みコマンドを選びます。オフのメンバーは巡回実行しません
 - **定期実行コマンド**: **定期実行を追加** でコマンドと実行時刻を指定します（例: 定期レポート、クリーンアップ）。時刻は 毎時 / 毎日 / 毎週 のプリセットか、**詳細 cron**（5 フィールドの cron 表記）で指定します
 
 巡回間隔と、連続失敗でワーカーを止める回数は **サービス実行** 画面で指定します。
 
-サービスが実行するコマンドは、デスクトップアプリから開始しても `guildbotics start` で開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。定期実行の `.sh` や AI CLI のターンが相対パスで書き出したファイルはここに出ます。
+サービスが実行するコマンドは、**サービス実行** 画面から開始しても `guildbotics start` で開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。定期実行の `.sh` や AI CLI のターンが相対パスで書き出したファイルはここに出ます。
 
 設定内容はワークスペースの `team/members/<person_id>/member.yml` に保存されます。GUI を使わないサーバーでは、このファイルを直接編集します。
 
@@ -397,7 +415,7 @@ cron 表記の詳細、ランダム化構文、スケジューラの内部動作
 
 ## 独自のコマンドを作る
 
-クイックスタートで実行した `translate` のように、独自のコマンドを定義して、手動実行・定期実行・Slack 定期投稿に使えます。作成と動作確認はデスクトップアプリの **コマンド編集** 画面で行います。
+クイックスタートで実行した `translate` のように、独自のコマンドを定義して、手動実行・定期実行・Slack 定期投稿に使えます。作成と動作確認は **コマンド編集** 画面で行います。
 
 **AI アシスタントに作らせる**: **新規作成** で **AIに作成させる** を選び、やりたいことを書いて依頼すると、コマンド名・形式・ソースが提案されます。編集中のコマンドについては、**AIアシスタント** に質問したり、変更を依頼したりできます。
 
@@ -450,7 +468,6 @@ commands:
 **実行方法**:
 
 - **コマンド編集** 画面の **実行**（入力文と追加引数を指定できます）
-- ホットキーから開く **コマンド実行ウィンドウ**
 - **設定 → メンバー → 巡回** タブでの巡回実行 / 定期実行（→ [決まった作業を自動で実行する](#決まった作業を自動で実行する)）
 - Slack への定期投稿（`workflows/chat_post_command` と組み合わせて定期実行に設定）
 - CLI の `guildbotics run <command_name> [args...]`（→ [サーバーで運用する](#サーバーで運用する)）
@@ -492,7 +509,7 @@ guildbotics secrets --workspace /path/to/workspace list
 
 非シークレットの設定はすべてワークスペース内のプレーンテキストファイルに保存されるため、一度セットアップすれば GUI のない環境（ヘッドレスサーバー等）へ移して CLI だけで運用できます。
 
-1. 移行先で `uv tool install guildbotics` により CLI をインストールします
+1. 移行先で [インストール](#インストール) のとおりチェックアウトを用意します（Linux では `guildbotics start` で自分でサーバーを動かします）
 2. ワークスペースフォルダと `~/.guildbotics/identity/`（メンバーのアイデンティティ）を移行先へコピーします
 3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行し、メンバーの認証情報についても `--identities` を付けて同じ操作をします（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
 4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか（Linux では [ヘッドレスの Linux サーバーの秘密ストア](#ヘッドレスの-linux-サーバーの秘密ストア) を参照）、実行時の環境変数でシークレットを渡してください
@@ -507,18 +524,18 @@ guildbotics secrets --workspace /path/to/workspace list
 
    サービス稼働中は、宣言が変わると自動で再ビルドされます。ログインはマシンごとに `~/.guildbotics/data/agent_environment/` に保持されます
 
-**サービスの起動と停止**（デスクトップアプリの **サービス実行** 画面に相当します）:
+**サーバーとサービスの起動と停止**:
 
 ```bash
 guildbotics workspace status   # 対象ワークスペースと設定の確認
-guildbotics start              # サービスを起動
-guildbotics stop               # 新規受付を止め、実行中の作業の完了を待って終了
-guildbotics kill               # 即座に強制停止
+guildbotics start              # サーバーを動かし、サービスを開始
+guildbotics stop               # 新規受付を止め、実行中の作業の完了を待ってサーバーを終了
+guildbotics kill               # 実行中の作業をキャンセルし、サーバーを強制終了
 ```
 
-`guildbotics start` は Desktop と同じバックエンドを起動し、サービスを開始します。先に Desktop を閉じてください。1 回目の Ctrl-C は作業の完了を待ち、2 回目は作業をキャンセルします。別のターミナルからは `guildbotics stop --force` でタイムアウト後のキャンセル、`guildbotics kill` で即時の強制停止を要求します。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。
+`guildbotics start` はチェックアウトのサーバーをターミナルで動かし、待ち受けを始めたらサービスを開始します。サービスを開始できなくてもサーバーは動き続け、失敗を画面とサーバーの出力に示します。サーバーは `guildbotics stop` かシグナルを受けるまで動きます。1 回目の Ctrl-C は実行中の作業の完了を待ち、2 回目は作業をキャンセルします。SIGTERM（OS がサービスを止めるときに送るもの）では、すぐにキャンセルします。別のターミナルからは `guildbotics stop --force` でタイムアウト後のキャンセル、`guildbotics kill` で即時の強制停止を要求します。`--timeout` や `--force` などのオプションは [CLI リファレンス](docs/cli_reference.md#guildbotics-stop)を参照してください。`guildbotics start` の終了コードはサーバーの終了コードで、終了を頼まれたときは 0 です。
 
-`guildbotics start` は **サービス実行** 画面で保存した設定（含める経路・巡回間隔・連続失敗で停止する回数）で開始します（→ [サービスを起動して作業を依頼する](#サービスを起動して作業を依頼する)）。Desktop を使わない Hub では、サービスの稼働中に `guildbotics open` で画面を開いて変更します。変更は次の開始から反映されます。サービスの待機中にマシンをスリープさせない設定も同じ画面にあり、すぐに反映されます。設定はワークスペースの `.guildbotics/local/service.yml` に保存されます。最初の開始の前に決めるときは、このファイルを手で書きます（書かなかった項目は既定値です）。
+`guildbotics start` は **サービス実行** 画面で保存した設定（含める経路・巡回間隔・連続失敗で停止する回数）で開始します（→ [サービスを起動して作業を依頼する](#サービスを起動して作業を依頼する)）。`guildbotics open` で画面を開いて変更します。変更は次にサービスを開始したときから反映されます。サービスの待機中にマシンをスリープさせない設定も同じ画面にあり、すぐに反映されます。設定はワークスペースの `.guildbotics/local/service.yml` に保存されます。最初の開始の前に決めるときは、このファイルを手で書きます（書かなかった項目は既定値です）。
 
 ```yaml
 keep_awake: false             # サービスの待機中にスリープさせない
@@ -529,7 +546,7 @@ routine_interval_minutes: 10  # 1〜1440
 max_consecutive_errors: 3     # 1〜20
 ```
 
-**コマンドの実行**（デスクトップアプリの **コマンド編集** 画面での実行に相当します）:
+**コマンドの実行**（**コマンド編集** 画面での実行に相当します）:
 
 ```bash
 guildbotics run <command_name> [args...]
@@ -538,9 +555,9 @@ echo "Hello" | guildbotics run translate
 
 `--person` または `<command>@<person_id>` で実行メンバーを指定できます。
 
-バックエンドは生存期間中ずっとマシン共通の lock（`~/.guildbotics/data/run/app-api.lock`）を持つため、Desktop と `guildbotics start` は同時に動かせません。Desktop を開いているときはサービス画面から開始します。CLI のバックエンドが動いているときに Desktop を開くと、`guildbotics stop` で止めてから開くよう案内します。`service.lock` とスリープ抑止は、サービスの稼働中だけ保持します。
+サーバーは生存期間中ずっとマシン共通の lock（`~/.guildbotics/data/run/app-api.lock`）を持つため、1 台のマシンで動くサーバーは 1 つだけです。2 つ目のサーバーは起動しません。`service.lock` とスリープ抑止は、サービスの稼働中だけ保持します。
 
-CLI のバックエンドも API とブラウザの画面を提供するため、`guildbotics run` の委譲先になります。`guildbotics start` は必ずサービスを開始し、API だけを動かすモードはありません。Desktop の更新前には `guildbotics start` と実行中の `guildbotics run` を止めてください。更新後に CLI サービスを起動し直すか、Desktop のサービス画面から開始します。
+サーバーは API と画面も提供するため、`guildbotics run` の委譲先になります。`guildbotics start` は必ずサービスを開始します。**サービス実行** 画面でサービスを止めても、サーバーは画面を配り続けます。
 
 完了した仕事は TaskRun の記録（`state/task-runs/`）に残るため、サービスを再起動しても同じ入力を再度受け付けません。
 
@@ -585,11 +602,37 @@ CLI のバックエンドも API とブラウザの画面を提供するため�
    この解除が済むまで、Secret を使うワークフローは実行時エラーになります。GuildBotics が
    平文のファイルへ書き出すことはありません。
 
+### サーバーを OS のサービスで動かす
+
+macOS の Hub では、`scripts/hub-server.sh install`（→ [インストール](#インストール)）が、チェックアウトの `guildbotics start` を LaunchAgent `local.guildbotics` として、ログインしたユーザーのセッションで動かします。サーバーのシークレットがそのユーザーのキーチェーンにあるためです。スクリプトはチェックアウトから実行します。
+
+```bash
+scripts/hub-server.sh status      # サービスと、直前の終了の状態
+scripts/hub-server.sh restart     # `guildbotics stop` と同じくサーバーを止めてから、起動し直す
+scripts/hub-server.sh update      # チェックアウトを更新したあと（下記）
+scripts/hub-server.sh uninstall   # サーバーを止め、LaunchAgent を外す
+```
+
+- **ログ**: サーバーの出力は `~/Library/Logs/guildbotics.log` に追記されます。ローテーションはしません。サーバーが起動しない・止まったときは、まずここを見ます
+- **動くとき**: ログインすると起動し、Hub を再起動したあとはログインするまで動きません。予期せず終わったとき（`guildbotics kill` を含む）は起動し直します。`guildbotics stop` で止めると、次のログインか `scripts/hub-server.sh restart` まで止まったままです。サーバーが起動できないとき（ワークスペースが選ばれていない、別のサーバーがすでに動いている）は、サービスが 15 秒ごとに起動し直し、理由をログに書きます
+- **macOS が止めるとき**（ログアウト、再起動）: サーバーは SIGTERM を受けて実行中の作業をすぐにキャンセルし、その実行は `guildbotics stop --force` がキャンセルしたときと同じ終わり方をします。`restart`・`update`・`uninstall` は、`guildbotics stop` と同じく実行中の作業の完了を、どれだけかかっても待って止めます。別のターミナルで `guildbotics stop --force` を実行すると、作業をキャンセルします
+- **環境**: サービスは `install` を実行したシェルの `PATH` を引き継ぐので、サーバーは `git` や `uv` などのコマンドに届きます。`GUILDBOTICS_SERVER_PORT` が設定されていれば、それも引き継ぎます。変えたときは `install` をもう一度実行します
+
+**更新**: チェックアウトを更新（`git pull` など）してから、次を実行します。
+
+```bash
+scripts/hub-server.sh update
+```
+
+依存を入れ直し（`uv sync`、`desktop` で `npm ci`）、画面をビルドし（`desktop` で `npx vite build`）、CLI とスキルを配置し直してから、実行中の作業の完了を待ってサーバーを起動し直します。自分で始めた `guildbotics run` は先に止めてください。
+
+更新で Python の実行ファイルが変わると、新しい実行ファイルが読む前に、キーチェーンが GuildBotics の項目ごとに許可を聞き直します。ウィンドウのないサービスからは答えられないので、`update` はサーバーを止め、ターミナルで一度 `guildbotics start` を実行し、確認に「常に許可」で答えて Ctrl-C で止めてから `scripts/hub-server.sh restart` を実行するよう案内します。
+
 ### ブラウザから使う
 
-GuildBotics の画面（サービス、コマンド、設定、診断）は、バックエンドが `http://127.0.0.1:8765` で配っています。デスクトップアプリのウィンドウもこの画面を表示しているので、同じことをブラウザだけで行えます。ブラウザで使えないのは、ウィンドウの外で動くもの（グローバルなホットキーとクイック実行のウィンドウ、トレイ、アプリの終了の制御）です。
+GuildBotics の画面（サービス、コマンド、設定、診断）は、サーバーが `http://127.0.0.1:8765` で配っています。画面はブラウザで使います。
 
-**バックエンドが動いているマシンで開く**:
+**サーバーが動いているマシンで開く**:
 
 ```bash
 guildbotics open
@@ -623,7 +666,7 @@ guildbotics open
    sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
    ```
 
-   `~/.guildbotics/bin/guildbotics` は managed shim なので、CLI 本体を入れ直しても有効なままです。Windows では installer が managed bin を user PATH へ追加するため、SSH セッションからも見えます。
+   `~/.guildbotics/bin/guildbotics` は導入時に置かれる managed shim なので、常にチェックアウトの CLI を指します。
 
 4. ポートを転送します。[Branvil 連携ガイド](docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する) の転送サービスを使うと、ログインしている間ずっと転送されます。`--port 8765` を指定してインストールします（Branvil を使うときは `--port 7878` も指定します）。その場限りなら `ssh -L 8765:127.0.0.1:8765 <Hub>` でも転送できます。
 5. Hub で入口リンクを表示し、手元のブラウザに貼ります:
@@ -634,15 +677,14 @@ guildbotics open
 
 **別のマシンの CLI をつなぐ**: そのマシンで `guildbotics connect` を実行すると、ブラウザに同意画面が開きます。オーナーが許可すると、そのマシンの CLI 用のトークンが発行され、そのマシンの OS のキーチェーンに保存されます。そのマシンの `guildbotics open` がこのトークンを使います（同じマシンからもう一度つなぐと、前のトークンは失効します）。
 
-ブラウザでは、画面の一部が次のように変わります。
+画面でのファイルとフォルダの扱いは次のとおりです。
 
-- フォルダの「参照」はなく、サーバーのマシンのパスを入力します（ワークスペースは、登録済みの一覧からも選べます）
-- コマンドを外部のエディタで開くことはできず、画面の中のエディタで編集します
-- コマンドの入力欄に落としたファイルは、コピーとしてアップロードされます（エージェントの変更は元のファイルに反映されません。フォルダは落とせません）
-- AI CLI ツールのスキルの状態と強制更新は出ません
+- フォルダの「参照」はなく、Hub のパスを入力します（ワークスペースは、登録済みの一覧からも選べます）
+- コマンドは画面の中のエディタで編集します。外部のエディタでは開きません
+- コマンドの入力欄に落としたファイルや貼り付けた画像は、コピーとしてアップロードされます（エージェントの変更は元のファイルに反映されません。フォルダは落とせません）。アップロードしたファイルはサーバーを再起動するまで残り、画面から始めた手動の実行から読めます
 - 「このマシン」と表示される設定（スリープ防止、登録済みのワークスペース）は、Hub のものです
 
-**ポート**: バックエンドは固定のポート 8765 で待ち受けます。ほかのプログラムがこのポートを使っていると、バックエンドは起動しません。同じマシンで 2 つのバックエンド（開発版と配布版のデスクトップアプリなど）を動かすときは、片方を起動する環境で `GUILDBOTICS_SERVER_PORT` に別のポートを指定します。サーバー、CLI、デスクトップアプリはすべてこの値を読みます。
+**ポート**: サーバーは固定のポート 8765 で待ち受けます。ほかのプログラムがこのポートを使っていると、サーバーは起動しません。別のポートを使うときは、サーバーと CLI を起動する環境で `GUILDBOTICS_SERVER_PORT` を指定します。どちらもこの値を読みます（サービスは登録したときの値を使います）。
 
 ### アカウント関連環境変数
 
@@ -686,7 +728,7 @@ guildbotics workspace use /path/to/workspace
 
 1. サブコマンドの前の `--workspace <dir>` 指定
 2. 明示的な `GUILDBOTICS_WORKSPACE_ROOT`、または `<workspace>/.guildbotics/config` を指す `GUILDBOTICS_CONFIG_DIR`
-3. デスクトップアプリまたは `guildbotics workspace use` が記録した使用中のワークスペース
+3. 画面または `guildbotics workspace use` が記録した使用中のワークスペース
 
 プロセスのカレントディレクトリはワークスペースとして扱いません。選択されたワークスペースから `GUILDBOTICS_CONFIG_DIR` が `<workspace>/.guildbotics/config` に設定されます。
 
@@ -695,7 +737,7 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
 - すべてのワークスペースで共有するメンバーのアイデンティティは、ワークスペースの `.guildbotics` と同じ構成で `$HOME/.guildbotics/identity/.guildbotics` に保存されます
 - memory、会話の制御状態、task-run 記録、interactive session 記録、Activity イベントなど、ワークスペースの永続状態は `<workspace>/.guildbotics/state` に保存されます
-- 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
+- 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）など、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
 - エージェント隔離環境の runtime と image は `$HOME/.guildbotics/data/msb` に、AI CLI ツールのログインとセッション（マシン内の全メンバー・全ワークスペースで共有）は `$HOME/.guildbotics/data/agent_environment/<tool>/` に保存されます
 
 ### 設定ファイル
@@ -749,24 +791,25 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 
 | 症状                                         | 最初に確認すること                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `guildbotics` コマンドが見つからない         | macOS / Linux では `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。Windows では install 後に新しい shell を開き、user PATH の `%USERPROFILE%\.guildbotics\bin` を確認します                                                                                                                                                                                                                  |
-| どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
-| メンバーが動作しない・設定に不安がある       | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
+| `guildbotics` コマンドが見つからない | `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。どちらも無ければ、配置し直します（→ [インストール](#インストール)） |
+| サーバーが起動しない・止まった | `~/Library/Logs/guildbotics.log` を読み、`scripts/hub-server.sh status` を実行します（→ [サーバーを OS のサービスで動かす](#サーバーを-os-のサービスで動かす)） |
+| どのワークスペースが使われているか分からない | **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
+| メンバーが動作しない・設定に不安がある       | **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
 | GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます。`GitHub writes are limited to repositories of '<owner>'` というエラーは、書き込み先リポジトリの owner がプロジェクトに設定した owner と異なるため、GuildBotics が送信せずに拒否したことを表します |
 | 脆弱性アラートを読めない（403） | メンバーの GitHub App または fine-grained PAT に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスがあるか確認してください。App はインストール先で追加権限を承認し、PAT はトークンの権限を編集して organization が要求する承認を済ませます。手順は [GitHub アカウントの準備](#ai-エージェント用の-github-アカウントを用意する)を参照してください。403 だけでは原因を断定できません |
 | Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めているか（`guildbotics start` も同じ設定で開始します）を確認してください                                                                                                                                                                                                                                       |
-| コマンド実行が失敗した                       | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
+| コマンド実行が失敗した                       | **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
 | スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |
 | AI CLI の turn が始まらない・「この端末では実行できません」と警告が出る | **設定 → エージェント実行環境** の **この端末の状態**（または `guildbotics environment status`）を確認してください。runtime にはハードウェア仮想化（Apple Silicon / Windows ハイパーバイザー プラットフォーム / KVM）が必要で、環境が **準備完了**（**ビルド** を押す。サービス稼働中は宣言の変更で自動再ビルド）、ツールの認証情報がこのマシンに保存されている必要があります（画面のログインコマンドを実行）。保存済みは認証の成功を保証しません。ビルド中は作業が失敗ではなく見送りになります |
-| 認証情報保存済みなのに AI CLI の認証に失敗する | **設定 → エージェント実行環境** で対象ツールのログインコマンドをコピーし、ターミナルで実行してください。画面を開いている間、状態は10秒ごとに自動更新されます。保存状態を読み直すには **表示を更新** を押します。利用レートの再取得には、対応ツールの **再確認** を使います。macOS / Linux は Desktop 管理 CLI の絶対パス、Windows は PATH 上の `guildbotics` を使います。**認証情報保存済み** はファイルの存在だけを表します（Claude Code と Grok Build は、この端末のキーチェーンで暗号化保存したログインを開けること。これらのログインは turn の microVM に入らず、以前の平文ファイルのログインは読まないため、更新後に一度ログインし直し、旧ファイルを削除してください。詳しくは[こちら](docs/native_agent_runtime.ja.md#vmの外で管理するログイン)）。認証失敗は同じ端末・同じツールを使う全メンバーへ反映され、ログイン完了または後続の正常実行で解除されます。ネットワーク障害やレート制限は認証結果を変えず、過去の失敗が再試行を妨げることもありません |
+| 認証情報保存済みなのに AI CLI の認証に失敗する | **設定 → エージェント実行環境** で対象ツールのログインコマンドをコピーし、ターミナルで実行してください。画面を開いている間、状態は10秒ごとに自動更新されます。保存状態を読み直すには **表示を更新** を押します。利用レートの再取得には、対応ツールの **再確認** を使います。コマンドは管理用 CLI の絶対パスを使います。**認証情報保存済み** はファイルの存在だけを表します（Claude Code と Grok Build は、この端末のキーチェーンで暗号化保存したログインを開けること。これらのログインは turn の microVM に入らず、以前の平文ファイルのログインは読まないため、更新後に一度ログインし直し、旧ファイルを削除してください。詳しくは[こちら](docs/native_agent_runtime.ja.md#vmの外で管理するログイン)）。認証失敗は同じ端末・同じツールを使う全メンバーへ反映され、ログイン完了または後続の正常実行で解除されます。ネットワーク障害やレート制限は認証結果を変えず、過去の失敗が再試行を妨げることもありません |
 
 AI CLI の利用レート取得に失敗すると、画面上部と設定の対象行に同じ問題を表示します。対象行には最終確認時刻も表示します。**再確認** は対象ツールのキャッシュを使わずに取得し、**エラー詳細** は該当する診断セッションを開きます。再取得に成功すると通知と対象行の警告が解除されます。この通知だけで認証期限切れと断定するものではありません。通信障害や利用枠を表示できない認証方式でも取得に失敗するためです。**表示を更新** は保存状態を読み直し、ツールへの再取得は行いません。アクティビティ画面ではツールごとに個別に取得し、同じツールを使うメンバー間で結果を共有するため、遅いツールが他のツールの表示を待たせません。更新中も前回取得できた値を取得時刻つきで表示し続けます。更新に失敗した場合は前回の値であることを示し、その値では Rate limit 表示を判定せず、通常の5分ではなく30秒後に再取得します。
 
-**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。制限付きAI CLI turnでは、構造化されたcommand/tool/runtime失敗証拠に明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカルIPアドレスを除き、`agent_environment.network_egress_candidate`として記録します。これはmicrosandboxによる拒否の証明ではなく情報扱いの手掛かりです。成功commandの出力、bare hostname/IPアドレス、追加のDEBUG log、agentの自己報告は使用しません。
+**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。**診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。制限付きAI CLI turnでは、構造化されたcommand/tool/runtime失敗証拠に明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカルIPアドレスを除き、`agent_environment.network_egress_candidate`として記録します。これはmicrosandboxによる拒否の証明ではなく情報扱いの手掛かりです。成功commandの出力、bare hostname/IPアドレス、追加のDEBUG log、agentの自己報告は使用しません。
 
 **デバッグ出力**: 詳細なログを取得するための環境変数:
 
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
 - `AGNO_DEBUG`: Agno エンジンの追加デバッグ出力 (`true`/`false`)
 
-transcript の詳細度（`standard` / `full`）と保持日数は、デスクトップアプリの **診断** 画面から設定し、`.guildbotics/config/transcripts.yml` に保存されます。
+transcript の詳細度（`standard` / `full`）と保持日数は、**診断** 画面から設定し、`.guildbotics/config/transcripts.yml` に保存されます。

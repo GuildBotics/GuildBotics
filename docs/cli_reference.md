@@ -34,7 +34,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
+| [`guildbotics kill`](#guildbotics-kill) | Stop the server, cancelling its in-flight work, and force terminate it if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
@@ -94,7 +94,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
 | [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
-| [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
+| [`guildbotics run`](#guildbotics-run) | Run a command on the server of the same workspace when it runs, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
@@ -102,13 +102,13 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
-| [`guildbotics start`](#guildbotics-start) | Start the backend and its services with the settings saved on the Service screen; Desktop must be closed. |
-| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
+| [`guildbotics start`](#guildbotics-start) | Run the server and start its services with the settings saved on the Service screen. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop the server through its API, after its in-flight work, and wait for it to exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
-| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
+| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for the server and external AI CLI tools. |
 
 ## `guildbotics`
 
@@ -129,13 +129,13 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
-| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member through the running backend. |
+| [`guildbotics kill`](#guildbotics-kill) | Stop the server, cancelling its in-flight work, and force terminate it if needed. |
+| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member through the running server. |
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
-| [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
+| [`guildbotics run`](#guildbotics-run) | Run a command on the server of the same workspace when it runs, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics start`](#guildbotics-start) | Start the backend and its services with the settings saved on the Service screen; Desktop must be closed. |
-| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
+| [`guildbotics start`](#guildbotics-start) | Run the server and start its services with the settings saved on the Service screen. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop the server through its API, after its in-flight work, and wait for it to exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 
@@ -220,7 +220,7 @@ guildbotics diagnostics traces [OPTIONS]
 | `--attr-key TEXT` | Only traces carrying this attribute key. |
 | `--attr-value TEXT` | Required value for --attr-key. |
 | `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
-| `--include-assistant / --no-include-assistant` | Include the Desktop AI assistants' own traces. [default: no-include-assistant] |
+| `--include-assistant / --no-include-assistant` | Include the traces of the screens' AI assistants. [default: no-include-assistant] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -310,7 +310,7 @@ List the images this device's declaration may name as its base.
 
 Those loaded here, by the name they were loaded under, and whether the
 declaration names each for this device's architecture; the same list the
-Desktop's declaration picks from.
+Agent execution environment screen picks from.
 
 ```text
 guildbotics environment image list [OPTIONS]
@@ -417,7 +417,8 @@ guildbotics git-credential [OPTIONS] ACTION
 
 ## `guildbotics kill`
 
-Cancel CLI services and force terminate the backend if needed.
+Stop the server, cancelling its in-flight work, and force terminate it
+if needed.
 
 Equivalent to: `guildbotics stop --force --timeout 0`.
 
@@ -1528,7 +1529,8 @@ guildbotics open [OPTIONS]
 
 ## `guildbotics run`
 
-Run a command through the matching Desktop when open, otherwise locally.
+Run a command on the server of the same workspace when it runs, otherwise
+locally.
 
 ```text
 guildbotics run [OPTIONS] CUSTOM_COMMAND [COMMAND_ARGS]...
@@ -1642,8 +1644,12 @@ guildbotics secrets status [OPTIONS]
 
 ## `guildbotics start`
 
-Start the backend and its services with the settings saved on the
-Service screen; Desktop must be closed.
+Run the server and start its services with the settings saved on the
+Service screen.
+
+It runs until `guildbotics stop`. Ctrl-C asks the same: the first lets
+in-flight work finish, the second cancels it. SIGTERM, which an OS sends
+to stop its service, cancels it at once.
 
 ```text
 guildbotics start [OPTIONS]
@@ -1655,7 +1661,8 @@ guildbotics start [OPTIONS]
 
 ## `guildbotics stop`
 
-Stop CLI services through the local backend API and wait for its exit.
+Stop the server through its API, after its in-flight work, and wait
+for it to exit.
 
 ```text
 guildbotics stop [OPTIONS]
@@ -1695,7 +1702,7 @@ guildbotics workspace [OPTIONS] COMMAND [ARGS]...
 | --- | --- |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
-| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
+| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for the server and external AI CLI tools. |
 
 ## `guildbotics workspace current`
 
@@ -1725,7 +1732,7 @@ guildbotics workspace status [OPTIONS]
 
 ## `guildbotics workspace use`
 
-Persist the active workspace for desktop and external AI CLI tools.
+Persist the active workspace for the server and external AI CLI tools.
 
 ```text
 guildbotics workspace use [OPTIONS] WORKSPACE_DIR

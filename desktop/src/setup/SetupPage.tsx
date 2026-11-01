@@ -2,7 +2,6 @@ import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
 import { InfoCallout, RequiredLabel } from "./formParts";
-import { isTauriRuntime } from "../desktopWindow";
 import { ServerMachineBadge, useServerMachineLabel, useServerPathHint } from "../serverMachine";
 import {
   Avatar,
@@ -17,8 +16,6 @@ import {
   Card,
   Divider,
   Group,
-  HoverCard,
-  Indicator,
   Menu,
   Modal,
   MultiSelect,
@@ -50,7 +47,6 @@ import {
   Copy,
   Eraser,
   Folder,
-  FolderOpen,
   History,
   Plus,
   Save,
@@ -106,6 +102,7 @@ import {
   getTeam,
   initConfig,
   runScenarioDiagnostics,
+  setWorkspace,
   stopScheduler,
   updateDefaultPerson,
   updateMemberConfig,
@@ -127,13 +124,6 @@ import {
   type ServiceSelection,
 } from "../api/client";
 import {
-  type CliAgentSkillState,
-  type CliAgentSkillStatusesResponse,
-  forceUpdateCliAgentSkill,
-  getCliAgentSkillStatuses,
-  restartBackend,
-} from "../api/backend";
-import {
   cliAgentLabelFromConfig,
   cliAgentNameFromConfig,
   useMemberCliAgentLabel,
@@ -143,7 +133,6 @@ import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
 import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailureNotice";
 import { PROVIDER_UIS, serviceErrors, servicesReady, useServiceProviders } from "./providers";
 import type { MemberContext } from "./providers/types";
-import { ShortcutsSection } from "./ShortcutsSection";
 import { DeviceSettings } from "./DeviceSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
@@ -201,9 +190,6 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   // providers they choose.
   "integrations",
   "members",
-  // Hotkeys are an everyday convenience rather than part of getting running,
-  // so they are offered only once the workspace is configured.
-  "shortcuts",
   "verification",
   "device",
 ] as const;
@@ -217,7 +203,6 @@ const CORE_SECTION_LABEL_KEYS = {
   environment: "setup.nav.environment",
   members: "setup.nav.members",
   integrations: "setup.nav.integrations",
-  shortcuts: "setup.nav.shortcuts",
   verification: "setup.nav.verification",
   device: "setup.nav.device",
 } as const satisfies Record<CoreSection, string>;
@@ -568,7 +553,7 @@ export function SetupPage() {
     try {
       const written = await saveMutation.mutateAsync(form.values);
       if (creatingInitialSetup) {
-        await restartBackend(form.values.workspaceDir);
+        await setWorkspace({ workspace_dir: form.values.workspaceDir });
         await Promise.all([
           queryClient.refetchQueries({ queryKey: ["config"] }),
           queryClient.refetchQueries({ queryKey: ["team"] }),
@@ -616,7 +601,7 @@ export function SetupPage() {
     return revisionsWritten;
   };
   const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
-    await restartBackend(workspace);
+    await setWorkspace({ workspace_dir: workspace });
     if (workspaceSwitchId.current !== switchId) {
       return;
     }
@@ -628,9 +613,6 @@ export function SetupPage() {
     queryClient.removeQueries({ queryKey: ["project-config"] });
     queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
     queryClient.invalidateQueries({ queryKey: ["command-options"] });
-    // Hotkey assignments live in the workspace config, so the previous
-    // workspace's combinations must not stay registered with the OS.
-    queryClient.invalidateQueries({ queryKey: ["hotkeys"] });
     queryClient.invalidateQueries({ queryKey: ["scheduler"] });
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["config"] }),
@@ -779,7 +761,6 @@ export function SetupPage() {
               onSave={saveNow}
             />
           ) : null}
-          {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
           {activeSection === "device" ? <DeviceSettings /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
@@ -1146,7 +1127,6 @@ function IntelligenceSection({
 }) {
   const { t } = useTranslation();
   const machine = useServerMachineLabel();
-  const queryClient = useQueryClient();
   const selectedTool = tools.find((tool) => tool.name === form.values.cliAgent);
   // The advanced editor writes different files from the basic settings above
   // it, but they are one screen to the user, so one button saves both.
@@ -1181,38 +1161,6 @@ function IntelligenceSection({
     }
   };
 
-  const skillStatuses = useQuery({
-    queryKey: ["cli-agent-skill-statuses"],
-    queryFn: getCliAgentSkillStatuses,
-    // Skills live in each machine's harness: the server sees none of a
-    // browser's machine, so only a Desktop window shows them.
-    enabled: isTauriRuntime(),
-  });
-  const forceSkillUpdate = useMutation({
-    mutationFn: forceUpdateCliAgentSkill,
-    onSuccess: (updated) => {
-      queryClient.setQueryData<CliAgentSkillStatusesResponse>(
-        ["cli-agent-skill-statuses"],
-        (current) => ({
-          agents: upsertByAgent(current?.agents ?? [], updated),
-          error: current?.error,
-        }),
-      );
-      notifications.show({
-        color: "success",
-        title: t("setup.intelligence.skillUpdatedTitle"),
-        message: t("setup.intelligence.skillUpdatedBody"),
-      });
-    },
-    onError: (error) => {
-      notifications.show({
-        color: "danger",
-        title: t("setup.intelligence.skillUpdateFailedTitle"),
-        message:
-          error instanceof Error ? error.message : t("setup.intelligence.skillUpdateFailedBody"),
-      });
-    },
-  });
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader
@@ -1312,86 +1260,6 @@ function IntelligenceSection({
               tools={tools}
               isActive={(tool) => form.values.cliAgent === tool.name}
               onSelect={(tool) => form.setFieldValue("cliAgent", tool.name)}
-              renderExtra={(agent) => {
-                if (!isTauriRuntime()) {
-                  return null;
-                }
-                const status = (skillStatuses.data?.agents ?? []).find(
-                  (s) => s.agent === agent.name,
-                );
-                const statusKey = status?.status ?? "agent_home_missing";
-                const canForceUpdate = Boolean(status?.can_force_update);
-                return (
-                  <HoverCard width={340} shadow="md" withArrow openDelay={200} closeDelay={400}>
-                    <HoverCard.Target>
-                      <Indicator
-                        disabled={!canForceUpdate}
-                        color="info"
-                        size={6}
-                        offset={3}
-                        processing
-                      >
-                        <ActionIcon
-                          variant="subtle"
-                          color="neutral"
-                          size="sm"
-                          aria-label={t("setup.intelligence.skillStatusButtonLabel", {
-                            agent: agent.label,
-                          })}
-                          style={{ fontSize: "12px" }}
-                        >
-                          🪄
-                        </ActionIcon>
-                      </Indicator>
-                    </HoverCard.Target>
-                    <HoverCard.Dropdown p="md">
-                      <Stack gap="xs">
-                        <Group justify="space-between">
-                          <Text fw={700} size="sm">
-                            {t("setup.intelligence.skillStatusTitle")}
-                          </Text>
-                          <Badge color={skillStatusColor(statusKey)} variant="light" size="sm">
-                            {t(`setup.intelligence.skillStatusLabels.${statusKey}`)}
-                          </Badge>
-                        </Group>
-                        <Text size="sm">
-                          {t(`setup.intelligence.skillStatusMessages.${statusKey}`)}
-                        </Text>
-                        {status?.skill_path ? (
-                          <Text
-                            size="xs"
-                            c="dimmed"
-                            className="mono-text"
-                            style={{ wordBreak: "break-all" }}
-                          >
-                            {status.skill_path}
-                          </Text>
-                        ) : null}
-                        {status?.error ? (
-                          <Text size="xs" c="danger" style={{ wordBreak: "break-all" }}>
-                            {status.error}
-                          </Text>
-                        ) : null}
-                        {canForceUpdate ? (
-                          <Button
-                            size="xs"
-                            variant="light"
-                            leftSection={<WandSparkles size={14} />}
-                            loading={
-                              forceSkillUpdate.isPending &&
-                              forceSkillUpdate.variables === agent.name
-                            }
-                            onClick={() => forceSkillUpdate.mutate(agent.name)}
-                            mt="xs"
-                          >
-                            {t("setup.intelligence.skillOverwrite")}
-                          </Button>
-                        ) : null}
-                      </Stack>
-                    </HoverCard.Dropdown>
-                  </HoverCard>
-                );
-              }}
             />
             {persisted && selectedTool ? (
               <Group justify="space-between" mt="xs">
@@ -1651,30 +1519,6 @@ function EnvironmentScopeHeader({
   );
 }
 
-function skillStatusColor(status: CliAgentSkillState["status"]) {
-  if (status === "up_to_date") {
-    return "success";
-  }
-  if (status === "user_modified" || status === "unmanaged" || status === "outdated") {
-    return "warning";
-  }
-  if (status === "error") {
-    return "danger";
-  }
-  return "neutral";
-}
-
-function upsertByAgent(
-  statuses: CliAgentSkillState[],
-  updated: CliAgentSkillState,
-): CliAgentSkillState[] {
-  const exists = statuses.some((status) => status.agent === updated.agent);
-  if (!exists) {
-    return [...statuses, updated];
-  }
-  return statuses.map((status) => (status.agent === updated.agent ? updated : status));
-}
-
 const DEFAULT_LLM_PROVIDER = "openai";
 
 type ProviderDefaults = Record<
@@ -1799,8 +1643,8 @@ function withSlotModel(
 }
 
 // An option card, read-only when no selection handler is supplied. `extra` is a top-right control
-// (e.g. the team's API-key popover or CLI skill-status button) that only the
-// team scope supplies; the member scope renders the same card without it.
+// (e.g. the team's API-key popover) that only the team scope supplies; the
+// member scope renders the same card without it.
 function OptionCard({
   label,
   active,
@@ -1917,13 +1761,11 @@ function DefaultCliAgentCards({
   tools,
   isActive,
   onSelect,
-  renderExtra,
   personId,
 }: {
   tools: EnvironmentToolStatus[];
   isActive: (tool: EnvironmentToolStatus) => boolean;
   onSelect?: (tool: EnvironmentToolStatus) => void;
-  renderExtra?: (tool: EnvironmentToolStatus) => ReactNode;
   personId?: string;
 }) {
   const { t } = useTranslation();
@@ -1941,7 +1783,6 @@ function DefaultCliAgentCards({
           statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`, { machine })}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={onSelect ? () => onSelect(tool) : undefined}
-          extra={renderExtra?.(tool)}
           detail={
             personId && turns.data ? (
               <CliAgentLastTurnDetails
@@ -5343,7 +5184,6 @@ function WorkspacePicker({
     setShown(value);
     setDraft(value);
   }
-  const [picking, setPicking] = useState(false);
   const registered = useQuery({
     queryKey: ["registered-workspaces"],
     queryFn: getRegisteredWorkspaces,
@@ -5352,18 +5192,6 @@ function WorkspacePicker({
     setDraft(next);
     if (next.trim() !== value.trim()) {
       onChange(next);
-    }
-  };
-  const pickDirectory = async () => {
-    setPicking(true);
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true, multiple: false });
-      if (typeof selected === "string") {
-        take(selected);
-      }
-    } finally {
-      setPicking(false);
     }
   };
   const workspaces = (registered.data ?? []).filter((path) => path !== value);
@@ -5382,11 +5210,7 @@ function WorkspacePicker({
             take(event.currentTarget.value);
           }
         }}
-        description={
-          isTauriRuntime()
-            ? t("setup.project.workspaceDescription")
-            : `${serverPathHint} ${t("setup.project.workspaceDescription")}`
-        }
+        description={`${serverPathHint} ${t("setup.project.workspaceDescription")}`}
         flex={1}
       />
       <Menu position="bottom-end" disabled={workspaces.length === 0}>
@@ -5407,16 +5231,6 @@ function WorkspacePicker({
           ))}
         </Menu.Dropdown>
       </Menu>
-      {isTauriRuntime() ? (
-        <Button
-          leftSection={<FolderOpen size={16} />}
-          loading={picking}
-          onClick={pickDirectory}
-          variant="default"
-        >
-          {t("setup.project.choose")}
-        </Button>
-      ) : null}
     </Group>
   );
 }
@@ -5554,9 +5368,9 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   if (section === "verification") {
     return status.verificationReady;
   }
-  // Hotkeys and this machine's own settings ask for nothing
-  // before the project can run, so they are never the step that is still
-  // missing -- and never the step that stops the first-run walkthrough.
+  // This machine's own settings ask for nothing before the project can run,
+  // so they are never the step that is still missing -- and never the step
+  // that stops the first-run walkthrough.
   return true;
 }
 

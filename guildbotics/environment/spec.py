@@ -262,7 +262,7 @@ def host_environment() -> dict[str, str]:
     at this one: a time it writes, a date it decides by, and the language it
     speaks must be theirs. Every environment starts with these, whatever runs
     in it, so they are facts of the host rather than settings of a provider.
-    Each is read afresh, since the Desktop outlives a change of either, and a
+    Each is read afresh, since the server outlives a change of either, and a
     fact the host cannot name is left out rather than guessed.
 
     Returns:

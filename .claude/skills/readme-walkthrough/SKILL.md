@@ -37,7 +37,7 @@ Never contact GitHub or Slack and never open their URLs. Instead:
 
 ### Tier 3 — Out of scope (declare, don't attempt)
 
-Real GitHub/Slack accounts and workspaces, OS keychain writes, AI CLI tool authentication, building the Tauri desktop app, and the first-launch installs it performs (`~/.guildbotics/bin/guildbotics`, `~/.local/bin` shim, skill installation). Where the README makes checkable claims about these (paths, behaviors), do a static source cross-check; otherwise list the step under "unverified (out of scope)" in the report so the manual release checklist can cover it.
+Real GitHub/Slack accounts and workspaces, OS keychain writes, AI CLI tool authentication, registering the LaunchAgent with `scripts/hub-server.sh`, and the installs it performs (`~/.guildbotics/bin/guildbotics`, `~/.local/bin` shim, skill installation). Where the README makes checkable claims about these (paths, behaviors), do a static source cross-check; otherwise list the step under "unverified (out of scope)" in the report so the manual release checklist can cover it.
 
 ## Procedure
 
@@ -76,8 +76,8 @@ For every step, record: README section (+ line number), what the README says, wh
 Section-specific notes:
 
 - **Getting Started → Initial Setup**: follow the GUI literally, answering that GitHub will not be used, as the README suggests for a first run. Use the harness temp workspace as the workspace folder. After setup, diff the actual files on disk against the README's list.
-- **Quick Start**: per Tier 1 above. Also check the shortcut-related claims as far as the GUI shows them (Setup → Shortcuts existence; the hotkey chip in the command bar).
-- **Work Together with a Member**: mostly Tier 3 (skill installation); statically confirm the claims about skill install locations against the desktop/Tauri source, and confirm the skill status display under **Setup → LLM / AI CLI tools** exists.
+- **Quick Start**: per Tier 1 above.
+- **Work Together with a Member**: mostly Tier 3 (skill installation); statically confirm the claims about skill install locations against `scripts/install_cli_assets.py` and `CliAgentProvision.user_skills`.
 - **Delegate GitHub Tickets / Ask for Work in Slack**: Tier 2. Include the lane-mapping description, the `Agent` field claim, and the `codex doctor` snippet (existence of the command is out of scope; just note it).
 - **Service screen**: confirm the three execution sources and their per-source toggles, the patrol interval and consecutive-failure inputs, the run/stop controls, and any streaming or activity view the README claims, all as described. Beware the trap here: first-setup **forces one active member**, and that member inherits the default AI CLI tool, which runs for real inside the isolated agent environment — so pressing Run as-is would hand real work to a real agent. Stubbing the tool is no longer an option — the one-shot `script:` path was removed, and `intelligences/cli_agent_mapping.yml` now only points at catalog tools (`cli_agents/<tool>/default.yml`), so a fake entry cannot stand in for a real CLI. Keep the run OFF the agent path instead, by giving the member a shell routine command, which the scheduler runs with no AI CLI tool involved:
 

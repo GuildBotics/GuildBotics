@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
+import signal
 import socket
 import sys
 import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
+from typing import Literal
 
 import uvicorn
+from fastapi import FastAPI
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.auth import ServerAuth
-from guildbotics.drivers.app_api_lock import PORT_NOTICE_PREFIX, hold_backend_lock
+from guildbotics.drivers.app_api_lock import (
+    PARENT_PID_ENV,
+    START_SERVICES_ENV,
+    BackendAlreadyRunningError,
+    hold_backend_lock,
+)
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
     apply_workspace_root,
     get_workspace_root,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.local_api import server_port
 from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.safe_paths import UnsafePathError
@@ -30,17 +40,19 @@ from guildbotics.utils.workspace_state import (
     register_workspace,
 )
 
+#: The line on stdout that tells a launcher the server listens on the port.
+PORT_NOTICE_PREFIX = "GUILDBOTICS_APP_API_PORT="
+
 
 def _parent_is_alive(parent_pid: int) -> bool:
     return pid_exists(parent_pid)
 
 
 def _watch_parent(parent_pid: int) -> None:
-    """Exit the sidecar once the parent (Desktop or CLI) process is gone.
+    """Exit the server once the process that launched it is gone.
 
-    A force-killed desktop app cannot stop its sidecar, which would otherwise
-    survive as an orphan holding the API port. Watching the desktop app PID
-    covers that as well as a clean quit.
+    A force-killed ``guildbotics start`` cannot stop its server, which would
+    otherwise survive as an orphan holding the API port.
     """
     while True:
         if not _parent_is_alive(parent_pid):
@@ -49,7 +61,7 @@ def _watch_parent(parent_pid: int) -> None:
 
 
 def _start_parent_watchdog() -> None:
-    raw_pid = os.getenv("GUILDBOTICS_APP_API_PARENT_PID")
+    raw_pid = os.getenv(PARENT_PID_ENV)
     if not raw_pid:
         return
     try:
@@ -133,13 +145,65 @@ def _bind(port: int) -> socket.socket:
     return sock
 
 
+class _Server(uvicorn.Server):
+    """A server that ends as ``guildbotics stop`` ends it.
+
+    The first Ctrl-C lets in-flight work finish and a second one cancels it;
+    SIGTERM, which an OS sends once to stop its service before killing it,
+    cancels at once. Nothing is re-raised after the exit, so an exit asked for
+    is a successful one.
+    """
+
+    def __init__(self, config: uvicorn.Config, app: FastAPI, start_services: bool):
+        super().__init__(config)
+        self._app = app
+        self._start_services = start_services
+        # Counted here, not read from ``should_exit``, which an exit asked
+        # through the API also sets.
+        self._stage: Literal["", "draining", "cancelling"] = ""
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        await super().startup(sockets=sockets)
+        if self._start_services and not self.should_exit:
+            threading.Thread(
+                target=self._start, name="guildbotics-service-start", daemon=True
+            ).start()
+
+    def _start(self) -> None:
+        try:
+            self._app.state.runtime.start_scheduler()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # The server stays up to show the failure and start them again:
+            # on the screens, and in the output an OS service keeps.
+            logging.getLogger("guildbotics").exception("The services did not start")
+            print(f"The services did not start: {exc}", file=sys.stderr)
+
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+        if self._stage == "cancelling":
+            # A third Ctrl-C skips a teardown that does not end.
+            self.force_exit = self.force_exit or sig == signal.SIGINT
+            return
+        if sig == signal.SIGINT and not self._stage:
+            self._stage = "draining"
+            print(t("runtime.service_lock.stopping_after_work"), file=sys.stderr)
+            self._app.state.shut_down(force=False)
+            return
+        if sig == signal.SIGINT:
+            print(t("runtime.service_lock.cancelling"), file=sys.stderr)
+        self._stage = "cancelling"
+        self._app.state.shut_down(force=True)
+
+
 def main() -> None:
     _start_parent_watchdog()
-    with hold_backend_lock() as backend:
-        _serve(backend.request_stop)
+    try:
+        with hold_backend_lock():
+            _serve()
+    except BackendAlreadyRunningError:
+        sys.exit(t("runtime.service_lock.already_running"))
 
 
-def _serve(on_service_stop: Callable[[], None]) -> None:
+def _serve() -> None:
     config = uvicorn.Config(
         "",  # Built once the port is announced, below.
         # Loopback only: other machines reach the server through SSH
@@ -176,9 +240,10 @@ def _serve(on_service_stop: Callable[[], None]) -> None:
             restore_workspace_environment=True,
             workspace_problem=workspace_problem,
         )
-        app.state.on_service_stop = on_service_stop
         config.app = app
-        uvicorn_server = uvicorn.Server(config)
+        uvicorn_server = _Server(
+            config, app, os.environ.pop(START_SERVICES_ENV, "") == "1"
+        )
         app.state.request_shutdown = lambda: setattr(
             uvicorn_server, "should_exit", True
         )

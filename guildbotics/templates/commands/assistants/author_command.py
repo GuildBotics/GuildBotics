@@ -8,7 +8,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.validation import CommandValidationError
 
 COMMAND_METADATA = {
-    "description": "Answer a request from the Desktop command editor or propose command changes.",
+    "description": "Answer a request from the command editor screen or propose command changes.",
     "read_only": True,
     "inputs": {"message": "required"},
 }

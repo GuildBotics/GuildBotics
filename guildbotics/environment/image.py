@@ -209,9 +209,6 @@ def short_digest(digest: str) -> str:
     return digest[:_SHORT_DIGEST]
 
 
-def image_load_command(*, platform: str | None = None) -> str:
+def image_load_command() -> str:
     """The terminal instruction that loads an image archive on this device."""
-    return (
-        managed_cli_command("environment", "image", "load", platform=platform)
-        + " <archive.tar>"
-    )
+    return managed_cli_command("environment", "image", "load") + " <archive.tar>"

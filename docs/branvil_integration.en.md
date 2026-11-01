@@ -177,7 +177,7 @@ workspace its members work in.
 
 ## Connect GuildBotics to Branvil
 
-On the Hub, under **Setup → Integrations** in the desktop app (or the same screen in a browser):
+On the Hub's screens, under **Setup → Integrations**:
 
 1. Choose **Branvil** for the code host and for the tickets. Both use the one Branvil
    GuildBotics is connected to.
@@ -279,8 +279,7 @@ token. GuildBotics hands git yours, so git never asks for a name or a password:
 
    The empty `helper =` stops git from asking the helpers configured before it (the OS
    keychain, Git Credential Manager) for Branvil. A helper configured after these lines would
-   be asked to store the token, so keep them last. On Windows the helper is
-   `!guildbotics git-credential`, since the installer puts the CLI on `PATH`.
+   be asked to store the token, so keep them last.
 3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
 
 On its first request, GuildBotics issues the owner a token for the machine with its

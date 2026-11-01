@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
 import "../../../i18n";
@@ -48,17 +48,7 @@ function Harness({ onForm }: { onForm: (form: GitHubForm) => void }) {
 }
 
 describe("GitHub App private key", () => {
-  afterEach(() => {
-    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-  });
-
-  it.each([
-    ["the browser", false],
-    ["the Desktop window", true],
-  ])("sends the chosen file's PEM text in %s", async (_where, desktop) => {
-    if (desktop) {
-      (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    }
+  it("sends the chosen file's PEM text", async () => {
     const onForm = vi.fn();
     render(
       <TestMantineProvider>

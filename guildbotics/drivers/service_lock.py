@@ -28,8 +28,8 @@ from guildbotics.utils.log_utils import get_logger
 LOCK_RETRY_SECONDS = 0.01
 #: How often the holding process reads the setting again while it holds the
 #: lock. The setting is written by whoever the user switches it from (the
-#: Desktop's API, which may run in another process than the service, or an
-#: editor), so the holder follows the file rather than being told.
+#: server's API or an editor), so the holder follows the file rather than
+#: being told.
 SETTING_POLL_SECONDS = 1.0
 
 

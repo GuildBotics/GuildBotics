@@ -156,7 +156,7 @@ def test_a_device_local_change_never_waits(tmp_path: Path) -> None:
     agree: waiting on them would make every device-local writer queue behind a
     synchronization cycle it is not racing.
     """
-    local = tmp_path / ".guildbotics/local/hotkeys.yml"
+    local = tmp_path / ".guildbotics/local/service.yml"
     local.parent.mkdir(parents=True)
 
     with held_elsewhere(tmp_path):

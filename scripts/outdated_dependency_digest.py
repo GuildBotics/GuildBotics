@@ -2,7 +2,7 @@
 """Report dependencies that have a newer release into a single tracking issue.
 
 The Dependabot alert digest only covers dependencies with a known vulnerability.
-This script covers the rest: packages that are merely behind, across the three
+This script covers the rest: packages that are merely behind, across the two
 lockfiles in this repository. It deliberately reports instead of opening update
 PRs, for the same reason Dependabot security updates are disabled — a bare
 version bump without the accompanying test and behaviour fixes is not a
@@ -34,7 +34,6 @@ CLOSE_COMMENT = "更新可能な依存が無くなったため、この issue �
 ECOSYSTEMS = (
     ("pip", "Python", "uv.lock"),
     ("npm", "desktop", "desktop/package-lock.json"),
-    ("cargo", "Tauri", "desktop/src-tauri/Cargo.lock"),
 )
 
 # A tree line names the package first; the annotations that follow it (`latest`,
@@ -43,12 +42,6 @@ UV_LINE = re.compile(
     r"^[\s│├└─]*(?P<name>[A-Za-z0-9._-]+)(?:\[[^\]]*\])? v(?P<current>[^\s(]+)"
 )
 UV_LATEST = re.compile(r"\(latest: v(?P<latest>[^)]+)\)")
-CARGO_UPDATING = re.compile(
-    r"^\s*Updating (?P<name>\S+) v(?P<current>\S+) -> v(?P<latest>\S+)\s*$"
-)
-CARGO_UNCHANGED = re.compile(
-    r"^\s*Unchanged (?P<name>\S+) v(?P<current>\S+) \(available: v(?P<latest>\S+)\)"
-)
 
 
 class Outdated(NamedTuple):
@@ -99,21 +92,6 @@ def parse_npm_outdated(payload: str) -> list[Outdated]:
     return found
 
 
-def parse_cargo_update(text: str) -> list[Outdated]:
-    """Parse `cargo update --dry-run --verbose` output.
-
-    Both the crates cargo would move and the ones it holds back report a newer
-    version. Neither covers releases outside the declared semver range, so major
-    bumps do not appear here.
-    """
-    found = []
-    for line in text.splitlines():
-        match = CARGO_UPDATING.match(line) or CARGO_UNCHANGED.match(line)
-        if match is not None:
-            found.append(Outdated("cargo", *match.group("name", "current", "latest")))
-    return found
-
-
 def render_body(items: Sequence[Outdated], generated_at: datetime) -> str:
     """Render the tracking issue body for the given outdated dependencies."""
     by_ecosystem = {
@@ -156,8 +134,6 @@ def render_body(items: Sequence[Outdated], generated_at: datetime) -> str:
         "",
         "- Python: `uv tree --outdated --depth 1` — 直接依存のみ。推移的依存は対象外",
         "- desktop: `npm outdated --json` — `npm ci` 後に実行",
-        "- Tauri: `cargo update --dry-run --verbose` — **semver 互換の範囲のみ**。"
-        "`Cargo.toml` の変更を伴うメジャー更新は検出できない",
         "",
         "</details>",
         "",
@@ -184,21 +160,18 @@ def render_new_outdated_comment(items: Sequence[Outdated], new_ids: set[str]) ->
     return "\n".join(lines) + "\n"
 
 
-def _run(
-    args: Sequence[str], cwd: Path, check: bool = True, from_stderr: bool = False
-) -> str:
-    """Run a dependency tool and return the stream carrying its report.
+def _run(args: Sequence[str], cwd: Path, check: bool = True) -> str:
+    """Run a dependency tool and return its report on stdout.
 
     Args:
         args: Command and arguments to run.
         cwd: Directory to run the command in.
         check: Fail on a non-zero exit status.
-        from_stderr: Read the report from stderr instead of stdout.
     """
     result = subprocess.run(
         list(args), cwd=cwd, capture_output=True, text=True, check=check
     )
-    return result.stderr if from_stderr else result.stdout
+    return result.stdout
 
 
 def collect(repo_root: Path) -> list[Outdated]:
@@ -208,14 +181,6 @@ def collect(repo_root: Path) -> list[Outdated]:
         # npm outdated exits non-zero precisely when it finds outdated packages.
         *parse_npm_outdated(
             _run(["npm", "outdated", "--json"], repo_root / "desktop", check=False)
-        ),
-        # cargo prints its status lines, including the version report, on stderr.
-        *parse_cargo_update(
-            _run(
-                ["cargo", "update", "--dry-run", "--verbose"],
-                repo_root / "desktop" / "src-tauri",
-                from_stderr=True,
-            )
         ),
     ]
 
