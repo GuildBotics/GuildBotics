@@ -1,38 +1,25 @@
-# GuildBotics Desktop (macOS / Linux)
+# GuildBotics の画面（`desktop/`）
 
-GuildBotics のデスクトップ GUI です。Tauri v2 + TypeScript frontend と、Python backend（Local API daemon）および GuildBotics CLI を sidecar として同梱します。
+GuildBotics の画面（React + TypeScript）です。Vite でビルドした `desktop/dist` を、GuildBotics のサーバー（`python -m guildbotics.app_api`）がブラウザへ配ります（`guildbotics/app_api/ui.py`）。サーバーの導入・起動・更新は、リポジトリの [README](../README.ja.md#インストール) を参照してください。
 
-- 正式対応: macOS Apple Silicon (arm64)、Linux x86_64（glibc）
-- v1 は手動更新前提（自動更新なし）
-- アーキテクチャ上の位置づけ（Local API 境界・sidecar 構成・対応プラットフォーム）は [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) の「Desktop App」を参照
+- 必要なもの: [uv](https://docs.astral.sh/uv/)（Python 環境）、Node.js 24 以上（CI は 24）
+- アーキテクチャ上の位置づけ（Local API 境界）は [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) を参照
 
 ---
 
-## クイック操作スクリプト
+## 画面をビルドする
 
-リポジトリルートから以下を実行できます。通常の再テストではこちらを使うと、§2 / §3 の手順を直接打たずに済みます。
-
-### ビルド
+サーバーが配る画面は、チェックアウトの `desktop/dist` です。画面のソースを変えたら、ブラウザで見る前にビルドし直します（`scripts/hub-server.sh update` も同じビルドを行います）。
 
 ```bash
-# Python sidecar（Local API + CLI）のみ（事前に画面の build が必要: cd desktop && npm ci && npm run build）
-scripts/desktop-build-backend.sh
-
-# Tauri パッケージのみ（事前に sidecar が必要）
-scripts/desktop-build-frontend.sh
-
-# 画面、sidecar、Tauri パッケージの順にまとめて build
-scripts/desktop-build-all.sh
+cd desktop
+npm ci
+npx vite build
 ```
 
-スクリプトは既定で現在の Rust host target を検出し、対応する sidecar 名を使います。macOS では DMG、Linux では `.deb` と AppImage を生成します。クロスビルドなどで明示する場合は `DESKTOP_TARGET` を指定してください。
+## 開発モード起動
 
-```bash
-DESKTOP_TARGET=aarch64-apple-darwin scripts/desktop-build-all.sh
-DESKTOP_TARGET=x86_64-unknown-linux-gnu scripts/desktop-build-all.sh
-```
-
-### 開発モード起動
+画面とバックエンドを別々に動かします。リポジトリルートから実行します。
 
 ```bash
 # Local API backend のみ（既定: http://127.0.0.1:8765）
@@ -40,12 +27,9 @@ scripts/desktop-dev-backend.sh
 
 # ブラウザ preview 用 frontend（backend は別途起動しておく）
 scripts/desktop-dev-frontend.sh
-
-# Tauri dev でデスクトップアプリを起動
-scripts/desktop-dev-tauri.sh
 ```
 
-backend は `127.0.0.1` の固定ポートで待ち受けます。ポートは `GUILDBOTICS_SERVER_PORT`（既定 8765）で決まり、backend・CLI・Desktop・Vite dev server（`/api` の転送先）がすべて同じ変数を読みます。配布版の Desktop と開発版を同じマシンで同時に動かすときは、片方のポートを変えます。
+backend は `127.0.0.1` の固定ポートで待ち受けます。ポートは `GUILDBOTICS_SERVER_PORT`（既定 8765）で決まり、backend・CLI・Vite dev server（`/api` の転送先）がすべて同じ変数を読みます。OS のサービスで動いているサーバーと同じマシンで開発版を動かすときは、開発版のポートを変えます。
 
 ```bash
 GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-backend.sh
@@ -54,10 +38,6 @@ GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
 ```
 
 ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420`）が画面を配り、`/api`（`/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
-
-`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。ウィンドウは同梱の `bootstrap.html` から入口リンクで UI へ移り、`tauri dev` では UI も Vite dev server から開きます。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。`guildbotics open` で開くブラウザには、backend が `desktop/dist` の画面を配ります。そのため、起動時に画面も build します（`vite build`）。起動したあとにソースを変えたら、ブラウザで見る前に `npx vite build` をもう一度実行するか、起動し直してください。
-
-開発用CLIは`uv run --project`でGuildBoticsのPython環境を選び、呼び出し元の作業ディレクトリを維持します。別リポジトリからの`member git ... --workspace-mode current`や相対パスも、その場所を基準に扱います。開発版のbuild-idはwrapperの内容から作るため、wrapperが変わればDesktopの次回起動時に新しいCLIが配置されます。ソースコードだけの変更は配置し直さなくても、次の実行からそのまま反映されます。
 
 コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AIアシスタントは質問には回答だけを返し、エディタやファイルを変更しません。ソース変更を依頼した場合は、現在のコマンドの更新と必要な補助コマンドの新規作成をまとめて提案します。提案ソースはチャット履歴には展開せず、エディタ側の読み取り専用ファイルタブへ「現在」「新規作成」「更新」を区別して表示します。「更新」タブは追加行と削除行を行番号付きの差分として表示し、「新規作成」タブは完成版ソースを表示します。各表示は領域内で縦横にスクロールできます。内容を確認して「変更を適用」を押した時点で、リビジョン競合と全ソースの妥当性を確認したうえで反映されます。新規ファイルだけを適用した場合、開いていた既存コマンドは切り替えません。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。通常の手動編集ではバリデーションエラーのある途中のソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
 
@@ -95,16 +75,15 @@ npm run test:watch    # ウォッチ
 npm run quality       # format:check + lint + typecheck + duplicates + test（E2E は含まない）
 ```
 
-入力停止から一定時間後の処理（idle自動実行など）を検証するテストは、
+入力停止から一定時間後の処理を検証するテストは、
 必要なデータの取得と画面の表示を待ってから仮想時計を止めます。
 `fireEvent`で入力やフォーカスのイベントを送り、`act`内の`vi.advanceTimersByTimeAsync`で
 本番の期限の直前と到達時点まで時計を進めます。入力操作に掛かった実時間が待ち時間に含まれると、
 遅い環境で入力途中の値が先に処理されるためです。
-実装例は[`QuickRun.test.tsx`](src/quick/QuickRun.test.tsx)を参照してください。
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` + 実ファイル書き込み」を貫く critical user journey を検証します。Tauri は使わず browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
 
 前提:
 
@@ -128,7 +107,7 @@ cd desktop
 npm run e2e
 ```
 
-`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ画面を build（`vite build` で `desktop/dist`）→ スタックごとに backend（temp workspace）を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。画面は配布版と同じく backend が配ります。各テストは `guildbotics open` と同じ入口から入ります。harness が owner token（temp HOME の `~/.guildbotics/data/server/<port>/owner.token`）で `POST /api/session/links` を呼び、返った入口リンクを Playwright が開いてセッションの cookie を得ます（`desktop/e2e/stack-context.ts` の `test`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
+`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ画面を build（`vite build` で `desktop/dist`）→ スタックごとに backend（temp workspace）を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。画面は本番と同じく backend が配ります。各テストは `guildbotics open` と同じ入口から入ります。harness が owner token（temp HOME の `~/.guildbotics/data/server/<port>/owner.token`）で `POST /api/session/links` を呼び、返った入口リンクを Playwright が開いてセッションの cookie を得ます（`desktop/e2e/stack-context.ts` の `test`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
 | spec                      | journey                                                                                                                                                                                                                                                                                        |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -156,220 +135,3 @@ npm run e2e
 - 各スタックの backend のポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。backend は `127.0.0.1` だけで待ち受けます。
 - 各スタックの owner token はその temp HOME の下に backend が作り、spec は stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）が示す temp HOME から読みます。
 - `npx playwright test` を直接実行するときは、先に `npx vite build` で画面を build しておきます（harness は `desktop/dist/index.html` が無ければ起動しません）。
-- Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
-
----
-
-## 1. 前提ツール
-
-| ツール                                | バージョン目安       | 用途                           |
-| ------------------------------------- | -------------------- | ------------------------------ |
-| [uv](https://docs.astral.sh/uv/)      | 最新                 | Python 依存解決・sidecar build |
-| Node.js                               | 24 以上（CI は 24）  | frontend build / Tauri CLI     |
-| Rust (rustup)                         | **stable 1.88 以上** | Tauri 本体の build             |
-| Xcode Command Line Tools（macOS）     | —                    | macOS 向けリンク・署名         |
-| WebKitGTK 4.1 開発パッケージ（Linux） | —                    | Linux 向けリンク               |
-
-### Rust ツールチェーンの注意（重要）
-
-Tauri の依存には Rust 1.88 以上を要求するクレートがあるため、**Cargo 1.88 以上**が必要です。Homebrew 版の `rust`（standalone）が PATH 上で `rustup` より優先されていると、古い Cargo が使われて次のエラーで失敗します。
-
-```
-error: failed to download `idna_adapter vX.Y.Z`
-  ...
-  feature `edition2024` is required
-```
-
-対処（いずれか）:
-
-```bash
-# rustup の stable を最新化し、PATH 上で優先されるようにする
-rustup default stable
-rustup update
-rustc --version   # 1.88 以上であることを確認
-
-# 現在の target を確認
-rustc -vV | awk '$1 == "host:" { print $2 }'
-```
-
-`which -a cargo` で Homebrew 版（`/opt/homebrew/bin/cargo`）が先に来る場合は、ビルド時だけ rustup のツールチェーンを優先させることもできます。
-
-```bash
-PATH="$(dirname "$(rustup which cargo)"):$PATH" scripts/desktop-build-frontend.sh
-```
-
-Linux では Rust と Node.js に加えて、使用するディストリビューションの Tauri / WebKitGTK 開発依存が必要です。Debian / Ubuntu では次を実行してください。
-
-```bash
-sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-```
-
-Linux の Tauri 実行に必要なパッケージはディストリビューションにより異なります。Arch / Fedora などは [Tauri の Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux) を参照してください。
-
----
-
-## 2. 配布物のローカルビルド手順
-
-リポジトリのルートで実行します。
-
-### 2.1 Python sidecar（Local API + CLI）を build する
-
-GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。`_internal/guildbotics/` には package の `.py` のソースと隔離環境の依存の一覧も入ります（隔離環境の microVM がこの directory を mount して GuildBotics 自身のコードを動かすため）。Local API が配る画面（`desktop/dist` の Vite build）は `_internal/desktop/dist` に入ります。checkout で `guildbotics/` の隣に `desktop/` があるのと同じ位置で、Local API はそこから画面を読みます。そのため先に画面を build します（無ければ `scripts/desktop-build-backend.sh` はエラーで止まります）。通常は `scripts/desktop-build-backend.sh` を使います。
-
-```bash
-# リポジトリルートで実行
-uv sync --extra test --extra dev
-(cd desktop && npm ci && npm run build)
-
-scripts/desktop-build-backend.sh
-
-# 生成物（build-id は build ごとの識別子）:
-# desktop/src-tauri/binaries/guildbotics/{guildbotics-app-api,guildbotics,_internal/,build-id}
-```
-
-生成される directory は約 240MB です。Desktop はこの directory を同梱し、起動時に build ごとの `~/.guildbotics/programs/<build-id>/` へ一度だけ複製して、`~/.guildbotics/bin` をそこを指すリンクにします（managed CLI は `~/.guildbotics/bin/guildbotics`）。古い build の CLI が動いている間は切り替えを次回の起動へ延期するので、実行中のプロセスの参照先が途中で変わることはありません。onefile は起動のたびに全体を一時 directory へ展開して CLI 1 回に数秒かかるため使いません。
-
-> **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
->
-> ```bash
-> dist/guildbotics/guildbotics-app-api &
-> printf 'Authorization: Bearer %s\n' "$(cat ~/.guildbotics/data/server/8765/owner.token)" |
->   curl -H @- http://127.0.0.1:8765/api/health
-> # => {"status":"ok",...}
-> ```
-
-### 2.2 frontend 依存をインストールしてパッケージを build する
-
-```bash
-# リポジトリルートで実行（§2.1 の sidecar build 後）
-scripts/desktop-build-frontend.sh
-```
-
-macOS Apple Silicon の成果物:
-
-```
-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/GuildBotics_<version>_aarch64.dmg
-```
-
-Linux x86_64 の成果物:
-
-```
-desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/GuildBotics_<version>_amd64.deb
-desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/GuildBotics_<version>_amd64.AppImage
-```
-
-Windows x86_64 の成果物は NSIS installer です。Windows 実機の前提ツール、native test、build、smoke checklist は [Windows build 手順](../docs/windows_desktop_build.ja.md)を参照してください。
-
-```
-desktop/src-tauri/target/release/bundle/nsis/GuildBotics_<version>_x64-setup.exe
-```
-
-`<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version` です。Tauri は各 OS 用の config を自動選択します。macOS は [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json) で DMG、Linux は [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json) で `.deb` と AppImage、Windows は [src-tauri/tauri.windows.conf.json](src-tauri/tauri.windows.conf.json) で NSIS を指定しています。
-
-各パッケージには desktop 本体と、Local API `guildbotics-app-api` と CLI `guildbotics` の directory が同梱されます。macOS の secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
-
----
-
-## 3. 開発モード（`tauri dev`）
-
-macOS / Linux で毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは `desktop/src-tauri/binaries/guildbotics/` に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。Windows では shell script を実行ファイルとして起動できないため、同じ script が先に `desktop-build-backend.sh` で実体を build します。
-
-```bash
-scripts/desktop-dev-tauri.sh
-```
-
-このスクリプトは `tauri dev` を `--no-watch` で起動します。Tauri の watcher は `desktop/src-tauri/` の変更でアプリのプロセスごと再起動し、その子である Local API sidecar も一緒に終了するため、実行中の service とメンバーの作業が途中で打ち切られるからです。
-
-- frontend（`desktop/src/`）の変更は、これまでどおり Vite の HMR で即時反映されます。
-- Rust / `tauri.conf.json` / `Cargo.toml` の変更は、service を止めてよいタイミングでスクリプトを起動し直して反映します。
-
-> `desktop/src-tauri/binaries/` は `.gitignore` 対象です。配布物を作る前には、必ず 2.1 の手順で本物の PyInstaller バイナリへ置き換えてください。
-
----
-
-## 4. インストール手順（利用者向け）
-
-### macOS（DMG）
-
-1. `GuildBotics_<version>_aarch64.dmg` をダブルクリックしてマウントする。
-2. 開いたウィンドウで **`GuildBotics.app` を `Applications` フォルダへドラッグ**する。
-3. マウントしたディスクイメージを取り出す（Finder のサイドバーで取り出し、または `⌘E`）。
-
-### 初回起動（unsigned / 未 notarized の場合）
-
-ローカルビルドや署名なしの DMG は Gatekeeper にブロックされます。次のいずれかで開きます。
-
-- **方法 A（推奨）**: `Applications` の `GuildBotics.app` を **右クリック → 開く** → 警告ダイアログで再度 **開く**。
-- **方法 B**: 一度起動を試みた後、**システム設定 → プライバシーとセキュリティ** を開き、下部の「"GuildBotics" は…」の項目で **このまま開く** を押す。
-- **方法 C（CLI）**: quarantine 属性を外す。
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/GuildBotics.app
-  ```
-
-> signed + notarized された DMG ではこの操作は不要です。
-
-### Linux（`.deb` / AppImage）
-
-Debian / Ubuntu 系では `.deb` を使います。
-
-```bash
-sudo apt install ./GuildBotics_<version>_amd64.deb
-```
-
-その他の対応ディストリビューションでは AppImage に実行権限を付けて起動します。
-
-```bash
-chmod +x GuildBotics_<version>_amd64.AppImage
-./GuildBotics_<version>_amd64.AppImage
-```
-
-### 起動後
-
-- 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**初回と更新後は、同梱の program を `~/.guildbotics/programs` へ配置し、OS が同梱ライブラリを初めて検査するため、起動完了まで時間がかかることがあります**（2 回目以降は速くなります）。
-- backend が立ち上がると、設定状態（config / `.env` / storage path）が画面に表示されます。
-- 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を AI CLIツールから参照できる場所へ配置します。
-  - `~/.guildbotics/bin/guildbotics`: managed CLI
-  - `~/.local/bin/guildbotics`: 未作成または既存の managed shim の場合だけ更新
-  - `~/.agents/skills/guildbotics/SKILL.md`（Codex を `$CODEX_HOME` または `~/.codex` で検出した場合）。Codex のユーザースキルは `$CODEX_HOME/skills` から `$HOME/.agents/skills` へ移行し、前者は非推奨になったため、配置先は Codex home ではなくユーザー共通のスキルディレクトリです。Codex home 側に GuildBotics desktop が配置した未編集の skill が残っている場合は、同じ skill が二重に登録されないよう削除します
-  - `$CLAUDE_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.claude/skills/guildbotics/SKILL.md`
-  - `$GROK_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.grok/skills/guildbotics/SKILL.md`
-  - `$ANTIGRAVITY_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.gemini/config/skills/guildbotics/SKILL.md`
-  - `$COPILOT_HOME/skills/guildbotics/SKILL.md` または検出済みの `~/.copilot/skills/guildbotics/SKILL.md`
-- Grok Build は Claude 互換 skill として `~/.claude/skills/` も読み込みますが、`$GROK_HOME/skills/guildbotics/` を配置すると native 側が優先され、同名の GuildBotics skill が重複して有効になることはありません（Grok Build 0.2.114 で確認）。
-- 既存の user skill は、GuildBotics desktop が配置した未編集 skill だけを更新します。ユーザーが作成・編集した `SKILL.md` は上書きしません。
-- `設定 - LLM・AI CLIツール` では、AI CLIツールごとの GuildBotics skill 状態を確認できます。ユーザー編集済みなどで最新版が自動適用されない場合は、画面上の `最新版で上書きする` ボタンから明示的に更新できます。
-
----
-
-## 5. コード署名・notarization（任意）
-
-CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos.yml)）は、以下の GitHub Secrets が設定されている場合だけ署名・notarization を行います。未設定なら unsigned DMG を生成します。
-
-| Secret                       | 内容                                                           |
-| ---------------------------- | -------------------------------------------------------------- |
-| `APPLE_CERTIFICATE`          | Developer ID Application 証明書（base64 化した `.p12`）        |
-| `APPLE_CERTIFICATE_PASSWORD` | `.p12` のパスワード                                            |
-| `APPLE_KEYCHAIN_PASSWORD`    | CI 上の一時 keychain 用パスワード                              |
-| `APPLE_SIGNING_IDENTITY`     | 署名 identity（例: `Developer ID Application: Name (TEAMID)`） |
-| `APPLE_ID`                   | notarization 用 Apple ID                                       |
-| `APPLE_PASSWORD`             | notarization 用 app-specific password                          |
-| `APPLE_TEAM_ID`              | Apple Developer Team ID                                        |
-
-`APPLE_CERTIFICATE` が無ければ署名 step を skip、`APPLE_CERTIFICATE` と `APPLE_ID` が揃った時だけ notarization を実行します。
-
----
-
-## 6. トラブルシュート
-
-| 症状                                                                  | 原因 / 対処                                                                                                                                              |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。                                                                                                 |
-| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics/` に `guildbotics-app-api` / `guildbotics` / `build-id` が存在するか確認。                        |
-| PyInstaller 実行時に `ModuleNotFoundError`                            | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics.spec](sidecar/guildbotics.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
-| 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                    |
-| Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                        |
-| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/programs` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                            |
-| `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                         |

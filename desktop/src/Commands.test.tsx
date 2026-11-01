@@ -14,7 +14,6 @@ import {
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
-  getHotkeys,
   getTeam,
   getTraceDetail,
   getTraces,
@@ -59,11 +58,6 @@ vi.mock("./commands/CommandEditor", () => ({
   ),
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
-vi.mock("@tauri-apps/api/webview", () => ({
-  getCurrentWebview: () => ({ onDragDropEvent: async () => () => undefined }),
-}));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
 let eventListener: ((event: RuntimeEvent) => void) | null = null;
@@ -76,8 +70,6 @@ vi.mock("./api/client", async (importOriginal) => {
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
     getServerMachineName: vi.fn(async () => "studio"),
-    getHotkeys: vi.fn(),
-    updateHotkeys: vi.fn(),
     getTeam: vi.fn(),
     getTraceDetail: vi.fn(),
     getTraces: vi.fn(),
@@ -93,7 +85,6 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
-const getHotkeysMock = vi.mocked(getHotkeys);
 const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
@@ -202,8 +193,6 @@ beforeEach(() => {
   eventListener = null;
   window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
-  getHotkeysMock.mockReset().mockResolvedValue({ quick_run: "", commands: {} });
-  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
     message: "This is possible.",
@@ -313,8 +302,7 @@ describe("Command editor screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("puts selection, save state, path and hotkey in one command bar", async () => {
-    getHotkeysMock.mockResolvedValue({ quick_run: "", commands: { greet: "Control+Alt+1" } });
+  it("puts selection, save state and path in one command bar", async () => {
     const { container } = await renderPage();
     await screen.findByLabelText("editor");
 
@@ -329,30 +317,6 @@ describe("Command editor screen", () => {
     expect(inBar.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
     expect(inBar.getByTitle("/workspace/.guildbotics/config/commands/greet.md")).toBeVisible();
     expect(inBar.getByRole("button", { name: t("commands.copyScriptPath") })).toBeEnabled();
-    await waitFor(() =>
-      expect(inBar.getByRole("button", { name: t("hotkey.commandLabel") })).toHaveTextContent(
-        "Control+Alt+1",
-      ),
-    );
-  });
-
-  it("opens the file in an external editor only from a Desktop window", async () => {
-    const { container } = await renderPage();
-    await screen.findByLabelText("editor");
-    const bar = within(container.querySelector<HTMLElement>(".command-bar")!);
-
-    // The file is on the server machine: a browser has nothing to open it with.
-    expect(bar.queryByRole("button", { name: t("commands.openScript") })).not.toBeInTheDocument();
-    expect(bar.getByRole("button", { name: t("commands.copyScriptPath") })).toBeEnabled();
-  });
-
-  it("offers the external editor in a Desktop window", async () => {
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    const { container } = await renderPage();
-    await screen.findByLabelText("editor");
-    const bar = within(container.querySelector<HTMLElement>(".command-bar")!);
-
-    expect(bar.getByRole("button", { name: t("commands.openScript") })).toBeEnabled();
   });
 
   it("shows the command a link names", async () => {

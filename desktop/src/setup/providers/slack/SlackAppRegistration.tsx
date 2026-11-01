@@ -120,16 +120,22 @@ export function SlackAppRegistrationPanel({ defaultAppName, memberKey = "" }: Pr
           </Text>
           <Group gap="xs">
             <Button
+              component="a"
+              href={registration.registration_url}
+              target="_blank"
+              rel="noopener noreferrer"
               variant="subtle"
               size="compact-sm"
-              onClick={() => void openExternal(registration.registration_url)}
             >
               {t("setup.members.slackAppRegistration.reopen")}
             </Button>
             <Button
+              component="a"
+              href={registration.app_directory_url}
+              target="_blank"
+              rel="noopener noreferrer"
               variant="subtle"
               size="compact-sm"
-              onClick={() => void openExternal(registration.app_directory_url)}
             >
               {t("setup.members.slackAppRegistration.openAppList")}
             </Button>

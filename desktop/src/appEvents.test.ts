@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./api/client";
-import { onAppEvent, onWorkspaceChange } from "./appEvents";
+import { onWorkspaceChange } from "./appEvents";
 import { makeRuntimeEvent } from "./test/factories";
 
 class FakeWebSocket {
@@ -25,7 +25,7 @@ const sockets = () => FakeWebSocket.instances;
 
 describe("server announcements", () => {
   // Each screen has its own query cache, so a change on the server reaches
-  // every one of them through the event stream, in a browser as in Desktop.
+  // every one of them through the event stream.
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -50,16 +50,6 @@ describe("server announcements", () => {
 
     unsubscribe();
     expect(sockets()[0].close).toHaveBeenCalled();
-  });
-
-  it("tells hotkey changes apart from a workspace switch", () => {
-    const handler = vi.fn();
-    onAppEvent("hotkeys.changed", handler);
-
-    sockets()[0].publish(makeRuntimeEvent({ type: "workspace.changed" }));
-    sockets()[0].publish(makeRuntimeEvent({ type: "hotkeys.changed" }));
-
-    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("listens again shortly after the server closes the stream", () => {

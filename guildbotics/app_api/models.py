@@ -96,10 +96,12 @@ class HealthResponse(BaseModel):
     machine_name: str
 
 
-class ShutdownResponse(BaseModel):
-    """Accepted shutdown: how long the host must leave the teardown alone."""
+class ShutdownRequest(BaseModel):
+    """Whether in-flight work is cancelled rather than waited for."""
 
-    teardown_budget_seconds: float
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool
 
 
 class ConfigStatus(BaseModel):
@@ -249,40 +251,6 @@ class CommandInputFileResponse(BaseModel):
     guest_path: str
 
 
-class CommandInputFileCopyRequest(BaseModel):
-    path: Path
-
-
-class CommandInputPathsRequest(BaseModel):
-    """Paths the Desktop is about to put in a command's input field."""
-
-    paths: list[Path] = Field(min_length=1)
-    cwd: Path | None = None
-
-
-class CommandInputGrantSuggestion(BaseModel):
-    """The grant that would open an unreachable path, for the grants screen."""
-
-    scope: Literal["document", "device"]
-    path: str
-
-
-class CommandInputPathStatus(BaseModel):
-    path: Path
-    kind: Literal["file", "directory", "missing"]
-    #: Whether a turn of this device's isolated agent environment sees it.
-    reachable: bool
-    #: The path as the agent inside the environment names it: what the
-    #: input field carries.
-    guest_path: str
-    grant: CommandInputGrantSuggestion | None = None
-    problem: str = ""
-
-
-class CommandInputPathsResponse(BaseModel):
-    paths: list[CommandInputPathStatus]
-
-
 CommandFileFormat = CommandFormat
 
 
@@ -320,19 +288,6 @@ class CommandFileExecutionStatus(BaseModel):
         | None
     ) = None
     blocking_context: dict[str, str] = Field(default_factory=dict)
-
-
-class HotkeySettings(BaseModel):
-    """Global hotkey assignments for the desktop quick-run window.
-
-    ``commands`` maps a logical command name to its accelerator; an empty
-    ``quick_run`` means the generic window has no hotkey.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    quick_run: str = ""
-    commands: dict[str, str] = Field(default_factory=dict)
 
 
 class CommandFileCreateRequest(BaseModel):
@@ -609,7 +564,6 @@ class ActivityHistoryResponse(BaseModel):
 
 class SchedulerStopRequest(BaseModel):
     force: bool = False
-    wait: bool = True
 
 
 class RuntimeActiveWork(BaseModel):

@@ -1,5 +1,4 @@
 import type { ClientRequest } from "node:http";
-import { resolve } from "node:path";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type HttpProxy } from "vite";
@@ -13,13 +12,6 @@ export default defineConfig({
   clearScreen: false,
   build: {
     rolldownOptions: {
-      // `quick.html` is the hotkey-triggered quick run window; `bootstrap.html`
-      // is the bundled page a Desktop window shows until the backend is up.
-      input: {
-        main: resolve(import.meta.dirname, "index.html"),
-        quick: resolve(import.meta.dirname, "quick.html"),
-        bootstrap: resolve(import.meta.dirname, "bootstrap.html"),
-      },
       output: {
         // A single group whose `name` decides per module: returning `null`
         // leaves the module to Rolldown's automatic splitting, and every
@@ -32,9 +24,6 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1420,
     strictPort: true,
-    watch: {
-      ignored: ["**/src-tauri/target/**"],
-    },
     proxy: {
       "/api": { target: BACKEND, changeOrigin: true, ws: true, configure: asBackendOrigin },
     },
@@ -90,9 +79,6 @@ function vendorChunkName(id: string): string | null {
   }
   if (packageName === "lucide-react") {
     return "vendor-icons";
-  }
-  if (packageName.startsWith("@tauri-apps/")) {
-    return "vendor-tauri";
   }
   return "vendor";
 }

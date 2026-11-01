@@ -1,6 +1,6 @@
 """The next brain sees configuration that changed after the previous one.
 
-A long-lived process (the Desktop local API, ``guildbotics start``) used to
+A long-lived process (the server, ``guildbotics server start``) used to
 remember the first load of the brain, model, and AI CLI mappings, and only the
 settings screen dropped that memory. Hand edits, files synced from another
 device, workspace switches, and service-side writes never did. The mappings

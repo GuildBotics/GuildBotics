@@ -54,7 +54,7 @@ directory -- and is discarded when the command ends, whether it succeeded, faile
 cancelled. The adapters and the provider CLIs run inside it, so a provider's
 output is read there, not on the host. The turns run one at a time and see what an earlier one left in
 it, since a command and its subcommands are one isolation. No turn runs
-outside a command: the Desktop's assistants and the diagnostics screen's AI CLI
+outside a command: the screens' assistants and the diagnostics screen's AI CLI
 tool check run as bundled commands too. A running microVM is never reshaped: a turn whose working
 directory is outside what the microVM mounted when it booted, or that asks
 for another access contract, is refused. A tool that is configured but not
@@ -82,7 +82,7 @@ What the environment holds -- the base image, the provider CLIs GuildBotics
 installs at pinned versions with the Node.js they run on, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
 when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
-**Agent execution environment** screen in the Desktop shows the runtime, the
+**Agent execution environment** screen shows the runtime, the
 base image, the snapshot's state (with a
 build button), the assigned resources, the network policy, the DNS resolvers,
 and each tool's login; `guildbotics
@@ -161,7 +161,7 @@ The image for developing GuildBotics itself
 builds every architecture, loads it here and into the CI runner, and declares) is
 the worked example.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into the isolated environment ([microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)). If any directory mounted for a command is there -- the working directory of a writable command, a filesystem grant, the workspace itself, or GuildBotics' data under the home directory -- the command is refused at startup with the path and the reason. Move the directory outside the OS temporary directory and try again.
 
@@ -188,14 +188,11 @@ is canonicalized once before inspection, and code and templates share that root.
 The **This machine → Registered workspaces** list includes inactive workspaces;
 remove an entry only when its state no longer needs protection. Removing the entry
 does not delete files. The selected workspace cannot be unregistered, and removing
-another entry requires confirmation. Invalid startup selections leave Desktop
+another entry requires confirmation. Invalid startup selections leave the server
 running with no workspace selected and show the refusal reason. Unavailable old
 locations can still be unregistered. Malformed grants allow workspace selection
 for editing, but commands remain refused until repaired.
-Copy sources must remain outside protected state. Leaf links are refused. Ancestor
-links such as `~/Dropbox/report.pdf` are accepted only when the parent contains fixed
-credential state and cannot be shared with a turn; otherwise select the file in its
-real directory. The preview shows the refusal and offers no unsafe grant. Status
+Status
 polling retries an unavailable input store and clears its dedicated alert after recovery.
 Member IDs accept lowercase letters, digits, `_` and `-`, excluding Windows reserved names.
 Invalid stored configurations show their filename and can be edited or removed from the
@@ -204,12 +201,11 @@ be changed. Existing directory names such as `Alice`, `alice.bak`, names with in
 spaces, and Unicode names are shown and can be removed from the workspace. Names with separators, drive or stream suffixes, control characters, or trailing
 dots or spaces must be renamed or removed on disk using the reported filename.
 A workspace's directory without `member.yml` is not a member, and an identity directory
-without `identity.yml` is not an identity. Copying checks the 20MiB
-limit throughout the read, including files that grow during the copy. Workspace
+without `identity.yml` is not an identity. An upload from the screens is limited
+to 20MiB. Workspace
 locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
-opening it. Host-created hard links to protected files are not distinguished by copy
-admission; turns cannot create such links because protected files are not mounted.
+opening it.
 
 - **Working directory**: the working directory itself opens nothing for
   writing; only a grant does. A command that may write works in it directly,
@@ -261,7 +257,7 @@ admission; turns cannot create such links because protected files are not mounte
   what it finds. A command the host
   starts on its own (a scheduled or routine command, the ticket patrol, a
   chat dispatch) works in the exchange directory (`Documents/GuildBotics`,
-  below); a Desktop run works where the screen says (the exchange directory
+  below); a run from the screens works where the screen says (the exchange directory
   when it says nothing), and `guildbotics run` in `--cwd` or the shell's
   working directory. A turn works there or anywhere else the microVM
   mounted. The workspace's `.guildbotics/config` and `state` are not part
@@ -293,14 +289,14 @@ admission; turns cannot create such links because protected files are not mounte
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
   Apart from that file, `Documents/GuildBotics` (the exchange directory) is
-  always granted read/write: a Desktop run that names no working directory
-  runs there, and what an agent makes for the user goes under it unless the
-  request names a destination. What the Desktop hands over (a pasted image, a
-  copy of a file the environment could not reach) is kept in GuildBotics' own
-  storage (`~/.guildbotics/data/command_inputs`), bound read-only at the same
-  path into the runs the Desktop starts, and removed when the app session
-  ends. A path the Desktop puts in the input field is spelled as the
-  environment names it (`/c/...` on Windows, never `C:\...`), so the agent
+  always granted read/write: a run from the screens that names no working
+  directory runs there, and what an agent makes for the user goes under it
+  unless the request names a destination. What the screens hand over (a pasted
+  image, or a file dropped on the input, which the browser uploads as a copy)
+  is kept in GuildBotics' own storage (`~/.guildbotics/data/command_inputs`),
+  bound read-only at the same path into the runs the screens start, and removed
+  when the server's session ends, at its restart. The path the screen puts in
+  the input field for such a file is spelled as the environment names it (`/c/...` on Windows, never `C:\...`), so the agent
   opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that protect directories from sharing, in
@@ -341,7 +337,7 @@ admission; turns cannot create such links because protected files are not mounte
   ```
 
   The values apply when the next microVM boots. Changing them does not rebuild
-  the disk snapshot. `guildbotics environment status` and the Desktop's
+  the disk snapshot. `guildbotics environment status` and the screens'
   **Agent execution environment** screen show the assigned values.
 
   A command's microVM keeps `/tmp` on a disk of its own, the same 4 GiB as its
@@ -388,7 +384,7 @@ admission; turns cannot create such links because protected files are not mounte
   ```
 
 - **Read-only turns**: a command that may change nothing declares so
-  (`read_only: true`; among the bundled commands, the Desktop's troubleshooting
+  (`read_only: true`; among the bundled commands, the screens' troubleshooting
   and command-authoring assistants and the diagnostics screen's AI CLI tool
   check). The declaration is the command's: its whole run, its own code, its
   subcommands, and every turn among them included, is held to it, and no turn
@@ -411,7 +407,7 @@ admission; turns cannot create such links because protected files are not mounte
   Such a turn holds no person lease, so the member broker also refuses every
   write-capable member command.
 
-All of this is edited in Desktop under **Agent execution environment**.
+All of this is edited on the screens under **Agent execution environment**.
 The "Directories shared by the workspace" card holds the documents; the
 "Directories on this device" card holds the paths and denies added here; both
 judge a typed or picked path before it is added (whether it exists here,
@@ -465,7 +461,7 @@ environment: on every device that runs turns, run `guildbotics environment login
 the environment and walks you through its device code flow in the browser. The result
 is sealed on the device (see below) and shared by every member and workspace on that
 device. GuildBotics does not copy them into its conversation store or
-diagnostics. The Desktop shows the login state and the command to run; it never
+diagnostics. The screens show the login state and the command to run; they never
 drives the login dialogue itself.
 
 The login runs on a terminal inside the environment, because a tool that must ask
@@ -478,8 +474,8 @@ environment's kernel lacks, so it runs with `--sandbox off` there; the environme
 the boundary.
 
 The settings card always offers the login command and copy action, including when
-credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
-absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
+credentials are already saved. The command uses the managed CLI's absolute path.
+While the card is open, status
 updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
 only reports that the sealed login opens, not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
@@ -592,7 +588,7 @@ and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret test
   authentication failure and asks for a new login.
 - **State**: a locked or unavailable keychain, a missing key, and a record that does not
   open are told apart from a missing login, in the same words `status.py` gives the CLI,
-  the Desktop, and a refused turn. Nothing falls back to plain text. When the gateway
+  the screens, and a refused turn. Nothing falls back to plain text. When the gateway
   could not use the login during a turn (a refresh that failed, or a login that never
   refreshes being refused), no later request of the turn is given the login either, and
   the turn is an authentication failure that asks for a new login, whatever the tool
@@ -778,7 +774,7 @@ identity`:
 - Slack: `slack:<bot-user-id>:<channel-id>:<thread-root-ts>`. Later messages in the same
   thread resume the exact session and advance the context cursor only after a terminal
   success.
-- Other commands: the conversation the host entry names (a Desktop assistant's
+- Other commands: the conversation the host entry names (an assistant's of the screens
   conversation), otherwise the command's own run.
 
 The host settles the identity when it starts the command, and every turn of the command
@@ -923,7 +919,7 @@ the next attempt until that exact time. They do not consume in-process completio
 retries. Diagnostics use `agent_runtime.*`, `workflow.rate_limited`,
 `credential.failed`, and `credential.verified` records correlated by person, run, logical conversation,
 generation, provider session/turn, context cursor, and lease. Sensitive detail keys
-are redacted, and long text is bounded. The records are available in Desktop
+are redacted, and long text is bounded. The records are available on the screens
 Diagnostics and `<workspace-data-root>/run/diagnostics.jsonl`.
 
 If startup reports `unsupported_version`, update the provider CLI. Claude capability

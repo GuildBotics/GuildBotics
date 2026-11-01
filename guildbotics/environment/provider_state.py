@@ -146,9 +146,9 @@ def has_credentials(tool: CliAgentInfo) -> bool:
     return credential_state(tool) == "saved"
 
 
-def login_command(name: str, *, platform: str | None = None) -> str:
-    """The terminal login instruction shared by status, alerts, and Desktop."""
-    return managed_cli_command("environment", "login", name, platform=platform)
+def login_command(name: str) -> str:
+    """The terminal login instruction shared by status, alerts, and the screens."""
+    return managed_cli_command("environment", "login", name)
 
 
 def sealed_login_path(tool: CliAgentInfo) -> Path:

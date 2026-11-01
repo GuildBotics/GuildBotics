@@ -157,6 +157,9 @@ describe("GitHubAppRegistrationPanel", () => {
     );
     expect(openExternal).toHaveBeenCalledWith(pendingRegistration.start_url);
     expect(screen.getByText(t("setup.members.githubAppRegistration.pending"))).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: t("setup.members.githubAppRegistration.reopen") }),
+    ).toHaveAttribute("href", pendingRegistration.start_url);
   });
 
   it("applies the bot identity and follows the registration to its installation", async () => {
@@ -178,6 +181,9 @@ describe("GitHubAppRegistrationPanel", () => {
     expect(
       screen.getByText(t("setup.members.githubAppRegistration.converted", { slug: "my-bot" })),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: t("setup.members.githubAppRegistration.openInstall") }),
+    ).toHaveAttribute("href", convertedRegistration.installation_page_url);
 
     vi.mocked(getAppRegistration).mockResolvedValue(installedRegistration);
     expect(

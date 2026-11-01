@@ -62,7 +62,6 @@ import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { CommandsPage } from "./commands/CommandsPage";
 import { TroubleshootingDrawer } from "./diagnostics/TroubleshootingDrawer";
-import { useHotkeyRegistration } from "./hotkeys/useHotkeyRegistration";
 import { requestNavigation } from "./navigationGuard";
 import {
   getConfigStatus,
@@ -103,9 +102,7 @@ import {
 import { useServiceProviders } from "./setup/providers";
 import { BranvilNavItem } from "./setup/providers/branvil/BranvilNavItem";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
-import { openExternal } from "./openExternal";
 import { onWorkspaceChange } from "./appEvents";
-import { isTauriRuntime } from "./desktopWindow";
 import { ServerMachineBadge, useServerMachineLabel } from "./serverMachine";
 import { SetupPage } from "./setup/SetupPage";
 import {
@@ -153,33 +150,10 @@ export function App() {
   });
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
-  const closeGuard = useAppCloseGuard();
-  useHostNavigation();
-  useHotkeyRegistration();
   useWorkspaceChangeReload();
   return (
     <main className="shell">
-      <AppCloseBlockedModal
-        error={closeGuard.forceQuitError}
-        forceQuitting={closeGuard.forceQuitting}
-        blocked={closeGuard.blocked}
-        onCancel={closeGuard.cancel}
-        onForceQuit={() => void closeGuard.forceStopAndQuit()}
-      />
-      <aside className="sidebar" style={{ position: "relative" }}>
-        <div
-          data-tauri-drag-region
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "44px",
-            zIndex: 10,
-            cursor: "default",
-          }}
-        />
-
+      <aside className="sidebar">
         <nav className="nav">
           {configured ? (
             <GuardedNavLink className="nav-item" to="/activity">
@@ -230,7 +204,7 @@ export function App() {
         />
       </aside>
 
-      <section className="workspace" style={{ position: "relative" }}>
+      <section className="workspace">
         {config.data?.workspace_problem ? (
           <Alert color="danger" role="alert">
             {config.data.workspace_problem}
@@ -242,18 +216,6 @@ export function App() {
             {config.data.input_store_problem}
           </Alert>
         ) : null}
-        <div
-          data-tauri-drag-region
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "24px",
-            zIndex: 10,
-            cursor: "default",
-          }}
-        />
         {configured ? <SystemAlertBand /> : null}
         <Routes>
           <Route
@@ -301,12 +263,7 @@ function SystemAlertBand() {
     return null;
   }
   return (
-    <Stack
-      aria-label={t("systemAlerts.region")}
-      className="system-alert-band"
-      gap="xs"
-      role="region"
-    >
+    <Stack aria-label={t("systemAlerts.region")} gap="xs" role="region">
       {alerts.data.alerts.map((alert) => (
         <Alert
           color={alert.severity === "critical" ? "danger" : "warning"}
@@ -541,175 +498,11 @@ function runtimeUnitsStopping(status: RuntimeStatus) {
 
 /**
  * Reload what the screen shows once the server opens another workspace,
- * whichever screen -- this one, another tab, a Desktop window -- switched it.
+ * whichever screen -- this one or another tab -- switched it.
  */
 function useWorkspaceChangeReload() {
   const queryClient = useQueryClient();
   useEffect(() => onWorkspaceChange(() => void queryClient.invalidateQueries()), [queryClient]);
-}
-
-/**
- * Follow a route the host asks for (`app://navigate`): a control in the
- * quick-run window, a separate webview, sends the user to a settings screen
- * this way. The navigation guard applies as it does for the sidebar.
- */
-function useHostNavigation() {
-  const navigate = useNavigate();
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      return;
-    }
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        const stop = await listen<string>("app://navigate", (event) => {
-          requestNavigation(() => navigate(event.payload));
-        });
-        if (cancelled) {
-          stop();
-        } else {
-          unlisten = stop;
-        }
-      } catch {
-        // The event API is unavailable (a harness that only stubs
-        // __TAURI_INTERNALS__): nothing can ask for a route, so nothing to follow.
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [navigate]);
-}
-
-/**
- * Block quitting while service or command work is running, so a quit never cuts
- * a running agent off.
- *
- * Every quit the host can see asks here first (`app://quit-requested`): the
- * tray's and the app menu's Quit, and on macOS the quits that arrive from
- * outside the app (the Dock, logout) when the backend reports work. Whether
- * there is work is the backend's answer (`has_active_work`), not derived here.
- * The user can force stop the runtime and quit from the modal.
- */
-function useAppCloseGuard() {
-  // Why the quit is held: work is running, or whether it is running could not be read.
-  const [blocked, setBlocked] = useState<"busy" | "unknown" | null>(null);
-  const [forceQuitting, setForceQuitting] = useState(false);
-  const [forceQuitError, setForceQuitError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      return;
-    }
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        const { invoke } = await import("@tauri-apps/api/core");
-        const stop = await listen("app://quit-requested", async () => {
-          let busy: boolean;
-          try {
-            busy = (await getSchedulerStatus()).has_active_work;
-          } catch {
-            // A failed read says nothing about the work. Quitting silently
-            // under running agents is the worse mistake, so ask.
-            setBlocked("unknown");
-            return;
-          }
-          if (busy) {
-            setBlocked("busy");
-          } else {
-            await invoke("quit_app");
-          }
-        });
-        if (cancelled) {
-          stop();
-        } else {
-          unlisten = stop;
-        }
-      } catch {
-        // The event API is unavailable (e.g. a harness that only stubs
-        // __TAURI_INTERNALS__ without the full metadata): skip the guard
-        // rather than leaking an unhandled rejection.
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  const cancel = () => {
-    setBlocked(null);
-    setForceQuitError(null);
-  };
-  const forceStopAndQuit = async () => {
-    setForceQuitting(true);
-    setForceQuitError(null);
-    try {
-      try {
-        await stopScheduler({ force: true });
-      } catch {
-        // Quit regardless; the force stop is best-effort cleanup.
-      }
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("quit_app");
-    } catch (error) {
-      // The quit failed (e.g. a missing command), so the app is staying up:
-      // surface the error instead of leaving the button spinning.
-      setForceQuitError(error instanceof Error ? error.message : String(error));
-      setForceQuitting(false);
-    }
-  };
-
-  return { blocked, forceQuitting, forceQuitError, cancel, forceStopAndQuit };
-}
-
-function AppCloseBlockedModal({
-  blocked,
-  forceQuitting,
-  error,
-  onCancel,
-  onForceQuit,
-}: {
-  blocked: "busy" | "unknown" | null;
-  forceQuitting: boolean;
-  error: string | null;
-  onCancel: () => void;
-  onForceQuit: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <Modal
-      centered
-      opened={blocked !== null}
-      onClose={onCancel}
-      title={t(blocked === "unknown" ? "app.closeBlocked.unknownTitle" : "app.closeBlocked.title")}
-    >
-      <Stack gap="md">
-        <Text size="sm">
-          {t(blocked === "unknown" ? "app.closeBlocked.unknownBody" : "app.closeBlocked.body")}
-        </Text>
-        {error ? (
-          <Alert color="danger" title={t("app.closeBlocked.error")}>
-            {error}
-          </Alert>
-        ) : null}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onCancel}>
-            {t("app.closeBlocked.cancel")}
-          </Button>
-          <Button color="danger" loading={forceQuitting} onClick={onForceQuit}>
-            {t("app.closeBlocked.force")}
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
 }
 
 function ConfiguredRoute({ configured, loading }: { configured: boolean; loading: boolean }) {
@@ -733,7 +526,7 @@ function IndexRedirect() {
 const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];
 
 // The service settings live on the server, so every screen and
-// `guildbotics start` run with the same ones. A change shows at once, only
+// `guildbotics service start` run with the same ones. A change shows at once, only
 // the change is sent, and changes are saved in the order made. While any is
 // on its way -- also one made before this screen was opened again -- the
 // changes in the QueryClient are the truth: the screen does not read the
@@ -1061,7 +854,17 @@ function ServicePage() {
               />
             </ServiceRuntimeSection>
           </div>
-          <ServiceKeepAwakeSettings
+          <ServiceSwitchSetting
+            title={t("service.startWithServer.title")}
+            description={t("service.startWithServer.description")}
+            enabled={Boolean(settings?.start_with_server)}
+            disabled={!settings}
+            onChange={(start_with_server) => save({ start_with_server })}
+          />
+          <ServiceSwitchSetting
+            title={t("service.keepAwake.title")}
+            description={t("service.keepAwake.description")}
+            serverMachine
             enabled={Boolean(settings?.keep_awake)}
             disabled={!settings}
             onChange={(keep_awake) => save({ keep_awake })}
@@ -2092,10 +1895,11 @@ function TraceExplorer({
                                     variant="transparent"
                                     color="info"
                                     aria-label={t("diagnostics.executions.ticket.open")}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void openExternal(chip.url);
-                                    }}
+                                    component="a"
+                                    href={chip.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
                                   >
                                     <ExternalLink size={12} />
                                   </ActionIcon>
@@ -2977,30 +2781,37 @@ function ServiceRuntimeSection({
   );
 }
 
-function ServiceKeepAwakeSettings({
+/** One on/off service setting, saved as soon as it is switched. */
+function ServiceSwitchSetting({
+  title,
+  description,
+  serverMachine = false,
   enabled,
   disabled,
   onChange,
 }: {
+  title: string;
+  description: string;
+  /** Whether the setting is about "this machine", the one the server runs on. */
+  serverMachine?: boolean;
   enabled: boolean;
   disabled: boolean;
   onChange: (enabled: boolean) => void;
 }) {
-  const { t } = useTranslation();
   return (
     <div className="service-unit-panel">
       <Group justify="space-between" align="center" wrap="nowrap">
         <div>
           <Group gap="xs">
-            <Text fw={700}>{t("service.keepAwake.title")}</Text>
-            <ServerMachineBadge />
+            <Text fw={700}>{title}</Text>
+            {serverMachine ? <ServerMachineBadge /> : null}
           </Group>
           <Text c="dimmed" size="sm">
-            {t("service.keepAwake.description")}
+            {description}
           </Text>
         </div>
         <Switch
-          aria-label={t("service.keepAwake.title")}
+          aria-label={title}
           checked={enabled}
           disabled={disabled}
           onChange={(event) => onChange(event.currentTarget.checked)}

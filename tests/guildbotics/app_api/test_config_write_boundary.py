@@ -65,11 +65,6 @@ ELSEWHERE = {
     ("POST", "/chat/receive-state/reset"): "state/, no edited config snapshot",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
     ("POST", "/commands/input-files"): "a temporary file outside the workspace",
-    ("POST", "/commands/input-files/copy"): "a temporary file outside the workspace",
-    (
-        "POST",
-        "/commands/input-paths",
-    ): "answers what a turn would reach, writes nothing",
     ("POST", "/commands/run"): "starts a run; its own writes go through the helpers",
     ("POST", "/diagnostics/scenario"): "local/run diagnostics",
     ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
@@ -88,7 +83,6 @@ ELSEWHERE = {
     ("POST", "/system-alerts/dismiss"): "local/run state",
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",
-    ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
     ("PATCH", "/service/settings"): "local/service.yml is device-specific by design",
 }

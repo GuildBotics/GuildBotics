@@ -11,8 +11,6 @@ import {
   type ConnectionLoss,
   applyCommandAuthoring,
   authorCommand,
-  checkCommandInputPaths,
-  copyCommandInputFile,
   troubleshoot,
   createCommandFile,
   dismissSystemAlert,
@@ -291,29 +289,6 @@ describe("request headers and body", () => {
     }
   });
 
-  it("POSTs the paths about to enter a command input, and a copy request", async () => {
-    const check = captureFetch(
-      jsonResponse({ paths: [{ path: "/a", kind: "file", reachable: false, guest_path: "/a" }] }),
-    );
-    await checkCommandInputPaths({ paths: ["/a"], cwd: "/work" });
-
-    expect(check.calls[0].url).toBe("/api/commands/input-paths");
-    expect(check.calls[0].init.method).toBe("POST");
-    expect(check.calls[0].init.body).toBe(JSON.stringify({ paths: ["/a"], cwd: "/work" }));
-
-    const copy = captureFetch(
-      jsonResponse({
-        path: "/home/Documents/GuildBotics/tmp/x-a",
-        guest_path: "/home/Documents/GuildBotics/tmp/x-a",
-      }),
-    );
-    await copyCommandInputFile("/a");
-
-    expect(copy.calls[0].url).toBe("/api/commands/input-files/copy");
-    expect(copy.calls[0].init.method).toBe("POST");
-    expect(copy.calls[0].init.body).toBe(JSON.stringify({ path: "/a" }));
-  });
-
   it("GETs the providers the setup screens offer", async () => {
     const providers = [
       {
@@ -472,6 +447,7 @@ describe("GET query parameter encoding", () => {
 
   it("gets and saves the service settings every start reads", async () => {
     const settings = {
+      start_with_server: false,
       keep_awake: true,
       scheduled: false,
       routine: true,

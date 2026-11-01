@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { enterAgain } from "../api/backend";
 import { getConfigStatus } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
@@ -13,13 +12,6 @@ import { EntryPage } from "./EntryPage";
 import { leavePage, replacePage } from "./pageNavigation";
 
 vi.mock("./pageNavigation", () => ({ leavePage: vi.fn(), replacePage: vi.fn() }));
-vi.mock("../api/backend", async (importActual) => ({
-  ...(await importActual<typeof import("../api/backend")>()),
-  enterAgain: vi.fn(),
-}));
-
-const enterAgainMock = vi.mocked(enterAgain);
-
 const t = i18n.getFixedT("en");
 
 type Answer = { status: number; body: unknown } | Error;
@@ -135,69 +127,23 @@ describe("a page the server serves", () => {
     expect(view.queryByText(/Screen read/)).not.toBeInTheDocument();
   });
 
-  describe("in a Desktop window", () => {
-    beforeEach(() => {
-      Reflect.set(window, "__TAURI_INTERNALS__", {});
-      enterAgainMock.mockReset().mockResolvedValue(undefined);
-    });
+  it("says how to enter again when a retry finds the session gone", async () => {
+    let config: Answer = ok({ cwd: "/ws" });
+    let session: Answer = SESSION;
+    serve({ "GET /api/session": () => session, "GET /api/config/status": () => config });
+    const user = userEvent.setup();
+    renderPage("/");
+    await screen.findByText("Screen read /ws");
+    config = OFFLINE;
+    session = OFFLINE;
+    void getConfigStatus().catch(() => undefined);
+    const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
 
-    afterEach(() => {
-      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
-    });
+    session = NO_SESSION;
+    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
 
-    async function loseSession() {
-      let config: Answer = ok({ cwd: "/ws" });
-      serve({ "GET /api/session": SESSION, "GET /api/config/status": () => config });
-      const view = renderPage("/");
-      await screen.findByText("Screen read /ws");
-      config = NO_SESSION;
-      void getConfigStatus().catch(() => undefined);
-      return view;
-    }
-
-    it("enters again through its bootstrap page once the session is gone", async () => {
-      const view = await loseSession();
-
-      await waitFor(() => expect(enterAgainMock).toHaveBeenCalled());
-      expect(view.queryByText(/Screen read/)).not.toBeInTheDocument();
-      expect(screen.queryByText(t("session.guide.title"))).not.toBeInTheDocument();
-    });
-
-    it("enters again when a retry finds the session it held gone", async () => {
-      let config: Answer = ok({ cwd: "/ws" });
-      let session: Answer = SESSION;
-      serve({ "GET /api/session": () => session, "GET /api/config/status": () => config });
-      const user = userEvent.setup();
-      renderPage("/");
-      await screen.findByText("Screen read /ws");
-      config = OFFLINE;
-      session = OFFLINE;
-      void getConfigStatus().catch(() => undefined);
-      const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
-
-      session = NO_SESSION;
-      await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
-
-      await waitFor(() => expect(enterAgainMock).toHaveBeenCalled());
-      expect(screen.queryByText(t("session.guide.title"))).not.toBeInTheDocument();
-    });
-
-    it("says how to enter, without entering again, when it never had a session", async () => {
-      serve({ "GET /api/session": NO_SESSION });
-
-      renderPage("/");
-
-      expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
-      expect(enterAgainMock).not.toHaveBeenCalled();
-    });
-
-    it("says how to enter when the window cannot go back", async () => {
-      enterAgainMock.mockRejectedValue(new Error("not allowed"));
-
-      await loseSession();
-
-      expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
-    });
+    expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
+    expect(screen.queryByText(/Screen read/)).not.toBeInTheDocument();
   });
 
   it("keeps saying how to enter again when a later request cannot reach the server", async () => {
@@ -264,9 +210,9 @@ describe("the entry page", () => {
   it("enters once with the link's code, forgets the code, and opens next", async () => {
     const calls = serve({ "POST /api/session": SESSION });
 
-    renderPage("/-/enter?next=/quick.html#code-1");
+    renderPage("/-/enter?next=/index.html#code-1");
 
-    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/quick.html"));
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/index.html"));
     // StrictMode runs the effect twice; the code works a single time.
     expect(calls).toEqual([
       expect.objectContaining({ method: "POST", url: "/api/session", body: { code: "code-1" } }),

@@ -243,24 +243,9 @@ body {
   min-width: 0;
 }
 
-.system-alert-band {
-  position: relative;
-  z-index: 11;
-}
-
 .mono-text {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   overflow-wrap: anywhere;
-}
-
-.skill-status-row {
-  border-top: 1px solid var(--color-border);
-  padding-top: 10px;
-}
-
-.skill-status-row:first-child {
-  border-top: 0;
-  padding-top: 0;
 }
 
 .grid {
@@ -758,10 +743,6 @@ pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.command-hotkey-chip {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 .command-authoring-workspace {
@@ -2706,11 +2687,7 @@ pre {
   }
 }
 
-.startup-error {
-  margin: 24px;
-}
-
-.app-bootstrap {
+.app-center {
   min-height: 100vh;
   padding: 24px;
 }

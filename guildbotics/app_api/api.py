@@ -53,18 +53,13 @@ from guildbotics.app_api.auth import (
     SessionRequest,
     SessionResponse,
 )
-from guildbotics.app_api.command_input_files import (
-    CommandInputFileStore,
-    command_cwd,
-    describe_command_input_paths,
-)
+from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.config_revisions import (
     apply_config_write,
     config_repository,
 )
 from guildbotics.app_api.errors import AppApiError, api_error_message
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
-from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
 from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
     intelligence_config_dir,
@@ -86,12 +81,7 @@ from guildbotics.app_api.models import (
     CommandFileExecutionStatus,
     CommandFilesResponse,
     CommandFileUpdateRequest,
-    CommandInputFileCopyRequest,
     CommandInputFileResponse,
-    CommandInputGrantSuggestion,
-    CommandInputPathsRequest,
-    CommandInputPathsResponse,
-    CommandInputPathStatus,
     CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
@@ -101,7 +91,6 @@ from guildbotics.app_api.models import (
     GrantEvaluation,
     GrantScope,
     HealthResponse,
-    HotkeySettings,
     InferenceFailuresResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
@@ -118,7 +107,7 @@ from guildbotics.app_api.models import (
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStopRequest,
-    ShutdownResponse,
+    ShutdownRequest,
     SystemAlertDismissRequest,
     SystemAlertsResponse,
     TeamSummary,
@@ -200,14 +189,6 @@ def _request_language(request: Request) -> str:
     value = (request.headers.get(LANGUAGE_HEADER) or "").strip().lower()
     return "ja" if value.startswith("ja") else "en"
 
-
-# How long the lifespan teardown may take before the host gives up on it. The
-# backend owns this number and hands it to the host with every accepted
-# shutdown, so the two cannot disagree about when a teardown is still orderly.
-# It has to cover every wait the teardown can run into, each at its limit: a
-# forced runtime stop (event listener join, scheduler shutdown, scheduler join,
-# work drain) and the diagnostics maintenance join.
-TEARDOWN_BUDGET_SECONDS = 60.0
 
 logger = logging.getLogger("guildbotics.app_api")
 
@@ -294,6 +275,29 @@ def create_app(
     # The server hosting this app installs the real hook; without one (tests,
     # embedding) there is nothing to stop.
     app.state.request_shutdown = lambda: None
+
+    def shut_down(*, force: bool) -> None:
+        """End the server: on ``guildbotics server stop``, or a signal to it.
+
+        The services stop first, and the server exits after them: without
+        ``force`` once their in-flight work has finished, with it once that
+        work is cancelled. Cancelling cannot wait for the lifespan teardown:
+        the server waits for its open requests before that, and a manual run
+        holds its request until it ends.
+        """
+
+        def stop_then_exit() -> None:
+            try:
+                app_runtime.stop_scheduler(force=force)
+            except Exception:
+                logger.exception("Service stop before the server exit failed")
+            app.state.request_shutdown()
+
+        threading.Thread(
+            target=stop_then_exit, name="guildbotics-server-stop", daemon=True
+        ).start()
+
+    app.state.shut_down = shut_down
 
     app.add_middleware(_UnhandledErrorMiddleware)
     # Outermost: nothing runs for a request the guard refuses.
@@ -518,17 +522,9 @@ def create_app(
         return server_auth.app_token(request)
 
     @router.post("/shutdown", status_code=202)
-    def shutdown() -> ShutdownResponse:
-        """Ask the hosting server to exit through its normal shutdown path.
-
-        The desktop host calls this before it would kill the sidecar, so the
-        lifespan teardown (scheduler stop, session finish)
-        runs no matter which route the app took to quit. The answer tells the
-        host how long that teardown may take, so it does not kill one that is
-        still within its own limits.
-        """
-        app.state.request_shutdown()
-        return ShutdownResponse(teardown_budget_seconds=TEARDOWN_BUDGET_SECONDS)
+    def shutdown(request: ShutdownRequest) -> None:
+        """End the server, as ``shut_down`` says."""
+        shut_down(force=request.force)
 
     @router.get("/config/status")
     def config_status() -> ConfigStatus:
@@ -565,19 +561,8 @@ def create_app(
     def command_input_file_upload(
         file: UploadFile = File(...),  # noqa: B008
     ) -> CommandInputFileResponse:
-        return _store_command_input(lambda: input_file_store.save(file))
-
-    @router.post("/commands/input-files/copy")
-    def command_input_file_copy(
-        request: CommandInputFileCopyRequest,
-    ) -> CommandInputFileResponse:
-        return _store_command_input(lambda: input_file_store.copy(request.path))
-
-    def _store_command_input(
-        store: Callable[[], Path],
-    ) -> CommandInputFileResponse:
         try:
-            path = store()
+            path = input_file_store.save(file)
         except ValueError as exc:
             raise AppApiError(
                 "command_input_file_invalid",
@@ -591,32 +576,6 @@ def create_app(
                 status_code=500,
             ) from exc
         return CommandInputFileResponse(path=path, guest_path=guest_path(path))
-
-    @router.post("/commands/input-paths")
-    def command_input_paths(
-        request: CommandInputPathsRequest,
-    ) -> CommandInputPathsResponse:
-        return CommandInputPathsResponse(
-            paths=[
-                CommandInputPathStatus(
-                    path=entry.path,
-                    kind=entry.kind,
-                    reachable=entry.reachable,
-                    guest_path=entry.guest_path,
-                    grant=(
-                        CommandInputGrantSuggestion(
-                            scope=entry.grant.scope, path=entry.grant.path
-                        )
-                        if entry.grant
-                        else None
-                    ),
-                    problem=entry.problem,
-                )
-                for entry in describe_command_input_paths(
-                    request.paths, command_cwd(request.cwd)
-                )
-            ]
-        )
 
     @router.post("/commands/author")
     async def author_command(
@@ -662,18 +621,6 @@ def create_app(
             file_id, person, expected_revision
         )
 
-    @router.get("/hotkeys")
-    def get_hotkeys() -> HotkeySettings:
-        return load_hotkeys()
-
-    @router.put("/hotkeys")
-    def put_hotkeys(request: HotkeySettings) -> HotkeySettings:
-        saved = save_hotkeys(request)
-        # The Desktop of this machine registers them again, whichever screen
-        # saved them.
-        bus.publish_event("hotkeys.changed")
-        return saved
-
     @router.get("/config/roles")
     def config_roles(
         language: Annotated[str, Query(pattern="^(en|ja)$")] = "ja",
@@ -705,22 +652,7 @@ def create_app(
 
     @router.post("/scheduler/stop")
     def scheduler_stop(request: SchedulerStopRequest | None = None) -> RuntimeStatus:
-        on_stop = getattr(app.state, "on_service_stop", None)
-        if on_stop is not None:
-            on_stop()
-        if request is not None and not request.wait:
-            # CLI callers wait for the backend PID themselves. Acknowledge
-            # before draining, so they can escalate without a blocked request.
-            def stop_in_background() -> None:
-                try:
-                    app_runtime.stop_scheduler(force=request.force)
-                except Exception:
-                    logger.exception("Background service stop failed")
-
-            threading.Thread(
-                target=stop_in_background, name="guildbotics-service-stop", daemon=True
-            ).start()
-            return app_runtime.get_scheduler_status()
+        # The services only: the server keeps serving the screens.
         return app_runtime.stop_scheduler(force=request.force if request else False)
 
     @router.get("/service/settings")

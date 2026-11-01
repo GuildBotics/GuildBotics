@@ -12,7 +12,7 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -24,7 +24,6 @@ import {
   type LocalGrants,
   type EnvironmentAccessStatus,
 } from "../api/client";
-import { isTauriRuntime } from "../desktopWindow";
 import { useServerMachineLabel } from "../serverMachine";
 
 /** What a row or a new entry may be granted: the two accesses, or closed. */
@@ -34,12 +33,6 @@ const DEVICE_ACCESSES: Access[] = ["read", "read_write", "deny"];
 
 /** Keystrokes settle for this long before the device is asked about the text. */
 const LOOKUP_DEBOUNCE_MS = 300;
-
-/** A picked absolute path, relative to the home directory when under it. */
-function homeRelative(path: string, home: string): string {
-  const under = ["/", "\\"].some((separator) => path.startsWith(home + separator));
-  return under ? path.slice(home.length + 1) : path;
-}
 
 /** The workspace's shared directories under the home. */
 export function DocumentsCard({
@@ -69,7 +62,6 @@ export function DocumentsCard({
       placeholder={t("setup.intelligence.documents.pathPlaceholder")}
       accesses={GRANT_ACCESSES}
       scopeOf={() => "document"}
-      withinHome
       taken={(path) =>
         builtin.some((row) => row.grant === path) || documents.some((grant) => grant.path === path)
       }
@@ -261,7 +253,6 @@ function AccessCard({
   placeholder,
   accesses,
   scopeOf,
-  withinHome = false,
   taken,
   onAdd,
   rows,
@@ -278,7 +269,6 @@ function AccessCard({
   accesses: Access[];
   /** Which judgement a path with this access needs. */
   scopeOf: (access: Access) => GrantScope;
-  withinHome?: boolean;
   taken: (path: string) => boolean;
   onAdd: (path: string, access: Access) => void;
   rows: AccessRow[];
@@ -307,11 +297,13 @@ function AccessCard({
           </Text>
         </div>
         <Group align="flex-end" gap="xs" wrap="wrap">
-          <PathInput
+          <TextInput
+            label={t("setup.intelligence.grants.path")}
             placeholder={placeholder}
+            size="xs"
             value={path}
-            withinHome={withinHome}
-            onChange={setPath}
+            onChange={(event) => setPath(event.currentTarget.value)}
+            style={{ flex: 1, minWidth: 220 }}
             error={
               duplicate
                 ? t("setup.intelligence.grants.duplicate")
@@ -431,72 +423,6 @@ function useGrantJudgement(scope: GrantScope, path: string, access: Access) {
   // The judgement is about the debounced text; while newer keystrokes are
   // pending it would describe something the field no longer shows.
   return { typed, judged: typed && settled ? evaluation.data : undefined };
-}
-
-/**
- * A path field with a directory picker. A choice under the home directory is
- * shown relative to it, which is the form both grant files save; `withinHome`
- * starts the dialog there for the shared documents, whose paths cannot leave it.
- */
-function PathInput({
-  placeholder,
-  value,
-  withinHome,
-  error,
-  onChange,
-}: {
-  placeholder: string;
-  value: string;
-  withinHome: boolean;
-  error?: string;
-  onChange: (value: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [picking, setPicking] = useState(false);
-  const pickDirectory = async () => {
-    setPicking(true);
-    try {
-      const [{ open }, { homeDir }] = await Promise.all([
-        import("@tauri-apps/plugin-dialog"),
-        import("@tauri-apps/api/path"),
-      ]);
-      const home = (await homeDir()).replace(/[\\/]+$/, "");
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: withinHome ? home : undefined,
-      });
-      if (typeof selected === "string") onChange(homeRelative(selected, home));
-    } finally {
-      setPicking(false);
-    }
-  };
-  return (
-    <TextInput
-      label={t("setup.intelligence.grants.path")}
-      placeholder={placeholder}
-      size="xs"
-      value={value}
-      onChange={(event) => onChange(event.currentTarget.value)}
-      style={{ flex: 1, minWidth: 220 }}
-      rightSectionWidth={30}
-      // A browser has no dialog for the server machine's folders: the path is typed.
-      rightSection={
-        isTauriRuntime() ? (
-          <ActionIcon
-            aria-label={t("setup.intelligence.grants.choose")}
-            variant="subtle"
-            size="sm"
-            loading={picking}
-            onClick={pickDirectory}
-          >
-            <FolderOpen size={14} />
-          </ActionIcon>
-        ) : null
-      }
-      error={error}
-    />
-  );
 }
 
 function PresenceBadge({ present }: { present: boolean | undefined }) {

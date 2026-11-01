@@ -154,8 +154,9 @@ export type ChatReceiveResetResponse = {
 };
 
 // How the service runs, saved on the server for every screen and for
-// `guildbotics start`: every start reads it.
+// `guildbotics service start`: every start reads it.
 export type ServiceSettings = {
+  start_with_server: boolean;
   keep_awake: boolean;
   scheduled: boolean;
   routine: boolean;
@@ -316,12 +317,6 @@ export type RuntimeEvent = Correlation & {
   timestamp: string;
 };
 
-export type HotkeySettings = {
-  quick_run: string;
-  /** Logical command name to accelerator. */
-  commands: Record<string, string>;
-};
-
 export type CommandRunResponse = {
   trace_id: string;
   output: string;
@@ -331,27 +326,6 @@ export type CommandInputFileResponse = {
   path: string;
   /** The path as the agent inside the environment names it: what the input field carries. */
   guest_path: string;
-};
-
-/** The grant that would open an unreachable path, spelled for the grants screen. */
-export type CommandInputGrantSuggestion = {
-  scope: "document" | "device";
-  path: string;
-};
-
-/** A path about to enter a command's input, as a turn on this device would find it. */
-export type CommandInputPathStatus = {
-  path: string;
-  kind: "file" | "directory" | "missing";
-  reachable: boolean;
-  /** The path as the agent inside the environment names it: what the input field carries. */
-  guest_path: string;
-  grant: CommandInputGrantSuggestion | null;
-  problem: string;
-};
-
-export type CommandInputPathsResponse = {
-  paths: CommandInputPathStatus[];
 };
 
 export type TraceSummary = {
@@ -1136,14 +1110,6 @@ export async function setWorkspace(body: WorkspaceChangeRequest): Promise<Config
   return request("/workspace", { method: "POST", body });
 }
 
-export async function getHotkeys(): Promise<HotkeySettings> {
-  return request("/hotkeys");
-}
-
-export async function updateHotkeys(body: HotkeySettings): Promise<HotkeySettings> {
-  return request("/hotkeys", { method: "PUT", body });
-}
-
 export async function getTeam(): Promise<TeamSummary> {
   return request("/team");
 }
@@ -1432,17 +1398,6 @@ export async function runCommand(body: {
 
 export async function uploadCommandInputFile(file: File): Promise<CommandInputFileResponse> {
   return uploadFile("/commands/input-files", file);
-}
-
-export async function copyCommandInputFile(path: string): Promise<CommandInputFileResponse> {
-  return request("/commands/input-files/copy", { method: "POST", body: { path } });
-}
-
-export async function checkCommandInputPaths(body: {
-  paths: string[];
-  cwd?: string;
-}): Promise<CommandInputPathsResponse> {
-  return request("/commands/input-paths", { method: "POST", body });
 }
 
 export async function authorCommand(

@@ -2,43 +2,27 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import IO, Literal
+from typing import IO
 from uuid import uuid4
 
 from fastapi import UploadFile
 
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.environment.contract import (
-    AccessContractError,
-    grant_spelling,
-    load_local_grants,
-    load_shared_grants,
-    protected_paths,
-    resolve_access,
-    validate_mount_source,
-)
-from guildbotics.environment.spec import guest_path
+from guildbotics.environment.contract import AccessContractError
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     unlock_file,
 )
 from guildbotics.utils.fileio import get_machine_state_path
-from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.safe_paths import (
-    HostPathPermissionError,
-    UnsafePathError,
-    consume_host_file,
     inspect_host_path,
     normalize_host_path,
     open_host_file,
-    resolve_host_links,
     visit_host_directory,
 )
 
@@ -53,9 +37,6 @@ _LOCK_RETRY_SECONDS = 0.01
 _SESSION_DIRECTORY_PREFIX = "session-"
 _SESSION_LOCK_NAME = ".session.lock"
 
-InputPathKind = Literal["file", "directory", "missing"]
-GrantScope = Literal["document", "device"]
-
 
 class CommandInputFileStore:
     """Own what the Desktop hands a command for one App API session.
@@ -65,8 +46,8 @@ class CommandInputFileStore:
     commands the session runs (:attr:`directory`), at the same path: a path
     pasted into the input field means the same file inside the environment,
     and no command can change what the host saved there. It is all temporary
-    by nature -- a clipboard image exists nowhere else, a copy has its
-    original elsewhere -- and goes with the session that made it.
+    by nature -- a clipboard image exists nowhere else, an uploaded file has
+    its original elsewhere -- and goes with the session that made it.
     """
 
     def __init__(self, *, root: Path | None = None) -> None:
@@ -122,10 +103,6 @@ class CommandInputFileStore:
         """Save an uploaded file in the active App API session directory."""
         return save_command_input_file(self._session_directory(), upload_file)
 
-    def copy(self, source: Path) -> Path:
-        """Copy a file of the user's into the active session directory."""
-        return copy_command_input_file(self._session_directory(), source)
-
     def close(self) -> None:
         """Remove everything owned by this App API session."""
         with self._lock:
@@ -158,7 +135,9 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
     """Persist an uploaded file -- a pasted image, or a file a browser dropped,
     which cannot hand over a path -- and return its absolute path.
 
-    Like a copy, it keeps its name behind a short random prefix.
+    The file keeps its name behind a short random prefix: the name is what
+    tells an agent what the file is, and the prefix is what keeps two uploads
+    of the same name apart.
 
     Args:
         directory: App API session directory for command inputs.
@@ -168,109 +147,12 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
         Absolute path to the persisted file.
 
     Raises:
-        ValueError: If the upload exceeds the limit.
+        ValueError: If the upload is empty or exceeds the limit.
     """
     # Either separator: the name is the screen's, of a file on any machine.
     # Its end is what says what the file is; the start goes when it is long.
     name = PureWindowsPath(upload_file.filename or "").name.strip()[-_NAME_CHARS:]
-
-    def write(output: IO[bytes]) -> int:
-        size = 0
-        while chunk := upload_file.file.read(1024 * 1024):
-            size += len(chunk)
-            _check_size(size)
-            output.write(chunk)
-        return size
-
-    return _write_command_input_file(
-        directory, f"{uuid4().hex[:8]}-{name or 'file'}", write
-    )
-
-
-def copy_command_input_file(directory: Path, source: Path) -> Path:
-    """Copy one of the user's files beside the pasted images and return the copy.
-
-    The copy keeps the file's name behind a short random prefix: the name is
-    what tells an agent what the file is, and the prefix is what keeps two
-    drops of the same name apart.
-
-    Args:
-        directory: App API session directory for command inputs.
-        source: The file as the Desktop names it.
-
-    Raises:
-        ValueError: If ``source`` is not a regular file or exceeds the limit.
-    """
-    name = source.name
-    source = _admit_input_path(source)
-    try:
-        info = source.stat()
-    except PermissionError as exc:
-        raise HostPathPermissionError(source) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(t("safe_paths.file_missing", path=source)) from exc
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError(f"'{source}' is not a file.")
-    _check_size(info.st_size)
-
-    def write(output: IO[bytes]) -> int:
-        size = 0
-
-        def chunk(content: bytes) -> None:
-            nonlocal size
-            size += len(content)
-            _check_size(size)
-            output.write(content)
-
-        try:
-            consume_host_file(source, chunk)
-        except FileNotFoundError as exc:
-            raise ValueError(t("safe_paths.file_missing", path=source)) from exc
-        return size
-
-    return _write_command_input_file(directory, f"{uuid4().hex[:8]}-{name}", write)
-
-
-def _admit_input_path(source: Path) -> Path:
-    """A copy must never borrow the host's authority through a turn's link."""
-    denied = protected_paths()
-
-    def admit_link(link: Path, leaf: bool) -> None:
-        if leaf:
-            raise UnsafePathError(t("safe_paths.copy_link", path=link))
-        parent = inspect_host_path(link.parent)
-        if any(facts.contains(parent) for closed in denied for facts in closed.facts()):
-            raise UnsafePathError(t("safe_paths.copy_link", path=link))
-        # A current cwd cannot prove that a previous turn never wrote here.
-        # Trust only a parent that can never be granted: it contains a fixed
-        # credential/device path. Registered workspace state is removable.
-        if not any(
-            parent.contains(
-                inspect_host_path(
-                    closed.path, missing=True, directory=False, link_as_missing=True
-                )
-            )
-            for closed in denied
-            if closed.kind == "credentials"
-        ):
-            raise UnsafePathError(t("safe_paths.copy_link", path=link))
-
-    resolution = resolve_host_links(source, on_link=admit_link)
-    if resolution.cyclic:
-        raise UnsafePathError(t("safe_paths.copy_link", path=source))
-    return validate_mount_source(resolution.path, denied, grant=True, missing=True)
-
-
-def _check_size(size: int) -> None:
-    if size > MAX_COMMAND_INPUT_FILE_BYTES:
-        raise ValueError(
-            f"File is too large (max {MAX_COMMAND_INPUT_FILE_BYTES // (1024 * 1024)} MB)."
-        )
-
-
-def _write_command_input_file(
-    directory: Path, name: str, write: Callable[[IO[bytes]], int]
-) -> Path:
+    name = f"{uuid4().hex[:8]}-{name or 'file'}"
     directory = normalize_host_path(directory)
     destination = directory / name
     temporary = directory / f".{name}.upload"
@@ -285,8 +167,16 @@ def _write_command_input_file(
                 0o600,
                 dir_fd=fd,
             )
+            size = 0
             with os.fdopen(handle, "wb") as output:
-                size = write(output)
+                while chunk := upload_file.file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_COMMAND_INPUT_FILE_BYTES:
+                        raise ValueError(
+                            "File is too large (max "
+                            f"{MAX_COMMAND_INPUT_FILE_BYTES // (1024 * 1024)} MB)."
+                        )
+                    output.write(chunk)
             if size == 0:
                 raise ValueError("File is empty.")
             os.replace(
@@ -309,39 +199,11 @@ def _remove_session(directory: Path, fd: int | None) -> None:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class GrantSuggestion:
-    """The grant that would open an unreachable path: its directory, spelled
-    as the grants screen wants it -- a document grant under the home, a
-    device path elsewhere."""
-
-    scope: GrantScope
-    path: str
-
-
-@dataclass(frozen=True, slots=True)
-class CommandInputPath:
-    """One path the Desktop is about to put in the input field, as a turn
-    on this device would find it.
-
-    ``guest_path`` is the spelling that goes into the field: the path as the
-    agent inside the environment names it (``/c/...`` for ``C:\\...``), which
-    is the only spelling it can open.
-    """
-
-    path: Path
-    kind: InputPathKind
-    reachable: bool
-    guest_path: str
-    grant: GrantSuggestion | None = None
-    problem: str = ""
-
-
 def command_cwd(cwd: Path | None) -> Path | None:
     """The working directory as the Desktop typed it, ready to run in.
 
     ``~`` is expanded, as a shell would, because the field has no shell in
-    front of it. A relative path is refused: the sidecar's own directory is
+    front of it. A relative path is refused: the server's own directory is
     nowhere the user can see, so there is nothing to resolve it against.
     """
     if cwd is None:
@@ -350,58 +212,6 @@ def command_cwd(cwd: Path | None) -> Path | None:
     if not expanded.is_absolute():
         raise AppApiError("command_cwd_not_absolute", params={"cwd": str(cwd)})
     return normalize_host_path(expanded)
-
-
-def describe_command_input_paths(
-    paths: Iterable[Path], cwd: Path | None = None
-) -> list[CommandInputPath]:
-    """Whether a turn run in ``cwd`` would see each path, and if not, which
-    grant would let it.
-
-    Grants that cannot be resolved make every path unreachable, which is also
-    what the turn would say: it refuses to start.
-    """
-    try:
-        access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
-    except AccessContractError:
-        access = None
-    home = normalize_host_path(Path.home())
-    described = []
-    for original in paths:
-        path = normalize_host_path(original)
-        kind: InputPathKind = (
-            "directory" if path.is_dir() else "file" if path.exists() else "missing"
-        )
-        try:
-            reachable = access is not None and access.reaches(path, cwd)
-        except AccessContractError:
-            reachable = False
-        grant = None
-        problem = ""
-        if not reachable and kind != "missing":
-            try:
-                real = _admit_input_path(path)
-            except AccessContractError as exc:
-                problem = str(exc)
-            else:
-                directory = real if kind == "directory" else real.parent
-                with suppress(AccessContractError):
-                    validate_mount_source(directory, protected_paths(), grant=True)
-                    grant = _grant_for(directory, home)
-        described.append(
-            CommandInputPath(
-                path, kind, reachable, guest_path(path.absolute()), grant, problem
-            )
-        )
-    return described
-
-
-def _grant_for(directory: Path, home: Path) -> GrantSuggestion | None:
-    """The home directory itself cannot be granted; anything else can."""
-    if directory == home:
-        return None
-    scope: GrantScope = "document" if directory.is_relative_to(home) else "device"
-    return GrantSuggestion(scope, grant_spelling(directory, home))
 
 
 @contextmanager

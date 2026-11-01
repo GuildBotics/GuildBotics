@@ -336,25 +336,6 @@ class ResolvedAccess:
     paths: tuple[ResolvedGrant, ...] = ()
     denied: tuple[DeniedPath, ...] = ()
 
-    def reaches(self, path: Path, cwd: Path | None = None) -> bool:
-        """Whether a turn run in ``cwd`` sees ``path`` on this device.
-
-        The same answer the mounts give: under the working directory or a
-        granted directory that exists here, and not under a closed one.
-        """
-        target = inspect_host_path(path, missing=True, directory=False)
-        opened = [g.path for g in (*self.documents, *self.paths) if g.present]
-        if cwd is not None:
-            try:
-                opened.append(validate_mount_source(cwd, self.denied, grant=True))
-            except AccessContractError:
-                return False
-        return any(
-            inspect_host_path(root).contains(target) for root in opened
-        ) and not any(
-            facts.contains(target) for denied in self.denied for facts in denied.facts()
-        )
-
 
 def resolve_access(
     shared: SharedGrants,

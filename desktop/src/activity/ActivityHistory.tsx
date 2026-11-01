@@ -533,9 +533,8 @@ function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
 }
 
 // Live status under the member name: the newest presentation record of the
-// trace behind the member's currently running work, mirroring the quick-run
-// window's bottom status line. Falls back to the command name until the trace
-// writes its first record. Links to the trace in the diagnostics executions
+// trace behind the member's currently running work. Falls back to the command
+// name until the trace writes its first record. Links to the trace in the diagnostics executions
 // view, the same deep link system alerts use.
 function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
   const { t } = useTranslation();

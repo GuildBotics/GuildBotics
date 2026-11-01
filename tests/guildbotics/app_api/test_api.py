@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api import lifecycle as lifecycle_module
-from guildbotics.app_api.api import TEARDOWN_BUDGET_SECONDS, create_app
+from guildbotics.app_api.api import create_app
+from guildbotics.drivers.app_api_lock import TEARDOWN_BUDGET_SECONDS
 from guildbotics.app_api.auth import SECURITY_HEADERS
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
@@ -563,25 +564,37 @@ class RuntimeStub:
         self.usage_closed = True
 
 
-def test_shutdown_asks_the_hosting_server_to_exit(tmp_path: Path) -> None:
-    app = create_app(runtime=RuntimeStub(tmp_path))
-    requested: list[bool] = []
-    app.state.request_shutdown = lambda: requested.append(True)
+@pytest.mark.parametrize("force", [False, True])
+def test_shutdown_stops_the_services_before_the_server_exits(
+    tmp_path: Path, force: bool
+) -> None:
+    """A forced exit cancels the work first as well: the server waits for its
+    open requests before the lifespan teardown, and a manual run holds one."""
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(runtime=runtime)
+    events: list[object] = []
+    app.state.request_shutdown = lambda: events.append("exit")
+    runtime.stop_scheduler = lambda *, force=False: events.append(("stop", force))
 
     with owner_client(app) as client:
-        unauthorized = _anonymous(app).post(API_PREFIX + "/shutdown")
-        assert requested == []
-        response = client.post("/shutdown")
+        unauthorized = _anonymous(app).post(
+            API_PREFIX + "/shutdown", json={"force": force}
+        )
+        assert events == []
+        accepted = client.post("/shutdown", json={"force": force})
+        deadline = time.monotonic() + 5
+        while len(events) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert events == [("stop", force), "exit"]
+        # The caller says which: no default decides for it.
+        assert client.post("/shutdown", json={}).status_code == 422
 
     assert unauthorized.status_code == HTTP_UNAUTHORIZED
-    assert response.status_code == HTTP_ACCEPTED
-    assert requested == [True]
-    # The host waits exactly as long as the backend says its teardown may take.
-    assert response.json() == {"teardown_budget_seconds": TEARDOWN_BUDGET_SECONDS}
+    assert accepted.status_code == HTTP_ACCEPTED
 
 
 def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
-    """The host must not kill a teardown that is still within its own limits.
+    """An OS service must not kill a teardown that is still within its limits.
 
     Each wait below is one the lifespan teardown can run into; all of them
     timing out at once is the longest an orderly teardown takes. A new wait in
@@ -976,91 +989,6 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
     assert not saved.exists()
 
 
-def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
-    tmp_path: Path,
-) -> None:
-    store = CommandInputFileStore(root=tmp_path / "tmp")
-    app = create_app(
-        runtime=RuntimeStub(tmp_path),
-        command_input_file_store=store,
-    )
-    source = tmp_path / "report.md"
-    source.write_text("hello", encoding="utf-8")
-
-    with owner_client(app) as client:
-        response = client.post(
-            "/commands/input-files/copy",
-            json={"path": str(source)},
-        )
-        assert response.status_code == HTTP_OK
-        copied = Path(response.json()["path"])
-        assert copied.is_relative_to(tmp_path / "tmp")
-        assert response.json()["guest_path"] == guest_path(copied)
-        assert copied.name.endswith("-report.md")
-        assert copied.read_text(encoding="utf-8") == "hello"
-
-        refused = client.post(
-            "/commands/input-files/copy",
-            json={"path": str(tmp_path)},
-        )
-
-    assert refused.status_code == HTTP_BAD_REQUEST
-    assert refused.json()["code"] == "command_input_file_invalid"
-    assert not copied.exists()
-    assert source.exists()
-
-
-def test_command_input_paths_report_what_a_turn_would_reach(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    app = create_app(runtime=RuntimeStub(tmp_path))
-    home = Path.home()
-    reachable = home / "Documents/GuildBotics/tmp/a.png"
-    reachable.parent.mkdir(parents=True)
-    reachable.write_bytes(b"x")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    unreachable = outside / "shot.png"
-    unreachable.write_bytes(b"x")
-
-    with owner_client(app) as client:
-        response = client.post(
-            "/commands/input-paths",
-            json={"paths": [str(reachable), str(unreachable), str(outside)]},
-        )
-
-    assert response.status_code == HTTP_OK
-    device = {"scope": "device", "path": str(outside.resolve())}
-    assert response.json() == {
-        "paths": [
-            {
-                "path": str(reachable),
-                "kind": "file",
-                "reachable": True,
-                "guest_path": guest_path(reachable),
-                "grant": None,
-                "problem": "",
-            },
-            {
-                "path": str(unreachable),
-                "kind": "file",
-                "reachable": False,
-                "guest_path": guest_path(unreachable),
-                "grant": device,
-                "problem": "",
-            },
-            {
-                "path": str(outside),
-                "kind": "directory",
-                "reachable": False,
-                "guest_path": guest_path(outside),
-                "grant": device,
-                "problem": "",
-            },
-        ]
-    }
-
-
 def test_command_input_file_upload_runs_sync_io_outside_event_loop(
     tmp_path: Path,
 ) -> None:
@@ -1094,6 +1022,16 @@ def test_command_input_file_upload_takes_any_file_a_browser_drops(
         saved = Path(response.json()["path"])
         assert saved.name.endswith("-document.pdf")
         assert saved.read_bytes() == b"pdf"
+
+        refused = client.post(
+            "/commands/input-files",
+            files={"file": ("empty.txt", b"", "text/plain")},
+        )
+        assert not list(saved.parent.glob("*empty.txt*"))
+
+    assert refused.status_code == HTTP_BAD_REQUEST
+    assert refused.json()["code"] == "command_input_file_invalid"
+    assert "File is empty." in refused.json()["message"]
 
 
 def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
@@ -2573,10 +2511,7 @@ UNAUTHENTICATED_ROUTES = {
         if provider.setup
         for name in provider.setup.pages
     ),
-    *(
-        ("GET", path)
-        for path in ("/", "/index.html", "/quick.html", "/-/enter", "/-/authorize")
-    ),
+    *(("GET", path) for path in ("/", "/index.html", "/-/enter", "/-/authorize")),
     ("GET", "/openapi.json"),
     ("GET", "/docs"),
     ("GET", "/docs/oauth2-redirect"),
@@ -3220,16 +3155,19 @@ def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:
     assert response.json()["events"]["state"] == "running"
 
 
-def test_scheduler_stop_endpoint(tmp_path: Path) -> None:
+def test_scheduler_stop_endpoint_leaves_the_server_running(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    client = _client(runtime)
+    app = create_app(runtime=runtime)
+    exits: list[bool] = []
+    app.state.request_shutdown = lambda: exits.append(True)
 
-    response = client.post("/scheduler/stop")
+    response = owner_client(app).post("/scheduler/stop")
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "stopped"
     assert response.json()["events"]["state"] == "stopped"
     assert runtime.stop_force is False
+    assert exits == []
 
 
 def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
@@ -3245,14 +3183,7 @@ def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
     assert runtime.stop_force is True
 
 
-def test_scheduler_stop_acknowledges_before_waiting_and_can_escalate(
-    tmp_path, monkeypatch
-):
-    from guildbotics.drivers.app_api_lock import (
-        hold_backend_lock,
-        read_backend_metadata,
-    )
-
+def test_a_drain_before_the_exit_can_still_be_cancelled(tmp_path, monkeypatch):
     runtime = RuntimeStub(tmp_path)
     entered = threading.Event()
     cancelled = threading.Event()
@@ -3271,18 +3202,22 @@ def test_scheduler_stop_acknowledges_before_waiting_and_can_escalate(
 
     monkeypatch.setattr(runtime, "stop_scheduler", stop)
     app = create_app(runtime=runtime)
+    exits = []
+    app.state.request_shutdown = lambda: exits.append(True)
     client = owner_client(app)
-    with hold_backend_lock() as backend:
-        app.state.on_service_stop = backend.request_stop
-        graceful = client.post("/scheduler/stop", json={"wait": False})
-        assert graceful.status_code == HTTP_OK
-        assert entered.wait(5)
-        assert read_backend_metadata().stop_requested is True
-        assert not cancelled.is_set()
-        forced = client.post("/scheduler/stop", json={"force": True, "wait": False})
-        assert forced.status_code == HTTP_OK
-        assert completed.wait(5)
+    drain = client.post("/shutdown", json={"force": False})
+    assert drain.status_code == HTTP_ACCEPTED
+    assert entered.wait(5)
+    assert exits == []
+    forced = client.post("/shutdown", json={"force": True})
+    assert forced.status_code == HTTP_ACCEPTED
+    # The forced stop cancels the work the drain waits for; both then exit.
+    assert completed.wait(5)
+    deadline = time.monotonic() + 5
+    while len(exits) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert stages == [False, True]
+    assert exits == [True, True]
 
 
 def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
@@ -3427,7 +3362,10 @@ def test_service_settings_are_saved_for_every_later_start(tmp_path: Path) -> Non
     other = _client(AppRuntime(EventBus()))
 
     before = one.get("/service/settings")
-    one.patch("/service/settings", json={"keep_awake": True, "scheduled": False})
+    one.patch(
+        "/service/settings",
+        json={"keep_awake": True, "scheduled": False, "start_with_server": True},
+    )
     other.patch(
         "/service/settings", json={"event_queue": False, "routine_interval_minutes": 3}
     )
@@ -3440,6 +3378,7 @@ def test_service_settings_are_saved_for_every_later_start(tmp_path: Path) -> Non
     after = other.get("/service/settings")
 
     saved = {
+        "start_with_server": True,
         "keep_awake": True,
         "scheduled": False,
         "routine": True,
@@ -3486,7 +3425,7 @@ def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder_owner: str
 ) -> None:
     """The switch is this device's, and a service already running follows it
-    without a restart, including one a ``guildbotics start`` holds: the
+    without a restart, including one a ``guildbotics server start`` holds: the
     holder is another ``ServiceLock`` than the one the API's lifecycle has."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()

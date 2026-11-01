@@ -22,8 +22,8 @@ import httpx
 from guildbotics.utils.fileio import get_machine_state_path
 
 DEFAULT_PORT = 8765
-#: Moves the port for every program on this machine at once: the server, its
-#: clients, and the Desktop that launches it.
+#: Moves the port for every program on this machine at once: the server and
+#: its clients.
 PORT_ENV = "GUILDBOTICS_SERVER_PORT"
 API_PREFIX = "/api"
 PROOF_PATH = "/local-api/proof"
@@ -139,9 +139,13 @@ def connect_local_api(
     headers: dict[str, str] | None = None,
     timeout: float | None,
     consent: bool = False,
+    port: int | None = None,
 ) -> Iterator[httpx.Client | None]:
     """Yield a client carrying this machine's credential, or None without
     sending it.
+
+    ``port`` is the one this machine names unless given: the one the running
+    server recorded in its lock, for a caller that addresses that server.
 
     Without ``consent`` only the owner file is offered, so only the server
     running on this machine can answer: a caller that hands over this
@@ -155,7 +159,7 @@ def connect_local_api(
     it. The proof is the only evidence: a health answer says nothing about who
     holds the port.
     """
-    port = server_port()
+    port = port or server_port()
     with httpx.Client(
         base_url=base_url(port) + API_PREFIX,
         headers=headers,

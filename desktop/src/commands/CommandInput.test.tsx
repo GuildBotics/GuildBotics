@@ -1,52 +1,22 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import {
-  checkCommandInputPaths,
-  copyCommandInputFile,
-  uploadCommandInputFile,
-  type CommandInputPathStatus,
-} from "../api/client";
-import { openMainWindow } from "../hotkeys/hotkeyRuntime";
+import { uploadCommandInputFile } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
-import { appendCommandInputPaths, CommandInput, grantSettingsRoute } from "./CommandInput";
+import { appendCommandInputPath, CommandInput } from "./CommandInput";
 import { TestMantineProvider } from "../test/TestMantineProvider";
-
-const tauriDrag = vi.hoisted(() => ({
-  handler: null as ((event: unknown) => void) | null,
-  unlisten: vi.fn(),
-}));
-
-vi.mock("@tauri-apps/api/webview", () => ({
-  getCurrentWebview: () => ({
-    onDragDropEvent: vi.fn(async (handler: (event: unknown) => void) => {
-      tauriDrag.handler = handler;
-      return tauriDrag.unlisten;
-    }),
-  }),
-}));
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
-  return {
-    ...actual,
-    checkCommandInputPaths: vi.fn(),
-    copyCommandInputFile: vi.fn(),
-    uploadCommandInputFile: vi.fn(),
-  };
+  return { ...actual, uploadCommandInputFile: vi.fn() };
 });
 
-vi.mock("../hotkeys/hotkeyRuntime", () => ({ openMainWindow: vi.fn(async () => {}) }));
-
 const uploadMock = vi.mocked(uploadCommandInputFile);
-const checkMock = vi.mocked(checkCommandInputPaths);
-const copyMock = vi.mocked(copyCommandInputFile);
-const openMainWindowMock = vi.mocked(openMainWindow);
 const t = i18n.getFixedT("en");
 
-function ControlledInput({ initial = "", cwd }: { initial?: string; cwd?: string }) {
+function ControlledInput({ initial = "" }: { initial?: string }) {
   const [value, setValue] = useState(initial);
   return (
     <CommandInput
@@ -54,257 +24,70 @@ function ControlledInput({ initial = "", cwd }: { initial?: string; cwd?: string
       required={false}
       value={value}
       onChange={setValue}
-      cwd={cwd}
     />
   );
 }
 
-function renderInput(initial = "", cwd?: string) {
+function renderInput(initial = "") {
   return render(
     <TestMantineProvider>
-      <ControlledInput initial={initial} cwd={cwd} />
+      <ControlledInput initial={initial} />
     </TestMantineProvider>,
   );
 }
 
-/** Drop `paths` on the input once the Tauri listener is attached. */
-async function drop(input: HTMLElement, paths: string[]) {
-  vi.spyOn(input, "getBoundingClientRect").mockReturnValue({
-    bottom: 110,
-    height: 100,
-    left: 10,
-    right: 210,
-    top: 10,
-    width: 200,
-    x: 10,
-    y: 10,
-    toJSON: () => ({}),
-  });
-  await waitFor(() => expect(tauriDrag.handler).not.toBeNull());
-  act(() => {
-    tauriDrag.handler?.({ payload: { type: "drop", paths, position: { x: 20, y: 20 } } });
-  });
-}
-
-function described(
-  entries: [string, CommandInputPathStatus["kind"], boolean, CommandInputPathStatus["grant"]?][],
-): CommandInputPathStatus[] {
-  return entries.map(([path, kind, reachable, grant = null]) => ({
-    path,
-    kind,
-    reachable,
-    guest_path: path,
-    grant,
-    problem: "",
-  }));
-}
-
 describe("CommandInput", () => {
-  beforeEach(() => {
-    uploadMock.mockReset();
-    checkMock.mockReset();
-    copyMock.mockReset();
-    openMainWindowMock.mockClear();
-    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1 });
-    Object.defineProperty(navigator, "platform", { configurable: true, value: "" });
-    tauriDrag.handler = null;
-    tauriDrag.unlisten.mockReset();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-  });
+  // The browser has no path the server machine could read: a dropped or
+  // pasted file is handed over as an uploaded copy, and a folder is refused.
+  function fileItem(file: File, directory = false) {
+    return {
+      kind: "file",
+      getAsFile: () => file,
+      webkitGetAsEntry: () => ({ isDirectory: directory }),
+    };
+  }
 
-  it("appends dropped paths the environment reaches, asking about the working directory", async () => {
-    checkMock.mockResolvedValue({
-      paths: described([
-        ["/tmp/scan one.pdf", "file", true],
-        ["/tmp/page.png", "file", true],
-      ]),
-    });
-    renderInput("OCR these files:", "/work/clone");
+  function dropItems(target: HTMLElement, items: ReturnType<typeof fileItem>[]) {
+    const dataTransfer = { types: ["Files"], items };
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+  }
+
+  it("uploads each dropped file and appends the copies' paths", async () => {
+    uploadMock
+      .mockResolvedValueOnce({ path: "/in/a-notes.md", guest_path: "/in/a-notes.md" })
+      .mockResolvedValueOnce({ path: "/in/b-shot.png", guest_path: "/in/b-shot.png" });
+    renderInput("describe");
     const input = screen.getByRole("textbox", { name: t("commands.message") });
+    const notes = new File(["# notes"], "notes.md", { type: "text/markdown" });
+    const shot = new File(["pixels"], "shot.png", { type: "image/png" });
 
-    await drop(input, ["/tmp/scan one.pdf", "/tmp/page.png"]);
+    dropItems(input, [fileItem(notes), fileItem(shot)]);
 
-    await waitFor(() =>
-      expect(input).toHaveValue("OCR these files:\n/tmp/scan one.pdf\n/tmp/page.png"),
-    );
-    expect(checkMock).toHaveBeenCalledWith({
-      paths: ["/tmp/scan one.pdf", "/tmp/page.png"],
-      cwd: "/work/clone",
-    });
-    expect(screen.queryByText(t("commands.inputPathUnreachable"))).not.toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveValue("describe\n/in/a-notes.md\n/in/b-shot.png"));
+    expect(uploadMock).toHaveBeenCalledWith(notes);
+    expect(uploadMock).toHaveBeenCalledWith(shot);
   });
 
-  it("holds an unreachable dropped file until the user hands over a copy", async () => {
-    checkMock.mockResolvedValue({
-      paths: described([
-        ["/Users/me/Desktop/shot.png", "file", false, { scope: "document", path: "Desktop" }],
-        ["/Users/me/gone.txt", "missing", false],
-      ]),
-    });
-    copyMock.mockResolvedValue({
-      path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
-      guest_path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
-    });
-    renderInput("describe", "/work/clone");
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    await drop(input, ["/Users/me/Desktop/shot.png", "/Users/me/gone.txt"]);
-
-    // A missing path is not a file to hand over; the unreachable one waits.
-    await waitFor(() => expect(input).toHaveValue("describe\n/Users/me/gone.txt"));
-    const held = await screen.findByRole("group", { name: t("commands.inputPathUnreachable") });
-    expect(held).toHaveTextContent("/Users/me/Desktop/shot.png");
-    expect(held).toHaveTextContent(t("commands.inputPathHint"));
-
-    fireEvent.click(screen.getByRole("button", { name: t("commands.inputPathCopy") }));
-
-    await waitFor(() => expect(copyMock).toHaveBeenCalledWith("/Users/me/Desktop/shot.png"));
-    await waitFor(() =>
-      expect(input).toHaveValue(
-        "describe\n/Users/me/gone.txt\n/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
-      ),
-    );
-    expect(screen.queryByRole("group")).not.toBeInTheDocument();
-  });
-
-  it("shows the protection reason and refuses copying or granting a private path", async () => {
-    checkMock.mockResolvedValue({
-      paths: [
-        {
-          ...described([["/home/u/.ssh/key", "file", false]])[0],
-          problem: "Private credentials are protected",
-        },
-      ],
-    });
-    renderInput();
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-    await drop(input, ["/home/u/.ssh/key"]);
-    expect(await screen.findByText("Private credentials are protected")).toBeInTheDocument();
-    const copy = screen.getByRole("button", { name: t("commands.inputPathCopy") });
-    expect(copy).toBeDisabled();
-    expect(screen.queryByRole("button", { name: t("commands.inputPathGrant") })).toBeNull();
-    fireEvent.click(copy);
-    expect(copyMock).not.toHaveBeenCalled();
-    expect(input).toHaveValue("");
-  });
-
-  it("keeps the original and opens its folder's grant when the user allows it; a folder is never copied", async () => {
-    checkMock.mockResolvedValue({
-      paths: described([
-        [
-          "/Users/me/Desktop/photos",
-          "directory",
-          false,
-          { scope: "document", path: "Desktop/photos" },
-        ],
-      ]),
-    });
+  it("refuses a dropped folder, asking for its server path, and still uploads the files", async () => {
+    uploadMock.mockResolvedValue({ path: "/in/a.md", guest_path: "/in/a.md" });
     renderInput();
     const input = screen.getByRole("textbox", { name: t("commands.message") });
 
-    await drop(input, ["/Users/me/Desktop/photos"]);
+    dropItems(input, [fileItem(new File([], "project"), true), fileItem(new File(["a"], "a.md"))]);
 
-    await screen.findByRole("group", { name: t("commands.inputPathUnreachable") });
-    expect(screen.queryByRole("button", { name: t("commands.inputPathCopy") })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: t("commands.inputPathGrant") }));
-
-    // The path stays: once the grant is saved the command is ready to run.
-    expect(input).toHaveValue("/Users/me/Desktop/photos");
-    expect(copyMock).not.toHaveBeenCalled();
-    expect(openMainWindowMock).toHaveBeenCalledWith(
-      "/setup?section=intelligence&advanced=intelligence&focus=grants-documents&grant=Desktop%2Fphotos",
-    );
-    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(t("commands.inputFolderRefused"));
+    await waitFor(() => expect(input).toHaveValue("/in/a.md"));
+    expect(uploadMock).toHaveBeenCalledTimes(1);
   });
 
-  it("drops a held file when the user dismisses it, inserting nothing", async () => {
-    checkMock.mockResolvedValue({
-      paths: described([
-        ["/Users/me/Desktop/a.png", "file", false, { scope: "document", path: "Desktop" }],
-        ["/Users/me/Desktop/b.png", "file", false, { scope: "document", path: "Desktop" }],
-      ]),
-    });
-    renderInput("look");
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    await drop(input, ["/Users/me/Desktop/a.png", "/Users/me/Desktop/b.png"]);
-
-    const held = await screen.findByRole("group", { name: t("commands.inputPathUnreachable") });
-    fireEvent.click(
-      within(held).getAllByRole("button", { name: t("commands.inputPathDismiss") })[0],
-    );
-
-    expect(input).toHaveValue("look");
-    expect(held).not.toHaveTextContent("/Users/me/Desktop/a.png");
-    expect(held).toHaveTextContent("/Users/me/Desktop/b.png");
-    expect(copyMock).not.toHaveBeenCalled();
-    expect(openMainWindowMock).not.toHaveBeenCalled();
-  });
-
-  it("offers no grant for a file whose directory cannot be granted", async () => {
-    checkMock.mockResolvedValue({
-      paths: described([["/Users/me/notes.md", "file", false, null]]),
-    });
-    renderInput();
-
-    await drop(screen.getByRole("textbox", { name: t("commands.message") }), [
-      "/Users/me/notes.md",
-    ]);
-
-    await screen.findByRole("group", { name: t("commands.inputPathUnreachable") });
-    expect(screen.getByRole("button", { name: t("commands.inputPathCopy") })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t("commands.inputPathGrant") })).toBeNull();
-  });
-
-  it("reads the drop position as CSS pixels on macOS and as device pixels elsewhere", async () => {
-    checkMock.mockImplementation(async ({ paths }) => ({
-      paths: paths.map((path) => ({
-        path,
-        kind: "file" as const,
-        reachable: true,
-        guest_path: path,
-        grant: null,
-        problem: "",
-      })),
-    }));
-    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
-    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+  it("says the drop hands over a copy while a file is dragged over", () => {
     renderInput();
     const input = screen.getByRole("textbox", { name: t("commands.message") });
 
-    // The field spans 10..210 x 10..110 in CSS pixels; wry reports (20, 20)
-    // in those same units on macOS, which is inside.
-    await drop(input, ["/tmp/mac.md"]);
-    await waitFor(() => expect(input).toHaveValue("/tmp/mac.md"));
+    fireEvent.dragOver(input, { dataTransfer: { types: ["Files"], items: [] } });
 
-    // Elsewhere the same numbers are device pixels: (20, 20) is (10, 10) in
-    // CSS pixels, on the field's edge, while (40, 40) lands inside it.
-    Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
-    act(() => {
-      tauriDrag.handler?.({
-        payload: { type: "drop", paths: ["/tmp/edge.md"], position: { x: 500, y: 500 } },
-      });
-    });
-    act(() => {
-      tauriDrag.handler?.({
-        payload: { type: "drop", paths: ["/tmp/win.md"], position: { x: 40, y: 40 } },
-      });
-    });
-    await waitFor(() => expect(input).toHaveValue("/tmp/mac.md\n/tmp/win.md"));
-  });
-
-  it("inserts dropped paths untouched and reports it when the check itself fails", async () => {
-    checkMock.mockRejectedValue(new Error("backend down"));
-    renderInput();
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    await drop(input, ["/tmp/a.md"]);
-
-    await waitFor(() => expect(input).toHaveValue("/tmp/a.md"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("backend down");
+    expect(screen.getByRole("status")).toHaveTextContent(t("commands.inputFileDropActive"));
   });
 
   it("uploads a pasted image and appends the returned temporary path", async () => {
@@ -345,118 +128,12 @@ describe("CommandInput", () => {
   });
 });
 
-describe("grantSettingsRoute", () => {
-  it("points at the documents card for a home directory and the device card elsewhere", () => {
-    expect(grantSettingsRoute({ scope: "document", path: "Desktop" })).toBe(
-      "/setup?section=intelligence&advanced=intelligence&focus=grants-documents&grant=Desktop",
-    );
-    expect(grantSettingsRoute({ scope: "device", path: "/Volumes/data" })).toBe(
-      "/setup?section=intelligence&advanced=intelligence&focus=grants-device&grant=%2FVolumes%2Fdata",
-    );
-  });
-});
-
-describe("appendCommandInputPaths", () => {
+describe("appendCommandInputPath", () => {
   it("preserves path spaces and avoids an extra blank line", () => {
-    expect(appendCommandInputPaths("existing\n", ["/tmp/file name.pdf"])).toBe(
+    expect(appendCommandInputPath("existing\n", "/tmp/file name.pdf")).toBe(
       "existing\n/tmp/file name.pdf",
     );
-  });
-
-  it("puts the environment's own spelling of a handed-over path in the field", async () => {
-    checkMock.mockResolvedValue({
-      paths: [
-        {
-          path: "C:\\Users\\me\\Desktop\\shot.png",
-          kind: "file",
-          reachable: false,
-          guest_path: "/c/Users/me/Desktop/shot.png",
-          grant: { scope: "document", path: "Desktop" },
-          problem: "",
-        },
-      ],
-    });
-    copyMock.mockResolvedValue({
-      path: "C:\\Users\\me\\Documents\\GuildBotics\\tmp\\s1\\ab12-shot.png",
-      guest_path: "/c/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
-    });
-    renderInput("describe");
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    await drop(input, ["C:\\Users\\me\\Desktop\\shot.png"]);
-    await screen.findByText("C:\\Users\\me\\Desktop\\shot.png");
-    fireEvent.click(screen.getByRole("button", { name: t("commands.inputPathCopy") }));
-
-    await waitFor(() =>
-      expect(input).toHaveValue("describe\n/c/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png"),
-    );
-  });
-});
-
-describe("CommandInput in the browser", () => {
-  // A browser has no path the server machine could read: a dropped file is
-  // handed over as an uploaded copy, and a folder is refused.
-  beforeEach(() => {
-    uploadMock.mockReset();
-    checkMock.mockReset();
-    tauriDrag.handler = null;
-    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
-  });
-
-  function fileItem(file: File, directory = false) {
-    return {
-      kind: "file",
-      getAsFile: () => file,
-      webkitGetAsEntry: () => ({ isDirectory: directory }),
-    };
-  }
-
-  function dropItems(target: HTMLElement, items: ReturnType<typeof fileItem>[]) {
-    const dataTransfer = { types: ["Files"], items };
-    fireEvent.dragOver(target, { dataTransfer });
-    fireEvent.drop(target, { dataTransfer });
-  }
-
-  it("uploads each dropped file and appends the copies' paths", async () => {
-    uploadMock
-      .mockResolvedValueOnce({ path: "/in/a-notes.md", guest_path: "/in/a-notes.md" })
-      .mockResolvedValueOnce({ path: "/in/b-shot.png", guest_path: "/in/b-shot.png" });
-    renderInput("describe");
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-    const notes = new File(["# notes"], "notes.md", { type: "text/markdown" });
-    const shot = new File(["pixels"], "shot.png", { type: "image/png" });
-
-    dropItems(input, [fileItem(notes), fileItem(shot)]);
-
-    await waitFor(() => expect(input).toHaveValue("describe\n/in/a-notes.md\n/in/b-shot.png"));
-    expect(uploadMock).toHaveBeenCalledWith(notes);
-    expect(uploadMock).toHaveBeenCalledWith(shot);
-    // No path is checked, and no copy-or-allow choice is offered.
-    expect(checkMock).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("group", { name: t("commands.inputPathUnreachable") }),
-    ).not.toBeInTheDocument();
-    expect(tauriDrag.handler).toBeNull();
-  });
-
-  it("refuses a dropped folder, asking for its server path, and still uploads the files", async () => {
-    uploadMock.mockResolvedValue({ path: "/in/a.md", guest_path: "/in/a.md" });
-    renderInput();
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    dropItems(input, [fileItem(new File([], "project"), true), fileItem(new File(["a"], "a.md"))]);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(t("commands.inputFolderRefused"));
-    await waitFor(() => expect(input).toHaveValue("/in/a.md"));
-    expect(uploadMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("says the drop hands over a copy while a file is dragged over", () => {
-    renderInput();
-    const input = screen.getByRole("textbox", { name: t("commands.message") });
-
-    fireEvent.dragOver(input, { dataTransfer: { types: ["Files"], items: [] } });
-
-    expect(screen.getByRole("status")).toHaveTextContent(t("commands.inputFileDropUpload"));
+    expect(appendCommandInputPath("existing", "/tmp/a.md")).toBe("existing\n/tmp/a.md");
+    expect(appendCommandInputPath("", "/tmp/a.md")).toBe("/tmp/a.md");
   });
 });

@@ -13,11 +13,6 @@ PACKAGE_ROOT = REPOSITORY_ROOT / "guildbotics"
 NON_ENTRY_COMMAND_READS = Counter(
     {
         (
-            "guildbotics/app_api/hotkeys.py",
-            "load_hotkeys",
-            "get",
-        ): 1,
-        (
             "guildbotics/commands/validation.py",
             "_validate_generated_markdown_message_usage",
             "get:not",

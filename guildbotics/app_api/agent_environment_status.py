@@ -141,7 +141,7 @@ def agent_environment_status(
             held=device.image.held,
             problem=device.image.refusal,
             warning=device.image.warning,
-            load_command=image_load_command(platform=platform),
+            load_command=image_load_command(),
         ),
         network=device.network,
         dns=EnvironmentDnsStatus(
@@ -157,7 +157,7 @@ def agent_environment_status(
                 provisioned=tool.provisioned,
                 credentials_saved=tool.credentials_saved,
                 authentication_failed=tool.authentication_failed,
-                login_command=login_command(tool.name, platform=platform),
+                login_command=login_command(tool.name),
                 problem=tool.problem or _usage_problem(tool.name, usage_checks or {}),
                 usage_supported=tool.name in CLI_AGENT_USAGE_READERS,
                 usage_check=(usage_checks or {}).get(tool.name),

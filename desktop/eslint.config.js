@@ -9,7 +9,6 @@ export default tseslint.config(
     ignores: [
       "dist",
       "node_modules",
-      "src-tauri",
       "coverage",
       "eslint.config.js",
       "vite.config.ts",

@@ -1,196 +1,40 @@
-import {
-  ActionIcon,
-  Button,
-  Group,
-  Stack,
-  Text,
-  Textarea,
-  Tooltip,
-  type TextareaProps,
-} from "@mantine/core";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { X } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type DOMAttributes,
-  type RefObject,
-} from "react";
+import { Text, Textarea, type TextareaProps } from "@mantine/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  checkCommandInputPaths,
-  copyCommandInputFile,
-  uploadCommandInputFile,
-  type CommandInputGrantSuggestion,
-  type CommandInputPathStatus,
-} from "../api/client";
-import { isTauriRuntime } from "../desktopWindow";
-import { isMacPlatform } from "../hotkeys/accelerator";
-import { openMainWindow } from "../hotkeys/hotkeyRuntime";
+import { uploadCommandInputFile } from "../api/client";
 
 type CommandInputProps = Omit<TextareaProps, "onChange" | "value"> & {
-  inputRef?: RefObject<HTMLTextAreaElement | null>;
   value: string;
   onChange: (value: string) => void;
-  /** Where the command will run, when the screen knows; a dropped file there is reachable. */
-  cwd?: string;
 };
 
-type DropPosition = { x: number; y: number };
-
-type DragHandlers = Pick<DOMAttributes<HTMLDivElement>, "onDragOver" | "onDragLeave" | "onDrop">;
-
-/**
- * The settings screen where a grant that would open a dropped path is added:
- * the advanced intelligence panel, scrolled to the right card, with the
- * directory already in its path field.
- */
-export function grantSettingsRoute(grant: CommandInputGrantSuggestion): string {
-  const search = new URLSearchParams({
-    section: "intelligence",
-    advanced: "intelligence",
-    focus: grant.scope === "document" ? "grants-documents" : "grants-device",
-    grant: grant.path,
-  });
-  return `/setup?${search.toString()}`;
-}
-
-export function appendCommandInputPaths(value: string, paths: string[]): string {
-  const additions = paths.filter(Boolean);
-  if (!additions.length) {
-    return value;
-  }
+/** `value` with `path` on a line of its own after it. */
+export function appendCommandInputPath(value: string, path: string): string {
   const separator = value && !value.endsWith("\n") ? "\n" : "";
-  return `${value}${separator}${additions.join("\n")}`;
+  return `${value}${separator}${path}`;
 }
 
-export function CommandInput({
-  inputRef,
-  value,
-  onChange,
-  onPaste,
-  cwd,
-  ...textareaProps
-}: CommandInputProps) {
+export function CommandInput({ value, onChange, onPaste, ...textareaProps }: CommandInputProps) {
   const { t } = useTranslation();
-  const localInputRef = useRef<HTMLTextAreaElement>(null);
-  const resolvedInputRef = inputRef ?? localInputRef;
   const valueRef = useRef(value);
   const [dropActive, setDropActive] = useState(false);
   const [uploadsInFlight, setUploadsInFlight] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [folderRefused, setFolderRefused] = useState(false);
-  /** Dropped paths the isolated agent environment cannot reach, awaiting the user's choice. */
-  const [unreachable, setUnreachable] = useState<CommandInputPathStatus[]>([]);
 
   useEffect(() => {
     valueRef.current = value;
   }, [value]);
 
-  const appendPaths = useCallback(
-    (paths: string[]) => {
-      const next = appendCommandInputPaths(valueRef.current, paths);
+  const appendPath = useCallback(
+    (path: string) => {
+      const next = appendCommandInputPath(valueRef.current, path);
       valueRef.current = next;
       onChange(next);
     },
     [onChange],
   );
-
-  /**
-   * A dropped path goes in as it is when a turn would see it there; otherwise
-   * the user decides between a copy the environment can reach and the original.
-   * A missing path is not a file to hand over, so it goes in untouched too.
-   */
-  const acceptDroppedPaths = useCallback(
-    async (paths: string[]) => {
-      setUploadError(null);
-      let described: CommandInputPathStatus[];
-      try {
-        described = (await checkCommandInputPaths({ paths, cwd })).paths;
-      } catch (error) {
-        setUploadError(error instanceof Error ? error.message : String(error));
-        appendPaths(paths);
-        return;
-      }
-      const held = described.filter((entry) => !entry.reachable && entry.kind !== "missing");
-      appendPaths(
-        described.filter((entry) => !held.includes(entry)).map((entry) => entry.guest_path),
-      );
-      setUnreachable((current) => [...current, ...held]);
-    },
-    [appendPaths, cwd],
-  );
-
-  /**
-   * Hand over a copy the environment can reach, keep the original and go and
-   * open its directory to agents (the path goes in as it is, so the command
-   * is ready once the grant is saved), or drop the file altogether.
-   */
-  const settleUnreachable = useCallback(
-    async (entry: CommandInputPathStatus, choice: "copy" | "grant" | "dismiss") => {
-      setUnreachable((current) => current.filter((held) => held !== entry));
-      if (choice === "dismiss") {
-        return;
-      }
-      if (choice === "grant") {
-        appendPaths([entry.guest_path]);
-        if (entry.grant) {
-          void openMainWindow(grantSettingsRoute(entry.grant));
-        }
-        return;
-      }
-      setUploadError(null);
-      setUploadsInFlight((count) => count + 1);
-      try {
-        appendPaths([(await copyCommandInputFile(entry.path)).guest_path]);
-      } catch (error) {
-        setUploadError(error instanceof Error ? error.message : String(error));
-      } finally {
-        setUploadsInFlight((count) => count - 1);
-      }
-    },
-    [appendPaths],
-  );
-
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      return;
-    }
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        const payload = event.payload;
-        if (payload.type === "leave") {
-          setDropActive(false);
-          return;
-        }
-        const inside = containsDropPoint(resolvedInputRef.current, payload.position);
-        if (payload.type === "drop") {
-          setDropActive(false);
-          if (inside) {
-            void acceptDroppedPaths(payload.paths);
-          }
-          return;
-        }
-        setDropActive(inside);
-      })
-      .then((stopListening) => {
-        if (disposed) {
-          stopListening();
-        } else {
-          unlisten = stopListening;
-        }
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [acceptDroppedPaths, resolvedInputRef]);
 
   const uploadCopy = useCallback(
     async (file: File) => {
@@ -198,61 +42,52 @@ export function CommandInput({
       setUploadsInFlight((count) => count + 1);
       try {
         const response = await uploadCommandInputFile(file);
-        appendPaths([response.guest_path]);
+        appendPath(response.guest_path);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {
         setUploadsInFlight((count) => count - 1);
       }
     },
-    [appendPaths],
+    [appendPath],
   );
 
-  /**
-   * A browser drop hands over a copy of each file: the browser has no path
-   * the server machine could read, so the file travels as a pasted image does.
-   * A folder cannot travel that way; its server path is typed instead.
-   */
-  const browserDrop: DragHandlers = isTauriRuntime()
-    ? {}
-    : {
-        onDragOver: (event) => {
-          if (event.dataTransfer.types.includes("Files")) {
-            event.preventDefault();
-            setDropActive(true);
-          }
-        },
-        onDragLeave: (event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setDropActive(false);
-          }
-        },
-        onDrop: (event) => {
-          if (!event.dataTransfer.types.includes("Files")) {
-            return;
-          }
-          event.preventDefault();
-          setDropActive(false);
-          const items = Array.from(event.dataTransfer.items).filter((item) => item.kind === "file");
-          const folders = items.filter((item) => item.webkitGetAsEntry()?.isDirectory);
-          setFolderRefused(folders.length > 0);
-          for (const item of items) {
-            const file = folders.includes(item) ? null : item.getAsFile();
-            if (file) {
-              void uploadCopy(file);
-            }
-          }
-        },
-      };
-
+  // A drop hands over a copy of each file: the browser has no path the server
+  // machine could read, so the file travels as a pasted image does. A folder
+  // cannot travel that way; its server path is typed instead.
   return (
     <div
       className={dropActive ? "command-input command-input-drop-active" : "command-input"}
-      {...browserDrop}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+          setDropActive(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDropActive(false);
+        }
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) {
+          return;
+        }
+        event.preventDefault();
+        setDropActive(false);
+        const items = Array.from(event.dataTransfer.items).filter((item) => item.kind === "file");
+        const folders = items.filter((item) => item.webkitGetAsEntry()?.isDirectory);
+        setFolderRefused(folders.length > 0);
+        for (const item of items) {
+          const file = folders.includes(item) ? null : item.getAsFile();
+          if (file) {
+            void uploadCopy(file);
+          }
+        }
+      }}
     >
       <Textarea
         {...textareaProps}
-        ref={resolvedInputRef}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         onPaste={(event) => {
@@ -269,65 +104,13 @@ export function CommandInput({
       />
       {dropActive ? (
         <Text size="xs" c="blue" role="status">
-          {t(isTauriRuntime() ? "commands.inputFileDropActive" : "commands.inputFileDropUpload")}
+          {t("commands.inputFileDropActive")}
         </Text>
       ) : null}
       {folderRefused ? (
         <Text size="xs" c="red" role="alert">
           {t("commands.inputFolderRefused")}
         </Text>
-      ) : null}
-      {unreachable.length ? (
-        <Stack gap={4} role="group" aria-label={t("commands.inputPathUnreachable")}>
-          <Text size="xs" c="dimmed">
-            {t("commands.inputPathUnreachable")}
-          </Text>
-          {unreachable.map((entry) => (
-            <Group key={entry.path} gap="xs" wrap="nowrap">
-              <Text size="xs" ff="monospace" style={{ flex: 1, wordBreak: "break-all" }}>
-                {entry.path}
-                {entry.problem ? (
-                  <Text component="span" style={{ display: "block" }} size="xs" c="red">
-                    {entry.problem}
-                  </Text>
-                ) : null}
-              </Text>
-              {entry.kind === "file" ? (
-                <Button
-                  size="compact-xs"
-                  variant="light"
-                  disabled={Boolean(entry.problem)}
-                  onClick={() => void settleUnreachable(entry, "copy")}
-                >
-                  {t("commands.inputPathCopy")}
-                </Button>
-              ) : null}
-              {entry.grant ? (
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  onClick={() => void settleUnreachable(entry, "grant")}
-                >
-                  {t("commands.inputPathGrant")}
-                </Button>
-              ) : null}
-              <Tooltip label={t("commands.inputPathDismiss")}>
-                <ActionIcon
-                  aria-label={t("commands.inputPathDismiss")}
-                  size="xs"
-                  variant="subtle"
-                  color="gray"
-                  onClick={() => void settleUnreachable(entry, "dismiss")}
-                >
-                  <X size={12} />
-                </ActionIcon>
-              </Tooltip>
-            </Group>
-          ))}
-          <Text size="xs" c="dimmed">
-            {t("commands.inputPathHint")}
-          </Text>
-        </Stack>
       ) : null}
       {uploadsInFlight > 0 ? (
         <Text size="xs" c="dimmed" role="status">
@@ -350,22 +133,4 @@ function pastedImage(items: DataTransferItemList): File | null {
     }
   }
   return null;
-}
-
-/**
- * Whether a drop landed on the element. The host reports the position as
- * physical pixels, except on macOS, where wry reads the view's own
- * coordinates (points, i.e. CSS pixels) and Tauri wraps them unscaled
- * (`wry/src/wkwebview/drag_drop.rs`); dividing those by the pixel ratio put
- * the target below and to the right of the field on Retina displays.
- */
-function containsDropPoint(element: HTMLElement | null, position: DropPosition): boolean {
-  if (!element) {
-    return false;
-  }
-  const scale = isMacPlatform() ? 1 : window.devicePixelRatio || 1;
-  const x = position.x / scale;
-  const y = position.y / scale;
-  const rect = element.getBoundingClientRect();
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }

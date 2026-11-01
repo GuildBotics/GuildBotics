@@ -118,23 +118,21 @@ describe("SlackAppRegistrationPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("reopens the creation page and the app list from the backend URLs", async () => {
+  it("links the creation page and the app list from the backend URLs", async () => {
     const user = userEvent.setup();
     renderPanel();
 
     await user.click(registerButton());
     await screen.findByText(t("setup.members.slackAppRegistration.stepsTitle"));
-    vi.mocked(openExternal).mockClear();
 
-    await user.click(
-      screen.getByRole("button", { name: t("setup.members.slackAppRegistration.reopen") }),
-    );
-    expect(openExternal).toHaveBeenCalledWith(registration.registration_url);
-
-    await user.click(
-      screen.getByRole("button", { name: t("setup.members.slackAppRegistration.openAppList") }),
-    );
-    expect(openExternal).toHaveBeenCalledWith(registration.app_directory_url);
+    for (const [name, url] of [
+      [t("setup.members.slackAppRegistration.reopen"), registration.registration_url],
+      [t("setup.members.slackAppRegistration.openAppList"), registration.app_directory_url],
+    ]) {
+      const link = screen.getByRole("link", { name });
+      expect(link).toHaveAttribute("href", url);
+      expect(link).toHaveAttribute("target", "_blank");
+    }
   });
 
   it("translates the invalid app name error code", async () => {

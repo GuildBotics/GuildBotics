@@ -30,6 +30,7 @@ import {
   importAvatarFromProvider,
   initConfig,
   runScenarioDiagnostics,
+  setWorkspace,
   stopScheduler,
   updateDefaultPerson,
   updateIntelligenceConfig,
@@ -45,7 +46,6 @@ import {
   type DiagnosticCheck,
 } from "../api/client";
 import { type AgentEnvironmentStatusResponse } from "../api/client";
-import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import { openExternal } from "../openExternal";
 import i18n from "../i18n";
 import { fill } from "../test/fill";
@@ -83,30 +83,11 @@ import {
 import "../i18n";
 
 const t = i18n.getFixedT("en");
-const dialogMock = vi.hoisted(() => ({
-  open: vi.fn(async () => null as string | null),
-}));
-
-vi.mock("../api/backend", () => ({
-  forceUpdateCliAgentSkill: vi.fn(async (agent: string) => ({
-    agent,
-    agent_home: `/home/.${agent}`,
-    skill_path: `/home/.${agent}/skills/guildbotics/SKILL.md`,
-    status: "up_to_date",
-    can_force_update: false,
-  })),
-  getCliAgentSkillStatuses: vi.fn(async () => ({ agents: [] })),
-  restartBackend: vi.fn(async () => undefined),
-}));
-
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: dialogMock.open,
-}));
-
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    setWorkspace: vi.fn(async () => configStatus()),
     getDecisionOptions: vi.fn(async () => ({ credential_present: true })),
     buildAgentEnvironment: vi.fn(async () => environmentStatus()),
     getAgentEnvironmentImages: vi.fn(async () => ({
@@ -377,7 +358,6 @@ beforeEach(() => {
 
 afterEach(() => {
   notifications.clean();
-  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   vi.useRealTimers();
 });
 
@@ -593,12 +573,10 @@ describe("SetupPage", () => {
 
   it("switches from settings mode to first setup mode when the selected workspace is unconfigured", async () => {
     const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
 
-    dialogMock.open.mockResolvedValueOnce("/empty-workspace");
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/empty-workspace",
@@ -610,9 +588,11 @@ describe("SetupPage", () => {
     );
     vi.mocked(getTeam).mockRejectedValueOnce(new Error("project config missing"));
 
-    await user.click(screen.getByRole("button", { name: "Choose" }));
+    await openWorkspace(user, "/empty-workspace");
 
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/empty-workspace"));
+    await waitFor(() =>
+      expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/empty-workspace" }),
+    );
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
@@ -624,19 +604,18 @@ describe("SetupPage", () => {
     const field = await screen.findByLabelText("Workspace");
     await waitFor(() => expect(field).toHaveValue("/workspace"));
 
-    expect(screen.queryByRole("button", { name: "Choose" })).not.toBeInTheDocument();
     expect(
       screen.getByText(t("app.serverMachine.pathHint", { machine: "studio" }), { exact: false }),
     ).toBeInTheDocument();
     await user.clear(field);
     await user.type(field, "/srv/demo");
     // A partial path is never opened as a workspace.
-    expect(restartBackend).not.toHaveBeenCalled();
+    expect(setWorkspace).not.toHaveBeenCalled();
 
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/srv/demo"));
-    expect(restartBackend).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/srv/demo" }));
+    expect(setWorkspace).toHaveBeenCalledTimes(1);
   });
 
   it("switches to a registered workspace picked from the list", async () => {
@@ -649,7 +628,9 @@ describe("SetupPage", () => {
     expect(screen.queryByRole("menuitem", { name: "/workspace" })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("menuitem", { name: "/other-workspace" }));
 
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/other-workspace"));
+    await waitFor(() =>
+      expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/other-workspace" }),
+    );
   });
 
   it("names the server machine beside the settings that belong to it", async () => {
@@ -664,14 +645,12 @@ describe("SetupPage", () => {
 
   it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
     const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     // The configured workspace has a stored OpenAI key.
     await waitFor(() => expect(getProjectConfig).toHaveBeenCalled());
 
-    dialogMock.open.mockResolvedValueOnce("/empty-workspace");
     vi.mocked(getConfigStatus).mockResolvedValue(
       configStatus({
         cwd: "/empty-workspace",
@@ -683,7 +662,7 @@ describe("SetupPage", () => {
     );
     vi.mocked(getTeam).mockRejectedValue(new Error("project config missing"));
 
-    await user.click(screen.getByRole("button", { name: "Choose" }));
+    await openWorkspace(user, "/empty-workspace");
 
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
@@ -743,7 +722,6 @@ describe("SetupPage", () => {
 
   it("switches from first setup mode to settings mode when the selected workspace is configured", async () => {
     const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/empty-workspace",
@@ -757,7 +735,6 @@ describe("SetupPage", () => {
 
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
 
-    dialogMock.open.mockResolvedValueOnce("/configured-workspace");
     vi.mocked(getConfigStatus).mockResolvedValueOnce(
       configStatus({
         cwd: "/configured-workspace",
@@ -779,17 +756,18 @@ describe("SetupPage", () => {
       members: [{ person_id: "bob", name: "Bob", is_active: true, roles: ["product"] }],
     });
 
-    await user.click(screen.getByRole("button", { name: "Choose" }));
+    await openWorkspace(user, "/configured-workspace");
 
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/configured-workspace"));
+    await waitFor(() =>
+      expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/configured-workspace" }),
+    );
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/configured-workspace");
   });
 
   it("offers force stop when workspace switching is blocked by active work", async () => {
     const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    vi.mocked(restartBackend)
+    vi.mocked(setWorkspace)
       .mockRejectedValueOnce(
         new ApiRequestError({
           code: "workspace_switch_blocked_by_active_work",
@@ -797,21 +775,20 @@ describe("SetupPage", () => {
           context: {},
         }),
       )
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(configStatus());
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    dialogMock.open.mockResolvedValueOnce("/busy-workspace");
 
-    await user.click(screen.getByRole("button", { name: "Choose" }));
+    await openWorkspace(user, "/busy-workspace");
 
     expect(await screen.findByText(t("setup.workspaceSwitchBlocked.body"))).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: t("setup.workspaceSwitchBlocked.force") }));
 
     await waitFor(() => expect(stopScheduler).toHaveBeenCalledWith({ force: true }));
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledTimes(2));
-    expect(restartBackend).toHaveBeenLastCalledWith("/busy-workspace");
+    await waitFor(() => expect(setWorkspace).toHaveBeenCalledTimes(2));
+    expect(setWorkspace).toHaveBeenLastCalledWith({ workspace_dir: "/busy-workspace" });
   });
 
   it("renders the first-setup required progress and project section fields", async () => {
@@ -862,7 +839,7 @@ describe("SetupPage", () => {
 
     expect(screen.getByRole("button", { name: t("setup.nav.device") })).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: t("setup.nav.shortcuts") }),
+      screen.queryByRole("button", { name: t("setup.nav.environment") }),
     ).not.toBeInTheDocument();
   });
 
@@ -979,62 +956,6 @@ describe("SetupPage", () => {
     expect(
       screen.getByText(t("setup.intelligence.environment.toolNotProvisioned")),
     ).toBeInTheDocument();
-  });
-
-  it("shows AI CLI tool skill status and allows an explicit overwrite", async () => {
-    const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
-    vi.mocked(getTeam).mockRejectedValue(
-      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
-    );
-    vi.mocked(getCliAgentSkillStatuses).mockResolvedValue({
-      agents: [
-        {
-          agent: "codex",
-          agent_home: "/home/.codex",
-          skill_path: "/home/.agents/skills/guildbotics/SKILL.md",
-          status: "user_modified",
-          can_force_update: true,
-        },
-      ],
-    });
-    renderSetupPage("/setup");
-
-    await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
-    const magicWand = await screen.findByRole("button", {
-      name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
-    });
-    await user.hover(magicWand);
-
-    expect(
-      await screen.findByText(t("setup.intelligence.skillStatusMessages.user_modified")),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: t("setup.intelligence.skillOverwrite") }));
-
-    expect(vi.mocked(forceUpdateCliAgentSkill).mock.calls[0][0]).toBe("codex");
-  });
-
-  it("shows no AI CLI tool skill status in the browser, which cannot see its machine's skills", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
-    vi.mocked(getTeam).mockRejectedValue(
-      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
-    );
-    renderSetupPage("/setup");
-
-    await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
-
-    expect(await screen.findByText(t("setup.intelligence.defaultCliAgent"))).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", {
-        name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
-      }),
-    ).not.toBeInTheDocument();
-    expect(getCliAgentSkillStatuses).not.toHaveBeenCalled();
   });
 
   it("offers per kind the providers serving it and shows the chosen one's fields", async () => {
@@ -1271,9 +1192,8 @@ describe("SetupPage", () => {
     expect(await screen.findByLabelText("Workspace")).toBeInTheDocument();
   });
 
-  it("creates the initial setup via initConfig and restartBackend", async () => {
+  it("creates the initial setup via initConfig and opens the workspace", async () => {
     const user = userEvent.setup();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
       environmentStatus({
         tools: [
@@ -1346,7 +1266,7 @@ describe("SetupPage", () => {
       services: {},
       provider_api_keys: { openai: "sk-test" },
     });
-    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
+    await waitFor(() => expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/workspace" }));
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
   });
@@ -1613,6 +1533,16 @@ describe("SetupPage", () => {
     expect(screen.getByText("scenario blew up")).toBeInTheDocument();
   });
 });
+
+/** Open `path` as the workspace, the way the user takes a typed server path. */
+async function openWorkspace(user: ReturnType<typeof userEvent.setup>, path: string) {
+  const field = screen.getByLabelText("Workspace");
+  // The open workspace arrives with the config; replacing it before then
+  // would type after it.
+  await waitFor(() => expect(field).not.toHaveValue(""));
+  await user.clear(field);
+  await user.type(field, `${path}{Enter}`);
+}
 
 function renderSetupPage(path: string, strict = false) {
   const theme = createTheme({

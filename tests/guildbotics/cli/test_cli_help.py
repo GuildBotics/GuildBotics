@@ -88,9 +88,9 @@ def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> N
     assert "[required]" in result.output
     assert "repeat for OR matching" in result.output
 
-    result = runner.invoke(main, ["stop", "--help"])
+    result = runner.invoke(main, ["diagnostics", "system", "--help"])
     assert result.exit_code == 0
-    assert "[default: 30; x>=0]" in " ".join(result.output.split())
+    assert "[default: 50; 1<=x<=1000]" in " ".join(result.output.split())
 
 
 def test_windows_cli_configures_standard_streams_as_utf8(

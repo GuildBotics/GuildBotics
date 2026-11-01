@@ -11,23 +11,12 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-
-import { letQuitsThrough } from "../api/backend";
-
-/**
- * Rendered wherever the App, whose guard answers the host's quits, is not: the
- * Desktop window would otherwise wait for an answer nobody gives.
- */
-export function QuitsThrough() {
-  useEffect(letQuitsThrough, []);
-  return null;
-}
 
 export function Connecting() {
   return (
-    <Center className="app-bootstrap">
+    <Center className="app-center">
       <Loader size="lg" />
     </Center>
   );
@@ -36,7 +25,7 @@ export function Connecting() {
 /** A page of its own, in place of the App. */
 export function GuideCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <Center className="app-bootstrap">
+    <Center className="app-center">
       <Card withBorder padding="lg" maw={560}>
         <Stack gap="md">
           <Title order={3}>{title}</Title>

@@ -62,8 +62,6 @@ def test_untraversable_protected_target_closes_names_without_stopping_other_work
 ):
     from guildbotics.environment.contract import (
         DeniedPath,
-        ResolvedAccess,
-        ResolvedGrant,
     )
     from guildbotics.utils.safe_paths import (
         UnsafePathError,
@@ -80,13 +78,8 @@ def test_untraversable_protected_target_closes_names_without_stopping_other_work
     protected.symlink_to(target, target_is_directory=True)
     ordinary = tmp_path / "ordinary"
     ordinary.mkdir()
-    file = ordinary / "report"
-    file.write_text("public")
     denied = (DeniedPath(protected, "credentials"),)
     assert validate_mount_source(ordinary, denied, grant=True) == ordinary
-    assert ResolvedAccess(
-        paths=(ResolvedGrant(ordinary, "read", str(ordinary)),), denied=denied
-    ).reaches(file)
     for path in (protected.parent, obstacle):
         with pytest.raises(AccessContractError):
             validate_mount_source(path, denied, grant=True, missing=True)
@@ -156,8 +149,6 @@ def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
 ):
     from guildbotics.environment.contract import (
         DeniedPath,
-        ResolvedAccess,
-        ResolvedGrant,
     )
 
     private = tmp_path / "private" / name
@@ -168,14 +159,8 @@ def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
         other.symlink_to(private, target_is_directory=True)
     work = tmp_path / "work"
     work.mkdir()
-    file = work / "report"
-    file.write_text("public")
     denied = (DeniedPath(private, "credentials"),)
     assert validate_mount_source(work, denied, grant=True) == work
-    access = ResolvedAccess(
-        paths=(ResolvedGrant(work, "read", str(work)),), denied=denied
-    )
-    assert access.reaches(file)
     with pytest.raises(AccessContractError):
         validate_mount_source(private.parent, denied, grant=True)
 
@@ -567,38 +552,6 @@ def test_the_exchange_directory_is_under_the_home(tmp_path: Path) -> None:
         )
 
 
-def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
-    home = _home(tmp_path)
-    (home / "Documents/GuildBotics/tmp").mkdir(parents=True)
-    (home / ".ssh").mkdir()
-    (home / "Projects/out/private").mkdir(parents=True)
-    cwd = tmp_path / "clone"
-    cwd.mkdir()
-    access = resolve_access(
-        SharedGrants(
-            documents=[
-                DocumentGrant(path="Projects/out", access="read"),
-                DocumentGrant(path="Projects/absent", access="read"),
-            ]
-        ),
-        LocalGrants(deny=["Projects/private"]),
-        home,
-        create=False,
-    )
-
-    assert access.reaches(home / "Documents/GuildBotics/tmp/a.png")
-    assert access.reaches(home / "Projects/out/report.md")
-    assert access.reaches(cwd / "src/main.py", cwd)
-    # Outside every opened root, inside a closed corner, under a document
-    # directory that does not exist here, or in the working directory of a
-    # turn that has not been named: not reachable.
-    assert not access.reaches(cwd / "src/main.py")
-    assert not access.reaches(home / "Projects/private/key.pem")
-    assert not access.reaches(home / "Projects/absent/x.md")
-    assert not access.reaches(home / "Desktop/shot.png")
-    assert not access.reaches(home / ".ssh/id_ed25519", home)
-
-
 def test_the_builtin_denies_include_absent_credential_directories(
     tmp_path: Path,
 ) -> None:
@@ -808,8 +761,9 @@ def test_the_workspace_state_directory_is_a_builtin_deny(tmp_path: Path) -> None
     assert (workspace / ".guildbotics", True) in [
         (d.path, d.builtin) for d in denied.denied
     ]
-    assert not denied.reaches(workspace / ".guildbotics/config/team.yml", workspace)
-    assert not denied.reaches(workspace / "README.md", workspace)
+    # The workspace root holds the closed directory, so it is never mounted.
+    with pytest.raises(AccessContractError):
+        validate_mount_source(workspace, denied.denied, grant=True)
     bare = resolve_access(
         SharedGrants(), LocalGrants(), home, workspace=tmp_path / "bare"
     )

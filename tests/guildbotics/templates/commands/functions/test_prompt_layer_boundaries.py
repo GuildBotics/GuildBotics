@@ -522,11 +522,10 @@ def test_member_prompt_layers_use_shell_neutral_content_files():
     assert "even when the command fails" in reference
 
 
-def test_interactive_skill_preserves_posix_path_and_documents_windows_bare_cli():
+def test_interactive_skill_runs_the_managed_cli_by_absolute_path():
     body = load_markdown_with_frontmatter(SKILL_PATH)["body"]
     assert '"$HOME/.guildbotics/bin/guildbotics" member context' in body
-    assert "On Windows" in body
-    assert "guildbotics member context --person <person_id>" in body
+    assert "\nguildbotics member " not in body
 
 
 def test_interactive_skill_keeps_content_files_outside_the_worktree():
@@ -534,7 +533,7 @@ def test_interactive_skill_keeps_content_files_outside_the_worktree():
     assert "`mktemp -d`" in body
     assert "outside the repository and worktree" in body
     assert "delete the directory even when the command fails" in body
-    assert body.count("<temporary_content_file>") == 2
+    assert body.count("<temporary_content_file>") == 1
     assert "guildbotics-content.txt" not in body
 
 

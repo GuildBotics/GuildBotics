@@ -11,7 +11,7 @@ There are two ways to work with the same member:
 
 Both ways drive the same member — same identity, same memory. What you teach while working together is kept as memory and carries over to the work you delegate.
 
-You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GUI). Configuration is stored as plain text files inside the workspace, so you can move it to a server without a GUI and operate it with the `guildbotics` CLI alone (→ [Run on a Server](#run-on-a-server)).
+You configure, run, and monitor GuildBotics in its screens, which the GuildBotics server on your machine serves to a browser. Configuration is stored as plain text files inside the workspace, so you can move it to a server without a GUI and operate it with the `guildbotics` CLI alone (→ [Run on a Server](#run-on-a-server)).
 
 ---
 
@@ -45,7 +45,7 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
 - **Scheduled execution**: Per-member patrol commands and cron-based scheduled commands
 - **Custom commands**: Define your own work as a Markdown prompt / Python / Shell / YAML command and reuse it per member or role
 - **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, Grok Build, Antigravity, and other AI tools launched from a local CLI)
-- **Desktop AI assistants**: Ask questions and apply proposed source changes in the command editor, and investigate execution failures in the diagnostics screen
+- **AI assistants in the screens**: Ask questions and apply proposed source changes in the command editor, and investigate execution failures in the diagnostics screen
 - **Internationalization**: English / Japanese
 
 ## Getting Started
@@ -53,8 +53,9 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
 ### What You Need
 
 - **OS**: Linux (verified on Ubuntu 24.04), macOS (verified on Sequoia), or Windows 11
-  - The desktop app targets macOS Apple Silicon (arm64), Linux x86_64, and Windows x86_64
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: used to build GuildBotics and install the CLI
+  - The script that runs the server as a service on the Hub is for macOS (see [Installation](#installation))
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: installs GuildBotics' Python environment in the checkout
+- **[Node.js](https://nodejs.org/) 24 or later**: builds the screens the server serves
 - **An LLM API key** (obtain one of the following in advance):
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
@@ -74,20 +75,42 @@ A member can carry a session over and resume where it left off. For the isolated
 
 ### Installation
 
-There is no general-purpose installer for the desktop app yet. Clone the repository and build it locally. In addition to uv, the build requires **Node.js 24 or later** and **Rust (rustup) stable 1.88 or later** (plus the WebKitGTK 4.1 development package on Linux). For macOS/Linux prerequisites and build steps, see [desktop/README.md](desktop/README.md). For the Windows native setup, NSIS build, and smoke checklist, see [Building GuildBotics Desktop on Windows](docs/windows_desktop_build.en.md).
+GuildBotics has no installer: the server runs from a checkout of this repository on the Hub. Clone it, install its dependencies, and build the screens:
 
-On first launch, the desktop app installs the following:
+```bash
+git clone https://github.com/GuildBotics/GuildBotics.git
+cd GuildBotics
+uv sync --locked --extra test --extra dev
+(cd desktop && npm ci && npx vite build)
+```
 
-- `~/.guildbotics/bin/guildbotics` on macOS/Linux, or `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` on Windows: the managed GuildBotics CLI used by AI CLI tools and skills
-- `~/.local/bin/guildbotics` on macOS/Linux: a small shim that forwards to the CLI above. On Windows the NSIS installer instead adds the managed bin directory to the user PATH and removes only its own entry during uninstall
-- The GuildBotics skill under the user skill directory of each detected Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI. Skills you created or edited are never overwritten
-- `~/.guildbotics/data/msb`: the runtime of the isolated agent environment, placed there the first time it is needed (from the copy that ships with GuildBotics, without downloading). On Windows, the firewall rule for that fixed path is created once with an elevation prompt
+On macOS, then register the server as a service of your user (a LaunchAgent):
 
-In environments without the desktop app (headless servers and the like), install the CLI on its own with `uv tool install guildbotics` (→ [Run on a Server](#run-on-a-server)).
+```bash
+scripts/hub-server.sh install
+```
+
+Before you run it:
+
+- If the former GuildBotics Desktop app is installed, quit it and uninstall it. The `~/.guildbotics/programs/` directory it left can be deleted by hand
+- Stop any other GuildBotics server (`guildbotics server stop`): `install` refuses while one runs
+- If you already have a workspace, select it with `.venv/bin/guildbotics workspace use <path>`. The server opens the selected workspace when it starts; without one, you create or choose it on the screens after `guildbotics open`
+- If this machine's keychain already holds GuildBotics secrets (from the Desktop app, for example), run `.venv/bin/guildbotics server start` once in a terminal, answer each keychain prompt with "Always Allow", and stop it with Ctrl-C. The service has no window to answer those prompts
+
+`install` places the following and starts the server:
+
+- `~/.guildbotics/bin/guildbotics`: the managed GuildBotics CLI, a small script that runs the checkout's `.venv/bin/guildbotics`. AI CLI tools, the skill, and the git credential helper of human members use this path
+- `~/.local/bin/guildbotics`: forwards to the CLI above, so `guildbotics` works once `~/.local/bin` is on your PATH (a `guildbotics` there that GuildBotics did not write is left alone)
+- The GuildBotics skill under the user skill directory of each Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI found on the machine. Skills you edited are never overwritten
+- The LaunchAgent `local.guildbotics`, which runs `guildbotics server start` of the checkout now, at every login, and again if it stops unexpectedly (→ [Run the Server as a Service](#run-the-server-as-a-service))
+
+On Linux, run the server in a terminal with `.venv/bin/guildbotics server start`, and place the CLI and the skill with `.venv/bin/python scripts/install_cli_assets.py`.
+
+The isolated agent environment's runtime is placed under `~/.guildbotics/data/msb` the first time it is needed (from the copy that ships with GuildBotics, without downloading). On Windows, the firewall rule for that fixed path is created once with an elevation prompt.
 
 ### Initial Setup
 
-Launching the desktop app opens **Project** setup, where you configure:
+Open the screens with `guildbotics open` on the Hub. The browser opens on **Project** setup, where you configure:
 
 - The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
 - The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside the exchange folder `~/Documents/GuildBotics`
@@ -110,7 +133,7 @@ Each member's identity (name, character, avatar, and service accounts) is the sa
 
 API keys and account tokens are stored in the OS keychain when one is available, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
 
-After project setup, configure the following in the desktop app:
+After project setup, configure the following on the screens:
 
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
@@ -120,7 +143,7 @@ After project setup, configure the following in the desktop app:
 
 ### Quick Start
 
-Confirm that setup is complete by running a custom command. Open the **Edit Command** screen in the desktop app.
+Confirm that setup is complete by running a custom command. Open the **Edit Command** screen.
 
 The initial setup placed sample commands in `.guildbotics/config/commands/` under your workspace. This walkthrough uses the `translate` sample.
 
@@ -129,11 +152,6 @@ The initial setup placed sample commands in `.guildbotics/config/commands/` unde
 2. Type `Hello` into **Input text** in the run panel and press **Save and run**.
 
 You are set if the translated text appears under **Output**. The default LLM you configured was called, and your custom command works.
-
-You can assign hotkeys to commands you use every day.
-
-- **Setup → Shortcuts**: a hotkey that opens the **Quick run window**. Copy the text you want to translate, press the key, and run it as the input text
-- **The hotkey chip in the Edit Command screen's command bar**: runs that command directly. The quick run window opens instead when an input is missing
 
 ### What Next
 
@@ -144,16 +162,16 @@ You can assign hotkeys to commands you use every day.
 
 ## Work Together with a Member
 
-The first launch of the desktop app installs the **guildbotics skill** into the user skill directory of each detected AI CLI tool, such as Claude Code or Codex (→ [Installation](#installation)). That skill is what lets you work together with a member in the repository you currently have open.
+`scripts/hub-server.sh install` (and `update`) installs the **guildbotics skill** into the user skill directory of each detected AI CLI tool, such as Claude Code or Codex (→ [Installation](#installation)). That skill is what lets you work together with a member in the repository you currently have open.
 
-The skill lives in the user skill directory each tool reads (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and so on), so the same skill is used whether you start the tool from its CLI or from its app. To check that it is installed, see each tool's skill status under **Setup → LLM / AI CLI tools** in the desktop app.
+The skill lives in the user skill directory each tool reads (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and so on), so the same skill is used whether you start the tool from its CLI or from its app. The install prints where it put the skill for each tool, and which copies it kept because you had edited them.
 
 There are four prerequisites:
 
 - The AI CLI tool is installed on your machine and you are logged in to it there. This is the one place a host install is needed: it is you working interactively, not a member's turn, which runs inside the isolated agent environment
-- You have launched the desktop app once (this installs the guildbotics skill and the managed CLI)
+- The guildbotics skill and the managed CLI are installed (→ [Installation](#installation))
 - A member is configured
-- Desktop or `guildbotics start` is running. All member commands, including `--help`, use that backend; the CLI and backend must be the same version
+- The GuildBotics server is running, as the service or with `guildbotics server start`. All member commands, including `--help`, use that server; the CLI and the server must come from the same checkout
 
 Start your AI CLI tool in the repository you want to work in and ask for work, **naming the skill and the member**. That phrase is what invokes the skill.
 
@@ -161,7 +179,7 @@ Start your AI CLI tool in the repository you want to work in and ask for work, *
 Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-Member commands use the workspace selected by the backend. `member --workspace <path>` selects a local workspace ID; it does not switch the backend. Finish active work and switch Desktop's workspace first, or use `guildbotics stop`, `guildbotics workspace use <path>`, and `guildbotics start`. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the backend.
+Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again (`scripts/hub-server.sh restart` for the service). File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 
@@ -177,9 +195,9 @@ Use a repository that contains no workspace state as the working directory for `
 
 The active member runs the built-in `ask` command and relays bob's result. Bob sees the same working tree; if you ask him to fix something, his edits appear there too. Select the workspace in GuildBotics first, and prepare bob's isolated agent environment and AI CLI login on this machine under **Setup → Agent execution environment**. The host CLI login used for your interactive session is separate. Reviews can take several minutes; an unavailable environment or login is reported back in the session.
 
-Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs or the calling shell's environment variables.
+Host `guildbotics run` commands execute on the server when it runs with the same workspace; when no server runs, or it has a different workspace selected, they run locally. Once the server receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. A command run on the server returns output only when it finishes and does not forward progress logs or the calling shell's environment variables.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 ## Delegate GitHub Tickets
 
@@ -227,7 +245,7 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
 6. Configure the token as follows
 
    - **Token name**: anything (for example `guildbotics-alice`)
-   - **Expiration**: your choice (when it expires, reissue the token and re-register it in the desktop app)
+   - **Expiration**: your choice (when it expires, reissue the token and register it again on the screens)
    - **Resource owner**: select the target **organization**, not the machine account itself
    - **Repository access**: choose **Only select repositories** and select only the repositories that member works on (this does not keep the token from writing issues, comments, reviews, or reactions to public repositories; GuildBotics keeps members inside the configured owner, as described in the Prerequisite above)
    - **Repository permissions**:
@@ -244,13 +262,13 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
      - **Projects**: Read and write (reading the Projects v2 board and creating / updating the `Agent` field)
 
 7. Press **Generate token** and copy the token shown (it cannot be displayed again once you leave the page). If a **Pending** badge appears next to the token name, it is awaiting approval and does not work until an organization owner approves it on the **Pending requests** page from step 2; complete the approval before moving on
-8. In the desktop app, open **Setup → Members → GitHub**, select "Machine Account (Machine User)", paste the token into **Access token**, and save
+8. On the screens, open **Setup → Members → GitHub**, select "Machine Account (Machine User)", paste the token into **Access token**, and save
 
-For an existing fine-grained PAT, open the token under **Fine-grained tokens** from step 5 and edit its permissions to add **Repository permissions → Dependabot alerts → Read-only**. Updating only the permissions of the same token does not require registering it again in the desktop app. If the organization requires approval, have an owner approve the updated permissions before retrying. Also confirm the target repository is included under **Repository access**. See GitHub's [required permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts) and [token approval requests](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization).
+For an existing fine-grained PAT, open the token under **Fine-grained tokens** from step 5 and edit its permissions to add **Repository permissions → Dependabot alerts → Read-only**. Updating only the permissions of the same token does not require registering it again on the screens. If the organization requires approval, have an owner approve the updated permissions before retrying. Also confirm the target repository is included under **Repository access**. See GitHub's [required permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts) and [token approval requests](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization).
 
 **Using a GitHub App**:
 
-The member edit screen in the desktop app (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID and installation ID are then filled in automatically, and saving the member stores the app's private key in the keychain, so the manual steps below are not needed. Save the member within 30 minutes of starting the registration; after that, the registration expires and the app has to be registered again.
+The member edit screen (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID and installation ID are then filled in automatically, and saving the member stores the app's private key in the keychain, so the manual steps below are not needed. Save the member within 30 minutes of starting the registration; after that, the registration expires and the app has to be registered again.
 
 When creating the GitHub App manually, configure the following permissions.
 
@@ -268,7 +286,7 @@ After creating the GitHub App:
 
 ### Prepare Credentials and the Execution Environment
 
-- Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings in the desktop app. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
+- Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings on the screens. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
 - Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/local/clones/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
 - Every git of that directory runs inside the isolated agent environment, never on the host, and the member's token is used only by GuildBotics on the host (→ [Member git and the member's clones](docs/native_agent_runtime.en.md#member-git-and-the-members-clones)). So your project's git hooks run inside the environment with the tools of its image, and Git LFS is not supported
 - If you also use the AI CLI tool interactively, we recommend denying or requiring approval for `gh`, direct token / API writes, and `git push`. This is a guardrail against falling back to your own GitHub account, not a sandbox that fully contains token leakage
@@ -280,7 +298,7 @@ After creating the GitHub App:
 
 ### Validate the Configuration
 
-Press **Validate settings** under **Setup → Verification** in the desktop app to check whether each active member's LLM, AI CLI tool, GitHub, Slack, and Git settings actually work (GitHub and Slack are accessed read-only).
+Press **Validate settings** under **Setup → Verification** to check whether each active member's LLM, AI CLI tool, GitHub, Slack, and Git settings actually work (GitHub and Slack are accessed read-only).
 
 ### Task Board Conventions
 
@@ -291,13 +309,13 @@ Press **Validate settings** under **Setup → Verification** in the desktop app 
 - By default `Todo` is ready, `In Progress` is working, and `Done` is done. A standard board needs no configuration
 - Statuses **between** ready and done (for example `In Review`) are automatically treated as working
 - Statuses **before** ready (for example `Backlog`) and **at or after** done (for example `Icebox`) are ignored. Intermediate or holding lanes can be added just by ordering the board columns
-- If you use your own status names, map them under **Setup → Integrations** → **Tickets** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
+- If you use your own status names, map them under **Setup → Integrations** → **Tickets** → **Lane mapping**. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
 
 ### Start the Service and Ask for Work
 
-Open the **Service** screen in the desktop app and press **Run**. A worker starts for each active member and runs the work of the selected sources in order.
+Open the **Service** screen and press **Run**. A worker starts for each active member and runs the work of the selected sources in order. The service runs inside the GuildBotics server, and the server starts alone unless told otherwise. To have the server start the service by itself whenever it starts (at every login when it runs as the service, for example), turn on **Start the services when the server starts** on the same screen (off by default); it applies from the next start of the server. From a terminal, `guildbotics service start` and `guildbotics service stop` do what **Run** and **Stop** do.
 
-The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so a start from any screen, or from `guildbotics start`, runs with them. A change made while the service runs applies from its next start.
+The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so every start runs with them: from any screen, from `guildbotics service start`, or by the server as it starts. A change made while the service runs applies from its next start.
 
 - **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
@@ -320,9 +338,9 @@ Once work starts, you interact with the member like this:
 - When the task completes, the member leaves a comment / PR URL / review reply / reaction
 - Review the PR created from the ticket on the PR itself. The pull request patrol follows its conversation (→ [Pull Request Patrol](#pull-request-patrol)). Once the ticket's comments and mentions are answered, an open PR keeps the ticket waiting and a merged PR moves it to Done. The member's latest failure or rate-limit status keeps the ticket on hold
 
-To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
+To stop, press **Stop**. The service stops accepting new work and stops after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work. The server keeps running and serving the screens; it ends only with `guildbotics server stop` (→ [Run on a Server](#run-on-a-server)).
 
-While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started with `guildbotics start`. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
+While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started from the CLI or by the server as it starts. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
 
 - Closing the lid and putting the machine to sleep by hand still put it to sleep
 - On Linux, sleep is held off through the desktop session (GNOME, KDE, and so on), so it cannot be held off where there is no desktop session. Commands and the service still run, and one warning is logged
@@ -336,7 +354,7 @@ Before looking at the ticket lanes, every patrol run checks the open pull reques
 In both roles, the member reads everything someone else says, decides what to do only after reading it, and leaves an answer for every statement: a reply saying what it did, a reply with the reason when it does not adopt a point, or a reaction when there is nothing to act on (thanks, LGTM). A statement is an unresolved review thread whose last word is someone else's, a review with a body (approvals included), or a conversation comment. It is answered by a later comment, review, or thread reply from the member, or by the member's reaction on it. Reviews without a body and workflow status notices are not picked up.
 
 - **PRs the member wrote**: statements the member has not answered are picked up. The member fixes the code where the point is valid
-- **Waiting for CI**: a member does not wait for CI inside its run. Whatever started the run (a ticket, a chat thread, a scheduled or manual command), when checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR (a ticket's or a chat thread's run shows "Waiting for CI" in the Desktop), and the patrol picks the same work up again once the checks finish or new commits land on it. The resumed run fixes the failures, or reports the outcome on the PR and where the work came from (the ticket, the thread, or where the command reports). A merged or closed PR is not picked up again
+- **Waiting for CI**: a member does not wait for CI inside its run. Whatever started the run (a ticket, a chat thread, a scheduled or manual command), when checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR (a ticket's or a chat thread's run shows "Waiting for CI" on the screens), and the patrol picks the same work up again once the checks finish or new commits land on it. The resumed run fixes the failures, or reports the outcome on the PR and where the work came from (the ticket, the thread, or where the command reports). A merged or closed PR is not picked up again
 - **PRs the member reviews**: the member starts when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. After a member has reviewed 3 heads, automatic re-review not driven by a request stops when a head that member has never reviewed is pushed: the host ticket selector converts the PR to a draft during candidate selection, records it in Activity, and announces it on the PR and in the reviewer’s chat channels with `notify_work_stops: true` (the author's patrol stops too, as drafts are skipped below). Statements and thread replies on an already reviewed head still start a run after the limit; this includes a head restored by force push and heads reviewed before the count restarted. Explicit review requests remain outside the limit. To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
 - The verdict is submitted as a GitHub review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Ask for the first review in Slack or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
 - **Draft PRs are skipped**, in both roles. Only humans and, at the automatic re-review limit, the host ticket selector convert a PR to a draft, and only humans mark it ready for review again (a member's work cannot change it). To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits (the automatic re-review rounds, and any member held by a failure, start over from that point)
@@ -349,9 +367,9 @@ How it behaves in Slack (reply with a message / only add a reaction / do nothing
 
 Two things need to be configured:
 
-First choose Slack under **Setup → Integrations → Chat** in the desktop app; the members then have a Slack tab.
+First choose Slack under **Setup → Integrations → Chat**; the members then have a Slack tab.
 
-1. **Create a Slack App**: under **Setup → Members → Slack** in the desktop app, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
+1. **Create a Slack App**: under **Setup → Members → Slack**, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
 2. **Register it with the member**: on the same Slack tab, configure the following
    - Paste the **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`), then press **Verify app** to confirm the bot name, workspace, granted scopes, and channel membership
    - **Channel**: add the channel names or IDs to watch
@@ -369,14 +387,14 @@ For the manual Slack App setup steps (including the list of required scopes), sh
 
 ## Automate Recurring Work
 
-Configure two kinds of automated execution per member under **Setup → Members → Patrol** in the desktop app. Both are run by the service you start on the **Service** screen.
+Configure two kinds of automated execution per member under **Setup → Members → Patrol**. Both are run by the service you start on the **Service** screen.
 
 - **Patrol commands**: while the service is running, these run repeatedly in round-robin order (for example, patrolling the task board). The **Patrol interval (minutes)** is the wait after no patrol work remains; a ticket patrol continues through all candidates without waiting for that interval between them. Turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
-Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started from the desktop app or with `guildbotics start`: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
+Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
 
 These settings are stored in the workspace's `team/members/<person_id>/member.yml`. On a server without the GUI, edit that file directly.
 
@@ -398,7 +416,7 @@ For cron details, the randomization syntax, how the scheduler works internally, 
 
 ## Create Your Own Commands
 
-Like the `translate` command you ran in the quick start, you can define your own commands and use them for manual runs, scheduled runs, and scheduled Slack posts. You author and try them out on the **Edit Command** screen in the desktop app.
+Like the `translate` command you ran in the quick start, you can define your own commands and use them for manual runs, scheduled runs, and scheduled Slack posts. You author and try them out on the **Edit Command** screen.
 
 **Let the AI assistant write it**: choose **Create with AI** under **New command**, describe what you want, and the command name, format, and source are proposed. For the command you are editing, you can ask the **AI assistant** questions or request changes.
 
@@ -450,7 +468,6 @@ Return only the translated text.
 **How to run a command**:
 
 - **Run** on the **Edit Command** screen (you can supply input text and additional args)
-- The **Quick run window** opened with a hotkey
 - Patrol / scheduled execution under **Setup → Members → Patrol** (→ [Automate Recurring Work](#automate-recurring-work))
 - Scheduled Slack posts (configured as a scheduled command combined with `workflows/chat_post_command`)
 - The CLI: `guildbotics run <command_name> [args...]` (→ [Run on a Server](#run-on-a-server))
@@ -492,7 +509,7 @@ guildbotics secrets --workspace /path/to/workspace list
 
 All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to an environment without a GUI (a headless server, for example) and operate with the CLI alone.
 
-1. Install the CLI on the target machine with `uv tool install guildbotics`
+1. Set up a checkout on the target machine as in [Installation](#installation) (on Linux, run the server with `guildbotics server start` yourself)
 2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine
 3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain entries themselves never leave the machine
 4. On servers without a keychain, set up an OS secret store (on Linux, see [A headless Linux server's secret store](#a-headless-linux-servers-secret-store)) or pass the secrets as environment variables at run time
@@ -507,20 +524,22 @@ All non-secret configuration is stored as plain text files inside the workspace,
 
    While the service runs, a changed declaration is rebuilt automatically; the login is kept per machine under `~/.guildbotics/data/agent_environment/`
 
-**Starting and stopping the service** (equivalent to the **Service** screen in the desktop app):
+**Starting and stopping the server and its service**:
 
 ```bash
 guildbotics workspace status   # check the target workspace and its configuration
-guildbotics start              # start the service
-guildbotics stop               # stop accepting new work and exit after in-flight work finishes
-guildbotics kill               # force stop immediately
+guildbotics server start       # run the server (add --services to start its services as well)
+guildbotics server stop        # end the server after its in-flight work finishes
+guildbotics service start      # start the services of the running server, as Run on the Service screen does
+guildbotics service stop       # stop the services after their in-flight work; the server keeps running
 ```
 
-`guildbotics start` launches the same backend as Desktop and starts its services. Close Desktop first. The first Ctrl-C waits for in-flight work; a second Ctrl-C cancels it. Use `guildbotics stop --force` to request cancellation after a timeout, or `guildbotics kill` for an immediate forced stop. For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
+`guildbotics server start` runs the server of the checkout in the terminal. Once it listens, it starts its services only with `--services`, or when **Start the services when the server starts** is on on the **Service** screen; otherwise the server runs alone and you start the services with `guildbotics service start` or on the screen. If the services fail to start, the server keeps running and shows the failure on the screens and in its output. The server runs until `guildbotics server stop` or a signal: the first Ctrl-C lets in-flight work finish, a second cancels it, and SIGTERM (what an OS sends to stop a service) cancels it at once. `guildbotics server stop` waits for the server to exit, however long its in-flight work takes; `guildbotics server stop --force` cancels the work at once, and force-terminates the server only when its teardown does not end in time. `guildbotics service start` and `guildbotics service stop [--force]` need a running server and fail with the reason when there is none. For the options, see the [CLI Reference](docs/cli_reference.md#guildbotics-server). `guildbotics server start` exits with the server's exit code, 0 when it was asked to end.
 
-`guildbotics start` runs with the settings saved on the **Service** screen: the sources to include, the patrol interval, and the failure limit (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)). On a Hub without Desktop, open the screen with `guildbotics open` while the service runs; a change applies from the next start. Whether the machine stays awake while the service waits is on the same screen and applies at once. The settings are saved in the workspace's `.guildbotics/local/service.yml`; to choose them before the first start, write the file by hand (keys left out keep their defaults):
+The services run with the settings saved on the **Service** screen, however they start: the sources to include, the patrol interval, and the failure limit (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)). Open the screen with `guildbotics open`; a change applies from the next start of the service, and whether the server starts the services applies from its next start. Whether the machine stays awake while the service waits is on the same screen and applies at once. The settings are saved in the workspace's `.guildbotics/local/service.yml`; to choose them before the first start, write the file by hand (keys left out keep their defaults):
 
 ```yaml
+start_with_server: false      # start the services when the server starts
 keep_awake: false             # keep the machine awake while the service waits
 scheduled: true               # scheduled commands
 routine: true                 # patrol commands
@@ -529,7 +548,7 @@ routine_interval_minutes: 10  # 1-1440
 max_consecutive_errors: 3     # 1-20
 ```
 
-**Running commands** (equivalent to running from the **Edit Command** screen in the desktop app):
+**Running commands** (equivalent to running from the **Edit Command** screen):
 
 ```bash
 guildbotics run <command_name> [args...]
@@ -538,9 +557,9 @@ echo "Hello" | guildbotics run translate
 
 Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
-The backend holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so Desktop and `guildbotics start` cannot run together. When Desktop is open, start services from its Service screen. When the CLI backend is running, Desktop asks you to run `guildbotics stop` before opening it again. Services hold `service.lock`, including the keep-awake setting, only while running.
+The server holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so only one server runs on a machine; a second one refuses to start. Services hold `service.lock`, including the keep-awake setting, only while running.
 
-The CLI backend also serves the API and browser screens, so `guildbotics run` can delegate commands to it. `guildbotics start` always starts services; it is not an API-only mode. Before updating Desktop, stop `guildbotics start` and any active `guildbotics run` processes. Restart the CLI service after the update, or use Desktop's Service screen.
+The server also serves the API and the screens, so `guildbotics run` can delegate commands to it. Stopping the services, on the **Service** screen or with `guildbotics service stop`, leaves the server serving the screens.
 
 Completed work is kept in TaskRun records (`state/task-runs/`), so a service restart does not accept the same input again.
 
@@ -585,11 +604,37 @@ desktop session.
    Until that unlock, workflows that need a secret fail at run time. GuildBotics never
    falls back to a plaintext file.
 
+### Run the Server as a Service
+
+On a macOS Hub, `scripts/hub-server.sh install` (→ [Installation](#installation)) runs `guildbotics server start` of the checkout as the LaunchAgent `local.guildbotics`, in your login session: the server's secrets are in your keychain. The server starts alone; to have the patrol and chat events resume at every login, turn on **Start the services when the server starts** on the **Service** screen. Run the script from the checkout:
+
+```bash
+scripts/hub-server.sh status      # the service and its last exit
+scripts/hub-server.sh restart     # stop the server after its in-flight work, as `guildbotics server stop` does, then start it again
+scripts/hub-server.sh update      # after updating the checkout: see below
+scripts/hub-server.sh uninstall   # stop the server and remove the LaunchAgent
+```
+
+- **Logs**: the server's output goes to `~/Library/Logs/guildbotics.log`, appended and never rotated. When the server does not start or stopped, look there first
+- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly: a crash, or a forced termination. `guildbotics server stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`, with `--force` as well, unless the server had to be force-terminated. When the server cannot start (another server already running, for example), the service tries again every 15 seconds and the log says why. Without a selected workspace the server still starts, and its screens ask for one
+- **When macOS stops it** (logout or restart): the server receives SIGTERM and cancels its in-flight work at once, and those runs end as they do when `guildbotics server stop --force` cancels them. `restart`, `update`, and `uninstall` instead stop it as `guildbotics server stop` does, after its in-flight work, waiting however long that takes; `guildbotics server stop --force` from another terminal cancels the work instead
+- **Environment**: the service keeps the `PATH` of the shell that ran `install`, so the server finds `git`, `uv`, and the other commands it uses, and `GUILDBOTICS_SERVER_PORT` when it is set. Run `install` again after changing them
+
+**Updating**: update the checkout (for example with `git pull`), then run:
+
+```bash
+scripts/hub-server.sh update
+```
+
+It installs the dependencies again (`uv sync`, and `npm ci` in `desktop`), builds the screens (`npx vite build` in `desktop`), installs the CLI and the skill again, and restarts the server after its in-flight work finishes. Stop any `guildbotics run` you started yourself first.
+
+When the update changed the Python interpreter, the keychain asks again, once for each GuildBotics item, before the new interpreter may read it. The service has no window to answer that, so `update` stops the server and asks you to run `guildbotics server start` once in a terminal, answer each prompt with "Always Allow", stop it with Ctrl-C, and then run `scripts/hub-server.sh restart`.
+
 ### Use It from a Browser
 
-The backend serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765`. The desktop app's windows show these same screens, so a browser alone can do everything they do, except what runs outside a window (the global hotkeys and the quick-run window, the tray, and controlling the app's quit).
+The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765`, and you use them in a browser.
 
-**On the machine where the backend runs**:
+**On the machine where the server runs**:
 
 ```bash
 guildbotics open
@@ -623,7 +668,7 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
    sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
    ```
 
-   `~/.guildbotics/bin/guildbotics` is the managed shim, so it keeps working across reinstalls of the CLI itself. On Windows the installer puts the managed bin on the user PATH, which SSH sessions also get.
+   `~/.guildbotics/bin/guildbotics` is the managed shim that the install places, so it keeps pointing at the checkout's CLI.
 
 4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 8765` (and `--port 7878` as well when you use Branvil). For a single session, `ssh -L 8765:127.0.0.1:8765 <Hub>` also works.
 5. Print an entry link on the Hub and paste it into your browser:
@@ -634,15 +679,14 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
 
 **Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain, and `guildbotics open` on that machine uses it (connecting the same machine again revokes its previous token).
 
-In a browser, a few parts of the screens differ:
+What the screens do with files and folders:
 
-- There is no "Browse" for folders: type the path on the server machine (a workspace can also be picked from the registered ones)
-- Commands cannot be opened in an external editor; edit them in the screen's editor
-- A file dropped on a command's input is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped)
-- The AI CLI tools' skill status and forced update are not shown
+- There is no "Browse" for folders: type the path on the Hub (a workspace can also be picked from the registered ones)
+- Commands are edited in the screen's editor; they are not opened in an external editor
+- A file dropped on a command's input, or an image pasted there, is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped). Uploaded files stay until the server restarts, and the manual runs started from the screens can read them
 - Settings labelled "this machine" (keeping it awake, the registered workspaces) are the Hub's
 
-**Port**: the backend listens on the fixed port 8765. If another program uses that port, the backend does not start. To run two backends on one machine (a development and a released desktop app, for example), set `GUILDBOTICS_SERVER_PORT` to another port where one of them starts; the server, the CLI, and the desktop app all read it.
+**Port**: the server listens on the fixed port 8765. If another program uses that port, the server does not start. To use another port, set `GUILDBOTICS_SERVER_PORT` wherever the server and the CLI start; both read it (the service keeps the value it was installed with).
 
 ### Account-Related Environment Variables
 
@@ -686,7 +730,7 @@ The workspace used by `guildbotics member` commands is resolved in this order:
 
 1. `--workspace <dir>` given before the subcommand
 2. An explicit `GUILDBOTICS_WORKSPACE_ROOT` or `GUILDBOTICS_CONFIG_DIR` that points at `<workspace>/.guildbotics/config`
-3. The workspace in use as recorded by the desktop app or `guildbotics workspace use`
+3. The workspace in use as recorded by the screens or `guildbotics workspace use`
 
 The process cwd is never treated as a workspace. From the selected workspace, `GUILDBOTICS_CONFIG_DIR` is set to `<workspace>/.guildbotics/config`.
 
@@ -749,24 +793,25 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 
 | Symptom | What to check first |
 | --- | --- |
-| `guildbotics` command not found | On macOS/Linux, run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. On Windows, open a new shell after installation and check `%USERPROFILE%\.guildbotics\bin` in the user PATH |
-| Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
-| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
+| `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. If neither exists, install them again (→ [Installation](#installation)) |
+| The server does not start, or has stopped | Read `~/Library/Logs/guildbotics.log` and run `scripts/hub-server.sh status` (→ [Run the Server as a Service](#run-the-server-as-a-service)) |
+| Not sure which workspace is in use | Check and change it under **Setup → Project**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
+| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** |
 | Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
 | Cannot read vulnerability alerts (403) | Check **Dependabot alerts: Read-only** and target repository access for the member's GitHub App or fine-grained PAT. For an App, approve updated permissions for the installation; for a PAT, edit the token's permissions and obtain any required organization approval. See [GitHub account setup](#prepare-a-github-account-for-the-ai-agent). A 403 alone does not establish the cause |
-| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (`guildbotics start` runs with the same settings) |
-| A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
+| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (every start of the services uses those settings) |
+| A command execution failed | Open the session on the **Diagnostics** screen and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
 | AI CLI turns do not start, or an alert says this device cannot run them | Open **Setup → Agent execution environment** and check **Status on this device** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon / Windows Hypervisor Platform / KVM), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and credentials must be saved for the tool on this machine (use the login command shown on the screen). Saved credentials do not guarantee successful authentication. While the environment is building, work is deferred, not failed |
-| AI CLI authentication fails despite saved credentials | In **Setup → Agent execution environment**, copy the login command shown for the tool, run it in a terminal, and wait for the automatic status update (every 10 seconds while the screen is open). Press **Refresh display** to reread saved state. Use **Check again**, when available, to retry usage retrieval. On macOS / Linux the command uses the Desktop-managed CLI’s absolute path; on Windows it uses `guildbotics` from PATH. **Credentials saved** only confirms that a file exists (for Claude Code and Grok Build, that the login sealed under this machine's keychain opens; these logins never enter a turn's microVM, and an earlier plain-file login is not read, so log in once more after updating and delete the old files — see [the details](docs/native_agent_runtime.en.md#logins-kept-outside-the-microvm)). An authentication failure is shared by all members using that tool on this device; completing login or a later successful turn clears it. Network errors and rate limits do not change this authentication result, and a past failure does not block retries |
+| AI CLI authentication fails despite saved credentials | In **Setup → Agent execution environment**, copy the login command shown for the tool, run it in a terminal, and wait for the automatic status update (every 10 seconds while the screen is open). Press **Refresh display** to reread saved state. Use **Check again**, when available, to retry usage retrieval. The command uses the managed CLI's absolute path. **Credentials saved** only confirms that a file exists (for Claude Code and Grok Build, that the login sealed under this machine's keychain opens; these logins never enter a turn's microVM, and an earlier plain-file login is not read, so log in once more after updating and delete the old files — see [the details](docs/native_agent_runtime.en.md#logins-kept-outside-the-microvm)). An authentication failure is shared by all members using that tool on this device; completing login or a later successful turn clears it. Network errors and rate limits do not change this authentication result, and a past failure does not block retries |
 
 When an AI CLI usage refresh fails, the top notification area and the tool's settings row show the same problem. The row includes the last-check time. **Check again** bypasses the usage cache for that tool, and **Error details** opens the corresponding diagnostics session. A successful usage refresh clears the notification and the row's warning. The notification does not by itself mean credentials have expired; network errors and unavailable usage panels also prevent retrieval. **Refresh display** rereads saved state without probing the tools. On the Activity screen, each tool is read on its own and shared by every member using it, so a slow tool never delays another. The last successful reading stays visible with its time while a newer one is fetched; if that fetch fails, the reading is marked as the previous value and no longer drives the rate-limit badge, and the tool is retried after 30 seconds instead of the usual 5 minutes.
 
-**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session. For a restricted AI CLI turn, `agent_environment.network_egress_candidate` records explicit URLs and host-and-port pairs from structured command/tool/runtime failure evidence after excluding known allowed domains and allowed local IP addresses. It is an informational clue rather than proof of a microsandbox denial; successful command output, bare hostnames/IP addresses, extra DEBUG logging, and agent self-report are not used.
+**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen shows both the execution history and the latest global / system session. For a restricted AI CLI turn, `agent_environment.network_egress_candidate` records explicit URLs and host-and-port pairs from structured command/tool/runtime failure evidence after excluding known allowed domains and allowed local IP addresses. It is an informational clue rather than proof of a microsandbox denial; successful command output, bare hostnames/IP addresses, extra DEBUG logging, and agent self-report are not used.
 
 **Debug output**: environment variables for more verbose logging:
 
 - `LOG_LEVEL`: `debug` / `info` / `warning` / `error`
 - `AGNO_DEBUG`: extra debug output from the Agno engine (`true`/`false`)
 
-Transcript detail (`standard` / `full`) and retention days are configured from the desktop app's **Diagnostics** screen and stored in `.guildbotics/config/transcripts.yml`.
+Transcript detail (`standard` / `full`) and retention days are configured from the **Diagnostics** screen and stored in `.guildbotics/config/transcripts.yml`.

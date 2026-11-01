@@ -11,33 +11,23 @@ This skill only defines the interactive envelope: how to work side by side with 
 
 ## Required First Step
 
-Before any member command, keep Desktop or `guildbotics start` running. The member CLI delegates to that backend, including `--help`; it cannot run alone. Use the CLI installed by the same Desktop version. Member commands use the backend's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch Desktop's workspace after stopping active work, or run `guildbotics stop`, `guildbotics workspace use <path>`, then `guildbotics start`.
+Before any member command, the GuildBotics server must be running (`guildbotics server start`, or its OS service). The member CLI delegates to that server, including `--help`; it cannot run alone. Use the CLI installed from the same checkout as the server. Member commands use the server's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch the workspace on the GuildBotics screens after stopping active work, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again.
 
-On macOS or Linux, run the desktop-managed CLI by absolute path:
+Run the managed CLI by absolute path:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id>
 ```
 
-On Windows, the installer adds the managed CLI directory to the user PATH. Open a new shell session and run:
-
-```text
-guildbotics member context --person <person_id>
-```
-
 Treat the returned non-secret member context as the source of truth for the member's persona, role, profile, judgment criteria, and `communication_style`.
-Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted with `"$HOME/.guildbotics/bin/guildbotics" member help` on macOS/Linux or `guildbotics member help` on Windows.
+Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted with `"$HOME/.guildbotics/bin/guildbotics" member help`.
 Do not perform ticket, repository, git, or chat writes before reading `member context`.
-Use the desktop-managed absolute path on macOS/Linux and bare `guildbotics` on Windows. If it reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
+Always use the managed absolute path. If it reports that no active workspace is configured, ask the user to select a workspace on the GuildBotics screens or run `guildbotics workspace use <path>`.
 
-If the user asks to verify credentials, use the same OS-specific executable form:
+If the user asks to verify credentials, use the same executable:
 
 ```bash
 "$HOME/.guildbotics/bin/guildbotics" member context --person <person_id> --check-credentials --format json
-```
-
-```text
-guildbotics member context --person <person_id> --check-credentials --format json
 ```
 
 This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform repository or git writes.
@@ -53,28 +43,20 @@ Do not ask the user to repeat the person ID, and do not switch to another member
 
 Treat the user's currently open repository as the shared pair-programming workspace.
 
-Use the bundled `repository/issue_inspect`, `repository/pr_inspect`, and `repository/pr_checks` commands through the desktop-managed CLI's `run` entry. Pass `--person <person_id> url=<ticket_or_pr_url>`; their complete usage and the workflow-internal invocation are in `member context` / `member help`.
+Use the bundled `repository/issue_inspect`, `repository/pr_inspect`, and `repository/pr_checks` commands through the managed CLI's `run` entry. Pass `--person <person_id> url=<ticket_or_pr_url>`; their complete usage and the workflow-internal invocation are in `member context` / `member help`.
 
 - Do not run `member git prepare` or clone into the member workspace. The member's own clones are worked on only inside the isolated environment of a running GuildBotics command, so member-mode git is refused in this session; for isolated work, delegate it as described below.
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
 - Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`.
-- To delegate a one-off task to another member, run `guildbotics run ask --person <person_id> --cwd <current_repo_path>` using the OS-specific executable above; write the request to a temporary file under the same rules as `--content-file`, feed it through stdin, and relay the returned output in the active member's voice. Unless a grant opens the repository for writing, the delegate works on a copy, and its changes to regular files are written back to the repository only when the task ends successfully; review them with plain git before committing. Allow several minutes with a longer tool timeout or background execution, wait for completion, and relay any environment/login refusal as returned. Open GuildBotics Desktop with the same workspace before requesting the task: when it is open, it starts the command and its isolated environment. If no matching Desktop is available, the command runs locally. This delegation runs from the host; do not invoke it inside an isolated agent environment.
+- To delegate a one-off task to another member, run `guildbotics run ask --person <person_id> --cwd <current_repo_path>` using the managed CLI above; write the request to a temporary file under the same rules as `--content-file`, feed it through stdin, and relay the returned output in the active member's voice. Unless a grant opens the repository for writing, the delegate works on a copy, and its changes to regular files are written back to the repository only when the task ends successfully; review them with plain git before committing. Allow several minutes with a longer tool timeout or background execution, wait for completion, and relay any environment/login refusal as returned. When the GuildBotics server runs with the same workspace, it starts the command and its isolated environment; otherwise the command runs locally. This delegation runs from the host; do not invoke it inside an isolated agent environment.
 - Before a command that writes free-form content, make a directory of your own with `mktemp -d` (on Windows, create a new directory with a random name under your user's temporary directory), outside the repository and worktree, and create a UTF-8 file in it. Write the exact content with a file-editing capability instead of an inline shell literal, pass the path as one argument to `--content-file`, and delete the directory even when the command fails. Never create or stage this file inside the repository.
-- On macOS/Linux, use:
+- Use:
 
 ```bash
 git add -A   # or: git add <paths> to stage only part of your changes
 "$HOME/.guildbotics/bin/guildbotics" member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
 "$HOME/.guildbotics/bin/guildbotics" member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
-```
-
-- On Windows, use the equivalent bare CLI commands from a new shell session:
-
-```text
-git add -A
-guildbotics member git commit --person <person_id> --repo-path <current_repo_path> --content-file "<temporary_content_file>" --workspace-mode current
-guildbotics member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 
 Run `member git commit` without `member git push` when the user asks for a commit without a push.

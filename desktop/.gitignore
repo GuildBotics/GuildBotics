@@ -1,7 +1,5 @@
 dist/
 node_modules/
-src-tauri/target/
-src-tauri/binaries/
 
 # Playwright E2E artifacts
 /test-results/

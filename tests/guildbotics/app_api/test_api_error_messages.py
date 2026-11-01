@@ -107,10 +107,16 @@ def test_the_two_languages_carry_the_same_placeholders():
 
 
 def test_an_error_renders_its_sentence_in_the_asked_language():
-    error = AppApiError("hotkey_invalid", params={"accelerator": "Ctrl+X"})
+    error = AppApiError("command_cwd_not_absolute", params={"cwd": "work"})
 
-    assert error.localized("en") == "'Ctrl+X' is not a usable key combination."
-    assert error.localized("ja") == "'Ctrl+X' はキーの組み合わせとして使えません。"
+    assert error.localized("en") == (
+        "'work' is not an absolute path. Name the working directory from the root"
+        " (~ is fine)."
+    )
+    assert error.localized("ja") == (
+        "'work' は絶対パスではありません。作業ディレクトリはルートからのパスで"
+        "指定してください（~ は使えます）。"
+    )
     # The English rendering doubles as the exception's own text for logs.
     assert str(error) == error.localized("en")
 

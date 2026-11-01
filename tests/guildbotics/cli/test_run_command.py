@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 import guildbotics.cli.run as run_module
+from guildbotics.cli import desktop_commands
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.cli import main
 from guildbotics.cli.member import run_in_process
@@ -19,6 +20,7 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.drivers.app_api_lock import BackendMetadata
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.drivers.member_context import resolve_person
 from guildbotics.entities.team import Person, Project, Team
@@ -70,7 +72,13 @@ def test_parse_command_spec_without_person():
 
 @pytest.fixture
 def desktop_route(tmp_path, monkeypatch):
-    monkeypatch.delenv(PORT_ENV, raising=False)
+    # Another port in this shell: the server is reached on the one it recorded.
+    monkeypatch.setenv(PORT_ENV, "1111")
+    monkeypatch.setattr(
+        desktop_commands,
+        "inspect_backend_lock",
+        lambda: (True, BackendMetadata(1, 8765)),
+    )
     monkeypatch.setattr(run_module, "selected_workspace", lambda: tmp_path)
     # The Desktop's server on this machine keeps its owner token here.
     token_id, digest, token = new_token()

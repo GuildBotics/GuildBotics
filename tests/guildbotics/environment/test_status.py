@@ -491,31 +491,23 @@ def test_preflight_reports_filesystem_changes_during_enumeration(
     )
 
 
-@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
 @pytest.mark.parametrize("language", ["en", "ja"])
-def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
-    monkeypatch, tmp_path, platform, language, fake_platform
-):
+def test_login_guidance_quotes_the_managed_cli_path(monkeypatch, tmp_path, language):
     import shlex
 
     from guildbotics.environment.status import ToolStatus
-    from guildbotics.utils import managed_cli
     from guildbotics.utils.i18n_tool import set_language
 
     home = tmp_path / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    fake_platform(managed_cli, platform)
     set_language(language)
     command = login_command("codex")
-    if platform == "win32":
-        assert command == "guildbotics environment login codex"
-    else:
-        assert shlex.split(command) == [
-            str(home / ".guildbotics/bin/guildbotics"),
-            "environment",
-            "login",
-            "codex",
-        ]
+    assert shlex.split(command) == [
+        str(home / ".guildbotics/bin/guildbotics"),
+        "environment",
+        "login",
+        "codex",
+    ]
     for saved in (False, True):
         tool = ToolStatus(
             "codex",

@@ -2,7 +2,6 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
 import { setApiLanguage } from "./api/client";
-import { isTauriRuntime } from "./desktopWindow";
 import { providerResources } from "./setup/providers/resources";
 
 export type AppLanguage = "en" | "ja";
@@ -49,16 +48,6 @@ const resources = {
             stopped: "No command is running",
           },
         },
-        closeBlocked: {
-          title: "Service or command is running",
-          body: "Service or command work is still running. Force stop it to quit now, or cancel to keep it running.",
-          cancel: "Cancel",
-          force: "Force stop and quit",
-          error: "Failed to close the window",
-          unknownTitle: "Could not check for running work",
-          unknownBody:
-            "GuildBotics could not check whether service or command work is running. Quitting interrupts any work that is. Force stop to quit now, or cancel to keep GuildBotics open.",
-        },
         language: {
           label: "Display language",
           english: "English",
@@ -69,24 +58,6 @@ const resources = {
           tooltip:
             '"This machine" here is {{machine}}, the machine the GuildBotics server runs on.',
           pathHint: "Enter a path on {{machine}}, the machine the GuildBotics server runs on.",
-        },
-        loading: {
-          title: "Starting GuildBotics",
-          closed: "GuildBotics is not running",
-          restart: "Restart GuildBotics",
-          reasons: {
-            cli_managed:
-              "The backend is running through the CLI. Run guildbotics stop in a terminal, then choose Restart GuildBotics.",
-            backend_in_use:
-              "Another Desktop backend is already running. Close it, then choose Restart GuildBotics.",
-            exited: "The backend exited ({{detail}}).",
-            timeout: "The backend did not start within {{detail}} seconds.",
-            invalid_notice: "The backend reported an invalid port ({{detail}}).",
-            duplicate_notice: "The backend reported its port twice.",
-            spawn_failed: "The backend could not be launched ({{detail}}).",
-            entry_failed: "The backend started, but no entry link came back from it ({{detail}}).",
-          },
-          logPath: "Bootstrap log",
         },
       },
       session: {
@@ -220,6 +191,10 @@ const resources = {
         settingsApplyAtNextStart:
           "Changes to what runs, the patrol interval, and the failure limit apply the next time the service starts.",
         saveError: "Could not save the service settings",
+        startWithServer: {
+          title: "Start the services when the server starts",
+          description: "When off, the server starts alone and you start the services here.",
+        },
         keepAwake: {
           title: "Keep this machine awake",
           description:
@@ -412,7 +387,6 @@ const resources = {
             session_pointer: "Session transcript",
             chat_receive_state_reset: "Chat receive state reset",
             workspace_changed: "Workspace switched",
-            hotkeys_changed: "Shortcuts saved",
             network_egress_candidate: "Network destination candidate",
           },
           messages: {
@@ -580,7 +554,6 @@ const resources = {
           environment: "Agent execution environment",
           members: "Members",
           integrations: "Integrations",
-          shortcuts: "Shortcuts",
           verification: "Verification",
           device: "Registered workspaces",
         },
@@ -615,7 +588,6 @@ const resources = {
           workspace: "Workspace",
           workspaceDescription:
             "GuildBotics keeps this project's settings and state here (.guildbotics/).",
-          choose: "Choose",
           registered: "Choose registered",
         },
         intelligence: {
@@ -672,32 +644,6 @@ const resources = {
           cliHint:
             "AI CLI tools run inside the agent execution environment. Log in to the selected tool on this machine.",
           openEnvironment: "Check in Agent execution environment",
-          skillStatusTitle: "GuildBotics skill",
-          skillStatusButtonLabel: "View {{agent}} GuildBotics skill status",
-          skillOverwrite: "Install latest version",
-          skillUpdatedTitle: "GuildBotics skill updated",
-          skillUpdatedBody: "The latest GuildBotics skill was applied.",
-          skillUpdateFailedTitle: "GuildBotics skill update failed",
-          skillUpdateFailedBody: "The GuildBotics skill could not be updated.",
-          skillStatusLabels: {
-            up_to_date: "Up to date",
-            user_modified: "User edited",
-            unmanaged: "User managed",
-            missing: "Not installed",
-            outdated: "Outdated",
-            agent_home_missing: "Not configured",
-            error: "Error",
-          },
-          skillStatusMessages: {
-            up_to_date: "GuildBotics skill is up to date.",
-            user_modified:
-              "GuildBotics skill is user-edited, so the latest version was not applied automatically.",
-            unmanaged: "A GuildBotics skill exists, but it is not managed by GuildBotics Desktop.",
-            missing: "GuildBotics skill is not installed.",
-            outdated: "GuildBotics skill is managed, but it is not the bundled latest version.",
-            agent_home_missing: "The skill directory for this AI CLI tool has not been detected.",
-            error: "GuildBotics skill status could not be read.",
-          },
           network: {
             title: "Network",
             description:
@@ -822,7 +768,6 @@ const resources = {
             presentHere: "On {{machine}}",
             absentHere: "Not on {{machine}}",
             add: "Add",
-            choose: "Choose a directory",
             accessFor: "Access to {{path}}",
             remove: "Remove {{path}}",
             duplicate: "Already added.",
@@ -1359,22 +1304,13 @@ const resources = {
         extraArgs: "Additional args",
         extraArgsPlaceholder: 'arg1 key=value "quoted value"',
         message: "Input text",
-        messageDescription:
-          "Text passed to the command. Drop files to insert their paths, or paste an image to save it temporarily.",
-        inputFileDropActive: "Drop to insert the file path",
         inputFileSaving: "Saving the file…",
         inputFileSaveError: "Could not save the file: {{message}}",
-        inputPathUnreachable: "The agent execution environment cannot reach:",
-        inputPathCopy: "Hand over a copy",
-        inputPathGrant: "Allow this folder",
-        inputPathDismiss: "Do not use this file",
-        messageDescriptionUpload:
+        messageDescription:
           "Text passed to the command. Drop files or paste an image to hand over a copy: the agent's changes do not reach the original.",
-        inputFileDropUpload: "Drop to hand over a copy of the file",
+        inputFileDropActive: "Drop to hand over a copy of the file",
         inputFolderRefused:
           "A folder cannot be dropped here. Type its path on the server machine instead.",
-        inputPathHint:
-          "Agents reach only the working directory and the folders allowed under Settings → AI. A read-only copy is kept by GuildBotics and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
         cwd: "Working directory",
         cwdDescription: "Blank uses the exchange folder: {{cwd}}",
@@ -1386,7 +1322,6 @@ const resources = {
         defaultPerson: "Default selection",
         noMembersTitle: "No active members",
         noMembersBody: "Enable at least one member in Settings before running commands.",
-        openScript: "Open in external editor",
         copyScriptPath: "Copy path",
         linkedCommandMissing: {
           title: "Command not found",
@@ -1480,55 +1415,6 @@ const resources = {
         },
         requirementUnmet: "{{requirement}}: {{reason}}",
       },
-      hotkey: {
-        label: "Hotkey",
-        unset: "Not set",
-        recording: "Press the keys you want to use",
-        needsModifier: "Add a modifier key such as ⌘, ⌃, ⌥ or ⇧.",
-        clear: "Clear the hotkey",
-        settingsTitle: "Quick run window",
-        settingsDescription: "Copy the selected text, then press this key to open the run window.",
-        deviceLocal:
-          "Hotkeys belong to this machine rather than to the workspace: which combinations are free depends on the OS, the other applications installed, and the keyboard layout.",
-        commandLabel: "Hotkey",
-        commandDescription:
-          "Runs this command directly. The run window opens instead when an input is missing.",
-        saveErrorTitle: "Could not save the hotkey",
-        rejectedTitle: "Some hotkeys could not be registered",
-        rejectedBody:
-          "Another application already uses {{accelerators}}. Pick a different combination.",
-        errors: {
-          hotkey_invalid: "That key combination cannot be used.",
-          hotkey_needs_modifier: "That key combination needs a modifier key.",
-          hotkey_conflict: "That key combination is already assigned to another command.",
-        },
-      },
-      quickRun: {
-        command: "Command",
-        commandPlaceholder: "Select a command",
-        runner: "Run as {{member}} — click to change",
-        message: "Input",
-        messagePlaceholder: "Text passed to the command",
-        autoRun: "Run automatically",
-        watchClipboard: "Watch the clipboard",
-        unknownCommandTitle: "This command is not available",
-        unknownCommandBody:
-          "'{{command}}' cannot be run right now. It may have been renamed or deleted, or its requirements are unmet.",
-        run: "Run",
-        running: "Running",
-        noOutput: "No output.",
-        requirementsMissing: "Needs configuration:",
-        copy: "Copy the output",
-        copied: "Copied",
-        failed: "Run failed",
-        close: "Close",
-        status: "Latest event",
-      },
-      tray: {
-        show: "Open GuildBotics",
-        quit: "Quit",
-        appQuit: "Quit GuildBotics",
-      },
     },
   },
   ja: {
@@ -1570,16 +1456,6 @@ const resources = {
             stopped: "コマンド停止状態",
           },
         },
-        closeBlocked: {
-          title: "サービスまたはコマンドを実行中です",
-          body: "サービスまたはコマンドを実行中です。今すぐ終了する場合は強制停止してください。実行を続ける場合はキャンセルしてください。",
-          cancel: "キャンセル",
-          force: "強制停止して終了",
-          error: "ウインドウを閉じられませんでした",
-          unknownTitle: "実行状態を確認できませんでした",
-          unknownBody:
-            "サービスまたはコマンドが実行中かどうかを確認できませんでした。実行中の作業がある場合、終了すると中断されます。今すぐ終了する場合は強制停止してください。GuildBotics を開いたままにする場合はキャンセルしてください。",
-        },
         language: {
           label: "表示言語",
           english: "English",
@@ -1590,25 +1466,6 @@ const resources = {
           tooltip:
             "ここでの「このマシン」は、GuildBotics のサーバーが動いている {{machine}} です。",
           pathHint: "GuildBotics のサーバーが動いている {{machine}} のパスを入力します。",
-        },
-        loading: {
-          title: "GuildBotics を起動しています",
-          closed: "GuildBotics が動いていません",
-          restart: "GuildBotics を再起動",
-          reasons: {
-            cli_managed:
-              "CLI のバックエンドが動いています。ターミナルで guildbotics stop を実行してから「GuildBotics を再起動」を押してください。",
-            backend_in_use:
-              "別の Desktop のバックエンドが動いています。閉じてから「GuildBotics を再起動」を押してください。",
-            exited: "バックエンドが終了しました（{{detail}}）。",
-            timeout: "バックエンドが {{detail}} 秒以内に起動しませんでした。",
-            invalid_notice: "バックエンドから不正なポートが通知されました（{{detail}}）。",
-            duplicate_notice: "バックエンドがポートを 2 回通知しました。",
-            spawn_failed: "バックエンドを起動できませんでした（{{detail}}）。",
-            entry_failed:
-              "バックエンドは起動しましたが、入口リンクを受け取れませんでした（{{detail}}）。",
-          },
-          logPath: "ブートログ",
         },
       },
       session: {
@@ -1790,7 +1647,6 @@ const resources = {
           environment: "エージェント実行環境",
           members: "メンバー",
           integrations: "連携",
-          shortcuts: "ショートカット",
           verification: "検証",
           device: "登録済みのワークスペース",
         },
@@ -1824,7 +1680,6 @@ const resources = {
           workspace: "ワークスペース",
           workspaceDescription:
             "このフォルダに GuildBotics の設定と状態（.guildbotics/）を置きます。",
-          choose: "選択",
           registered: "登録済みから選択",
         },
         intelligence: {
@@ -1880,33 +1735,6 @@ const resources = {
           cliHint:
             "AI CLIツールはエージェント実行環境の中で動きます。このマシンで、選んだツールへログインしてください。",
           openEnvironment: "エージェント実行環境で確認",
-          skillStatusTitle: "GuildBoticsスキル",
-          skillStatusButtonLabel: "{{agent}} のGuildBoticsスキル状態を表示",
-          skillOverwrite: "最新版をインストールする",
-          skillUpdatedTitle: "GuildBoticsスキルを更新しました",
-          skillUpdatedBody: "最新版のGuildBoticsスキルを適用しました。",
-          skillUpdateFailedTitle: "GuildBoticsスキルの更新に失敗しました",
-          skillUpdateFailedBody: "GuildBoticsスキルを更新できませんでした。",
-          skillStatusLabels: {
-            up_to_date: "最新版",
-            user_modified: "ユーザー編集済み",
-            unmanaged: "ユーザー管理",
-            missing: "未インストール",
-            outdated: "更新待ち",
-            agent_home_missing: "未設定",
-            error: "エラー",
-          },
-          skillStatusMessages: {
-            up_to_date: "GuildBoticsスキル は最新版が適用済みです。",
-            user_modified:
-              "GuildBoticsスキル はユーザー編集済みのため、最新版が適用されていません。",
-            unmanaged:
-              "GuildBoticsスキル は存在しますが、GuildBotics Desktop 管理外のため自動更新しません。",
-            missing: "GuildBoticsスキル はまだインストールされていません。",
-            outdated: "GuildBoticsスキル は管理対象ですが、同梱版の最新版ではありません。",
-            agent_home_missing: "このAI CLIツールのスキル配置先はまだ検出されていません。",
-            error: "GuildBoticsスキル の状態を取得できませんでした。",
-          },
           network: {
             title: "ネットワーク",
             description:
@@ -2033,7 +1861,6 @@ const resources = {
             presentHere: "{{machine}} にあり",
             absentHere: "{{machine}} にはなし",
             add: "追加",
-            choose: "ディレクトリを選択",
             accessFor: "{{path}} のアクセス",
             remove: "{{path}} を削除",
             duplicate: "追加済みです。",
@@ -2338,6 +2165,10 @@ const resources = {
         settingsApplyAtNextStart:
           "実行する対象・巡回間隔・連続失敗の回数の変更は、次にサービスを開始したときから反映されます。",
         saveError: "サービスの設定を保存できませんでした",
+        startWithServer: {
+          title: "サーバーの起動時にサービスも開始する",
+          description: "オフのときは、サーバーだけが起動し、サービスはこの画面から開始します。",
+        },
         keepAwake: {
           title: "このマシンをスリープさせない",
           description:
@@ -2529,7 +2360,6 @@ const resources = {
             session_pointer: "セッショントランスクリプト",
             chat_receive_state_reset: "チャット受信状態リセット",
             workspace_changed: "ワークスペースの切り替え",
-            hotkeys_changed: "ショートカットの保存",
             network_egress_candidate: "ネットワーク接続先候補",
           },
           messages: {
@@ -2883,22 +2713,13 @@ const resources = {
         extraArgs: "追加引数",
         extraArgsPlaceholder: 'arg1 key=value "引用付きの値"',
         message: "入力文",
-        messageDescription:
-          "この実行でコマンドへ渡す入力文です。ファイルのドロップでパスを挿入し、画像の貼り付けで一時保存できます。",
-        inputFileDropActive: "ドロップしてファイルパスを挿入",
         inputFileSaving: "ファイルを保存しています…",
         inputFileSaveError: "ファイルを保存できませんでした: {{message}}",
-        inputPathUnreachable: "エージェント実行環境から届きません:",
-        inputPathCopy: "コピーを渡す",
-        inputPathGrant: "このフォルダを許可する",
-        inputPathDismiss: "このファイルは使わない",
-        messageDescriptionUpload:
+        messageDescription:
           "この実行でコマンドへ渡す入力文です。ファイルのドロップと画像の貼り付けで、コピーを渡せます。エージェントの変更は元のファイルには反映されません。",
-        inputFileDropUpload: "ドロップしてファイルのコピーを渡す",
+        inputFileDropActive: "ドロップしてファイルのコピーを渡す",
         inputFolderRefused:
           "フォルダはドロップできません。サーバーのマシンでのフォルダのパスを入力してください。",
-        inputPathHint:
-          "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは GuildBotics が読み取り専用で保持し、アプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",
         cwd: "作業ディレクトリ",
         cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",
@@ -2911,7 +2732,6 @@ const resources = {
         noMembersTitle: "有効なメンバーがいません",
         noMembersBody:
           "コマンドを実行する前に、設定画面で少なくとも 1 人のメンバーを有効にしてください。",
-        openScript: "外部エディタで開く",
         copyScriptPath: "パスをコピー",
         linkedCommandMissing: {
           title: "コマンドが見つかりません",
@@ -3005,55 +2825,6 @@ const resources = {
         },
         requirementUnmet: "{{requirement}}：{{reason}}",
       },
-      hotkey: {
-        label: "ホットキー",
-        unset: "未設定",
-        recording: "使いたいキーを押してください",
-        needsModifier: "⌘ / ⌃ / ⌥ / ⇧ のいずれかと組み合わせてください。",
-        clear: "ホットキーを解除",
-        settingsTitle: "コマンド実行ウィンドウ",
-        settingsDescription:
-          "選択中の文字列をコピーしてからこのキーを押すと、実行ウィンドウが開きます。",
-        deviceLocal:
-          "ホットキーはワークスペースではなく、このマシン固有の設定です。どの組み合わせが空いているかは、OS の標準ショートカット・入っている他のアプリ・キーボード配列で決まるためです。",
-        commandLabel: "ホットキー",
-        commandDescription:
-          "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",
-        saveErrorTitle: "ホットキーを保存できませんでした",
-        rejectedTitle: "登録できなかったホットキーがあります",
-        rejectedBody: "{{accelerators}} は他のアプリが使用中です。別の組み合わせを選んでください。",
-        errors: {
-          hotkey_invalid: "そのキーの組み合わせは使用できません。",
-          hotkey_needs_modifier: "そのキーの組み合わせには修飾キーが必要です。",
-          hotkey_conflict: "そのキーの組み合わせは別のコマンドに割り当て済みです。",
-        },
-      },
-      quickRun: {
-        command: "コマンド",
-        commandPlaceholder: "コマンドを選択",
-        runner: "{{member}} として実行 — クリックで変更",
-        message: "入力文",
-        messagePlaceholder: "コマンドへ渡す入力文",
-        autoRun: "自動実行する",
-        watchClipboard: "クリップボード監視",
-        unknownCommandTitle: "このコマンドは実行できません",
-        unknownCommandBody:
-          "'{{command}}' は現在実行できません。名前の変更や削除、または必要な設定の不足が考えられます。",
-        run: "実行",
-        running: "実行中",
-        noOutput: "出力はありません。",
-        requirementsMissing: "設定が不足しています:",
-        copy: "出力をコピー",
-        copied: "コピーしました",
-        failed: "実行に失敗しました",
-        close: "閉じる",
-        status: "最新のイベント",
-      },
-      tray: {
-        show: "GuildBotics を開く",
-        quit: "終了",
-        appQuit: "GuildBotics を終了",
-      },
     },
   },
 };
@@ -3066,55 +2837,9 @@ export function getInitialAppLanguage(): AppLanguage {
   return normalizeLanguage(navigator.language) ?? "en";
 }
 
-/** Tauri event carrying a language change to the app's other windows. */
-const LANGUAGE_EVENT = "app://language-changed";
-
 export async function setAppLanguage(language: AppLanguage) {
   localStorage.setItem(STORAGE_KEY, language);
   await i18n.changeLanguage(language);
-  if (!isTauriRuntime()) {
-    return;
-  }
-  // Every window keeps its own webview and reads the stored language only when
-  // it loads. The quick run window is never reloaded, so it has to be told.
-  try {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit(LANGUAGE_EVENT, language);
-  } catch {
-    // The event API is unavailable (browser preview or a stubbed harness).
-  }
-}
-
-/**
- * Follow language changes made in another window.
- *
- * Returns a function that stops following.
- */
-export function followAppLanguage(): () => void {
-  if (!isTauriRuntime()) {
-    return () => {};
-  }
-  let stop: (() => void) | undefined;
-  let cancelled = false;
-  void (async () => {
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      const unlisten = await listen<AppLanguage>(LANGUAGE_EVENT, (event) => {
-        void i18n.changeLanguage(event.payload);
-      });
-      if (cancelled) {
-        unlisten();
-      } else {
-        stop = unlisten;
-      }
-    } catch {
-      // The event API is unavailable; the window keeps its loaded language.
-    }
-  })();
-  return () => {
-    cancelled = true;
-    stop?.();
-  };
 }
 
 export function normalizeLanguage(value: string | null | undefined): AppLanguage | null {
@@ -3159,7 +2884,7 @@ i18n.use(initReactI18next).init({
 
 // The backend renders API error sentences in the language named on each
 // request, so the client's header follows this instance's language -- through
-// init, the settings screen, and changes relayed from other windows alike.
+// init and the settings screen alike.
 i18n.on("languageChanged", (language) => setApiLanguage(language));
 setApiLanguage(i18n.language);
 

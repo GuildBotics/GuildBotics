@@ -33,8 +33,8 @@ pytest-xdist (`-p no:xdist`), as AGENTS.md requires.
 | Codex or Claude Code one turn | Saved device login and provider requests through the product command path | Spends provider quota |
 
 Snapshot names hash `build_steps()`, so changed pins change the snapshot.
-Build in a new verification workspace, never one served by Desktop or
-`guildbotics start`: a build removes that workspace's other snapshots, and
+Build in a new verification workspace, never the one a running GuildBotics
+server has selected: a build removes that workspace's other snapshots, and
 a service running old code can rebuild its own snapshot and remove yours.
 Saved logins are device-wide, so a separate workspace still uses the device's
 logins. Do not log in, reset, or replace them as part of verification.
@@ -63,8 +63,8 @@ root takes precedence over the config directory; an inherited root must not
 redirect the build or checks to a live workspace. The identity root keeps the
 `tester` member out of this machine's members (`~/.guildbotics/identity`). The `tester` member is
 needed by the contract product-path tests and every tool's turn checks.
-This workspace has no matching Desktop, so its `guildbotics run` commands
-execute locally.
+No running server has this workspace selected, so its `guildbotics run`
+commands execute locally.
 The build log shows `grok --version` and `agy --version`. A failed build is
 remembered as `<snapshot>.failed` until the pins change or a build runs again;
 the service does not retry it.

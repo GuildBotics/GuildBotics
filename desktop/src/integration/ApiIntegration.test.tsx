@@ -23,9 +23,6 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = vi.fn();
 }
 
-vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-
 // ---------------------------------------------------------------------------
 // Mock HTTP boundary: a recording fetch that matches "METHOD /pathname" against
 // a route table of API paths (after `/api`) and returns canned JSON. The real
@@ -311,6 +308,7 @@ function configWriteResponse() {
 // overrides only the specific responses it asserts against.
 function serviceServer(): MockServer {
   let settings = {
+    start_with_server: false,
     keep_awake: false,
     scheduled: true,
     routine: true,
@@ -383,7 +381,6 @@ afterEach(() => {
   notifications.clean();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
@@ -435,6 +432,26 @@ describe("Service Runtime integration (real client + mock server)", () => {
     expect(saves.map((call) => call.body)).toContainEqual({ routine_interval_minutes: 30 });
   });
 
+  it("saves starting the services with the server with a real PATCH request", async () => {
+    const server = serviceServer();
+    const user = userEvent.setup();
+    renderApp(server, "/service");
+    const startWithServer = await screen.findByRole("switch", {
+      name: t("service.startWithServer.title"),
+    });
+    await waitFor(() => expect(startWithServer).toBeEnabled());
+
+    await user.click(startWithServer);
+
+    await waitFor(() =>
+      expect(server.lastBody("PATCH", "/service/settings")).toEqual({ start_with_server: true }),
+    );
+    expect(server.requestsFor("PATCH", "/service/settings")[0].headers["X-GuildBotics-CSRF"]).toBe(
+      CSRF,
+    );
+    await waitFor(() => expect(startWithServer).toBeChecked());
+  });
+
   it("sends the real POST /scheduler/stop with the token when running", async () => {
     const server = serviceServer();
     server.json(
@@ -477,7 +494,6 @@ describe("Service Runtime integration (real client + mock server)", () => {
 
 describe("Setup integration (real client + mock server)", () => {
   it("drives first-time setup to a member add and project init with real requests", async () => {
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     let members: Array<Record<string, unknown>> = [];
     const server = new MockServer()
       .json("GET", "/config/status", configStatus({ project_file_exists: false }))
@@ -618,7 +634,7 @@ describe("Setup integration (real client + mock server)", () => {
       provider_api_keys: { openai: "sk-test" },
     });
 
-    // restartBackend -> setWorkspace fires a real POST /workspace.
+    // Opening the new workspace fires a real POST /workspace.
     await waitFor(() => expect(server.requestsFor("POST", "/workspace")).toHaveLength(1));
     expect(server.lastBody("POST", "/workspace")).toEqual({ workspace_dir: "/workspace" });
     expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
