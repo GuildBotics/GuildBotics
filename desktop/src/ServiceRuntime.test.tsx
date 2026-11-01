@@ -66,6 +66,7 @@ let saved: ServiceSettings;
 
 beforeEach(() => {
   saved = {
+    start_with_server: false,
     keep_awake: false,
     scheduled: true,
     routine: true,
@@ -284,6 +285,33 @@ describe("Service Runtime screen", () => {
     await waitFor(() => expect(getServiceSettingsMock).toHaveBeenCalledTimes(3));
     expect(eventsSwitch()).not.toBeChecked();
     focusManager.setFocused(undefined);
+  });
+
+  it("starts the services with the server once switched on", async () => {
+    const user = userEvent.setup();
+    renderApp("/service");
+    const startWithServer = await screen.findByRole("switch", {
+      name: t("service.startWithServer.title"),
+    });
+    await waitFor(() => expect(startWithServer).toBeEnabled());
+    expect(startWithServer).not.toBeChecked();
+    expect(screen.getByText(t("service.startWithServer.description"))).toBeInTheDocument();
+
+    await user.click(startWithServer);
+
+    await waitFor(() => expect(startWithServer).toBeChecked());
+    expect(updateServiceSettingsMock).toHaveBeenCalledWith({ start_with_server: true });
+    expect(saved.start_with_server).toBe(true);
+  });
+
+  it("shows that the services start with the server when that is saved", async () => {
+    saved.start_with_server = true;
+    renderApp("/service");
+    const startWithServer = await screen.findByRole("switch", {
+      name: t("service.startWithServer.title"),
+    });
+    await waitFor(() => expect(startWithServer).toBeChecked());
+    expect(screen.getByRole("switch", { name: t("service.keepAwake.title") })).not.toBeChecked();
   });
 
   it("keeps this machine awake during the service once switched on, even while running", async () => {

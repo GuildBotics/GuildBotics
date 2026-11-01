@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api import lifecycle as lifecycle_module
-from guildbotics.app_api.api import TEARDOWN_BUDGET_SECONDS, create_app
+from guildbotics.app_api.api import create_app
+from guildbotics.drivers.app_api_lock import TEARDOWN_BUDGET_SECONDS
 from guildbotics.app_api.auth import SECURITY_HEADERS
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
@@ -3361,7 +3362,10 @@ def test_service_settings_are_saved_for_every_later_start(tmp_path: Path) -> Non
     other = _client(AppRuntime(EventBus()))
 
     before = one.get("/service/settings")
-    one.patch("/service/settings", json={"keep_awake": True, "scheduled": False})
+    one.patch(
+        "/service/settings",
+        json={"keep_awake": True, "scheduled": False, "start_with_server": True},
+    )
     other.patch(
         "/service/settings", json={"event_queue": False, "routine_interval_minutes": 3}
     )
@@ -3374,6 +3378,7 @@ def test_service_settings_are_saved_for_every_later_start(tmp_path: Path) -> Non
     after = other.get("/service/settings")
 
     saved = {
+        "start_with_server": True,
         "keep_awake": True,
         "scheduled": False,
         "routine": True,
@@ -3420,7 +3425,7 @@ def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder_owner: str
 ) -> None:
     """The switch is this device's, and a service already running follows it
-    without a restart, including one a ``guildbotics start`` holds: the
+    without a restart, including one a ``guildbotics server start`` holds: the
     holder is another ``ServiceLock`` than the one the API's lifecycle has."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()

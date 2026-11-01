@@ -526,7 +526,7 @@ function IndexRedirect() {
 const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];
 
 // The service settings live on the server, so every screen and
-// `guildbotics start` run with the same ones. A change shows at once, only
+// `guildbotics service start` run with the same ones. A change shows at once, only
 // the change is sent, and changes are saved in the order made. While any is
 // on its way -- also one made before this screen was opened again -- the
 // changes in the QueryClient are the truth: the screen does not read the
@@ -854,7 +854,17 @@ function ServicePage() {
               />
             </ServiceRuntimeSection>
           </div>
-          <ServiceKeepAwakeSettings
+          <ServiceSwitchSetting
+            title={t("service.startWithServer.title")}
+            description={t("service.startWithServer.description")}
+            enabled={Boolean(settings?.start_with_server)}
+            disabled={!settings}
+            onChange={(start_with_server) => save({ start_with_server })}
+          />
+          <ServiceSwitchSetting
+            title={t("service.keepAwake.title")}
+            description={t("service.keepAwake.description")}
+            serverMachine
             enabled={Boolean(settings?.keep_awake)}
             disabled={!settings}
             onChange={(keep_awake) => save({ keep_awake })}
@@ -2771,30 +2781,37 @@ function ServiceRuntimeSection({
   );
 }
 
-function ServiceKeepAwakeSettings({
+/** One on/off service setting, saved as soon as it is switched. */
+function ServiceSwitchSetting({
+  title,
+  description,
+  serverMachine = false,
   enabled,
   disabled,
   onChange,
 }: {
+  title: string;
+  description: string;
+  /** Whether the setting is about "this machine", the one the server runs on. */
+  serverMachine?: boolean;
   enabled: boolean;
   disabled: boolean;
   onChange: (enabled: boolean) => void;
 }) {
-  const { t } = useTranslation();
   return (
     <div className="service-unit-panel">
       <Group justify="space-between" align="center" wrap="nowrap">
         <div>
           <Group gap="xs">
-            <Text fw={700}>{t("service.keepAwake.title")}</Text>
-            <ServerMachineBadge />
+            <Text fw={700}>{title}</Text>
+            {serverMachine ? <ServerMachineBadge /> : null}
           </Group>
           <Text c="dimmed" size="sm">
-            {t("service.keepAwake.description")}
+            {description}
           </Text>
         </div>
         <Switch
-          aria-label={t("service.keepAwake.title")}
+          aria-label={title}
           checked={enabled}
           disabled={disabled}
           onChange={(event) => onChange(event.currentTarget.checked)}

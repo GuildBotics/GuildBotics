@@ -17,6 +17,7 @@ from guildbotics.app_api import server
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.server import _restore_active_workspace
+from guildbotics.drivers.service_settings import ServiceSettings
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.local_api import PORT_ENV, owner_token_path
@@ -299,7 +300,7 @@ def test_sigterm_cancels_at_once_and_nothing_is_raised_again():
 
 
 def test_an_exit_asked_through_the_api_leaves_ctrl_c_its_stages():
-    """`guildbotics stop` also ends the server; a Ctrl-C meanwhile still lets
+    """`guildbotics server stop` also ends the server; a Ctrl-C meanwhile still lets
     the teardown run instead of skipping it."""
     shut_downs: list[bool] = []
     runner = _exit_server(shut_downs)
@@ -309,6 +310,47 @@ def test_an_exit_asked_through_the_api_leaves_ctrl_c_its_stages():
 
     assert shut_downs == [False]
     assert not runner.force_exit
+
+
+@pytest.mark.parametrize(
+    "asked,saved,starts",
+    [(False, False, False), (False, True, True), (True, False, True)],
+)
+def test_the_services_start_with_the_server_when_asked_or_set(
+    monkeypatch, asked, saved, starts
+):
+    started = []
+    monkeypatch.setattr(
+        server,
+        "read_service_settings",
+        lambda: ServiceSettings(start_with_server=saved),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtime=SimpleNamespace(start_scheduler=lambda: started.append(True))
+        )
+    )
+
+    server._Server(server.uvicorn.Config(app), app, start_services=asked)._start()
+
+    assert started == ([True] if starts else [])
+
+
+def test_without_a_workspace_nothing_starts_and_nothing_is_reported(
+    monkeypatch, caplog, capsys
+):
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    started = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtime=SimpleNamespace(start_scheduler=lambda: started.append(True))
+        )
+    )
+
+    server._Server(server.uvicorn.Config(app), app, start_services=False)._start()
+
+    assert started == []
+    assert "did not start" not in caplog.text + capsys.readouterr().err
 
 
 @pytest.mark.parametrize("fails", [False, True])

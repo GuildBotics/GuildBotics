@@ -81,9 +81,17 @@ def test_non_json_error_preserves_the_http_failure(api):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("command", ["stop", "kill"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["server", "stop"],
+        ["server", "stop", "--force"],
+        ["service", "start"],
+        ["service", "stop"],
+    ],
+)
 @pytest.mark.parametrize("connection_lost", [False, True])
-def test_stop_commands_show_the_api_reason_without_retry(
+def test_commands_show_the_api_reason_without_retry(
     monkeypatch, api, command, connection_lost
 ):
     settings, _, requests = api
@@ -93,7 +101,7 @@ def test_stop_commands_show_the_api_reason_without_retry(
     monkeypatch.setattr(
         service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
     )
-    result = CliRunner().invoke(main, [command])
+    result = CliRunner().invoke(main, command)
     assert result.exit_code == 1
     assert (
         "reply lost" if connection_lost else settings["body"]["message"]

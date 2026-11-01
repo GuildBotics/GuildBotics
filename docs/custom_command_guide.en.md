@@ -292,7 +292,7 @@ Delete that directory after the command exits, including on failure. In a skill 
 
 Host `guildbotics run` commands execute on the GuildBotics server when it runs with the same workspace; when no server runs, or it has a different workspace selected, they run locally. Once the server receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. A command run on the server returns output only when it finishes and does not forward progress logs.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 Invocation examples:
 
@@ -814,7 +814,7 @@ async def main(context) -> None:
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.
 
-A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen or by `guildbotics start`: a file it writes to a relative path lands there.
+A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file it writes to a relative path lands there.
 
 
 ## 9. Specifying model effort

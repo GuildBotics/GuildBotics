@@ -50,11 +50,11 @@ def cli_process(tmp_path, monkeypatch):
     children = []
     helper = Path(__file__).with_name("backend_service_fixture.py")
 
-    def launch(mode="normal"):
+    def launch(mode="normal", *, services=True):
         script = (
             "import sys; from guildbotics.cli import main, service; "
             "service._backend_command=lambda: sys.argv[1:]; "
-            "main(['start'])"
+            f"main(['server', 'start'{", '--services'" if services else ''}])"
         )
         log_path = tmp_path / f"cli-{len(children)}.log"
         log = log_path.open("w")
@@ -111,20 +111,20 @@ def test_cli_stop_ends_start_successfully_and_closes_the_server(cli_process):
     launch, _workspace = cli_process
     process = launch()
     wait_for(running, process)
-    result = CliRunner().invoke(main, ["stop"])
+    result = CliRunner().invoke(main, ["server", "stop"])
     assert result.exit_code == 0, result.output
     assert process.wait(timeout=15) == 0, log_of(process)
     assert not inspect_backend_lock()[0]
 
 
-def test_cli_kill_ends_the_server_even_while_work_holds_it(cli_process):
+def test_a_forced_stop_ends_the_server_even_while_work_holds_it(cli_process):
     launch, _workspace = cli_process
     process = launch("hold")
     wait_for(running, process)
-    result = CliRunner().invoke(main, ["kill"])
+    result = CliRunner().invoke(main, ["server", "stop", "--force"])
     assert result.exit_code == 0, result.output
-    # Killed, not asked: an OS service starts such a server again.
-    assert process.wait(timeout=15) != 0
+    # The work is cancelled, so the server exits as asked.
+    assert process.wait(timeout=15) == 0, log_of(process)
     assert not inspect_backend_lock()[0]
 
 
@@ -136,7 +136,33 @@ def test_services_that_stop_or_fail_leave_the_server_serving(cli_process, mode):
     time.sleep(1)
     assert process.poll() is None, log_of(process)
     assert not running()
-    assert CliRunner().invoke(main, ["stop"]).exit_code == 0
+    assert CliRunner().invoke(main, ["server", "stop"]).exit_code == 0
+    assert process.wait(timeout=15) == 0, log_of(process)
+
+
+def test_the_server_starts_alone_unless_the_setting_says_otherwise(cli_process):
+    launch, _workspace = cli_process
+    process = launch(services=False)
+    wait_for(lambda: status() is not None, process)
+    time.sleep(1)
+    assert not running()
+    # The Service screen's buttons, from the command line.
+    assert CliRunner().invoke(main, ["service", "start"]).exit_code == 0
+    assert running()
+    assert CliRunner().invoke(main, ["service", "stop"]).exit_code == 0
+    assert not running()
+    assert process.poll() is None
+    assert CliRunner().invoke(main, ["server", "stop"]).exit_code == 0
+    assert process.wait(timeout=15) == 0, log_of(process)
+
+    write_service_settings(
+        ServiceSettings(
+            scheduled=True, routine=True, event_queue=False, start_with_server=True
+        )
+    )
+    process = launch(services=False)
+    wait_for(running, process)
+    assert CliRunner().invoke(main, ["server", "stop"]).exit_code == 0
     assert process.wait(timeout=15) == 0, log_of(process)
 
 

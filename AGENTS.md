@@ -207,7 +207,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 
 `guildbotics/cli/__init__.py` がルート group で、サブコマンドは名前 → モジュールの表（`_options.LazyGroup`）から
 実行するときにだけ import する（CLI は呼び出しごとに新しいプロセスなので、1 つの `member` 操作に service の
-import を払わせない）。`start` / `stop` / `kill` は `cli/service.py`、`run` は `cli/run.py`。コマンド・オプションの完全な一覧は
+import を払わせない）。`server`（start / stop）と `service`（start / stop）は `cli/service.py`、`run` は `cli/run.py`。コマンド・オプションの完全な一覧は
 Click 定義から生成される `docs/cli_reference.md` を参照する（`scripts/generate-cli-reference.py`
 で再生成。drift は CI の `generate-cli-reference.py --check` ステップと
 `tests/guildbotics/cli/test_cli_reference.py` が検出する）。CLI の説明文は Click 定義の
@@ -218,36 +218,45 @@ help / docstring が正であり、member コマンドの一行説明は
 
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace のサーバー（Local API）が動いていれば実行を委譲し、それ以外は手元で実行する。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
-- `member` の CLI（`cli/member_client.py`）は `--workspace <dir>` だけを解釈してワークスペース ID にし、残りの引数を API に送る。`--help`・エラー・手元で扱う入力の分類はバックエンドの Click 定義が返す。CLI は provider・keyring・`cli/member.py` を読み込まない。サーバー（`guildbotics start` または OS のサービス）が必要で、版の不一致は実行前に拒否する。API は予約中に選択中の ID を照合し、実行が終わるまで切替を拒否する。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（show/prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
-- `start` はこのチェックアウトのサーバー（`python -m guildbotics.app_api`）を同じプロセスグループの
+- `member` の CLI（`cli/member_client.py`）は `--workspace <dir>` だけを解釈してワークスペース ID にし、残りの引数を API に送る。`--help`・エラー・手元で扱う入力の分類はバックエンドの Click 定義が返す。CLI は provider・keyring・`cli/member.py` を読み込まない。サーバー（`guildbotics server start` または OS のサービス）が必要で、版の不一致は実行前に拒否する。API は予約中に選択中の ID を照合し、実行が終わるまで切替を拒否する。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（show/prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
+- `server start` はこのチェックアウトのサーバー（`python -m guildbotics.app_api`）を同じプロセスグループの
   子として起動し、その終了コードで終わる（頼まれた終了は 0）。引数は渡さず、環境変数で workspace・
-  `GUILDBOTICS_START_SERVICES=1`・親 PID（`GUILDBOTICS_APP_API_PARENT_PID`。サーバーはこのプロセスが
-  消えたら終わる）を渡す（`drivers/app_api_lock.py`）。サーバーは listen してからサービスを開始する。
-  開始は本文を持たず、画面からの開始と同じく、サービスの設定（経路・巡回間隔・
-  連続失敗の回数・スリープ抑止。`drivers/service_settings.py`、ワークスペースの
+  親 PID（`GUILDBOTICS_APP_API_PARENT_PID`。サーバーはこのプロセスが消えたら終わる）と、`--services`
+  のときだけ `GUILDBOTICS_START_SERVICES=1` を渡す（`drivers/app_api_lock.py`）。サーバーは listen してから、
+  `GUILDBOTICS_START_SERVICES` か、サービスの設定の `start_with_server`（既定 false。サービス画面の
+  「サーバーの起動時にサービスも開始する」）のときだけサービスを開始する（`app_api/server.py` の `_Server`）。
+  サービスの開始（`POST /api/scheduler/start`）は本文を持たず、どの開始も、サービスの設定（経路・
+  巡回間隔・連続失敗の回数・スリープ抑止。`drivers/service_settings.py`、ワークスペースの
   `local/service.yml`）をサーバーが読んで開始する。開始に失敗してもサーバーは動き続け、
   失敗は画面とログに出る。画面は `PATCH /api/service/settings`
   で変えた項目だけを送る。巡回・受信を組み立てるのはサーバーだけ。
+- `service start` / `service stop [--force]` は動いているサーバーの `POST /api/scheduler/start` /
+  `stop` を呼ぶだけで、サービス画面の実行・停止と同じ。サーバーは動き続ける。サーバーが無ければ失敗する。
 - サーバーは全生存期間で `~/.guildbotics/data/run/app-api.lock` を保持し、PID を記録する。
   lock を取れない 2 つ目のサーバーは起動しない。
 - `service.lock` はサービスの稼働中だけ保持する（PID / workspace などを記録する）。
   スリープ抑止もこの期間だけ。どちらの lock もファイルの存在自体は稼働判定に使わない。
-- サーバーが終わるのは `guildbotics stop` / `kill`（`POST /api/shutdown` の `force`）とシグナルだけ。
-  サービス画面の停止（`POST /api/scheduler/stop`）は巡回・受信だけを止め、サーバーは画面を配り続ける。
+- サーバーが終わるのは `guildbotics server stop [--force]`（`POST /api/shutdown` の `force`）とシグナルだけ。
+  サービスの停止（`POST /api/scheduler/stop`）は巡回・受信だけを止め、サーバーは画面を配り続ける。
   1 回目の SIGINT は実行中の作業の完了を待って終わり、2 回目でキャンセルする。SIGTERM（OS が
   サービスを止めるときに送る）はすぐキャンセルする（`app_api/server.py` の `_Server`）。Ctrl-C は
-  プロセスグループのサーバーにも届き、`start` は自分が受けた SIGTERM をサーバーへ渡す。
-  `stop` / `kill` はこのマシンの owner token で API を呼び、`app-api.lock` の PID の終了を待つ。
-  `stop --force` はタイムアウト後にキャンセル、さらに待っても終了しなければ PID を強制終了する。
+  プロセスグループのサーバーにも届き、`server start` は自分が受けた SIGTERM をサーバーへ渡す。
+  `server stop` はこのマシンの owner token で API を呼び、`app-api.lock` の PID の終了を時間の上限なく待つ
+  （2 秒を過ぎたら待っていることを表示する）。`server stop --force` は実行中の作業をすぐキャンセルし、
+  `KILL_AFTER_SECONDS`（`drivers/app_api_lock.py`。後片付けの上限 `TEARDOWN_BUDGET_SECONDS` に余裕を足した値）
+  のうちに終わらなければ PID を強制終了する。
 - macOS では `scripts/hub-server.sh`（install / update / restart / status / uninstall）が、
-  チェックアウトの `.venv/bin/guildbotics start` を LaunchAgent（`local.guildbotics`）として動かす。
+  チェックアウトの `.venv/bin/guildbotics server start` を LaunchAgent（`local.guildbotics`）として動かす
+  （サービスを開始するのは `start_with_server` のときだけ）。
   サーバーの Secret は OS のキーチェーンにあるので、ログインしたユーザーのセッションで動かす。
   install 時の `PATH` と `GUILDBOTICS_SERVER_PORT` を引き継ぎ、`KeepAlive` の `SuccessfulExit=false`
-  で非 0 の終了（強制終了を含む）だけ起動し直す（`ExitTimeOut` は `TEARDOWN_BUDGET_SECONDS` に余裕を
-  足した 90 秒）。出力は `~/Library/Logs/guildbotics.log` に追記する。`update` は依存の入れ直し
+  で非 0 の終了（強制終了を含む。`server stop --force` はキャンセルのあと 0 で終わるので含まない）だけ
+  起動し直す（`ExitTimeOut` は `KILL_AFTER_SECONDS` と同じ 90 秒）。restart / update / uninstall
+  は `guildbotics server stop` で作業の完了を待って止め、install はサーバーが動いている間は断る。
+  出力は `~/Library/Logs/guildbotics.log` に追記する。`update` は依存の入れ直し
   （`uv sync --locked`、`desktop` で `npm ci`）、画面の build（`npx vite build`）、CLI とスキルの導入を
   やり直してからサーバーを起動し直す。Python の実行ファイルが変わったときは、キーチェーンの確認に
-  答えるため、手で一度 `guildbotics start` するよう案内して止まる
+  答えるため、手で一度 `guildbotics server start` するよう案内して止まる
 - `scripts/install_cli_assets.py` は、チェックアウトの CLI を呼ぶ `~/.guildbotics/bin/guildbotics`
   （人の git の credential helper がこのパスを指す。`utils/managed_cli.py`）と `~/.local/bin/guildbotics`
   を置き、`skills/guildbotics/SKILL.md` を、このマシンにある AI CLI ごとのユーザースキルの置き場所

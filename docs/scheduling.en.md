@@ -26,8 +26,9 @@ Service-wide settings live on the **Service** screen.
 - **Patrol interval (minutes)**: how often patrol commands run (default 10 minutes)
 - **Stop after consecutive failures**: stops that member's worker after this many consecutive failures (default 3)
 - **Include in service run**: enables patrol commands / scheduled commands / event triggers individually
+- **Start the services when the server starts**: the server starts the service by itself whenever it starts, for example at every login when it runs as an OS service (off by default: the server starts alone)
 
-These are saved in the workspace's `.guildbotics/local/service.yml` on the machine running the service, and every start uses them, from any screen or from `guildbotics start`.
+These are saved in the workspace's `.guildbotics/local/service.yml` on the machine running the service, and every start uses them: from any screen, from `guildbotics service start`, or by the server as it starts.
 
 The per-member settings above are stored in the workspace's `team/members/<person_id>/member.yml` (the member's participation in that workspace) as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file directly on a server without the GUI.
 
@@ -209,7 +210,7 @@ task_schedules:
 
 **Starting both agents**:
 
-Press **Run** on the **Service** screen (`guildbotics start` starts it as well). Both agents run in parallel, each repeating its patrol commands and running its scheduled commands at the configured times.
+Press **Run** on the **Service** screen (`guildbotics service start` starts it as well). Both agents run in parallel, each repeating its patrol commands and running its scheduled commands at the configured times.
 
 ### Multiple Schedule Patterns
 

@@ -11,5 +11,7 @@ ja:
   stopped: "サーバーを停止しました。"
   stopped_after_cancel: "実行中の作業をキャンセルしてサーバーを停止しました。"
   force_killed: "サーバーを強制終了しました。"
-  stop_timeout: "タイムアウトしました。サーバーは実行中の作業を続けていて、作業が終わると自分で止まります（OS のサービスは起動し直しません）。キャンセルを要求し、必要なら強制終了するには `guildbotics stop --force` を実行してください。"
   force_kill_failed: "プロセス %{pid} の強制終了に失敗しました: %{error}"
+  waiting_for_work: "実行中の作業の完了を待っています（`guildbotics server stop --force` でキャンセルします）..."
+  services_started: "サービスを開始しました。"
+  services_stopped: "サービスを停止しました。"

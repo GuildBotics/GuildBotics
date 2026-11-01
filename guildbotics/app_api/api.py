@@ -190,13 +190,6 @@ def _request_language(request: Request) -> str:
     return "ja" if value.startswith("ja") else "en"
 
 
-# How long the lifespan teardown may take. An OS service gives the server this
-# long, and a margin, after SIGTERM before it kills the process (``ExitTimeOut``
-# in ``scripts/hub-server.sh``). It has to cover every wait the teardown can run into, each at its limit: a
-# forced runtime stop (event listener join, scheduler shutdown, scheduler join,
-# work drain) and the diagnostics maintenance join.
-TEARDOWN_BUDGET_SECONDS = 60.0
-
 logger = logging.getLogger("guildbotics.app_api")
 
 
@@ -284,7 +277,7 @@ def create_app(
     app.state.request_shutdown = lambda: None
 
     def shut_down(*, force: bool) -> None:
-        """End the server: on ``guildbotics stop``, or a signal to the server.
+        """End the server: on ``guildbotics server stop``, or a signal to it.
 
         The services stop first, and the server exits after them: without
         ``force`` once their in-flight work has finished, with it once that

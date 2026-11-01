@@ -93,18 +93,18 @@ scripts/hub-server.sh install
 Before you run it:
 
 - If the former GuildBotics Desktop app is installed, quit it and uninstall it. The `~/.guildbotics/programs/` directory it left can be deleted by hand
-- Stop any other GuildBotics server (`guildbotics stop`): `install` refuses while one runs
+- Stop any other GuildBotics server (`guildbotics server stop`): `install` refuses while one runs
 - If you already have a workspace, select it with `.venv/bin/guildbotics workspace use <path>`. The server opens the selected workspace when it starts
-- If this machine's keychain already holds GuildBotics secrets (from the Desktop app, for example), run `.venv/bin/guildbotics start` once in a terminal, answer each keychain prompt with "Always Allow", and stop it with Ctrl-C. The service has no window to answer those prompts
+- If this machine's keychain already holds GuildBotics secrets (from the Desktop app, for example), run `.venv/bin/guildbotics server start` once in a terminal, answer each keychain prompt with "Always Allow", and stop it with Ctrl-C. The service has no window to answer those prompts
 
 `install` places the following and starts the server:
 
 - `~/.guildbotics/bin/guildbotics`: the managed GuildBotics CLI, a small script that runs the checkout's `.venv/bin/guildbotics`. AI CLI tools, the skill, and the git credential helper of human members use this path
 - `~/.local/bin/guildbotics`: forwards to the CLI above, so `guildbotics` works once `~/.local/bin` is on your PATH (a `guildbotics` there that GuildBotics did not write is left alone)
 - The GuildBotics skill under the user skill directory of each Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI found on the machine. Skills you edited are never overwritten
-- The LaunchAgent `local.guildbotics`, which runs `guildbotics start` of the checkout now, at every login, and again if it stops unexpectedly (→ [Run the Server as a Service](#run-the-server-as-a-service))
+- The LaunchAgent `local.guildbotics`, which runs `guildbotics server start` of the checkout now, at every login, and again if it stops unexpectedly (→ [Run the Server as a Service](#run-the-server-as-a-service))
 
-On Linux, run the server in a terminal with `.venv/bin/guildbotics start`, and place the CLI and the skill with `.venv/bin/python scripts/install_cli_assets.py`.
+On Linux, run the server in a terminal with `.venv/bin/guildbotics server start`, and place the CLI and the skill with `.venv/bin/python scripts/install_cli_assets.py`.
 
 The isolated agent environment's runtime is placed under `~/.guildbotics/data/msb` the first time it is needed (from the copy that ships with GuildBotics, without downloading). On Windows, the firewall rule for that fixed path is created once with an elevation prompt.
 
@@ -171,7 +171,7 @@ There are four prerequisites:
 - The AI CLI tool is installed on your machine and you are logged in to it there. This is the one place a host install is needed: it is you working interactively, not a member's turn, which runs inside the isolated agent environment
 - The guildbotics skill and the managed CLI are installed (→ [Installation](#installation))
 - A member is configured
-- The GuildBotics server is running, as the service or with `guildbotics start`. All member commands, including `--help`, use that server; the CLI and the server must come from the same checkout
+- The GuildBotics server is running, as the service or with `guildbotics server start`. All member commands, including `--help`, use that server; the CLI and the server must come from the same checkout
 
 Start your AI CLI tool in the repository you want to work in and ask for work, **naming the skill and the member**. That phrase is what invokes the skill.
 
@@ -179,7 +179,7 @@ Start your AI CLI tool in the repository you want to work in and ask for work, *
 Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics stop`, run `guildbotics workspace use <path>`, and start it again (`scripts/hub-server.sh restart` for the service). File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
+Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again (`scripts/hub-server.sh restart` for the service). File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 
@@ -197,7 +197,7 @@ The active member runs the built-in `ask` command and relays bob's result. Bob s
 
 Host `guildbotics run` commands execute on the server when it runs with the same workspace; when no server runs, or it has a different workspace selected, they run locally. Once the server receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. A command run on the server returns output only when it finishes and does not forward progress logs or the calling shell's environment variables.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 ## Delegate GitHub Tickets
 
@@ -313,9 +313,9 @@ Press **Validate settings** under **Setup → Verification** to check whether ea
 
 ### Start the Service and Ask for Work
 
-Open the **Service** screen and press **Run**. A worker starts for each active member and runs the work of the selected sources in order. The service runs inside the GuildBotics server; a server started by `guildbotics start` (or as the service) starts it by itself.
+Open the **Service** screen and press **Run**. A worker starts for each active member and runs the work of the selected sources in order. The service runs inside the GuildBotics server, and the server starts alone unless told otherwise. To have the server start the service by itself whenever it starts (at every login when it runs as the service, for example), turn on **Start the services when the server starts** on the same screen (off by default); it applies from the next start of the server. From a terminal, `guildbotics service start` and `guildbotics service stop` do what **Run** and **Stop** do.
 
-The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so a start from any screen, or from `guildbotics start`, runs with them. A change made while the service runs applies from its next start.
+The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so every start runs with them: from any screen, from `guildbotics service start`, or by the server as it starts. A change made while the service runs applies from its next start.
 
 - **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
@@ -338,9 +338,9 @@ Once work starts, you interact with the member like this:
 - When the task completes, the member leaves a comment / PR URL / review reply / reaction
 - Review the PR created from the ticket on the PR itself. The pull request patrol follows its conversation (→ [Pull Request Patrol](#pull-request-patrol)). Once the ticket's comments and mentions are answered, an open PR keeps the ticket waiting and a merged PR moves it to Done. The member's latest failure or rate-limit status keeps the ticket on hold
 
-To stop, press **Stop**. The service stops accepting new work and stops after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work. The server keeps running and serving the screens; it ends only with `guildbotics stop` (→ [Run on a Server](#run-on-a-server)).
+To stop, press **Stop**. The service stops accepting new work and stops after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work. The server keeps running and serving the screens; it ends only with `guildbotics server stop` (→ [Run on a Server](#run-on-a-server)).
 
-While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started with `guildbotics start`. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
+While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started from the CLI or by the server as it starts. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
 
 - Closing the lid and putting the machine to sleep by hand still put it to sleep
 - On Linux, sleep is held off through the desktop session (GNOME, KDE, and so on), so it cannot be held off where there is no desktop session. Commands and the service still run, and one warning is logged
@@ -394,7 +394,7 @@ Configure two kinds of automated execution per member under **Setup → Members 
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
-Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen or by `guildbotics start`: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
+Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
 
 These settings are stored in the workspace's `team/members/<person_id>/member.yml`. On a server without the GUI, edit that file directly.
 
@@ -509,7 +509,7 @@ guildbotics secrets --workspace /path/to/workspace list
 
 All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to an environment without a GUI (a headless server, for example) and operate with the CLI alone.
 
-1. Set up a checkout on the target machine as in [Installation](#installation) (on Linux, run the server with `guildbotics start` yourself)
+1. Set up a checkout on the target machine as in [Installation](#installation) (on Linux, run the server with `guildbotics server start` yourself)
 2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine
 3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain entries themselves never leave the machine
 4. On servers without a keychain, set up an OS secret store (on Linux, see [A headless Linux server's secret store](#a-headless-linux-servers-secret-store)) or pass the secrets as environment variables at run time
@@ -528,16 +528,18 @@ All non-secret configuration is stored as plain text files inside the workspace,
 
 ```bash
 guildbotics workspace status   # check the target workspace and its configuration
-guildbotics start              # run the server and start its service
-guildbotics stop               # stop accepting new work, and end the server after in-flight work finishes
-guildbotics kill               # cancel in-flight work and force the server to end
+guildbotics server start       # run the server (add --services to start its services as well)
+guildbotics server stop        # end the server after its in-flight work finishes
+guildbotics service start      # start the services of the running server, as Run on the Service screen does
+guildbotics service stop       # stop the services after their in-flight work; the server keeps running
 ```
 
-`guildbotics start` runs the server of the checkout in the terminal and starts its services once it listens. If the services fail to start, the server keeps running and shows the failure on the screens and in its output. The server runs until `guildbotics stop` or a signal: the first Ctrl-C lets in-flight work finish, a second cancels it, and SIGTERM (what an OS sends to stop a service) cancels it at once. Use `guildbotics stop --force` to request cancellation after a timeout, or `guildbotics kill` for an immediate forced stop. For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop). `guildbotics start` exits with the server's exit code, 0 when it was asked to end.
+`guildbotics server start` runs the server of the checkout in the terminal. Once it listens, it starts its services only with `--services`, or when **Start the services when the server starts** is on on the **Service** screen; otherwise the server runs alone and you start the services with `guildbotics service start` or on the screen. If the services fail to start, the server keeps running and shows the failure on the screens and in its output. The server runs until `guildbotics server stop` or a signal: the first Ctrl-C lets in-flight work finish, a second cancels it, and SIGTERM (what an OS sends to stop a service) cancels it at once. `guildbotics server stop` waits for the server to exit, however long its in-flight work takes; `guildbotics server stop --force` cancels the work at once, and force-terminates the server only when its teardown does not end in time. `guildbotics service start` and `guildbotics service stop [--force]` need a running server and fail with the reason when there is none. For the options, see the [CLI Reference](docs/cli_reference.md#guildbotics-server). `guildbotics server start` exits with the server's exit code, 0 when it was asked to end.
 
-`guildbotics start` runs with the settings saved on the **Service** screen: the sources to include, the patrol interval, and the failure limit (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)). Open the screen with `guildbotics open`; a change applies from the next start of the service. Whether the machine stays awake while the service waits is on the same screen and applies at once. The settings are saved in the workspace's `.guildbotics/local/service.yml`; to choose them before the first start, write the file by hand (keys left out keep their defaults):
+The services run with the settings saved on the **Service** screen, however they start: the sources to include, the patrol interval, and the failure limit (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)). Open the screen with `guildbotics open`; a change applies from the next start of the service, and whether the server starts the services applies from its next start. Whether the machine stays awake while the service waits is on the same screen and applies at once. The settings are saved in the workspace's `.guildbotics/local/service.yml`; to choose them before the first start, write the file by hand (keys left out keep their defaults):
 
 ```yaml
+start_with_server: false      # start the services when the server starts
 keep_awake: false             # keep the machine awake while the service waits
 scheduled: true               # scheduled commands
 routine: true                 # patrol commands
@@ -557,7 +559,7 @@ Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
 The server holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so only one server runs on a machine; a second one refuses to start. Services hold `service.lock`, including the keep-awake setting, only while running.
 
-The server also serves the API and the screens, so `guildbotics run` can delegate commands to it. `guildbotics start` always starts the services; stopping them on the **Service** screen leaves the server serving the screens.
+The server also serves the API and the screens, so `guildbotics run` can delegate commands to it. Stopping the services, on the **Service** screen or with `guildbotics service stop`, leaves the server serving the screens.
 
 Completed work is kept in TaskRun records (`state/task-runs/`), so a service restart does not accept the same input again.
 
@@ -604,18 +606,18 @@ desktop session.
 
 ### Run the Server as a Service
 
-On a macOS Hub, `scripts/hub-server.sh install` (→ [Installation](#installation)) runs `guildbotics start` of the checkout as the LaunchAgent `local.guildbotics`, in your login session: the server's secrets are in your keychain. Run the script from the checkout:
+On a macOS Hub, `scripts/hub-server.sh install` (→ [Installation](#installation)) runs `guildbotics server start` of the checkout as the LaunchAgent `local.guildbotics`, in your login session: the server's secrets are in your keychain. The server starts alone; to have the patrol and chat events resume at every login, turn on **Start the services when the server starts** on the **Service** screen. Run the script from the checkout:
 
 ```bash
 scripts/hub-server.sh status      # the service and its last exit
-scripts/hub-server.sh restart     # stop the server as `guildbotics stop` does, then start it again
+scripts/hub-server.sh restart     # stop the server after its in-flight work, as `guildbotics server stop` does, then start it again
 scripts/hub-server.sh update      # after updating the checkout: see below
 scripts/hub-server.sh uninstall   # stop the server and remove the LaunchAgent
 ```
 
 - **Logs**: the server's output goes to `~/Library/Logs/guildbotics.log`, appended and never rotated. When the server does not start or stopped, look there first
-- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly, including after `guildbotics kill`. `guildbotics stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`. When the server cannot start (no workspace selected, or another server already running), the service tries again every 15 seconds and the log says why
-- **When macOS stops it** (logout or restart): the server receives SIGTERM and cancels its in-flight work at once, and those runs end as they do when `guildbotics stop --force` cancels them. `restart`, `update`, and `uninstall` instead stop it as `guildbotics stop` does, after its in-flight work, waiting however long that takes; `guildbotics stop --force` from another terminal cancels the work instead
+- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly: a crash, or a forced termination. `guildbotics server stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`, with `--force` as well, unless the server had to be force-terminated. When the server cannot start (no workspace selected, or another server already running), the service tries again every 15 seconds and the log says why
+- **When macOS stops it** (logout or restart): the server receives SIGTERM and cancels its in-flight work at once, and those runs end as they do when `guildbotics server stop --force` cancels them. `restart`, `update`, and `uninstall` instead stop it as `guildbotics server stop` does, after its in-flight work, waiting however long that takes; `guildbotics server stop --force` from another terminal cancels the work instead
 - **Environment**: the service keeps the `PATH` of the shell that ran `install`, so the server finds `git`, `uv`, and the other commands it uses, and `GUILDBOTICS_SERVER_PORT` when it is set. Run `install` again after changing them
 
 **Updating**: update the checkout (for example with `git pull`), then run:
@@ -626,7 +628,7 @@ scripts/hub-server.sh update
 
 It installs the dependencies again (`uv sync`, and `npm ci` in `desktop`), builds the screens (`npx vite build` in `desktop`), installs the CLI and the skill again, and restarts the server after its in-flight work finishes. Stop any `guildbotics run` you started yourself first.
 
-When the update changed the Python interpreter, the keychain asks again, once for each GuildBotics item, before the new interpreter may read it. The service has no window to answer that, so `update` stops the server and asks you to run `guildbotics start` once in a terminal, answer each prompt with "Always Allow", stop it with Ctrl-C, and then run `scripts/hub-server.sh restart`.
+When the update changed the Python interpreter, the keychain asks again, once for each GuildBotics item, before the new interpreter may read it. The service has no window to answer that, so `update` stops the server and asks you to run `guildbotics server start` once in a terminal, answer each prompt with "Always Allow", stop it with Ctrl-C, and then run `scripts/hub-server.sh restart`.
 
 ### Use It from a Browser
 
@@ -797,7 +799,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** |
 | Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
 | Cannot read vulnerability alerts (403) | Check **Dependabot alerts: Read-only** and target repository access for the member's GitHub App or fine-grained PAT. For an App, approve updated permissions for the installation; for a PAT, edit the token's permissions and obtain any required organization approval. See [GitHub account setup](#prepare-a-github-account-for-the-ai-agent). A 403 alone does not establish the cause |
-| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (`guildbotics start` runs with the same settings) |
+| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (every start of the services uses those settings) |
 | A command execution failed | Open the session on the **Diagnostics** screen and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
 | AI CLI turns do not start, or an alert says this device cannot run them | Open **Setup → Agent execution environment** and check **Status on this device** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon / Windows Hypervisor Platform / KVM), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and credentials must be saved for the tool on this machine (use the login command shown on the screen). Saved credentials do not guarantee successful authentication. While the environment is building, work is deferred, not failed |

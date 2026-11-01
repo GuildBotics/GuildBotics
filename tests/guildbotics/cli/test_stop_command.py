@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -9,62 +8,107 @@ from click.testing import CliRunner
 
 from guildbotics.cli import main
 from guildbotics.cli import service
-from guildbotics.drivers.app_api_lock import BackendMetadata
+from guildbotics.drivers.app_api_lock import KILL_AFTER_SECONDS, BackendMetadata
 from guildbotics.utils.i18n_tool import t
 
 
-@pytest.mark.parametrize(
-    "exit_stage,expected",
-    [(False, [False]), (True, [False, True]), (None, [False, True, "kill"])],
-)
-def test_stop_escalates_through_api_then_native_termination(
-    monkeypatch, exit_stage, expected
-):
-    alive = True
-    requests = []
+class Clock:
+    """Time that passes only when a wait sleeps."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def server(monkeypatch):
+    """A running server whose process ends when ``state["exits_at"]`` passes."""
+    clock = Clock()
+    state = {"exits_at": None, "requests": []}
+    monkeypatch.setattr(service, "time", clock)
     monkeypatch.setattr(
         service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
     )
-    monkeypatch.setattr(service, "pid_exists", lambda pid: alive)
+    monkeypatch.setattr(
+        service,
+        "pid_exists",
+        lambda pid: state["exits_at"] is None or clock.now < state["exits_at"],
+    )
 
-    def call(path, *, payload, **kwargs):
-        nonlocal alive
-        assert path == "/shutdown"
-        requests.append(payload["force"])
-        if exit_stage is not None and payload["force"] is exit_stage:
-            alive = False
-        return {}
+    def call(path, *, payload=None, **kwargs):
+        state["requests"].append((path, payload))
 
     monkeypatch.setattr(service, "_call", call)
     monkeypatch.setattr(
-        service, "force_terminate_pid", lambda pid: requests.append("kill")
+        service, "force_terminate_pid", lambda pid: state["requests"].append("kill")
     )
-    result = CliRunner().invoke(main, ["stop", "--force", "--timeout", "0"])
+    return state
+
+
+def test_stop_waits_for_the_work_however_long_it_takes(server):
+    server["exits_at"] = 3600.0
+
+    result = CliRunner().invoke(main, ["server", "stop"])
+
     assert result.exit_code == 0, result.output
-    assert requests == expected
+    assert server["requests"] == [("/shutdown", {"force": False})]
+    assert t("runtime.service_lock.waiting_for_work") in result.output
+    assert t("runtime.service_lock.stopped") in result.output
 
 
-def test_stop_timeout_leaves_work_draining(monkeypatch):
-    requests = []
-    monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
-    )
-    monkeypatch.setattr(service, "pid_exists", lambda pid: True)
+def test_a_stop_that_ends_at_once_says_nothing_of_waiting(server):
+    server["exits_at"] = 0.5
 
-    def call(*args, **kwargs):
-        requests.append(kwargs["payload"])
-        return {}
+    result = CliRunner().invoke(main, ["server", "stop"])
 
-    monkeypatch.setattr(service, "_call", call)
-    result = CliRunner().invoke(main, ["stop", "--timeout", "0"])
-    assert result.exit_code == 0
-    assert requests == [{"force": False}]
-    assert t("runtime.service_lock.stop_timeout") in result.output
+    assert t("runtime.service_lock.waiting_for_work") not in result.output
+    assert t("runtime.service_lock.stopped") in result.output
+
+
+def test_a_forced_stop_cancels_the_work_and_leaves_the_server_its_time(server):
+    server["exits_at"] = KILL_AFTER_SECONDS - 1
+
+    result = CliRunner().invoke(main, ["server", "stop", "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert server["requests"] == [("/shutdown", {"force": True})]
+    assert t("runtime.service_lock.stopped_after_cancel") in result.output
+
+
+def test_a_forced_stop_kills_a_teardown_that_does_not_end(server):
+    result = CliRunner().invoke(main, ["server", "stop", "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert server["requests"] == [("/shutdown", {"force": True}), "kill"]
+    assert t("runtime.service_lock.force_killed") in result.output
+
+
+@pytest.mark.parametrize(
+    "command,path,payload,message",
+    [
+        (["start"], "/scheduler/start", None, "services_started"),
+        (["stop"], "/scheduler/stop", {"force": False}, "services_stopped"),
+        (["stop", "--force"], "/scheduler/stop", {"force": True}, "services_stopped"),
+    ],
+)
+def test_service_commands_ask_the_running_server_as_the_screen_does(
+    server, command, path, payload, message
+):
+    result = CliRunner().invoke(main, ["service", *command])
+
+    assert result.exit_code == 0, result.output
+    assert server["requests"] == [(path, payload)]
+    assert t(f"runtime.service_lock.{message}") in result.output
 
 
 def test_stop_without_a_backend_is_a_noop(monkeypatch):
     monkeypatch.setattr(service, "inspect_backend_lock", lambda: (False, None))
-    result = CliRunner().invoke(main, ["stop"])
+    result = CliRunner().invoke(main, ["server", "stop"])
     assert result.exit_code == 0
     assert t("runtime.service_lock.not_running") in result.output
 
@@ -81,9 +125,13 @@ def test_stop_never_terminates_without_authenticating_the_local_api(monkeypatch)
         yield None
 
     monkeypatch.setattr(service, "connect_local_api", unavailable)
-    result = CliRunner().invoke(main, ["kill"])
+    result = CliRunner().invoke(main, ["server", "stop", "--force"])
     assert result.exit_code == 1
     assert t("runtime.service_lock.api_unavailable") in result.output
+    for command in (["start"], ["stop"]):
+        result = CliRunner().invoke(main, ["service", *command])
+        assert result.exit_code == 1
+        assert t("runtime.service_lock.api_unavailable") in result.output
 
 
 def test_api_call_sends_requests_only_through_the_owner_client(monkeypatch):

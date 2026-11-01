@@ -154,8 +154,9 @@ export type ChatReceiveResetResponse = {
 };
 
 // How the service runs, saved on the server for every screen and for
-// `guildbotics start`: every start reads it.
+// `guildbotics service start`: every start reads it.
 export type ServiceSettings = {
+  start_with_server: boolean;
   keep_awake: boolean;
   scheduled: boolean;
   routine: boolean;

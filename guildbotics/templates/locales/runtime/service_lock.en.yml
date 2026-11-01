@@ -11,5 +11,7 @@ en:
   stopped: "The server stopped."
   stopped_after_cancel: "The server stopped after cancelling in-flight work."
   force_killed: "Force killed the server."
-  stop_timeout: "Timeout reached; the server is still finishing in-flight work and stops by itself when it ends (an OS service does not start it again). Run `guildbotics stop --force` to request cancellation and force termination if needed."
   force_kill_failed: "Failed to force terminate %{pid}: %{error}"
+  waiting_for_work: "Waiting for in-flight work to finish (`guildbotics server stop --force` cancels it)..."
+  services_started: "The services started."
+  services_stopped: "The services stopped."

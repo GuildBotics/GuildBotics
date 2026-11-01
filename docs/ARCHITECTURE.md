@@ -396,18 +396,20 @@ Invariants:
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
   command-name strings.
-- The server is singleton per machine: `guildbotics start` runs the checkout's
+- The server is singleton per machine: `guildbotics server start` runs the checkout's
   `guildbotics.app_api` as a child in its own process group and exits with its code.
   The server holds `<machine-state-root>/run/app-api.lock` from before binding through
   its exit, and records its PID there; a second server refuses to start.
   `service.lock` covers scheduler workers and event listeners only while active,
   including keep-awake. File existence alone is never a liveness signal.
-  The server ends only on `guildbotics stop` / `kill` (`POST /api/shutdown` with
-  `force`) or a signal: the first SIGINT drains in-flight work, a second cancels it,
-  and SIGTERM, which an OS sends to stop its service, cancels at once. Stopping the
-  services from the Service screen (`POST /api/scheduler/stop`) leaves the server
-  serving. CLI stop/kill use the local owner-token API and wait for the lock's PID.
-  An exit that was asked for is a successful one.
+  The server ends only on `guildbotics server stop [--force]` (`POST /api/shutdown`
+  with `force`) or a signal: the first SIGINT drains in-flight work, a second cancels
+  it, and SIGTERM, which an OS sends to stop its service, cancels at once. Stopping the
+  services from the Service screen or `guildbotics service stop`
+  (`POST /api/scheduler/stop`) leaves the server serving. `server stop` uses the local
+  owner-token API and waits for the lock's PID, without a limit; with `--force` it
+  force-terminates the PID only when it outlasts `KILL_AFTER_SECONDS`
+  (`TEARDOWN_BUDGET_SECONDS` and a margin). An exit that was asked for is a successful one.
 - A member that finishes work while messages 3 and 5 arrive in one Slack thread
   reads the unread conversation through message 5 in its next run. The oldest
   queued event starts that run; selection combines queued messages with a fresh
@@ -1156,7 +1158,7 @@ access and member key spelling in the package.
 
 `desktop/` is a React (Mantine, TanStack Query) frontend that the server serves to a
 browser; the repository is a monorepo on purpose. The server runs from a checkout on the
-Hub: `guildbotics start` in a terminal, or on macOS the LaunchAgent that
+Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
 `scripts/hub-server.sh` installs. There is no packaged program.
 
 - **Local API boundary**: the GUI never reimplements the Python engine. The backend
@@ -1236,19 +1238,22 @@ Hub: `guildbotics start` in a terminal, or on macOS the LaunchAgent that
     connection). A browser redirected back by GitHub App registration or Branvil's
     consent reaches the port even after the server exited, carrying a one-time code.
 - **Runtime lifecycle**: the server is the sole composition root for member workers
-  and event listeners. `guildbotics start` runs it as a child in its own process group
-  with `GUILDBOTICS_START_SERVICES=1` and its own PID for the watchdog
-  (`GUILDBOTICS_APP_API_PARENT_PID`); the server starts its services once it listens,
-  and stays up when they fail to start, so the screens and its output show why. The
+  and event listeners. `guildbotics server start` runs it as a child in its own process
+  group with its own PID for the watchdog (`GUILDBOTICS_APP_API_PARENT_PID`), and with
+  `GUILDBOTICS_START_SERVICES=1` under `--services`. Once it listens, the server starts
+  its services only then or when the service settings say `start_with_server` (the
+  Service screen's "Start the services when the server starts", off by default), and
+  stays up when they fail to start, so the screens and its output show why. The
   server owns `app-api.lock` for its lifetime and `service.lock` only while services
-  run. `/scheduler/start` takes no body: every start, from any screen or
-  `guildbotics start`, runs with the service settings saved in `local/service.yml`
-  (`drivers/service_settings.py`), which screens change one setting at a time with
-  `PATCH /service/settings`. `/scheduler/stop` stops the services only; `/shutdown`
-  (`guildbotics stop` / `kill`) ends the server, after in-flight work or, with
+  run. `/scheduler/start` takes no body: every start, from any screen,
+  `guildbotics service start`, or the server's own, runs with the service settings
+  saved in `local/service.yml` (`drivers/service_settings.py`), which screens change
+  one setting at a time with `PATCH /service/settings`. `/scheduler/stop`
+  (`guildbotics service stop`) stops the services only; `/shutdown`
+  (`guildbotics server stop`) ends the server, after in-flight work or, with
   `force`, cancelling it. On SIGTERM the server cancels at once, and its lifespan
-  teardown has `TEARDOWN_BUDGET_SECONDS`, which the LaunchAgent's `ExitTimeOut`
-  covers with a margin.
+  teardown has `TEARDOWN_BUDGET_SECONDS`; the LaunchAgent's `ExitTimeOut` is
+  `KILL_AFTER_SECONDS`, the same wait a forced `server stop` gives it.
 - **Installing the CLI and the skill**: `scripts/install_cli_assets.py` (run by
   `scripts/hub-server.sh install` and `update`) writes `~/.guildbotics/bin/guildbotics`,
   a shim that runs the checkout's `.venv/bin/guildbotics` (the path instructions, the
@@ -1303,7 +1308,7 @@ Hub: `guildbotics start` in a terminal, or on macOS the LaunchAgent that
   share one mutually exclusive right-edge panel, so two drawers never fight over the same
   strip; the assistant is non-modal, so the executions list behind it stays clickable.
 - **Support targets**: the service script targets a macOS Hub; on Linux the server
-  runs with `guildbotics start` in a terminal.
+  runs with `guildbotics server start` in a terminal.
 
 See `desktop/README.md` for build, development, and test instructions of the screens.
 

@@ -447,6 +447,7 @@ describe("GET query parameter encoding", () => {
 
   it("gets and saves the service settings every start reads", async () => {
     const settings = {
+      start_with_server: false,
       keep_awake: true,
       scheduled: false,
       routine: true,

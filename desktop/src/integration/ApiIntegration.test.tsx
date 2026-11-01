@@ -308,6 +308,7 @@ function configWriteResponse() {
 // overrides only the specific responses it asserts against.
 function serviceServer(): MockServer {
   let settings = {
+    start_with_server: false,
     keep_awake: false,
     scheduled: true,
     routine: true,
@@ -429,6 +430,26 @@ describe("Service Runtime integration (real client + mock server)", () => {
     expect(saves[0].headers["X-GuildBotics-CSRF"]).toBe(CSRF);
     expect(saves[0].body).toEqual({ event_queue: false });
     expect(saves.map((call) => call.body)).toContainEqual({ routine_interval_minutes: 30 });
+  });
+
+  it("saves starting the services with the server with a real PATCH request", async () => {
+    const server = serviceServer();
+    const user = userEvent.setup();
+    renderApp(server, "/service");
+    const startWithServer = await screen.findByRole("switch", {
+      name: t("service.startWithServer.title"),
+    });
+    await waitFor(() => expect(startWithServer).toBeEnabled());
+
+    await user.click(startWithServer);
+
+    await waitFor(() =>
+      expect(server.lastBody("PATCH", "/service/settings")).toEqual({ start_with_server: true }),
+    );
+    expect(server.requestsFor("PATCH", "/service/settings")[0].headers["X-GuildBotics-CSRF"]).toBe(
+      CSRF,
+    );
+    await waitFor(() => expect(startWithServer).toBeChecked());
   });
 
   it("sends the real POST /scheduler/stop with the token when running", async () => {

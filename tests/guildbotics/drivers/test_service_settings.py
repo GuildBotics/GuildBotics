@@ -19,6 +19,8 @@ def test_the_defaults_run_everything_every_ten_minutes() -> None:
 
     assert settings == ServiceSettings()
     assert settings.model_dump() == {
+        # The server starts alone, as Desktop did, until this is turned on.
+        "start_with_server": False,
         "keep_awake": False,
         "scheduled": True,
         "routine": True,

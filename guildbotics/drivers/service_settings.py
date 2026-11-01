@@ -30,12 +30,14 @@ ConsecutiveErrorLimit = Annotated[int, Field(ge=1, le=20)]
 
 
 class ServiceSettings(BaseModel):
-    """How the service runs, whichever screen or command starts it: what it
-    runs (scheduled commands, patrol, chat events; at least one), how often it
-    patrols, and after how many failures in a row a worker stops."""
+    """How the service runs, whichever screen or command starts it: whether
+    the server starts it as it starts, what it runs (scheduled commands,
+    patrol, chat events; at least one), how often it patrols, and after how
+    many failures in a row a worker stops."""
 
     model_config = ConfigDict(extra="forbid")
 
+    start_with_server: bool = False
     keep_awake: bool = False
     scheduled: bool = True
     routine: bool = True
@@ -56,6 +58,7 @@ class ServiceSettingsChange(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    start_with_server: bool | None = None
     keep_awake: bool | None = None
     scheduled: bool | None = None
     routine: bool | None = None

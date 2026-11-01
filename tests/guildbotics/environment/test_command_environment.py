@@ -1145,8 +1145,8 @@ def test_every_command_runs_in_an_environment() -> None:
 
 def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
     """A command works where its host entry says, never where the process
-    happens to be: the process's working directory differs between the
-    Desktop and ``guildbotics start``. What the host starts on its own works
+    happens to be: the process's working directory differs with how the
+    server was started. What the host starts on its own works
     in the exchange directory; what a person starts works where they said.
 
     The population is every call that makes a command to run --

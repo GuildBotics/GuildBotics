@@ -1,7 +1,7 @@
 """Smoke tests for the server process.
 
 These tests launch ``python -m guildbotics.app_api`` as a real subprocess
-(the same entrypoint `guildbotics start` runs), wait for its port notice, read
+(the same entrypoint `guildbotics server start` runs), wait for its port notice, read
 the owner token it wrote, poll ``/api/health`` until ready, and assert basic
 request handling plus a clean shutdown. They are hermetic: the server listens
 on a free loopback port named by ``GUILDBOTICS_SERVER_PORT`` and keeps its

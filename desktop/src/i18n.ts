@@ -191,6 +191,10 @@ const resources = {
         settingsApplyAtNextStart:
           "Changes to what runs, the patrol interval, and the failure limit apply the next time the service starts.",
         saveError: "Could not save the service settings",
+        startWithServer: {
+          title: "Start the services when the server starts",
+          description: "When off, the server starts alone and you start the services here.",
+        },
         keepAwake: {
           title: "Keep this machine awake",
           description:
@@ -2161,6 +2165,10 @@ const resources = {
         settingsApplyAtNextStart:
           "実行する対象・巡回間隔・連続失敗の回数の変更は、次にサービスを開始したときから反映されます。",
         saveError: "サービスの設定を保存できませんでした",
+        startWithServer: {
+          title: "サーバーの起動時にサービスも開始する",
+          description: "オフのときは、サーバーだけが起動し、サービスはこの画面から開始します。",
+        },
         keepAwake: {
           title: "このマシンをスリープさせない",
           description:

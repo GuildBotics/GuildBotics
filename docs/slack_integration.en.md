@@ -32,7 +32,7 @@ Whether to reply is decided by whether the member's role adds something new. Whe
 
 Posts, replies, reactions, and completion records in Slack all go through the member-only CLI (`guildbotics member chat ...`), where they are executed and recorded.
 
-To receive chat events, start the service with **Event triggers** included on the **Service** screen (`guildbotics start` starts it with the saved settings). Scheduled posts go through a separate path: configure them as scheduled commands, as described in [Scheduled Posts](#scheduled-posts).
+To receive chat events, start the service with **Event triggers** included on the **Service** screen (`guildbotics service start`, and the server when it starts the service by itself, start it with the saved settings). Scheduled posts go through a separate path: configure them as scheduled commands, as described in [Scheduled Posts](#scheduled-posts).
 
 ## Slack App Setup
 
@@ -229,8 +229,8 @@ guildbotics member chat reaction add --person alice --channel-id C0123456789 --m
 
 ## How Chat Handling Works Internally
 
-- Chat events are received by the event listener runner, and processed serially by the event queue source inside each member's worker. Both start when the service starts (**Service → Run** in the GUI, or `guildbotics start`)
-- When the service is started without **Event triggers** (a choice on the **Service** screen that `guildbotics start` also runs with), no chat events are received. Conversely, when **Patrol commands** and **Scheduled commands** are excluded, the member worker still processes queued chat events
+- Chat events are received by the event listener runner, and processed serially by the event queue source inside each member's worker. Both start when the service starts (**Service → Run** in the GUI, `guildbotics service start`, or the server as it starts when **Start the services when the server starts** is on)
+- When the service is started without **Event triggers** (a choice on the **Service** screen that every start of the service runs with), no chat events are received. Conversely, when **Patrol commands** and **Scheduled commands** are excluded, the member worker still processes queued chat events
 - The member worker selects each queued event before any workflow starts. The member's own messages, and messages the participation conditions exclude are only marked as read and leave no execution in Diagnostics. The remaining events go to the chat judgment engine, and reaction-only and no-action outcomes are completed right there. The chat workflow (`workflows/chat_conversation_workflow`) starts only for events that need the response agent, so a same-named file in the workspace replaces the response turn, not the selection or judgment
 - For chat handling by the AI CLI tool, `functions/handle_chat_event` runs with the member's working directory as `cwd`. By default this is `<workspace>/.guildbotics/local/clones/<person_id>/`, where cloned repositories under it can be referenced
 - Replies, reactions, no-ops, and completions are recorded through `guildbotics member chat reply|post|reaction add|noop|complete`. GuildBotics verifies these execution records and does not accept the tool's natural-language stdout alone as evidence that something was posted to Slack

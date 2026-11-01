@@ -11,7 +11,7 @@ This skill only defines the interactive envelope: how to work side by side with 
 
 ## Required First Step
 
-Before any member command, the GuildBotics server must be running (`guildbotics start`, or its OS service). The member CLI delegates to that server, including `--help`; it cannot run alone. Use the CLI installed from the same checkout as the server. Member commands use the server's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch the workspace on the GuildBotics screens after stopping active work, or stop the server with `guildbotics stop`, run `guildbotics workspace use <path>`, and start it again.
+Before any member command, the GuildBotics server must be running (`guildbotics server start`, or its OS service). The member CLI delegates to that server, including `--help`; it cannot run alone. Use the CLI installed from the same checkout as the server. Member commands use the server's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch the workspace on the GuildBotics screens after stopping active work, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again.
 
 Run the managed CLI by absolute path:
 

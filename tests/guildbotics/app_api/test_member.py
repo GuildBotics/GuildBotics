@@ -607,7 +607,7 @@ def test_member_workspace_and_shutdown_guidance(connected, locale):
         locale=locale,
         workspace=str(runtime.get_config_status().workspace),
     )
-    assert "guildbotics stop" in payload["message"]
+    assert "guildbotics server stop" in payload["message"]
     assert "guildbotics workspace use" in payload["message"]
     from guildbotics.app_api.errors import AppApiError
 

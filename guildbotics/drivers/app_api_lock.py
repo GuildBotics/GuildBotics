@@ -17,9 +17,19 @@ from guildbotics.utils.advisory_lock import (
 )
 from guildbotics.utils.fileio import get_machine_state_path
 
-#: Set by ``guildbotics start``: the server starts its services once it
-#: listens, with the settings saved on the Service screen.
+#: Set by ``guildbotics server start --services``: the server starts its
+#: services once it listens, with the settings saved on the Service screen.
 START_SERVICES_ENV = "GUILDBOTICS_START_SERVICES"
+#: How long the lifespan teardown may take. It has to cover every
+#: wait the teardown can run into, each at its limit: a forced runtime stop
+#: (event listener join, scheduler shutdown, scheduler join, work drain) and
+#: the diagnostics maintenance join.
+TEARDOWN_BUDGET_SECONDS = 60.0
+#: How long a forced stop leaves the server before it kills it: the teardown's
+#: budget and a margin for the waits before it (the services' forced stop, the
+#: requests still open). ``ExitTimeOut`` in ``scripts/hub-server.sh`` matches.
+KILL_AFTER_SECONDS = 90
+
 #: The process that launched the server; the server exits once it is gone.
 PARENT_PID_ENV = "GUILDBOTICS_APP_API_PARENT_PID"
 

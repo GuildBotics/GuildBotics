@@ -161,7 +161,7 @@ The image for developing GuildBotics itself
 builds every architecture, loads it here and into the CI runner, and declares) is
 the worked example.
 
-On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into the isolated environment ([microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)). If any directory mounted for a command is there -- the working directory of a writable command, a filesystem grant, the workspace itself, or GuildBotics' data under the home directory -- the command is refused at startup with the path and the reason. Move the directory outside the OS temporary directory and try again.
 

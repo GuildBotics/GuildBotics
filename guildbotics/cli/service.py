@@ -1,4 +1,4 @@
-"""Run the server of this checkout, and end it."""
+"""Run the server of this checkout and its services, and end them."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import httpx
 
 from guildbotics.cli._options import selected_workspace
 from guildbotics.drivers.app_api_lock import (
+    KILL_AFTER_SECONDS,
     PARENT_PID_ENV,
     START_SERVICES_ENV,
     inspect_backend_lock,
@@ -30,7 +31,9 @@ class BackendUnavailableError(RuntimeError):
     pass
 
 
-def _call(path: str, *, payload: dict[str, Any], timeout: float) -> None:
+def _call(
+    path: str, *, payload: dict[str, Any] | None = None, timeout: float | None
+) -> None:
     with connect_local_api(
         headers={"Accept-Language": get_language()}, timeout=timeout
     ) as client:
@@ -54,21 +57,46 @@ def _backend_command() -> list[str]:
     return [sys.executable, "-m", "guildbotics.app_api"]
 
 
-@click.command()
-def start() -> None:
-    """Run the server and start its services with the settings saved on the
-    Service screen.
+def _api_error(exc: Exception) -> click.ClickException:
+    return click.ClickException(str(exc))
 
-    It runs until `guildbotics stop`. Ctrl-C asks the same: the first lets
-    in-flight work finish, the second cancels it. SIGTERM, which an OS sends
-    to stop its service, cancels it at once.
+
+def _wait_for_process_exit(pid: int, timeout: float | None) -> bool:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while pid_exists(pid):
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        time.sleep(POLL_SECONDS)
+    return True
+
+
+@click.group()
+def server() -> None:
+    """Run and stop the server: the screens, the API, and the services in it."""
+
+
+@server.command("start")
+@click.option(
+    "--services",
+    is_flag=True,
+    help="Also start the services, whatever the Service screen's setting says",
+)
+def start_server(services: bool) -> None:
+    """Run the server in the foreground.
+
+    It starts the services as well with --services, or when the Service
+    screen's setting says so. It runs until `guildbotics server stop`.
+    Ctrl-C asks the same: the first lets in-flight work finish, the second
+    cancels it. SIGTERM, which an OS sends to stop its service, cancels it at
+    once.
     """
     environment = {
         **os.environ,
         GUILDBOTICS_WORKSPACE_ROOT: str(selected_workspace()),
-        START_SERVICES_ENV: "1",
         PARENT_PID_ENV: str(os.getpid()),
     }
+    if services:
+        environment[START_SERVICES_ENV] = "1"
     process: subprocess.Popen[bytes] | None = None
     terminated = False
 
@@ -99,21 +127,15 @@ def start() -> None:
         raise click.exceptions.Exit(code if code > 0 else 1)
 
 
-@click.command()
-@click.option(
-    "--timeout",
-    default=30,
-    type=click.IntRange(min=0),
-    help="Seconds to wait at each stop stage",
-)
+@server.command("stop")
 @click.option(
     "--force",
     is_flag=True,
-    help="Cancel in-flight work after timeout, then force terminate as a last resort",
+    help="Cancel in-flight work instead of waiting for it, and force terminate "
+    "the server if its teardown does not end",
 )
-def stop(timeout: int, force: bool) -> None:
-    """Stop the server through its API, after its in-flight work, and wait
-    for it to exit."""
+def stop_server(force: bool) -> None:
+    """Stop the server and wait for it to exit, after its in-flight work."""
     locked, metadata = inspect_backend_lock()
     if not locked:
         click.echo(t("runtime.service_lock.not_running"))
@@ -123,18 +145,19 @@ def stop(timeout: int, force: bool) -> None:
     pid = metadata.pid
     if not pid_exists(pid):
         raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
-    for cancel in [False, True] if force else [False]:
-        try:
-            _call("/shutdown", payload={"force": cancel}, timeout=5)
-        except (BackendUnavailableError, httpx.HTTPError) as exc:
-            if pid_exists(pid):
-                raise click.ClickException(str(exc)) from exc
-        if _wait_for_process_exit(pid, timeout):
-            key = "stopped_after_cancel" if cancel else "stopped"
-            click.echo(t(f"runtime.service_lock.{key}"))
-            return
+    try:
+        _call("/shutdown", payload={"force": force}, timeout=5)
+    except (BackendUnavailableError, httpx.HTTPError) as exc:
+        if pid_exists(pid):
+            raise _api_error(exc) from exc
     if not force:
-        click.echo(t("runtime.service_lock.stop_timeout"))
+        if not _wait_for_process_exit(pid, 2):
+            click.echo(t("runtime.service_lock.waiting_for_work"))
+            _wait_for_process_exit(pid, None)
+        click.echo(t("runtime.service_lock.stopped"))
+        return
+    if _wait_for_process_exit(pid, KILL_AFTER_SECONDS):
+        click.echo(t("runtime.service_lock.stopped_after_cancel"))
         return
     try:
         force_terminate_pid(pid)
@@ -145,21 +168,30 @@ def stop(timeout: int, force: bool) -> None:
     click.echo(t("runtime.service_lock.force_killed"))
 
 
-def _wait_for_process_exit(pid: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while pid_exists(pid):
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(POLL_SECONDS)
-    return True
+@click.group()
+def service() -> None:
+    """Start and stop the services of a running server, as the Service screen
+    does: scheduled commands, ticket patrol, and chat events."""
 
 
-@click.command()
-@click.pass_context
-def kill(ctx: click.Context) -> None:
-    """Stop the server, cancelling its in-flight work, and force terminate it
-    if needed.
+@service.command("start")
+def start_service() -> None:
+    """Start the services with the settings saved on the Service screen."""
+    try:
+        _call("/scheduler/start", timeout=None)
+    except (BackendUnavailableError, httpx.HTTPError) as exc:
+        raise _api_error(exc) from exc
+    click.echo(t("runtime.service_lock.services_started"))
 
-    Equivalent to: `guildbotics stop --force --timeout 0`.
-    """
-    ctx.invoke(stop, timeout=0, force=True)
+
+@service.command("stop")
+@click.option(
+    "--force", is_flag=True, help="Cancel in-flight work instead of waiting for it"
+)
+def stop_service(force: bool) -> None:
+    """Stop the services after their in-flight work; the server keeps running."""
+    try:
+        _call("/scheduler/stop", payload={"force": force}, timeout=None)
+    except (BackendUnavailableError, httpx.HTTPError) as exc:
+        raise _api_error(exc) from exc
+    click.echo(t("runtime.service_lock.services_stopped"))

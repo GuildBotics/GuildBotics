@@ -23,9 +23,11 @@ from guildbotics.drivers.app_api_lock import (
     BackendAlreadyRunningError,
     hold_backend_lock,
 )
+from guildbotics.drivers.service_settings import read_service_settings
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
+    WorkspaceNotConfiguredError,
     apply_workspace_root,
     get_workspace_root,
 )
@@ -51,7 +53,7 @@ def _parent_is_alive(parent_pid: int) -> bool:
 def _watch_parent(parent_pid: int) -> None:
     """Exit the server once the process that launched it is gone.
 
-    A force-killed ``guildbotics start`` cannot stop its server, which would
+    A force-killed ``guildbotics server start`` cannot stop its server, which would
     otherwise survive as an orphan holding the API port.
     """
     while True:
@@ -145,8 +147,16 @@ def _bind(port: int) -> socket.socket:
     return sock
 
 
+def _starts_with_server() -> bool:
+    try:
+        return read_service_settings().start_with_server
+    except WorkspaceNotConfiguredError:
+        # Nothing to start: no workspace, which the screens already report.
+        return False
+
+
 class _Server(uvicorn.Server):
-    """A server that ends as ``guildbotics stop`` ends it.
+    """A server that ends as ``guildbotics server stop`` ends it.
 
     The first Ctrl-C lets in-flight work finish and a second one cancels it;
     SIGTERM, which an OS sends once to stop its service before killing it,
@@ -164,14 +174,16 @@ class _Server(uvicorn.Server):
 
     async def startup(self, sockets: list[socket.socket] | None = None) -> None:
         await super().startup(sockets=sockets)
-        if self._start_services and not self.should_exit:
+        if not self.should_exit:
             threading.Thread(
                 target=self._start, name="guildbotics-service-start", daemon=True
             ).start()
 
     def _start(self) -> None:
+        """Start the services when asked, or when the saved settings say so."""
         try:
-            self._app.state.runtime.start_scheduler()
+            if self._start_services or _starts_with_server():
+                self._app.state.runtime.start_scheduler()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # The server stays up to show the failure and start them again:
             # on the screens, and in the output an OS service keeps.

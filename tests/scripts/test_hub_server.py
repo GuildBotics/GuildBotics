@@ -12,7 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.app_api.api import TEARDOWN_BUDGET_SECONDS
+from guildbotics.drivers.app_api_lock import (
+    KILL_AFTER_SECONDS,
+    TEARDOWN_BUDGET_SECONDS,
+)
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/hub-server.sh"
 pytestmark = pytest.mark.usefixtures("shell_commands")
@@ -42,11 +45,9 @@ elif name == 'python' and args[0] == '-c':
     if 'inspect_backend_lock' in args[1]:
         sys.exit(0 if (root / 'running').exists() else 1)
     print((root / 'interpreter').read_text())
-elif name == 'guildbotics' and args == ['stop']:
-    if not (root / 'drains').exists():
-        (root / 'running').unlink(missing_ok=True)
-elif name == 'sleep':
-    # The drain ends while the script waits.
+elif name == 'guildbotics' and args == ['server', 'stop']:
+    if (root / 'stop-fails').exists():
+        sys.exit(1)
     (root / 'running').unlink(missing_ok=True)
 elif name == 'uv' and (root / 'new-python').exists():
     (root / 'interpreter').write_text('/python/new')
@@ -69,7 +70,7 @@ class Service:
         for path in (
             *(
                 self.tools / name
-                for name in ("launchctl", "uname", "id", "uv", "npm", "npx", "sleep")
+                for name in ("launchctl", "uname", "id", "uv", "npm", "npx")
             ),
             self.repo / ".venv/bin/python",
             self.repo / ".venv/bin/guildbotics",
@@ -124,7 +125,7 @@ def test_install_runs_the_checkout_server_at_login_with_this_shells_path(service
 
     definition = plistlib.loads(service.plist.read_bytes())
     cli = str(service.repo / ".venv/bin/guildbotics")
-    assert definition["ProgramArguments"] == [cli, "start"]
+    assert definition["ProgramArguments"] == [cli, "server", "start"]
     assert definition["EnvironmentVariables"] == {
         "PATH": service.env["PATH"],
         "GUILDBOTICS_SERVER_PORT": "9876",
@@ -132,8 +133,8 @@ def test_install_runs_the_checkout_server_at_login_with_this_shells_path(service
     assert definition["RunAtLoad"] is True
     # A stop asked for stays stopped; a crash starts again.
     assert definition["KeepAlive"] == {"SuccessfulExit": False}
-    # SIGTERM cancels the work; the teardown gets its whole budget first.
-    assert definition["ExitTimeOut"] > TEARDOWN_BUDGET_SECONDS
+    # SIGTERM cancels the work; launchd waits as `server stop --force` does.
+    assert definition["ExitTimeOut"] == KILL_AFTER_SECONDS > TEARDOWN_BUDGET_SECONDS
     log = str(service.home / "Library/Logs/guildbotics.log")
     assert definition["StandardOutPath"] == definition["StandardErrorPath"] == log
     assert ["python", str(service.repo / "scripts/install_cli_assets.py")] in (
@@ -167,7 +168,7 @@ def test_installing_again_replaces_the_service_and_never_stops_a_server(service)
     service.run("install")
     service.mark("running")
     service.run("install", ok=False)
-    assert ["guildbotics", "stop"] not in service.calls
+    assert ["guildbotics", "server", "stop"] not in service.calls
 
     (service.root / "running").unlink()
     service.run("install")
@@ -186,27 +187,21 @@ def test_restart_stops_after_the_work_and_starts_again(service):
     service.run("restart")
 
     assert _commands(service.calls, "guildbotics", "launchctl")[-2:] == [
-        ["guildbotics", "stop"],
+        ["guildbotics", "server", "stop"],
         ["launchctl", "kickstart", "-k", "gui/1234/local.guildbotics"],
     ]
 
 
-def test_restart_waits_for_a_server_still_draining_then_starts(service):
+def test_restart_does_not_start_when_the_server_does_not_stop(service):
     service.run("install")
     service.mark("running")
-    service.mark("drains")
+    service.mark("stop-fails")
 
-    result = service.run("restart")
+    service.run("restart", ok=False)
 
-    assert "Waiting for the server to finish its work" in result.stdout
-    names = [call[0] for call in service.calls]
-    assert "sleep" in names
-    assert service.calls[-1] == [
-        "launchctl",
-        "kickstart",
-        "-k",
-        "gui/1234/local.guildbotics",
-    ]
+    assert not any(
+        call[1] == "kickstart" for call in _commands(service.calls, "launchctl")
+    )
 
 
 def test_update_rebuilds_everything_then_restarts(service):
@@ -242,6 +237,7 @@ def test_an_update_that_changes_python_leaves_the_keychain_to_a_terminal(service
     result = service.run("update")
 
     assert "Always Allow" in result.stdout
+    assert f"{service.repo / '.venv/bin/guildbotics'} server start" in result.stdout
     assert not any(
         call[1] == "kickstart" for call in _commands(service.calls, "launchctl")
     )
