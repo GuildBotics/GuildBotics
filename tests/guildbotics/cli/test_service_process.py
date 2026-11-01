@@ -166,6 +166,20 @@ def test_the_server_starts_alone_unless_the_setting_says_otherwise(cli_process):
     assert process.wait(timeout=15) == 0, log_of(process)
 
 
+def test_a_first_server_starts_before_any_workspace_is_selected(
+    cli_process, monkeypatch
+):
+    """A new Hub: the screens it serves are where the workspace is chosen."""
+    launch, _workspace = cli_process
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT")
+    process = launch(services=False)
+    wait_for(lambda: status() is not None, process)
+    assert not running()
+    assert CliRunner().invoke(main, ["server", "stop"]).exit_code == 0
+    assert process.wait(timeout=15) == 0, log_of(process)
+    assert "did not start" not in log_of(process)
+
+
 def test_a_second_start_is_refused_with_its_reason(cli_process):
     launch, _workspace = cli_process
     first = launch()

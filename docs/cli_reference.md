@@ -1650,8 +1650,9 @@ guildbotics server [OPTIONS] COMMAND [ARGS]...
 
 Run the server in the foreground.
 
-It starts the services as well with --services, or when the Service
-screen's setting says so. It runs until `guildbotics server stop`.
+It opens the selected workspace, or none until one is selected on the
+screens. It starts the services as well with --services, or when the
+Service screen's setting says so. It runs until `guildbotics server stop`.
 Ctrl-C asks the same: the first lets in-flight work finish, the second
 cancels it. SIGTERM, which an OS sends to stop its service, cancels it at
 once.

@@ -37,14 +37,19 @@ PARENT_PID_ENV = "GUILDBOTICS_APP_API_PARENT_PID"
 @dataclass
 class BackendMetadata:
     pid: int
+    #: The port it listens on, so that what stops it reaches it whatever the
+    #: environment of the one stopping it names.
+    port: int
 
 
 def _read(handle: IO[str]) -> BackendMetadata | None:
     try:
         data = json.loads(read_lock_data(handle))
-        if not isinstance(data["pid"], int) or data["pid"] <= 0:
+        if any(
+            not isinstance(data[key], int) or data[key] <= 0 for key in ("pid", "port")
+        ):
             return None
-        return BackendMetadata(data["pid"])
+        return BackendMetadata(data["pid"], data["port"])
     except OSError, ValueError, KeyError, TypeError:
         return None
 
@@ -73,13 +78,15 @@ class BackendAlreadyRunningError(RuntimeError):
 
 
 @contextmanager
-def hold_backend_lock() -> Iterator[None]:
-    """Hold the lock before binding or touching any server records."""
+def hold_backend_lock(port: int) -> Iterator[None]:
+    """Hold the lock, naming the server's ``port``, before binding or touching
+    any server records."""
     entered = False
     try:
         with held_lock(get_machine_state_path("run", "app-api.lock"), timeout=0) as f:
             entered = True
-            write_lock_data(f, json.dumps(asdict(BackendMetadata(os.getpid()))) + "\n")
+            metadata = BackendMetadata(os.getpid(), port)
+            write_lock_data(f, json.dumps(asdict(metadata)) + "\n")
             yield
     except LockTimeoutError:
         if entered:

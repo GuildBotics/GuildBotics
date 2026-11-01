@@ -16,6 +16,7 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.cli.desktop_commands import run_on_desktop
+from guildbotics.drivers.app_api_lock import hold_backend_lock
 from guildbotics.utils import local_api
 from guildbotics.utils.local_api import (
     API_PREFIX,
@@ -167,7 +168,12 @@ def test_an_impostor_receives_neither_token_a_machine_holds(impostor):
 def test_the_cli_runs_locally_instead_of_delegating_to_an_impostor(
     impostor, machine_state
 ):
-    assert run_on_desktop(machine_state, "ask", (), None, "work", machine_state) is None
+    # Even with the lock held, as by a server that has just died.
+    with hold_backend_lock(server_port()):
+        assert (
+            run_on_desktop(machine_state, "ask", (), None, "work", machine_state)
+            is None
+        )
     _assert_only_a_nonce_was_sent(impostor)
 
 

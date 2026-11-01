@@ -399,7 +399,8 @@ Invariants:
 - The server is singleton per machine: `guildbotics server start` runs the checkout's
   `guildbotics.app_api` as a child in its own process group and exits with its code.
   The server holds `<machine-state-root>/run/app-api.lock` from before binding through
-  its exit, and records its PID there; a second server refuses to start.
+  its exit, and records its PID and port there, which `server stop`,
+  `service start|stop` and the delegation of `guildbotics run` address; a second server refuses to start.
   `service.lock` covers scheduler workers and event listeners only while active,
   including keep-awake. File existence alone is never a liveness signal.
   The server ends only on `guildbotics server stop [--force]` (`POST /api/shutdown`

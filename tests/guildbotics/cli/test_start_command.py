@@ -43,14 +43,17 @@ def launched(monkeypatch, tmp_path):
         monkeypatch.setattr(service.subprocess, "Popen", popen)
         return launches
 
-    monkeypatch.setattr(service, "selected_workspace", lambda: tmp_path)
     return launch
 
 
 @pytest.mark.parametrize("services", [False, True])
-def test_start_runs_the_server_of_the_selected_workspace(launched, tmp_path, services):
-    """The services start with the server only when asked; otherwise the
-    server follows the Service screen's setting."""
+def test_start_runs_the_server_even_with_no_workspace_selected(
+    launched, monkeypatch, services
+):
+    """The server opens the selected workspace itself, or none until one is
+    chosen on the screens. The services start with it only when asked;
+    otherwise it follows the Service screen's setting."""
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
     launches = launched(Child())
     old = signal.getsignal(signal.SIGINT)
 
@@ -61,7 +64,7 @@ def test_start_runs_the_server_of_the_selected_workspace(launched, tmp_path, ser
     assert result.exit_code == 0, result.output
     [launch] = launches
     assert launch.command == [sys.executable, "-m", "guildbotics.app_api"]
-    assert launch.env[GUILDBOTICS_WORKSPACE_ROOT] == str(tmp_path)
+    assert GUILDBOTICS_WORKSPACE_ROOT not in launch.env
     assert (launch.env.get(START_SERVICES_ENV) == "1") is services
     assert launch.env[PARENT_PID_ENV] == str(os.getpid())
     assert signal.getsignal(signal.SIGINT) is old

@@ -54,10 +54,12 @@ def test_service_api_preserves_error_reason_and_requested_language(
     settings["status"] = status_code
     monkeypatch.setattr(service, "get_language", lambda: language, raising=False)
     with pytest.raises(httpx.HTTPStatusError) as caught:
-        service._call("/shutdown", payload={"force": False}, timeout=3)
+        service._call("/shutdown", port=9876, payload={"force": False}, timeout=3)
     assert str(caught.value) == message
     assert caught.value.response.status_code == status_code
-    assert connections == [{"headers": {"Accept-Language": language}, "timeout": 3}]
+    assert connections == [
+        {"headers": {"Accept-Language": language}, "timeout": 3, "port": 9876}
+    ]
     assert len(requests) == 1
     assert requests[0].url.path == "/api/shutdown"
     assert requests[0].method == "POST"
@@ -69,7 +71,7 @@ def test_malformed_api_error_preserves_the_http_failure(api, body):
     settings, _, requests = api
     settings["body"] = body
     with pytest.raises(httpx.HTTPStatusError):
-        service._call("/shutdown", payload={"force": False}, timeout=3)
+        service._call("/shutdown", port=9876, payload={"force": False}, timeout=3)
     assert len(requests) == 1
 
 
@@ -77,7 +79,7 @@ def test_non_json_error_preserves_the_http_failure(api):
     settings, _, requests = api
     settings["content"] = "temporarily unavailable"
     with pytest.raises(httpx.HTTPStatusError):
-        service._call("/shutdown", payload={"force": False}, timeout=3)
+        service._call("/shutdown", port=9876, payload={"force": False}, timeout=3)
     assert len(requests) == 1
 
 
@@ -99,7 +101,7 @@ def test_commands_show_the_api_reason_without_retry(
         settings["failure"] = httpx.ReadError("reply lost")
     monkeypatch.setattr(service, "pid_exists", lambda pid: True)
     monkeypatch.setattr(
-        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42))
+        service, "inspect_backend_lock", lambda: (True, BackendMetadata(42, 9876))
     )
     result = CliRunner().invoke(main, command)
     assert result.exit_code == 1

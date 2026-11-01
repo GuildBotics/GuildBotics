@@ -45,7 +45,8 @@ loaded() { launchctl print "$target" >/dev/null 2>&1; }
 running() {
     "$python" -c 'import sys; from guildbotics.drivers.app_api_lock import inspect_backend_lock; sys.exit(0 if inspect_backend_lock()[0] else 1)'
 }
-# Ends a running server after its in-flight work, however long it takes.
+# Ends a running server after its in-flight work, however long it takes; the
+# CLI reaches it on the port it recorded in this machine's lock.
 stop_server() {
     [ -x "$cli" ] || return 0
     "$cli" server stop

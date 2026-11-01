@@ -12,14 +12,13 @@ from typing import Any
 import click
 import httpx
 
-from guildbotics.cli._options import selected_workspace
 from guildbotics.drivers.app_api_lock import (
     KILL_AFTER_SECONDS,
     PARENT_PID_ENV,
     START_SERVICES_ENV,
+    BackendMetadata,
     inspect_backend_lock,
 )
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import get_language, t
 from guildbotics.utils.local_api import connect_local_api
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
@@ -32,10 +31,14 @@ class BackendUnavailableError(RuntimeError):
 
 
 def _call(
-    path: str, *, payload: dict[str, Any] | None = None, timeout: float | None
+    path: str,
+    *,
+    port: int,
+    payload: dict[str, Any] | None = None,
+    timeout: float | None,
 ) -> None:
     with connect_local_api(
-        headers={"Accept-Language": get_language()}, timeout=timeout
+        headers={"Accept-Language": get_language()}, timeout=timeout, port=port
     ) as client:
         if client is None:
             raise BackendUnavailableError(t("runtime.service_lock.api_unavailable"))
@@ -70,6 +73,14 @@ def _wait_for_process_exit(pid: int, timeout: float | None) -> bool:
     return True
 
 
+def _running_server() -> BackendMetadata | None:
+    """The server holding this machine's lock: its PID and port."""
+    locked, metadata = inspect_backend_lock()
+    if locked and metadata is None:
+        raise click.ClickException(t("runtime.service_lock.invalid_metadata"))
+    return metadata
+
+
 @click.group()
 def server() -> None:
     """Run and stop the server: the screens, the API, and the services in it."""
@@ -84,17 +95,15 @@ def server() -> None:
 def start_server(services: bool) -> None:
     """Run the server in the foreground.
 
-    It starts the services as well with --services, or when the Service
-    screen's setting says so. It runs until `guildbotics server stop`.
+    It opens the selected workspace, or none until one is selected on the
+    screens. It starts the services as well with --services, or when the
+    Service screen's setting says so. It runs until `guildbotics server stop`.
     Ctrl-C asks the same: the first lets in-flight work finish, the second
     cancels it. SIGTERM, which an OS sends to stop its service, cancels it at
     once.
     """
-    environment = {
-        **os.environ,
-        GUILDBOTICS_WORKSPACE_ROOT: str(selected_workspace()),
-        PARENT_PID_ENV: str(os.getpid()),
-    }
+    # The server resolves the workspace itself, as every launcher leaves it.
+    environment = {**os.environ, PARENT_PID_ENV: str(os.getpid())}
     if services:
         environment[START_SERVICES_ENV] = "1"
     process: subprocess.Popen[bytes] | None = None
@@ -136,17 +145,15 @@ def start_server(services: bool) -> None:
 )
 def stop_server(force: bool) -> None:
     """Stop the server and wait for it to exit, after its in-flight work."""
-    locked, metadata = inspect_backend_lock()
-    if not locked:
+    metadata = _running_server()
+    if metadata is None:
         click.echo(t("runtime.service_lock.not_running"))
         return
-    if metadata is None:
-        raise click.ClickException(t("runtime.service_lock.invalid_metadata"))
     pid = metadata.pid
     if not pid_exists(pid):
         raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
     try:
-        _call("/shutdown", payload={"force": force}, timeout=5)
+        _call("/shutdown", port=metadata.port, payload={"force": force}, timeout=5)
     except (BackendUnavailableError, httpx.HTTPError) as exc:
         if pid_exists(pid):
             raise _api_error(exc) from exc
@@ -174,11 +181,20 @@ def service() -> None:
     does: scheduled commands, ticket patrol, and chat events."""
 
 
+def _running_port() -> int:
+    """The running server's port, as it recorded it in this machine's lock."""
+    metadata = _running_server()
+    if metadata is None:
+        raise click.ClickException(t("runtime.service_lock.not_running"))
+    return metadata.port
+
+
 @service.command("start")
 def start_service() -> None:
     """Start the services with the settings saved on the Service screen."""
+    port = _running_port()
     try:
-        _call("/scheduler/start", timeout=None)
+        _call("/scheduler/start", port=port, timeout=None)
     except (BackendUnavailableError, httpx.HTTPError) as exc:
         raise _api_error(exc) from exc
     click.echo(t("runtime.service_lock.services_started"))
@@ -190,8 +206,9 @@ def start_service() -> None:
 )
 def stop_service(force: bool) -> None:
     """Stop the services after their in-flight work; the server keeps running."""
+    port = _running_port()
     try:
-        _call("/scheduler/stop", payload={"force": force}, timeout=None)
+        _call("/scheduler/stop", port=port, payload={"force": force}, timeout=None)
     except (BackendUnavailableError, httpx.HTTPError) as exc:
         raise _api_error(exc) from exc
     click.echo(t("runtime.service_lock.services_stopped"))

@@ -94,7 +94,7 @@ Before you run it:
 
 - If the former GuildBotics Desktop app is installed, quit it and uninstall it. The `~/.guildbotics/programs/` directory it left can be deleted by hand
 - Stop any other GuildBotics server (`guildbotics server stop`): `install` refuses while one runs
-- If you already have a workspace, select it with `.venv/bin/guildbotics workspace use <path>`. The server opens the selected workspace when it starts
+- If you already have a workspace, select it with `.venv/bin/guildbotics workspace use <path>`. The server opens the selected workspace when it starts; without one, you create or choose it on the screens after `guildbotics open`
 - If this machine's keychain already holds GuildBotics secrets (from the Desktop app, for example), run `.venv/bin/guildbotics server start` once in a terminal, answer each keychain prompt with "Always Allow", and stop it with Ctrl-C. The service has no window to answer those prompts
 
 `install` places the following and starts the server:
@@ -616,7 +616,7 @@ scripts/hub-server.sh uninstall   # stop the server and remove the LaunchAgent
 ```
 
 - **Logs**: the server's output goes to `~/Library/Logs/guildbotics.log`, appended and never rotated. When the server does not start or stopped, look there first
-- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly: a crash, or a forced termination. `guildbotics server stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`, with `--force` as well, unless the server had to be force-terminated. When the server cannot start (no workspace selected, or another server already running), the service tries again every 15 seconds and the log says why
+- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly: a crash, or a forced termination. `guildbotics server stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`, with `--force` as well, unless the server had to be force-terminated. When the server cannot start (another server already running, for example), the service tries again every 15 seconds and the log says why. Without a selected workspace the server still starts, and its screens ask for one
 - **When macOS stops it** (logout or restart): the server receives SIGTERM and cancels its in-flight work at once, and those runs end as they do when `guildbotics server stop --force` cancels them. `restart`, `update`, and `uninstall` instead stop it as `guildbotics server stop` does, after its in-flight work, waiting however long that takes; `guildbotics server stop --force` from another terminal cancels the work instead
 - **Environment**: the service keeps the `PATH` of the shell that ran `install`, so the server finds `git`, `uv`, and the other commands it uses, and `GUILDBOTICS_SERVER_PORT` when it is set. Run `install` again after changing them
 

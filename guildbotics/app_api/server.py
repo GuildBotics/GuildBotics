@@ -209,7 +209,7 @@ class _Server(uvicorn.Server):
 def main() -> None:
     _start_parent_watchdog()
     try:
-        with hold_backend_lock():
+        with hold_backend_lock(server_port()):
             _serve()
     except BackendAlreadyRunningError:
         sys.exit(t("runtime.service_lock.already_running"))

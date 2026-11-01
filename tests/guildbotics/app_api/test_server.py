@@ -230,7 +230,7 @@ def test_main_holds_backend_lock_until_the_server_exits(monkeypatch, captured_la
     from guildbotics.drivers.app_api_lock import BackendMetadata, inspect_backend_lock
 
     def run(runner, **kwargs):
-        assert inspect_backend_lock() == (True, BackendMetadata(os.getpid()))
+        assert inspect_backend_lock() == (True, BackendMetadata(os.getpid(), 8765))
 
     monkeypatch.setattr(server.uvicorn.Server, "run", run)
     server.main()
@@ -400,7 +400,7 @@ def test_losing_backend_never_binds_or_opens_server_records(
         pytest.fail("A second backend must not bind")
 
     monkeypatch.setattr(server, "_bind", bind)
-    with hold_backend_lock():
+    with hold_backend_lock(8765):
         with pytest.raises(SystemExit) as refused:
             server.main()
     assert refused.value.code == t("runtime.service_lock.already_running")

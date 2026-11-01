@@ -216,13 +216,14 @@ help / docstring が正であり、member コマンドの一行説明は
 
 補足（実装ポイント）:
 
-- `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace のサーバー（Local API）が動いていれば実行を委譲し、それ以外は手元で実行する。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
+- `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace のサーバー（Local API）が動いていれば実行を委譲し、それ以外は手元で実行する。委譲先は `app-api.lock` を持つサーバーで、lock に記録されたポートへ届く（呼ぶ側の環境の `GUILDBOTICS_SERVER_PORT` によらない）。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
 - `member` の CLI（`cli/member_client.py`）は `--workspace <dir>` だけを解釈してワークスペース ID にし、残りの引数を API に送る。`--help`・エラー・手元で扱う入力の分類はバックエンドの Click 定義が返す。CLI は provider・keyring・`cli/member.py` を読み込まない。サーバー（`guildbotics server start` または OS のサービス）が必要で、版の不一致は実行前に拒否する。API は予約中に選択中の ID を照合し、実行が終わるまで切替を拒否する。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（show/prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
 - `server start` はこのチェックアウトのサーバー（`python -m guildbotics.app_api`）を同じプロセスグループの
-  子として起動し、その終了コードで終わる（頼まれた終了は 0）。引数は渡さず、環境変数で workspace・
+  子として起動し、その終了コードで終わる（頼まれた終了は 0）。引数は渡さず、環境変数で
   親 PID（`GUILDBOTICS_APP_API_PARENT_PID`。サーバーはこのプロセスが消えたら終わる）と、`--services`
-  のときだけ `GUILDBOTICS_START_SERVICES=1` を渡す（`drivers/app_api_lock.py`）。サーバーは listen してから、
+  のときだけ `GUILDBOTICS_START_SERVICES=1` を渡す（`drivers/app_api_lock.py`）。ワークスペースは
+  `server start` では解決せず、サーバーが選択中のもの（無ければ未選択のまま、画面で選ばせる）を開く。サーバーは listen してから、
   `GUILDBOTICS_START_SERVICES` か、サービスの設定の `start_with_server`（既定 false。サービス画面の
   「サーバーの起動時にサービスも開始する」）のときだけサービスを開始する（`app_api/server.py` の `_Server`）。
   サービスの開始（`POST /api/scheduler/start`）は本文を持たず、どの開始も、サービスの設定（経路・
@@ -232,7 +233,7 @@ help / docstring が正であり、member コマンドの一行説明は
   で変えた項目だけを送る。巡回・受信を組み立てるのはサーバーだけ。
 - `service start` / `service stop [--force]` は動いているサーバーの `POST /api/scheduler/start` /
   `stop` を呼ぶだけで、サービス画面の実行・停止と同じ。サーバーは動き続ける。サーバーが無ければ失敗する。
-- サーバーは全生存期間で `~/.guildbotics/data/run/app-api.lock` を保持し、PID を記録する。
+- サーバーは全生存期間で `~/.guildbotics/data/run/app-api.lock` を保持し、PID と待ち受けるポートを記録する。
   lock を取れない 2 つ目のサーバーは起動しない。
 - `service.lock` はサービスの稼働中だけ保持する（PID / workspace などを記録する）。
   スリープ抑止もこの期間だけ。どちらの lock もファイルの存在自体は稼働判定に使わない。
@@ -241,7 +242,8 @@ help / docstring が正であり、member コマンドの一行説明は
   1 回目の SIGINT は実行中の作業の完了を待って終わり、2 回目でキャンセルする。SIGTERM（OS が
   サービスを止めるときに送る）はすぐキャンセルする（`app_api/server.py` の `_Server`）。Ctrl-C は
   プロセスグループのサーバーにも届き、`server start` は自分が受けた SIGTERM をサーバーへ渡す。
-  `server stop` はこのマシンの owner token で API を呼び、`app-api.lock` の PID の終了を時間の上限なく待つ
+  `server stop` と `service start|stop` は（`run` の委譲と同じく）、`app-api.lock` に記録されたポートへこのマシンの owner token で API を呼ぶ
+  （呼ぶ側の環境の `GUILDBOTICS_SERVER_PORT` によらず、動いているサーバーに届く）。`server stop` は lock の PID の終了を時間の上限なく待つ
   （2 秒を過ぎたら待っていることを表示する）。`server stop --force` は実行中の作業をすぐキャンセルし、
   `KILL_AFTER_SECONDS`（`drivers/app_api_lock.py`。後片付けの上限 `TEARDOWN_BUDGET_SECONDS` に余裕を足した値）
   のうちに終わらなければ PID を強制終了する。

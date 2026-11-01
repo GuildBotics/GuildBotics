@@ -94,7 +94,7 @@ scripts/hub-server.sh install
 
 - 以前の GuildBotics デスクトップアプリが入っていれば、終了してアンインストールします。デスクトップアプリが残した `~/.guildbotics/programs/` は手で削除してかまいません
 - ほかの GuildBotics サーバーを止めます（`guildbotics server stop`）。サーバーが動いている間、`install` は登録を断ります
-- 既にワークスペースがあれば、`.venv/bin/guildbotics workspace use <パス>` で選びます。サーバーは起動時に、選ばれたワークスペースを開きます
+- 既にワークスペースがあれば、`.venv/bin/guildbotics workspace use <パス>` で選びます。サーバーは起動時に、選ばれたワークスペースを開きます。なければ、`guildbotics open` で開いた画面で作るか選びます
 - このマシンのキーチェーンに GuildBotics のシークレットが既にあれば（デスクトップアプリで登録したものなど）、ターミナルで一度 `.venv/bin/guildbotics server start` を実行し、キーチェーンの確認に「常に許可」で答えてから Ctrl-C で止めます。サービスにはこの確認に答えるウィンドウがありません
 
 `install` は以下を配置して、サーバーを起動します。
@@ -616,7 +616,7 @@ scripts/hub-server.sh uninstall   # サーバーを止め、LaunchAgent を外�
 ```
 
 - **ログ**: サーバーの出力は `~/Library/Logs/guildbotics.log` に追記されます。ローテーションはしません。サーバーが起動しない・止まったときは、まずここを見ます
-- **動くとき**: ログインすると起動し、Hub を再起動したあとはログインするまで動きません。予期せず終わったとき（クラッシュや強制終了）は起動し直します。`guildbotics server stop` で止めると、次のログインか `scripts/hub-server.sh restart` まで止まったままです。`--force` を付けたときも同じで、サーバーを強制終了するまでに至ったときだけ起動し直します。サーバーが起動できないとき（ワークスペースが選ばれていない、別のサーバーがすでに動いている）は、サービスが 15 秒ごとに起動し直し、理由をログに書きます
+- **動くとき**: ログインすると起動し、Hub を再起動したあとはログインするまで動きません。予期せず終わったとき（クラッシュや強制終了）は起動し直します。`guildbotics server stop` で止めると、次のログインか `scripts/hub-server.sh restart` まで止まったままです。`--force` を付けたときも同じで、サーバーを強制終了するまでに至ったときだけ起動し直します。サーバーが起動できないとき（別のサーバーがすでに動いている、など）は、サービスが 15 秒ごとに起動し直し、理由をログに書きます。ワークスペースが選ばれていなくてもサーバーは起動し、画面でワークスペースを選ぶよう案内します
 - **macOS が止めるとき**（ログアウト、再起動）: サーバーは SIGTERM を受けて実行中の作業をすぐにキャンセルし、その実行は `guildbotics server stop --force` がキャンセルしたときと同じ終わり方をします。`restart`・`update`・`uninstall` は、`guildbotics server stop` と同じく実行中の作業の完了を、どれだけかかっても待って止めます。別のターミナルで `guildbotics server stop --force` を実行すると、作業をキャンセルします
 - **環境**: サービスは `install` を実行したシェルの `PATH` を引き継ぐので、サーバーは `git` や `uv` などのコマンドに届きます。`GUILDBOTICS_SERVER_PORT` が設定されていれば、それも引き継ぎます。変えたときは `install` をもう一度実行します
 
