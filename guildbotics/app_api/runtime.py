@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
@@ -663,9 +663,27 @@ class AppRuntime:
 
         Raises:
             AppApiError: If the member cannot be resolved, the runtime rejects
-                the work, or the command fails.
+                the work, the command fails, or a stop of the services or the
+                server cancels it.
         """
         trace_id = new_id()
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        assert task is not None, "a request is served in a task of its own"
+        # Whether a stop of the services or the server cancelled the run, read
+        # and changed only on the loop. The stop calls from its own thread, by
+        # then the run may have ended: only a run still going is cancelled.
+        stop: Literal["open", "requested", "closed"] = "open"
+
+        def _stop() -> None:
+            nonlocal stop
+            if stop == "open":
+                stop = "requested"
+                task.cancel()
+
+        def _cancel() -> None:
+            loop.call_soon_threadsafe(_stop)
+
         # The run is accepted for the workspace before anything is derived from
         # it, and the workspace cannot switch until the run is released.
         self._reserve_command(trace_id, expected_workspace, exclusive=False)
@@ -700,13 +718,6 @@ class AppRuntime:
             read_only = runner.access.read_only
             if not read_only:
                 self._reserve_command(trace_id)
-            loop = asyncio.get_running_loop()
-            task = asyncio.current_task()
-
-            def _cancel() -> None:
-                if task is not None:
-                    loop.call_soon_threadsafe(task.cancel)
-
             with (
                 self._execution.track_work(
                     source="manual",
@@ -729,7 +740,17 @@ class AppRuntime:
             raise AppApiError(
                 "work_rejected", reason=str(exc), status_code=409
             ) from exc
+        except asyncio.CancelledError as exc:
+            # The run's records already say it was cancelled; the caller is
+            # told why. Any other cancellation, such as the request's own,
+            # goes on.
+            if stop != "requested" or task.uncancel():
+                raise
+            raise AppApiError(
+                "command_cancelled", status_code=503, context={"trace_id": trace_id}
+            ) from exc
         finally:
+            stop = "closed"
             self._release_command(trace_id)
         return trace_id, outcome
 
@@ -808,9 +829,10 @@ class AppRuntime:
                 await runner.context.aclose()
         except BaseException as exc:
             # Cancellation lands here as well: a force stop cancels this task,
-            # and the run it started has to be reported as ended either way.
-            # Anything but a failed command is a defect: it stays a generic 500,
-            # so internal wording never reaches the client.
+            # and the run it started has to be reported as ended either way
+            # (the caller answers it). Anything but a failed or cancelled
+            # command is a defect: it stays a generic 500, so internal wording
+            # never reaches the client.
             failed = isinstance(exc, CommandError | CliAgentExecutionError)
             self.event_bus.publish_event(
                 "command.failed",

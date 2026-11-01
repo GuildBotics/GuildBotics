@@ -33,6 +33,7 @@ from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
     CommandAuthoringRequest,
     CommandRunRequest,
+    CommandRunResponse,
     TroubleshootingFocus,
     TroubleshootingRequest,
 )
@@ -79,6 +80,7 @@ pytestmark = pytest.mark.usefixtures("commands_in_process")
 
 HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
+HTTP_SERVICE_UNAVAILABLE = 503
 
 
 def _make_person(person_id: str = "bot", name: str = "Bot") -> Person:
@@ -1583,43 +1585,6 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
     assert stopped.active_works == []
 
 
-@pytest.mark.asyncio
-async def test_force_stop_scheduler_cancels_manual_command(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    event_bus = EventBus()
-    runtime = AppRuntime(event_bus)
-    started = asyncio.Event()
-    cancelled = {"value": False}
-
-    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
-        started.set()
-        try:
-            await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            cancelled["value"] = True
-            raise
-        return CommandOutcome(result="unreachable", text_output="unreachable")
-
-    monkeypatch.setattr(
-        runtime, "_get_context", lambda message="": _make_context([_make_person()])
-    )
-    stub_commands(monkeypatch, fake_run_command)
-
-    command_task = asyncio.create_task(
-        runtime.run_command(CommandRunRequest(command="demo", person="bot"))
-    )
-    await asyncio.wait_for(started.wait(), timeout=10)
-
-    stopped = await asyncio.to_thread(runtime.stop_scheduler, force=True)
-
-    with pytest.raises(asyncio.CancelledError):
-        await command_task
-    assert cancelled["value"] is True
-    assert stopped.active_works == []
-    assert event_bus.snapshot_events()[-1]["payload"]["code"] == "cancelled"
-
-
 # ---------------------------------------------------------------------------
 # start_scheduler
 # ---------------------------------------------------------------------------
@@ -2094,6 +2059,134 @@ _ASSISTANTS = {
     ),
     "author": (_author, CommandAuthoringResult, _ANSWER, "command_authoring_failed"),
 }
+
+
+def _run(runtime: AppRuntime) -> Any:
+    return runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+
+
+#: Every request that runs a command until it ends, so a stop can cancel it.
+_RUN_REQUESTS = {
+    "run": _run,
+    "troubleshoot": _troubleshoot,
+    "author": _author,
+}
+
+
+def _runtime_running_until_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[AppRuntime, EventBus, asyncio.Event]:
+    """A runtime whose commands run until something cancels them."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
+    started = asyncio.Event()
+
+    async def run_until_cancelled(*_: Any, **__: Any) -> CommandOutcome:
+        started.set()
+        await asyncio.sleep(30)
+        return CommandOutcome(result="unreachable", text_output="unreachable")
+
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+    stub_commands(monkeypatch, run_until_cancelled)
+    return runtime, event_bus, started
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_run", _RUN_REQUESTS.values(), ids=_RUN_REQUESTS)
+async def test_force_stop_scheduler_answers_a_cancelled_run_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request_run: Any
+) -> None:
+    runtime, event_bus, started = _runtime_running_until_cancelled(
+        tmp_path, monkeypatch
+    )
+    command_task = asyncio.create_task(request_run(runtime))
+    await asyncio.wait_for(started.wait(), timeout=10)
+
+    stopped = await asyncio.to_thread(runtime.stop_scheduler, force=True)
+
+    with pytest.raises(AppApiError) as caught:
+        await command_task
+    assert caught.value.status_code == HTTP_SERVICE_UNAVAILABLE
+    assert caught.value.code == "command_cancelled"
+    failed = event_bus.snapshot_events()[-1]
+    assert failed["type"] == "command.failed"
+    assert failed["payload"]["code"] == "cancelled"
+    assert caught.value.context == {"trace_id": failed["trace_id"]}
+    assert stopped.active_works == []
+    assert command_task.cancelling() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_run_cancelled_by_its_request_stays_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a stop is answered: the request's own cancellation goes on."""
+    runtime, event_bus, started = _runtime_running_until_cancelled(
+        tmp_path, monkeypatch
+    )
+    command_task = asyncio.create_task(_run(runtime))
+    await asyncio.wait_for(started.wait(), timeout=10)
+
+    command_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await command_task
+    assert event_bus.snapshot_events()[-1]["payload"]["code"] == "cancelled"
+    assert runtime.get_scheduler_status().active_works == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_its_request_cancels_during_a_stop_stays_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop does not swallow the request's own cancellation that came with
+    it."""
+    runtime, _, started = _runtime_running_until_cancelled(tmp_path, monkeypatch)
+    command_task = asyncio.create_task(_run(runtime))
+    await asyncio.wait_for(started.wait(), timeout=10)
+
+    runtime._execution.begin_drain(force=True)
+    command_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await command_task
+
+
+@pytest.mark.asyncio
+async def test_a_stop_that_comes_after_the_run_ended_leaves_the_request_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A force stop takes the running work before cancelling it, from its own
+    thread: by the time its cancellation reaches the loop, the run may have
+    ended and the request be sending its answer."""
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+
+    async def finish(*_: Any, **__: Any) -> CommandOutcome:
+        return CommandOutcome(result="ok", text_output="ok")
+
+    stub_commands(monkeypatch, finish)
+    cancels: list[Any] = []
+    track_work = runtime._execution.track_work
+
+    def tracking(**kwargs: Any) -> Any:
+        cancels.append(kwargs["cancel"])
+        return track_work(**kwargs)
+
+    monkeypatch.setattr(runtime._execution, "track_work", tracking)
+
+    async def request() -> CommandRunResponse:
+        response = await _run(runtime)
+        cancels[0]()
+        # The answer is still being sent.
+        await asyncio.sleep(0.05)
+        return response
+
+    response = await asyncio.create_task(request())
+
+    assert response.output == "ok"
 
 
 @pytest.mark.asyncio

@@ -37,7 +37,7 @@ from guildbotics.utils.fileio import (
     host_temporary_root,
     workspace_root_from_config_dir,
 )
-from guildbotics.utils.i18n_tool import get_language, t
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.local_api import connect_local_api
 from guildbotics.utils.log_utils import get_logger
@@ -294,9 +294,7 @@ def member(ctx: click.Context) -> None:
         "interactive_thread_key": interactive_thread_key(),
     }
     try:
-        with connect_local_api(
-            headers={"X-GuildBotics-Language": get_language()}, timeout=None
-        ) as client:
+        with connect_local_api(timeout=None) as client:
             if client is None:
                 raise click.ClickException(t("cli.member.client.backend_required"))
             with tempfile.TemporaryFile(dir=host_temporary_root()) as output:

@@ -19,7 +19,7 @@ from guildbotics.drivers.app_api_lock import (
     BackendMetadata,
     inspect_backend_lock,
 )
-from guildbotics.utils.i18n_tool import get_language, t
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.local_api import connect_local_api
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
 
@@ -37,9 +37,7 @@ def _call(
     payload: dict[str, Any] | None = None,
     timeout: float | None,
 ) -> None:
-    with connect_local_api(
-        headers={"Accept-Language": get_language()}, timeout=timeout, port=port
-    ) as client:
+    with connect_local_api(timeout=timeout, port=port) as client:
         if client is None:
             raise BackendUnavailableError(t("runtime.service_lock.api_unavailable"))
         response = client.post(path, json=payload)

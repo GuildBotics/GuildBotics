@@ -32,7 +32,6 @@ def api(monkeypatch):
         connections.append(kwargs)
         with httpx.Client(
             base_url="http://127.0.0.1:8765/api",
-            headers=kwargs.get("headers"),
             transport=httpx.MockTransport(respond),
         ) as client:
             yield client
@@ -41,29 +40,19 @@ def api(monkeypatch):
     return settings, connections, requests
 
 
-@pytest.mark.parametrize("language", ["en", "ja"])
 @pytest.mark.parametrize("status_code", [409, 503])
-def test_service_api_preserves_error_reason_and_requested_language(
-    monkeypatch, api, language, status_code
-):
+def test_service_api_preserves_error_reason(api, status_code):
     settings, connections, requests = api
-    message = (
-        "サーバーは終了中です。" if language == "ja" else settings["body"]["message"]
-    )
-    settings["body"] = {"code": "server_closing", "message": message}
+    settings["body"] = {"code": "server_closing", "message": "サーバーは終了中です。"}
     settings["status"] = status_code
-    monkeypatch.setattr(service, "get_language", lambda: language, raising=False)
     with pytest.raises(httpx.HTTPStatusError) as caught:
         service._call("/shutdown", port=9876, payload={"force": False}, timeout=3)
-    assert str(caught.value) == message
+    assert str(caught.value) == "サーバーは終了中です。"
     assert caught.value.response.status_code == status_code
-    assert connections == [
-        {"headers": {"Accept-Language": language}, "timeout": 3, "port": 9876}
-    ]
+    assert connections == [{"timeout": 3, "port": 9876}]
     assert len(requests) == 1
     assert requests[0].url.path == "/api/shutdown"
     assert requests[0].method == "POST"
-    assert requests[0].headers["Accept-Language"] == language
 
 
 @pytest.mark.parametrize("body", [{}, [], {"message": None}, {"message": ""}])

@@ -7,7 +7,6 @@ import click
 import httpx
 
 from guildbotics.drivers.app_api_lock import inspect_backend_lock
-from guildbotics.utils.i18n_tool import get_language
 from guildbotics.utils.local_api import connect_local_api
 
 
@@ -29,9 +28,7 @@ def run_on_desktop(
     metadata = inspect_backend_lock()[1]
     if metadata is None:
         return None
-    with connect_local_api(
-        headers={"Accept-Language": get_language()}, timeout=None, port=metadata.port
-    ) as client:
+    with connect_local_api(timeout=None, port=metadata.port) as client:
         if client is None:
             return None
         try:
