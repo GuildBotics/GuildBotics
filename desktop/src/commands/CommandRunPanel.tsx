@@ -43,8 +43,8 @@ export type CommandRunPanelProps = {
   /** The run shown: the one started or seen starting, else the latest. */
   runTraceId: string | null;
   runSummary: TraceSummary | null;
-  /** Why a run could not start; such a run left no trace to show. */
-  runStartError: string | null;
+  /** Why the last run request failed without naming a trace to show. */
+  runError: string | null;
   traceRecords: TraceRecord[];
   traceLoading: boolean;
   transcriptAvailable?: boolean;
@@ -190,9 +190,9 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
         </Stack>
 
         <div className="command-run-output">
-          {props.runStartError ? (
-            <Alert color="danger" mb="sm" title={t("commands.runStartFailed")}>
-              {props.runStartError}
+          {props.runError ? (
+            <Alert color="danger" mb="sm" title={t("commands.runFailed")}>
+              {props.runError}
             </Alert>
           ) : null}
           {props.runSummary ? (

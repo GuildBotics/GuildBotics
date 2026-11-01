@@ -23,7 +23,13 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import {
   Activity,
@@ -728,23 +734,35 @@ const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];
 
 // The service settings live on the server, so every screen and
 // `guildbotics start` run with the same ones. A change shows at once, only
-// the change is sent, and changes are saved in the order made, so the last
-// one is kept.
+// the change is sent, and changes are saved in the order made. While any is
+// on its way -- also one made before this screen was opened again -- the
+// changes in the QueryClient are the truth: the screen does not read the
+// server, which still has what they replace, and a start waits for them.
 function useServiceSettings() {
   const queryClient = useQueryClient();
-  const query = useQuery({ queryKey: SERVICE_SETTINGS_QUERY_KEY, queryFn: getServiceSettings });
+  const saving = useIsMutating({ mutationKey: SERVICE_SETTINGS_QUERY_KEY }) > 0;
+  const query = useQuery({
+    queryKey: SERVICE_SETTINGS_QUERY_KEY,
+    queryFn: getServiceSettings,
+    enabled: !saving,
+  });
   const mutation = useMutation({
     mutationKey: SERVICE_SETTINGS_QUERY_KEY,
     scope: { id: "service-settings" },
     mutationFn: (change: Partial<ServiceSettings>) => updateServiceSettings(change),
-    // Read the saved settings back once the last change has landed: earlier
-    // answers would undo the later changes shown meanwhile.
+    // Read the saved settings back once the last change has landed.
     onSettled: () => {
       if (queryClient.isMutating({ mutationKey: SERVICE_SETTINGS_QUERY_KEY }) === 1) {
         void queryClient.invalidateQueries({ queryKey: SERVICE_SETTINGS_QUERY_KEY });
       }
     },
   });
+  // Why the latest change failed, whichever screen made it.
+  const changes = useMutationState({
+    filters: { mutationKey: SERVICE_SETTINGS_QUERY_KEY },
+    select: (change) => change.state,
+  });
+  const latestChange = changes[changes.length - 1];
   const save = (change: Partial<ServiceSettings>) => {
     const current = queryClient.getQueryData<ServiceSettings>(SERVICE_SETTINGS_QUERY_KEY);
     if (!current) {
@@ -759,8 +777,8 @@ function useServiceSettings() {
     settings: query.data,
     loadError: query.error,
     save,
-    saving: mutation.isPending,
-    saveError: mutation.error,
+    saving,
+    saveError: latestChange?.status === "error" ? latestChange.error : null,
   };
 }
 

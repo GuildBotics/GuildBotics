@@ -204,6 +204,57 @@ describe("Service Runtime screen", () => {
     await waitFor(() => expect(start).toBeEnabled());
   });
 
+  it("waits to start for a change made before the screen was opened again", async () => {
+    let finishSave: () => void = () => undefined;
+    updateServiceSettingsMock.mockImplementation(
+      (change) =>
+        new Promise((resolve) => {
+          finishSave = () => {
+            saved = { ...saved, ...change };
+            resolve(structuredClone(saved));
+          };
+        }),
+    );
+    const user = userEvent.setup();
+    const { rerender } = renderApp("/service");
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
+    await user.click(eventsSwitch());
+
+    // Away to another screen and back, on the same client, while it saves.
+    rerender(appTree("/commands"));
+    rerender(appTree("/service"));
+
+    const start = await screen.findByRole("button", { name: t("overview.start") });
+    // The server still has what the change replaces, so it is not read back.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(getServiceSettingsMock).toHaveBeenCalledTimes(1);
+    expect(eventsSwitch()).not.toBeChecked();
+    expect(start).toBeDisabled();
+    act(() => finishSave());
+    await waitFor(() => expect(start).toBeEnabled());
+    await waitFor(() => expect(getServiceSettingsMock).toHaveBeenCalledTimes(2));
+    expect(eventsSwitch()).not.toBeChecked();
+  });
+
+  it("says why a change failed, also after the screen was opened again", async () => {
+    let failSave: () => void = () => undefined;
+    updateServiceSettingsMock.mockImplementation(
+      () => new Promise((_resolve, reject) => (failSave = () => reject(new Error("disk full")))),
+    );
+    const user = userEvent.setup();
+    const { rerender } = renderApp("/service");
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
+    await user.click(eventsSwitch());
+
+    rerender(appTree("/commands"));
+    act(() => failSave());
+    rerender(appTree("/service"));
+
+    expect(await screen.findByText(t("service.saveError"))).toBeInTheDocument();
+    expect(screen.getByText("disk full")).toBeInTheDocument();
+    await waitFor(() => expect(eventsSwitch()).toBeChecked());
+  });
+
   it("does not let a read already under way undo a change", async () => {
     let answerRead: () => void = () => undefined;
     let finishSave: () => void = () => undefined;
@@ -828,18 +879,24 @@ describe("App quit guard", () => {
   });
 });
 
-function renderApp(initialPath: string) {
+let queryClient: QueryClient;
+
+function appTree(path: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return (
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[initialPath]}>
+        <MemoryRouter key={path} initialEntries={[path]}>
           <App />
         </MemoryRouter>
       </QueryClientProvider>
-    </TestMantineProvider>,
+    </TestMantineProvider>
   );
+}
+
+function renderApp(initialPath: string) {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(appTree(initialPath));
 }
 
 function routineSourceSwitch() {

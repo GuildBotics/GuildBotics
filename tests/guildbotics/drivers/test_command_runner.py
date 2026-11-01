@@ -414,30 +414,57 @@ async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "output", ["hello from the run", ""], ids=["printed", "silent"]
+    ("command_name", "selected", "output"),
+    [
+        ("hello", None, "hello from the run"),
+        ("hello", None, ""),
+        ("workflows/ticket_driven_workflow", "ticket", "worked on the ticket"),
+        ("workflows/ticket_driven_workflow", "Rate limited until 10:00.", ""),
+        ("workflows/ticket_driven_workflow", None, ""),
+    ],
+    ids=["command", "command-silent", "ticket", "ticket-rate-limited", "ticket-idle"],
 )
-async def test_what_a_run_printed_is_kept_in_its_trace_only(
-    monkeypatch, tmp_path, output
+async def test_the_output_a_run_returns_is_kept_in_its_trace_only(
+    monkeypatch, tmp_path, command_name, selected, output
 ):
-    """Every command runs in its environment, so a screen shows any run's
-    output after the run from its trace, whichever route started it. The
-    output is an io record: the transcript keeps it, the index does not."""
+    """Whatever a run returns to its caller as output -- from its environment
+    or, for the ticket workflow, the selector's notice in its place -- a
+    screen shows after the run from its trace. It is an io record: the
+    transcript keeps it, the index does not. A run that returns nothing adds
+    nothing."""
+    from guildbotics.drivers import ticket_selector
     from guildbotics.observability import diagnostics_events
     from guildbotics.observability.diagnostics_store import DiagnosticsStore
+    from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+
+    class Selector:
+        def __init__(self, context, *, source):
+            pass
+
+        async def run_next(self, person, run_workflow):
+            if selected != "ticket":
+                return selected
+            return await run_workflow(
+                WorkflowInvocation(command_name, "aiko", "manual", "ticket", {})
+            )
 
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     monkeypatch.setattr(diagnostics_events, "_STORE", store)
+    monkeypatch.setattr(ticket_selector, "TicketSelector", Selector)
     _environment(monkeypatch, CommandReply(text_output=output))
 
-    outcome = await command_runner.run_in_environment(_prepared())
+    outcome = await command_runner.run_main_command(
+        _prepared(command_name=command_name), source="manual"
+    )
 
     recorded = [
         (item["kind"], item["payload"])
         for item in store.get_records("trace")
         if item.get("type") == "command.output"
     ]
-    assert outcome.text_output == output
-    assert recorded == ([("io", {"output": output})] if output else [])
+    expected = output or (selected if selected != "ticket" else None) or ""
+    assert outcome.text_output == expected
+    assert recorded == ([("io", {"output": expected})] if expected else [])
     assert not [item for item in store._records if item.get("type") == "command.output"]
 
 

@@ -1223,10 +1223,10 @@ describe("Command editor screen", () => {
       "true",
     );
     expect(document.querySelector("pre.command-output")).toHaveTextContent("agent failed");
-    expect(screen.queryByText(t("commands.runStartFailed"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("commands.runFailed"))).not.toBeInTheDocument();
   });
 
-  it("says why a run could not start, as it left nothing to show", async () => {
+  it("says why a run request failed until another run starts", async () => {
     runCommandMock.mockRejectedValue(
       new ApiRequestError({
         code: "work_rejected",
@@ -1240,9 +1240,23 @@ describe("Command editor screen", () => {
 
     await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
 
-    expect(await screen.findByText(t("commands.runStartFailed"))).toBeVisible();
+    expect(await screen.findByText(t("commands.runFailed"))).toBeVisible();
     expect(screen.getByText("Another command is running.")).toBeVisible();
     expect(screen.getByText(t("commands.noRunsYet"))).toBeVisible();
+
+    // A run started elsewhere takes the console over, without that failure.
+    runs = [run("evt-2", "running")];
+    act(() =>
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "evt-2",
+          attributes: { "run.entry": "command" },
+        }),
+      ),
+    );
+    expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeVisible();
+    expect(screen.queryByText(t("commands.runFailed"))).not.toBeInTheDocument();
   });
 
   it("deletes the selected command after confirmation and selects what remains", async () => {

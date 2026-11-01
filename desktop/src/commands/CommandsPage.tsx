@@ -140,7 +140,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
   const [showAdvanced, setShowAdvanced] = useState(initial.showAdvanced);
   // The run started here or seen starting; until one is, the latest run.
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
-  const [runStartError, setRunStartError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>(initial.activeTab ?? "events");
 
   const [draftContent, setDraftContent] = useState("");
@@ -490,7 +490,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
       // Build the run payload from the just-saved file so edited frontmatter
       // (args / inputs / command) is honored, not the pre-save definition.
       const runFile = dirty ? await saveMutation.mutateAsync() : detail;
-      setRunStartError(null);
+      setRunError(null);
       setActiveTab("events");
       const args = buildFileRunArgs(runFile, argValues, extraArgs);
       const response = await runCommand({
@@ -505,14 +505,15 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
       setActiveTraceId(response.trace_id);
       setActiveTab("output");
     } catch (error) {
-      // A run that started and failed is shown from its trace; one that never
-      // started has nothing recorded, so only its reason is shown.
+      // A run that names its trace is shown from it. Any other failure is
+      // shown as the request's answer: the run may never have started, or
+      // failed in a way that does not name it.
       const traceId = error instanceof ApiRequestError ? error.context.trace_id : undefined;
       if (typeof traceId === "string") {
         setActiveTraceId(traceId);
         setActiveTab("output");
       } else {
-        setRunStartError(error instanceof Error ? error.message : String(error));
+        setRunError(error instanceof Error ? error.message : String(error));
       }
     } finally {
       setRunBusy(false);
@@ -553,7 +554,9 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
         return;
       }
       if (event.type === "command.started") {
+        // A new run takes the console over, with no earlier run's failure.
         setActiveTraceId(event.trace_id);
+        setRunError(null);
       }
       void queryClient.invalidateQueries({ queryKey: COMMAND_RUNS_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: ["diagnostics-trace", event.trace_id] });
@@ -877,7 +880,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
                     onSaveAndRun={() => void saveAndRun()}
                     runTraceId={visibleTraceId}
                     runSummary={traceDetail.data?.summary ?? null}
-                    runStartError={runStartError}
+                    runError={runError}
                     traceRecords={traceRecords}
                     traceLoading={traceDetail.isFetching && !traceDetail.data}
                     transcriptAvailable={traceDetail.data?.transcript_available}

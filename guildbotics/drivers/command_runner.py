@@ -268,12 +268,28 @@ async def run_main_command(
         command: The command to run, read for the member it runs as.
         source: Route that started the command.
 
+    What the caller gets back as the run's output is kept in its trace, so a
+    screen shows a run's output after the run, whichever screen or command
+    started it.
+
     Returns:
         The command's outcome; for the ticket workflow, the rate-limit notice
         posted on the ticket instead, or nothing when there was no ticket.
     """
-    if command.command_name != TICKET_WORKFLOW_COMMAND:
-        return await run_in_environment(command)
+    if command.command_name == TICKET_WORKFLOW_COMMAND:
+        outcome = await _run_ticket_workflow(command, source)
+    else:
+        outcome = await run_in_environment(command)
+    if outcome.text_output:
+        record_correlated_io(
+            io_type=COMMAND_OUTPUT_IO_TYPE, payload={"output": outcome.text_output}
+        )
+    return outcome
+
+
+async def _run_ticket_workflow(
+    command: PreparedCommand, source: WorkflowSource
+) -> CommandOutcome:
     from guildbotics.drivers.ticket_selector import TicketSelector
 
     context = command.context
@@ -301,9 +317,7 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     the one its trace is -- and the work it does: its workflow run's, the one
     the caller named, or else the run's own manual work.
     What it returns is read as the host reads anything from it: its result
-    only as the type the caller asked for. What it printed is kept in its
-    trace, so a screen shows a run's output after the run, whichever screen
-    or command started it.
+    only as the type the caller asked for.
 
     Args:
         command: The command to run, read for the member it runs as.
@@ -361,12 +375,7 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
                 reply = await environment.execute(request)
     finally:
         await window.close()
-    outcome = _outcome(command, reply)
-    if outcome.text_output:
-        record_correlated_io(
-            io_type=COMMAND_OUTPUT_IO_TYPE, payload={"output": outcome.text_output}
-        )
-    return outcome
+    return _outcome(command, reply)
 
 
 def _outcome(command: PreparedCommand, reply: CommandReply) -> CommandOutcome:
