@@ -40,8 +40,11 @@ def status(running=True, *, active=False, failed=False):
     }
 
 
-@pytest.mark.parametrize("only", [None, "scheduler", "events"])
-def test_start_maps_options_to_the_backend_and_closes_it(monkeypatch, tmp_path, only):
+def test_start_runs_the_backend_with_its_saved_settings_and_closes_it(
+    monkeypatch, tmp_path
+):
+    """How the service runs is the Service screen's saved settings, read by
+    the backend: the command has nothing of its own to send."""
     process = object()
     calls = []
     monkeypatch.setattr(service, "selected_workspace", lambda: tmp_path)
@@ -51,7 +54,7 @@ def test_start_maps_options_to_the_backend_and_closes_it(monkeypatch, tmp_path, 
     )
     monkeypatch.setattr(service, "_wait_for_port", lambda *args: calls.append("notice"))
     monkeypatch.setattr(
-        service, "_supervise", lambda child, payload, signals: calls.append(payload)
+        service, "_supervise", lambda child, signals: calls.append(child)
     )
     monkeypatch.setattr(
         service,
@@ -59,32 +62,15 @@ def test_start_maps_options_to_the_backend_and_closes_it(monkeypatch, tmp_path, 
         lambda child, announced: calls.append((child, announced)),
     )
     old = signal.getsignal(signal.SIGINT)
-    arguments = ["start", "--max-consecutive-errors", "7"]
-    if only:
-        arguments += ["--only", only]
-    result = CliRunner().invoke(main, arguments)
+    result = CliRunner().invoke(main, ["start"])
     assert result.exit_code == 0, result.output
-    assert calls == [
-        "notice",
-        {
-            "sources": {
-                "scheduled": only != "events",
-                "routine": only != "events",
-                "event_queue": only != "scheduler",
-            },
-            "max_consecutive_errors": 7,
-        },
-        (process, True),
-    ]
+    assert calls == ["notice", process, (process, True)]
     assert signal.getsignal(signal.SIGINT) is old
 
 
-@pytest.mark.parametrize("limit", ["0", "-1"])
-def test_start_rejects_nonpositive_error_limit(limit):
-    assert (
-        CliRunner().invoke(main, ["start", "--max-consecutive-errors", limit]).exit_code
-        == 2
-    )
+@pytest.mark.parametrize("option", ["--only=events", "--max-consecutive-errors=3"])
+def test_start_takes_no_settings_of_its_own(option):
+    assert CliRunner().invoke(main, ["start", option]).exit_code == 2
 
 
 def test_start_does_not_launch_when_desktop_is_open(monkeypatch, tmp_path):
@@ -152,7 +138,7 @@ def test_two_signals_escalate_without_waiting_for_the_first_api_request(
     monkeypatch.setattr(service, "_call", call)
     monkeypatch.setattr(service, "_stop_requested", lambda pid: False)
     try:
-        service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
+        service._supervise(SimpleNamespace(pid=42, poll=lambda: None), signals)
     finally:
         # Force may finish before the graceful request's thread returns.
         for request in api_threads:
@@ -205,7 +191,7 @@ def test_start_completion_does_not_repeat_an_already_reported_stop(monkeypatch, 
     )
     monkeypatch.setattr(service, "_call", lambda *args, **kwargs: status(False))
     monkeypatch.setattr(service, "_stop_requested", lambda pid: True)
-    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, signals)
+    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), signals)
     assert (
         capsys.readouterr().out.count(t("runtime.service_lock.stopping_after_work"))
         == 1
@@ -218,7 +204,7 @@ def test_second_interrupt_can_end_a_blocked_start_request(monkeypatch):
     process = SimpleNamespace(
         kill=lambda: calls.append("kill"), wait=lambda: calls.append("wait")
     )
-    service._supervise(process, {}, [signal.SIGINT, signal.SIGINT])
+    service._supervise(process, [signal.SIGINT, signal.SIGINT])
     assert calls == ["kill", "wait"]
 
 
@@ -232,7 +218,7 @@ def test_signal_notices_are_visible_even_while_start_is_blocked(monkeypatch, cap
 
     monkeypatch.setattr(service.time, "sleep", interrupt_again)
     process = SimpleNamespace(kill=lambda: None, wait=lambda: None, poll=lambda: None)
-    service._supervise(process, {}, signals)
+    service._supervise(process, signals)
     assert t("runtime.service_lock.cancelling") in capsys.readouterr().out
 
 
@@ -243,7 +229,7 @@ def test_self_stopped_or_failed_service_is_an_error(monkeypatch, failed):
     )
     monkeypatch.setattr(service, "_stop_requested", lambda pid: False)
     with pytest.raises(service.BackendUnavailableError):
-        service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, [])
+        service._supervise(SimpleNamespace(pid=42, poll=lambda: None), [])
 
 
 def test_start_waits_for_manual_work_to_drain_after_the_workers_exit(monkeypatch):
@@ -256,7 +242,7 @@ def test_start_waits_for_manual_work_to_drain_after_the_workers_exit(monkeypatch
         return next(states)
 
     monkeypatch.setattr(service, "_call", call)
-    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), {}, [])
+    service._supervise(SimpleNamespace(pid=42, poll=lambda: None), [])
     assert seen == ["/scheduler/start", "/scheduler/status"]
 
 
@@ -287,7 +273,7 @@ def test_stop_matches_backend_pid_even_while_its_launcher_is_alive(
         else pytest.raises((service.BackendUnavailableError, httpx.HTTPError))
     )
     with expected:
-        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), [])
 
 
 @pytest.mark.parametrize("error", [service.BackendUnavailableError, httpx.ReadError])
@@ -308,13 +294,13 @@ def test_stop_marker_does_not_hide_api_failure_while_backend_is_alive(
     monkeypatch.setattr(service, "_call", call)
     monkeypatch.setattr(service, "pid_exists", lambda pid: True)
     with pytest.raises(error):
-        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), [])
 
 
 def test_start_cannot_supervise_without_its_announced_backend_record(monkeypatch):
     monkeypatch.setattr(service, "read_backend_metadata", lambda: None)
     with pytest.raises(service.BackendUnavailableError):
-        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), {}, [])
+        service._supervise(SimpleNamespace(pid=99, poll=lambda: None), [])
 
 
 def test_start_failure_still_closes_its_child(monkeypatch, tmp_path):

@@ -134,12 +134,16 @@ def runs_as(
             context, name, args, host_command_cwd(), Path(name), CommandAccess()
         )
 
-    async def run_in_environment(command: PreparedCommand) -> Any:
+    async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
         ran.append(command)
         runner = runner_class(
             command.context, command.command_name, command.args, command.cwd
         )
-        return await runner.run()
+        # Read as the host reads a run: an outcome, its text what it returned.
+        result = await runner.run()
+        return CommandOutcome(
+            result=result, text_output="" if result is None else str(result)
+        )
 
     for module in (command_runner, utils, workflow_dispatcher):
         monkeypatch.setattr(module, "prepare_host_command", prepare_host_command)

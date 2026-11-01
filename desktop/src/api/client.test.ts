@@ -33,7 +33,7 @@ import {
   importAvatarFromProvider,
   providerOperation,
   getRuntimeDebug,
-  getServiceKeepAwake,
+  getServiceSettings,
   getSystemAlerts,
   getTranscriptSettings,
   memberAvatarUrl,
@@ -41,7 +41,8 @@ import {
   setWorkspace,
   subscribeEvents,
   updateRuntimeDebug,
-  updateServiceKeepAwake,
+  startScheduler,
+  updateServiceSettings,
   updateTranscriptSettings,
   uploadCommandInputFile,
   uploadMemberAvatar,
@@ -469,15 +470,27 @@ describe("GET query parameter encoding", () => {
     expect(calls[0].init.body).toBe(JSON.stringify({ enabled: true }));
   });
 
-  it("gets and updates whether the service keeps this machine awake", async () => {
-    const { calls } = captureFetch(jsonResponse({ enabled: true }));
-    await getServiceKeepAwake();
-    await updateServiceKeepAwake({ enabled: true });
+  it("gets and saves the service settings every start reads", async () => {
+    const settings = {
+      keep_awake: true,
+      scheduled: false,
+      routine: true,
+      event_queue: true,
+      routine_interval_minutes: 3,
+      max_consecutive_errors: 5,
+    };
+    const { calls } = captureFetch(jsonResponse(settings));
+    await getServiceSettings();
+    await updateServiceSettings({ routine_interval_minutes: 3 });
+    await startScheduler();
 
-    expect(calls[0].url).toBe("/api/service/keep-awake");
-    expect(calls[1].url).toBe("/api/service/keep-awake");
-    expect(calls[1].init.method).toBe("PUT");
-    expect(calls[1].init.body).toBe(JSON.stringify({ enabled: true }));
+    expect(calls[0].url).toBe("/api/service/settings");
+    expect(calls[1].url).toBe("/api/service/settings");
+    expect(calls[1].init.method).toBe("PATCH");
+    expect(calls[1].init.body).toBe(JSON.stringify({ routine_interval_minutes: 3 }));
+    expect(calls[2].url).toBe("/api/scheduler/start");
+    expect(calls[2].init.method).toBe("POST");
+    expect(calls[2].init.body).toBeUndefined();
   });
 
   it("encodes person_id for runScenarioDiagnostics", async () => {

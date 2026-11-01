@@ -163,14 +163,12 @@ def _stop_requested(pid: int) -> bool:
     return metadata is not None and metadata.pid == pid and metadata.stop_requested
 
 
-def _start_service(
-    process: subprocess.Popen[str], payload: dict[str, Any]
-) -> dict[str, Any]:
+def _start_service(process: subprocess.Popen[str]) -> dict[str, Any]:
     # The notice precedes workspace/keychain loading. User interaction is not
     # counted against the bind deadline.
     while process.poll() is None:
         try:
-            return _call("/scheduler/start", payload=payload)
+            return _call("/scheduler/start")
         except BackendUnavailableError:
             time.sleep(POLL_SECONDS)
     raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
@@ -186,16 +184,14 @@ def _report_interrupts(signals: list[int], reported: int) -> int:
     return reported
 
 
-def _supervise(
-    process: subprocess.Popen[str], payload: dict[str, Any], signals: list[int]
-) -> None:
+def _supervise(process: subprocess.Popen[str], signals: list[int]) -> None:
     # The port notice follows the backend's lock acquisition. On Windows a
     # virtualenv launcher can have a different PID from the Python it runs.
     metadata = read_backend_metadata()
     if metadata is None:
         raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
     backend_pid = metadata.pid
-    starting = _background(lambda: _start_service(process, payload))
+    starting = _background(lambda: _start_service(process))
     reported = 0
     while not starting.done():
         reported = _report_interrupts(signals, reported)
@@ -277,21 +273,9 @@ def _close_backend(process: subprocess.Popen[str], *, announced: bool) -> None:
 
 
 @click.command()
-@click.option(
-    "--only",
-    "only_target",
-    type=click.Choice(["scheduler", "events"], case_sensitive=False),
-    default=None,
-    help="Start only scheduled/routine work or event reception and work.",
-)
-@click.option(
-    "--max-consecutive-errors",
-    type=click.IntRange(min=1),
-    default=3,
-    help="Stop a worker after this many consecutive workflow errors.",
-)
-def start(only_target: str | None, max_consecutive_errors: int) -> None:
-    """Start the backend and its services; Desktop must be closed."""
+def start() -> None:
+    """Start the backend and its services with the settings saved on the
+    Service screen; Desktop must be closed."""
     workspace = selected_workspace()
     locked, metadata = inspect_backend_lock()
     if locked:
@@ -312,18 +296,7 @@ def start(only_target: str | None, max_consecutive_errors: int) -> None:
         process, notices = _launch_backend(workspace)
         _wait_for_port(process, notices, signals)
         announced = True
-        _supervise(
-            process,
-            {
-                "sources": {
-                    "scheduled": only_target != "events",
-                    "routine": only_target != "events",
-                    "event_queue": only_target != "scheduler",
-                },
-                "max_consecutive_errors": max_consecutive_errors,
-            },
-            signals,
-        )
+        _supervise(process, signals)
     except StartupInterruptedError:
         return
     except (OSError, BackendUnavailableError, httpx.HTTPError) as exc:

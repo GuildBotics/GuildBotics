@@ -1,9 +1,14 @@
-import { Alert, Button, Group, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { Alert, Button, Group, Loader, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { CommandFileDetail, CommandFileExecutionStatus, TraceRecord } from "../api/client";
-import { CommandRunDetails, type CommandRunRecord } from "../App";
+import type {
+  CommandFileDetail,
+  CommandFileExecutionStatus,
+  TraceRecord,
+  TraceSummary,
+} from "../api/client";
+import { CommandRunDetails } from "../App";
 import { isTauriRuntime } from "../desktopWindow";
 import { MemberSelector } from "../MemberSelector";
 import { useServerPathHint } from "../serverMachine";
@@ -35,7 +40,11 @@ export type CommandRunPanelProps = {
   executionStatus: CommandFileExecutionStatus | null;
   runBusy: boolean;
   onSaveAndRun: () => void;
-  selectedRecord: CommandRunRecord | null;
+  /** The run shown: the one started or seen starting, else the latest. */
+  runTraceId: string | null;
+  runSummary: TraceSummary | null;
+  /** Why the last run request failed without naming a trace to show. */
+  runError: string | null;
   traceRecords: TraceRecord[];
   traceLoading: boolean;
   transcriptAvailable?: boolean;
@@ -181,16 +190,25 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
         </Stack>
 
         <div className="command-run-output">
-          {props.selectedRecord ? (
+          {props.runError ? (
+            <Alert color="danger" mb="sm" title={t("commands.runFailed")}>
+              {props.runError}
+            </Alert>
+          ) : null}
+          {props.runSummary ? (
             <CommandRunDetails
-              key={props.selectedRecord.traceId}
-              record={props.selectedRecord}
+              key={props.runSummary.trace_id}
+              summary={props.runSummary}
               records={props.traceRecords}
               loading={props.traceLoading}
               transcriptAvailable={props.transcriptAvailable}
               activeTab={props.activeTab}
               onTabChange={props.onTabChange}
             />
+          ) : props.runTraceId ? (
+            <div className="empty-row">
+              <Loader size="sm" />
+            </div>
           ) : (
             <div className="empty-row">{t("commands.noRunsYet")}</div>
           )}

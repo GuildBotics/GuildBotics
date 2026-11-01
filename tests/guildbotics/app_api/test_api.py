@@ -34,7 +34,6 @@ from guildbotics.app_api.models import (
     RuntimeStatus,
     RuntimeUnitStatus,
     ScenarioDiagnosticsResponse,
-    SchedulerStartRequest,
     TeamSummary,
     TranscriptSettingsStatus,
     TranscriptSettingsUpdateRequest,
@@ -46,6 +45,11 @@ from guildbotics.app_api.traces import list_traces
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers import service_lock as service_lock_module
 from guildbotics.drivers.service_lock import ServiceLock
+from guildbotics.drivers.service_settings import (
+    ServiceSettings,
+    read_service_settings,
+    write_service_settings,
+)
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.environment.spec import guest_path
 from guildbotics.integrations.chat_state_store import ChannelCursorState
@@ -442,15 +446,11 @@ class RuntimeStub:
     def get_scheduler_status(self) -> RuntimeStatus:
         return _runtime_status()
 
-    def start_scheduler(self, request) -> RuntimeStatus:
-        scheduler_running = (
-            request.sources.scheduled
-            or request.sources.routine
-            or request.sources.event_queue
-        )
+    def start_scheduler(self) -> RuntimeStatus:
+        settings = read_service_settings()
         return _runtime_status(
-            scheduler_state="running" if scheduler_running else "stopped",
-            events_state="running" if request.sources.event_queue else "stopped",
+            scheduler_state="running",
+            events_state="running" if settings.event_queue else "stopped",
         )
 
     def get_transcript_settings(self) -> TranscriptSettingsStatus:
@@ -1272,14 +1272,12 @@ def test_command_error_uses_stable_error_shape(tmp_path: Path) -> None:
 
 def test_scheduler_start_event_queue_source_uses_runtime(tmp_path: Path) -> None:
     app = create_app(runtime=RuntimeStub(tmp_path))
+    write_service_settings(
+        ServiceSettings(scheduled=False, routine=False, event_queue=True)
+    )
 
     with owner_client(app) as client:
-        response = client.post(
-            "/scheduler/start",
-            json={
-                "sources": {"scheduled": False, "routine": False, "event_queue": True}
-            },
-        )
+        response = client.post("/scheduler/start")
 
     assert response.status_code == HTTP_OK
     assert response.json()["events"]["state"] == "running"
@@ -1310,11 +1308,9 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
     app = create_app(runtime=RuntimeStub(tmp_path))
 
     with owner_client(app) as client:
-        response = client.post(
-            "/scheduler/start",
-            json={
-                "sources": {"scheduled": False, "routine": False, "event_queue": False}
-            },
+        response = client.patch(
+            "/service/settings",
+            json={"scheduled": False, "routine": False, "event_queue": False},
         )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
@@ -2079,6 +2075,11 @@ def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) ->
     assert status.retention_days == 14
 
 
+def _start_saved(runtime: AppRuntime, settings: ServiceSettings) -> RuntimeStatus:
+    write_service_settings(settings)
+    return runtime.start_scheduler()
+
+
 @pytest.fixture
 def scheduler_cleanup(request):
     """Reclaim fake schedulers even when an assertion or the stop API fails."""
@@ -2152,10 +2153,9 @@ def test_app_runtime_scheduler_start_stop_lifecycle(
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=default_stop_timeout)
     scheduler_cleanup(runtime, release)
 
-    first = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
+    first = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=True, routine=True, event_queue=False),
     )
     assert first.scheduler.state == "running"
     assert first.scheduler.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
@@ -2166,10 +2166,9 @@ def test_app_runtime_scheduler_start_stop_lifecycle(
     )
     assert started.wait(THREAD_WAIT_SECONDS)
 
-    second = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
+    second = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=True, routine=True, event_queue=False),
     )
     assert second.scheduler.state == "running"
     assert len(BlockingScheduler.instances) == 1
@@ -2225,10 +2224,9 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
     scheduler_cleanup(runtime, release)
-    first = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
+    first = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=True, routine=True, event_queue=False),
     )
     assert first.scheduler.state == "running"
     assert started.wait(THREAD_WAIT_SECONDS)
@@ -2317,10 +2315,9 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
     runtime = AppRuntime(EventBus())
     scheduler_cleanup(runtime, scheduler_release)
 
-    first = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
+    first = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=False, routine=False, event_queue=True),
     )
     assert first.scheduler.state == "running"
     assert first.events.state == "running"
@@ -2328,10 +2325,9 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
     assert RunningScheduler.instances[0].routine_source_enabled is False
     assert RunningScheduler.instances[0].event_queue_source_enabled is True
 
-    second = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
+    second = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=False, routine=False, event_queue=True),
     )
     assert second.scheduler.state == "running"
     assert second.events.state == "running"
@@ -2363,10 +2359,9 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
     runtime = AppRuntime(EventBus())
 
     with pytest.raises(AppApiError) as exc_info:
-        runtime.start_scheduler(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
+        _start_saved(
+            runtime,
+            ServiceSettings(scheduled=False, routine=False, event_queue=True),
         )
 
     assert exc_info.value.code == "config_not_found"
@@ -2444,10 +2439,9 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
     scheduler_cleanup(runtime, scheduler_release)
 
-    started = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
+    started = _start_saved(
+        runtime,
+        ServiceSettings(scheduled=False, routine=False, event_queue=True),
     )
     assert started.scheduler.state == "running"
     assert started.events.state == "running"
@@ -3205,11 +3199,11 @@ def test_config_intelligences_update_maps_setup_service_error(
 
 def test_scheduler_start_scheduled_and_routine_sources_endpoint(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
-
-    response = client.post(
-        "/scheduler/start",
-        json={"sources": {"scheduled": True, "routine": True, "event_queue": False}},
+    write_service_settings(
+        ServiceSettings(scheduled=True, routine=True, event_queue=False)
     )
+
+    response = client.post("/scheduler/start")
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "running"
@@ -3219,7 +3213,7 @@ def test_scheduler_start_scheduled_and_routine_sources_endpoint(tmp_path: Path) 
 def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.post("/scheduler/start", json={})
+    response = client.post("/scheduler/start")
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "running"
@@ -3425,6 +3419,68 @@ def test_runtime_debug_update_endpoint(tmp_path: Path) -> None:
     assert body["agno_debug"] is True
 
 
+def test_service_settings_are_saved_for_every_later_start(tmp_path: Path) -> None:
+    """What one screen saves is what every other screen reads, and what the
+    next start runs with, whoever starts it. A screen sends only what it
+    changed, so two screens changing different settings keep both."""
+    one = _client(AppRuntime(EventBus()))
+    other = _client(AppRuntime(EventBus()))
+
+    before = one.get("/service/settings")
+    one.patch("/service/settings", json={"keep_awake": True, "scheduled": False})
+    other.patch(
+        "/service/settings", json={"event_queue": False, "routine_interval_minutes": 3}
+    )
+    updated = one.patch("/service/settings", json={"max_consecutive_errors": 5})
+    out_of_range = other.patch(
+        "/service/settings", json={"routine_interval_minutes": 0}
+    )
+    # Each change alone is valid; with what is saved, nothing would run.
+    nothing_to_run = one.patch("/service/settings", json={"routine": False})
+    after = other.get("/service/settings")
+
+    saved = {
+        "keep_awake": True,
+        "scheduled": False,
+        "routine": True,
+        "event_queue": False,
+        "routine_interval_minutes": 3,
+        "max_consecutive_errors": 5,
+    }
+    assert before.json() == ServiceSettings().model_dump()
+    assert updated.json() == saved
+    assert out_of_range.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert nothing_to_run.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert nothing_to_run.json()["code"] == "validation_error"
+    assert after.json() == saved
+    assert read_service_settings() == ServiceSettings.model_validate(saved)
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["keep_awake: [", "routine_interval_minutes: 0\n", "unknown: 1\n", ""],
+)
+def test_an_unreadable_service_settings_file_is_reported_not_replaced(
+    tmp_path: Path, content: str
+) -> None:
+    """A file that does not read as settings is named, never taken as the
+    defaults: starting from the defaults would run what nobody chose."""
+    path = tmp_path / ".guildbotics" / "local" / "service.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    client = _client(AppRuntime(EventBus()))
+
+    read = client.get("/service/settings")
+    changed = client.patch("/service/settings", json={"keep_awake": True})
+    started = client.post("/scheduler/start")
+
+    for response in (read, changed, started):
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert response.json()["code"] == "service_settings_invalid"
+        assert response.json()["context"] == {"path": str(path)}
+    assert path.read_text(encoding="utf-8") == content
+
+
 @pytest.mark.parametrize("holder_owner", ["cli", "desktop"])
 def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder_owner: str
@@ -3444,17 +3500,17 @@ def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     client = _client(AppRuntime(EventBus()))
     holder.acquire(workspace=workspace)
     try:
-        before = client.get("/service/keep-awake")
-        turned_on = client.put("/service/keep-awake", json={"enabled": True})
+        before = client.get("/service/settings")
+        turned_on = client.patch("/service/settings", json={"keep_awake": True})
         awake_on = _wait_until(lambda: wakepy.modecount() == 1)
-        turned_off = client.put("/service/keep-awake", json={"enabled": False})
+        turned_off = client.patch("/service/settings", json={"keep_awake": False})
         awake_off = _wait_until(lambda: wakepy.modecount() == 0)
     finally:
         holder.release()
 
-    assert before.json() == {"enabled": False}
-    assert turned_on.json() == {"enabled": True}
-    assert turned_off.json() == {"enabled": False}
+    assert before.json()["keep_awake"] is False
+    assert turned_on.json()["keep_awake"] is True
+    assert turned_off.json()["keep_awake"] is False
     assert (awake_on, awake_off) == (True, True)
     assert (workspace / ".guildbotics" / "local" / "service.yml").is_file()
 
@@ -3637,9 +3693,11 @@ async def test_command_event_preserves_authentication_cause(
         access=CommandAccess(),
         context=RunContext(person=Person(person_id="alice", name="Alice")),
     )
-    # A failed agent is a failed command, wrapped or not.
-    with pytest.raises(AppApiError):
+    # A failed agent is a failed command, wrapped or not, and names the run
+    # it failed in.
+    with trace_scope("manual", trace_id="run-1"), pytest.raises(AppApiError) as failed:
         await runtime._run_command_traced(execution, runner)
+    assert failed.value.context == {"trace_id": "run-1"}
     assert events[-1][0] == "command.failed"
     assert events[-1][1]["code"] == (
         "cli_agent_authentication" if category == "authentication" else ""

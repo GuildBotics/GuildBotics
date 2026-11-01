@@ -12,7 +12,6 @@ from guildbotics.app_api.models import (
     RuntimeActiveWork,
     RuntimeStatus,
     RuntimeUnitStatus,
-    SchedulerStartRequest,
 )
 from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import (
@@ -21,6 +20,7 @@ from guildbotics.drivers.execution import (
     TaskRunCoordinator,
 )
 from guildbotics.drivers.service_lock import ServiceLock
+from guildbotics.drivers.service_settings import ServiceSettings
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.runtime import Context
 from guildbotics.utils.correlation import new_id
@@ -69,11 +69,11 @@ class RuntimeLifecycleService:
             ],
         )
 
-    def start(self, request: SchedulerStartRequest) -> RuntimeStatus:
+    def start(self, settings: ServiceSettings) -> RuntimeStatus:
         with self._start_lock:
-            return self._start(request)
+            return self._start(settings)
 
-    def _start(self, request: SchedulerStartRequest) -> RuntimeStatus:
+    def _start(self, settings: ServiceSettings) -> RuntimeStatus:
         if not self._service_lock.locked:
             self._service_lock.acquire(workspace=Path.cwd())
 
@@ -81,24 +81,17 @@ class RuntimeLifecycleService:
             self._start_in_progress = True
 
         try:
-            sources = request.sources
-            scheduled_source_enabled = sources.scheduled
-            routine_source_enabled = sources.routine
-            event_queue_source_enabled = sources.event_queue
             scheduler_was_running = self._scheduler.get_status().running
-            if (
-                scheduled_source_enabled
-                or routine_source_enabled
-                or event_queue_source_enabled
-            ):
-                self._scheduler.start(
-                    max_consecutive_errors=request.max_consecutive_errors,
-                    routine_interval_minutes=request.routine_interval_minutes,
-                    scheduled_source_enabled=scheduled_source_enabled,
-                    routine_source_enabled=routine_source_enabled,
-                    event_queue_source_enabled=event_queue_source_enabled,
-                )
-            if event_queue_source_enabled:
+            # Every source runs on the member workers, so the scheduler starts
+            # whichever is chosen; the settings hold at least one.
+            self._scheduler.start(
+                max_consecutive_errors=settings.max_consecutive_errors,
+                routine_interval_minutes=settings.routine_interval_minutes,
+                scheduled_source_enabled=settings.scheduled,
+                routine_source_enabled=settings.routine,
+                event_queue_source_enabled=settings.event_queue,
+            )
+            if settings.event_queue:
                 try:
                     self._events.start()
                 except Exception:

@@ -1,6 +1,6 @@
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import {
   getHotkeys,
   getTeam,
   getTraceDetail,
+  getTraces,
   listCommandFiles,
   runCommand,
   subscribeEvents,
@@ -27,10 +28,12 @@ import {
   type ConfigStatus,
   type RuntimeEvent,
   type TeamSummary,
+  type TraceDetailResponse,
+  type TraceRecord,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
-import { makeRuntimeEvent } from "./test/factories";
+import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
@@ -77,6 +80,7 @@ vi.mock("./api/client", async (importOriginal) => {
     updateHotkeys: vi.fn(),
     getTeam: vi.fn(),
     getTraceDetail: vi.fn(),
+    getTraces: vi.fn(),
     listCommandFiles: vi.fn(),
     getCommandFile: vi.fn(),
     createCommandFile: vi.fn(),
@@ -94,6 +98,42 @@ const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
 const getTraceDetailMock = vi.mocked(getTraceDetail);
+const getTracesMock = vi.mocked(getTraces);
+
+// The runs the server recorded, newest first: what every screen reads.
+let runs: TraceDetailResponse[];
+
+function run(
+  traceId: string,
+  status: string,
+  records: Partial<TraceRecord>[] = [],
+): TraceDetailResponse {
+  return {
+    trace_id: traceId,
+    summary: {
+      trace_id: traceId,
+      source: "manual",
+      person_id: "bot",
+      command: "greet",
+      workflow: "",
+      title: "",
+      started_at: "2026-06-04T01:00:00Z",
+      updated_at: "2026-06-04T01:00:00Z",
+      status,
+      event_count: records.length,
+      log_count: 0,
+      error_count: 0,
+      span_count: 0,
+      attributes: { "run.entry": "command" },
+    },
+    records: records.map((record) => makeTraceRecord({ trace_id: traceId, ...record })),
+    transcript_available: true,
+  };
+}
+
+function printed(output: string): Partial<TraceRecord> {
+  return { kind: "io", type: "command.output", payload: { output } };
+}
 const listCommandFilesMock = vi.mocked(listCommandFiles);
 const getCommandFileMock = vi.mocked(getCommandFile);
 const createCommandFileMock = vi.mocked(createCommandFile);
@@ -179,7 +219,18 @@ beforeEach(() => {
     ],
   });
   getTeamMock.mockReset().mockResolvedValue(team());
-  getTraceDetailMock.mockReset().mockResolvedValue({ trace_id: "", summary: null, records: [] });
+  runs = [];
+  getTracesMock
+    .mockReset()
+    .mockImplementation(async () => ({ traces: runs.flatMap((item) => item.summary ?? []) }));
+  getTraceDetailMock.mockReset().mockImplementation(
+    async (traceId) =>
+      runs.find((item) => item.trace_id === traceId) ?? {
+        trace_id: traceId,
+        summary: null,
+        records: [],
+      },
+  );
   listCommandFilesMock.mockReset().mockResolvedValue({ files: [summary()] });
   getCommandFileMock.mockReset().mockResolvedValue(detail());
   createCommandFileMock
@@ -192,7 +243,10 @@ beforeEach(() => {
       Promise.resolve(detail({ revision: "rev-2", content: body.content })),
     );
   executionStatusMock.mockReset().mockResolvedValue(status());
-  runCommandMock.mockReset().mockResolvedValue({ trace_id: "run-1", output: "done" });
+  runCommandMock.mockReset().mockImplementation(async () => {
+    runs.unshift(run("run-1", "success", [printed("done")]));
+    return { trace_id: "run-1", output: "done" };
+  });
   subscribeEventsMock.mockReset().mockImplementation((listener) => {
     eventListener = listener;
     return () => {
@@ -1049,35 +1103,80 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("textbox", { name: t("commands.cwd") })).toBeInTheDocument();
   });
 
-  it("updates run history from command lifecycle events", async () => {
+  it("shows the latest command run, also one that ended while no screen was open", async () => {
+    runs = [run("run-0", "success", [printed("report written")])];
+    const user = userEvent.setup();
     await renderPage();
     await screen.findByLabelText("editor");
 
-    eventListener?.(
-      makeRuntimeEvent({
-        type: "command.started",
-        trace_id: "evt-1",
-        payload: { command: "greet", person: "bot" },
-      }),
+    expect(await screen.findByText(t("diagnostics.executions.status.success"))).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: t("commands.output") }));
+    expect(await screen.findByText("report written")).toBeVisible();
+    // Only command runs are asked for: an assistant answering through a
+    // command is not a run of this console.
+    expect(getTracesMock).toHaveBeenCalledWith({
+      source: "manual",
+      attrKey: "run.entry",
+      attrValue: "command",
+      limit: 1,
+    });
+  });
+
+  it("follows a command run started on another screen, not an assistant's", async () => {
+    await renderPage();
+    await screen.findByLabelText("editor");
+    expect(await screen.findByText(t("commands.noRunsYet"))).toBeVisible();
+
+    runs = [run("assistant-1", "running")];
+    act(() =>
+      eventListener?.(
+        makeRuntimeEvent({ type: "command.started", trace_id: "assistant-1", attributes: {} }),
+      ),
+    );
+    runs = [run("evt-1", "running")];
+    act(() =>
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "evt-1",
+          attributes: { "run.entry": "command" },
+        }),
+      ),
     );
 
-    const running = await screen.findAllByText(t("commands.status.running"));
-    expect(running.length).toBeGreaterThan(0);
+    expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeVisible();
+    expect(getTraceDetailMock).not.toHaveBeenCalledWith("assistant-1");
+  });
+
+  it("shows the latest run instead of a run this workspace does not know", async () => {
+    runs = [run("run-0", "success", [printed("this workspace")])];
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+    await screen.findByText(t("diagnostics.executions.status.success"));
+
+    // The event stream replays a run from before a workspace switch.
+    act(() =>
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "other-workspace",
+          attributes: { "run.entry": "command" },
+        }),
+      ),
+    );
+
+    await waitFor(() => expect(getTraceDetailMock).toHaveBeenCalledWith("other-workspace"));
+    await user.click(await screen.findByRole("tab", { name: t("commands.output") }));
+    expect(await screen.findByText("this workspace")).toBeVisible();
   });
 
   it("shows the run timeline without the diagnostics record filter", async () => {
+    runs = [run("run-0", "success")];
     await renderPage();
     await screen.findByLabelText("editor");
 
-    eventListener?.(
-      makeRuntimeEvent({
-        type: "command.started",
-        trace_id: "evt-1",
-        payload: { command: "greet", person: "bot" },
-      }),
-    );
-
-    await screen.findAllByText(t("commands.status.running"));
+    await screen.findByText(t("diagnostics.executions.status.success"));
     // A single run is already scoped to one command, so the kind filter that
     // the diagnostics timeline offers is not rendered here.
     expect(
@@ -1086,6 +1185,78 @@ describe("Command editor screen", () => {
     expect(
       screen.queryByText(t("diagnostics.executions.recordFilters.memory")),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows the run it started, from the server's record of it", async () => {
+    runs = [run("run-0", "success", [printed("older")])];
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+
+    expect(await screen.findByText("done")).toBeVisible();
+    expect(screen.queryByText("older")).not.toBeInTheDocument();
+  });
+
+  it("shows how a started run failed from its trace", async () => {
+    runCommandMock.mockImplementation(async () => {
+      runs.unshift(
+        run("run-2", "failed", [{ type: "command.failed", payload: { message: "agent failed" } }]),
+      );
+      throw new ApiRequestError({
+        code: "command_error",
+        message: "agent failed",
+        context: { trace_id: "run-2" },
+      });
+    });
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+
+    expect(await screen.findByText(t("diagnostics.executions.status.failed"))).toBeVisible();
+    // The output tab is opened on the failure the trace recorded.
+    expect(screen.getByRole("tab", { name: t("commands.output") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(document.querySelector("pre.command-output")).toHaveTextContent("agent failed");
+    expect(screen.queryByText(t("commands.runFailed"))).not.toBeInTheDocument();
+  });
+
+  it("says why a run request failed until another run starts", async () => {
+    runCommandMock.mockRejectedValue(
+      new ApiRequestError({
+        code: "work_rejected",
+        message: "Another command is running.",
+        context: {},
+      }),
+    );
+    const user = userEvent.setup();
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+
+    expect(await screen.findByText(t("commands.runFailed"))).toBeVisible();
+    expect(screen.getByText("Another command is running.")).toBeVisible();
+    expect(screen.getByText(t("commands.noRunsYet"))).toBeVisible();
+
+    // A run started elsewhere takes the console over, without that failure.
+    runs = [run("evt-2", "running")];
+    act(() =>
+      eventListener?.(
+        makeRuntimeEvent({
+          type: "command.started",
+          trace_id: "evt-2",
+          attributes: { "run.entry": "command" },
+        }),
+      ),
+    );
+    expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeVisible();
+    expect(screen.queryByText(t("commands.runFailed"))).not.toBeInTheDocument();
   });
 
   it("deletes the selected command after confirmation and selects what remains", async () => {

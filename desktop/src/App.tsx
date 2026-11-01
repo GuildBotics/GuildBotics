@@ -23,7 +23,13 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import {
   Activity,
@@ -46,7 +52,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -65,7 +70,7 @@ import {
   getMemoryEvents,
   getRuntimeDebug,
   getSchedulerStatus,
-  getServiceKeepAwake,
+  getServiceSettings,
   getSystemAlerts,
   getTeam,
   getTraceDetail,
@@ -78,16 +83,15 @@ import {
   startScheduler,
   stopScheduler,
   updateRuntimeDebug,
-  updateServiceKeepAwake,
+  updateServiceSettings,
   updateTranscriptSettings,
   verify as verifyConfiguration,
   type ChatReceiveResetResponse,
   type MemoryEvent,
   type RuntimeActiveWork,
-  type RuntimeEvent,
   type RuntimeStatus,
   type RuntimeUnitStatus,
-  type SchedulerStartRequest,
+  type ServiceSettings,
   type ProviderOption,
   type SystemAlert,
   type TraceDetailResponse,
@@ -726,52 +730,66 @@ function IndexRedirect() {
   return <Navigate replace to={configured ? "/activity" : "/setup"} />;
 }
 
+const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];
+
+// The service settings live on the server, so every screen and
+// `guildbotics start` run with the same ones. A change shows at once, only
+// the change is sent, and changes are saved in the order made. While any is
+// on its way -- also one made before this screen was opened again -- the
+// changes in the QueryClient are the truth: the screen does not read the
+// server, which still has what they replace, and a start waits for them.
+function useServiceSettings() {
+  const queryClient = useQueryClient();
+  const saving = useIsMutating({ mutationKey: SERVICE_SETTINGS_QUERY_KEY }) > 0;
+  const query = useQuery({
+    queryKey: SERVICE_SETTINGS_QUERY_KEY,
+    queryFn: getServiceSettings,
+    enabled: !saving,
+  });
+  const mutation = useMutation({
+    mutationKey: SERVICE_SETTINGS_QUERY_KEY,
+    scope: { id: "service-settings" },
+    mutationFn: (change: Partial<ServiceSettings>) => updateServiceSettings(change),
+    // Read the saved settings back once the last change has landed.
+    onSettled: () => {
+      if (queryClient.isMutating({ mutationKey: SERVICE_SETTINGS_QUERY_KEY }) === 1) {
+        void queryClient.invalidateQueries({ queryKey: SERVICE_SETTINGS_QUERY_KEY });
+      }
+    },
+  });
+  // Why the latest change failed, whichever screen made it.
+  const changes = useMutationState({
+    filters: { mutationKey: SERVICE_SETTINGS_QUERY_KEY },
+    select: (change) => change.state,
+  });
+  const latestChange = changes[changes.length - 1];
+  const save = (change: Partial<ServiceSettings>) => {
+    const current = queryClient.getQueryData<ServiceSettings>(SERVICE_SETTINGS_QUERY_KEY);
+    if (!current) {
+      return;
+    }
+    // A read already under way would bring back what this change replaces.
+    void queryClient.cancelQueries({ queryKey: SERVICE_SETTINGS_QUERY_KEY });
+    queryClient.setQueryData(SERVICE_SETTINGS_QUERY_KEY, { ...current, ...change });
+    mutation.mutate(change);
+  };
+  return {
+    settings: query.data,
+    loadError: query.error,
+    save,
+    saving,
+    saveError: latestChange?.status === "error" ? latestChange.error : null,
+  };
+}
+
 function ServicePage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [initialPreferences] = useState(loadServicePreferences);
-  const [scheduledSourceEnabled, setScheduledSourceEnabled] = useState(
-    initialPreferences.scheduledSourceEnabled,
-  );
-  const [routineSourceEnabled, setRoutineSourceEnabled] = useState(
-    initialPreferences.routineSourceEnabled,
-  );
-  const [eventQueueSourceEnabled, setEventQueueSourceEnabled] = useState(
-    initialPreferences.eventQueueSourceEnabled,
-  );
-  const [maxConsecutiveErrors, setMaxConsecutiveErrors] = useState(
-    initialPreferences.maxConsecutiveErrors,
-  );
-  const [routineIntervalMinutes, setRoutineIntervalMinutes] = useState(
-    initialPreferences.routineIntervalMinutes,
-  );
-  const servicePreferences = useMemo<ServicePreferences>(
-    () => ({
-      scheduledSourceEnabled,
-      routineSourceEnabled,
-      eventQueueSourceEnabled,
-      routineIntervalMinutes,
-      maxConsecutiveErrors,
-    }),
-    [
-      scheduledSourceEnabled,
-      routineSourceEnabled,
-      eventQueueSourceEnabled,
-      routineIntervalMinutes,
-      maxConsecutiveErrors,
-    ],
-  );
-  // Persist preferences, debounced so rapid edits (e.g. typing in a NumberInput)
-  // do not hammer localStorage on every keystroke. A ref holds the latest value
-  // so it can be flushed on unmount, ensuring a change followed by an immediate
-  // navigation away is never dropped.
-  const servicePreferencesRef = useRef(servicePreferences);
-  useEffect(() => {
-    servicePreferencesRef.current = servicePreferences;
-    const handle = window.setTimeout(() => saveServicePreferences(servicePreferences), 400);
-    return () => window.clearTimeout(handle);
-  }, [servicePreferences]);
-  useEffect(() => () => saveServicePreferences(servicePreferencesRef.current), []);
+  const { settings, loadError, save, saving, saveError } = useServiceSettings();
+  // At least one source runs: the last one left on cannot be switched off.
+  const onlySource = settings
+    ? [settings.scheduled, settings.routine, settings.event_queue].filter(Boolean).length === 1
+    : false;
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const scheduler = useQuery({
@@ -782,18 +800,7 @@ function ServicePage() {
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
 
   const startMutation = useMutation({
-    mutationFn: () => {
-      const body: SchedulerStartRequest = {
-        sources: {
-          scheduled: scheduledSourceEnabled,
-          routine: routineSourceEnabled,
-          event_queue: eventQueueSourceEnabled,
-        },
-        max_consecutive_errors: maxConsecutiveErrors,
-        routine_interval_minutes: routineIntervalMinutes,
-      };
-      return startScheduler(body);
-    },
+    mutationFn: () => startScheduler(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler"] }),
   });
   const stopMutation = useMutation({
@@ -825,9 +832,13 @@ function ServicePage() {
   const runtimeBusy = Boolean(runtimeStarting || runtimeStopping);
   const runtimeActive = Boolean(runtimeRunning || runtimeBusy);
   const showStopAction = Boolean(runtimeRunning || runtimeStopping);
-  const noStartTarget =
-    !scheduledSourceEnabled && !routineSourceEnabled && !eventQueueSourceEnabled;
-  const startDisabled = !hasProjectConfig || runtimeActive || noStartTarget;
+  // A start reads the saved settings, so it waits for the last change to land.
+  const startDisabled = !hasProjectConfig || runtimeActive || !settings || saving;
+  // Settings stay editable while the service runs -- a service `guildbotics
+  // start` runs has no stopped screen to edit them on -- and apply at the
+  // next start.
+  const sourceSwitchDisabled = (enabled: boolean | undefined) =>
+    !settings || (Boolean(enabled) && onlySource);
   const stopDisabled = !runtimeActive;
 
   return (
@@ -883,13 +894,19 @@ function ServicePage() {
         </Alert>
       ) : null}
 
-      {noStartTarget ? (
-        <Alert color="warning" title={t("service.noTargetTitle")}>
-          {t("service.noTargetBody")}
+      {loadError ? (
+        <Alert color="danger" title={t("service.loadError")}>
+          {loadError.message}
         </Alert>
       ) : null}
 
       {activeWorks.length > 0 ? <ActiveWorkNotice works={activeWorks} /> : null}
+
+      {runtimeActive ? (
+        <Text c="dimmed" size="sm">
+          {t("service.settingsApplyAtNextStart")}
+        </Text>
+      ) : null}
 
       <Card withBorder radius="md" p="lg">
         <Stack>
@@ -902,16 +919,16 @@ function ServicePage() {
                 scheduler.data?.scheduler,
                 scheduler.data?.scheduler.routine_source_enabled,
               )}
-              enabled={routineSourceEnabled}
-              disabled={runtimeActive}
+              enabled={Boolean(settings?.routine)}
+              disabled={sourceSwitchDisabled(settings?.routine)}
               switchLabel={t("service.sourceTarget")}
-              onEnabledChange={setRoutineSourceEnabled}
+              onEnabledChange={(routine) => save({ routine })}
               rows={[
                 [
                   t("overview.routineSourceCard.status"),
                   sourceEnabledLabel(
                     t,
-                    scheduler.data?.scheduler.routine_source_enabled ?? routineSourceEnabled,
+                    scheduler.data?.scheduler.routine_source_enabled ?? settings?.routine,
                   ),
                 ],
               ]}
@@ -932,11 +949,12 @@ function ServicePage() {
                   max={1440}
                   step={1}
                   allowDecimal={false}
-                  disabled={!routineSourceEnabled || runtimeActive}
-                  value={routineIntervalMinutes}
+                  clampBehavior="strict"
+                  disabled={!settings?.routine}
+                  value={settings?.routine_interval_minutes ?? ""}
                   onChange={(value) => {
                     if (typeof value === "number") {
-                      setRoutineIntervalMinutes(value);
+                      save({ routine_interval_minutes: value });
                     }
                   }}
                 />
@@ -947,10 +965,10 @@ function ServicePage() {
               description={t("overview.eventsCard.description")}
               unit={scheduler.data?.events}
               state={eventSourceState(scheduler.data?.scheduler, scheduler.data?.events)}
-              enabled={eventQueueSourceEnabled}
-              disabled={runtimeActive}
+              enabled={Boolean(settings?.event_queue)}
+              disabled={sourceSwitchDisabled(settings?.event_queue)}
               switchLabel={t("service.sourceTarget")}
-              onEnabledChange={setEventQueueSourceEnabled}
+              onEnabledChange={(event_queue) => save({ event_queue })}
               rows={[
                 [
                   t("overview.eventsCard.subscriptions"),
@@ -983,16 +1001,16 @@ function ServicePage() {
                 scheduler.data?.scheduler,
                 scheduler.data?.scheduler.scheduled_source_enabled,
               )}
-              enabled={scheduledSourceEnabled}
-              disabled={runtimeActive}
+              enabled={Boolean(settings?.scheduled)}
+              disabled={sourceSwitchDisabled(settings?.scheduled)}
               switchLabel={t("service.sourceTarget")}
-              onEnabledChange={setScheduledSourceEnabled}
+              onEnabledChange={(scheduled) => save({ scheduled })}
               rows={[
                 [
                   t("overview.scheduledSourceCard.status"),
                   sourceEnabledLabel(
                     t,
-                    scheduler.data?.scheduler.scheduled_source_enabled ?? scheduledSourceEnabled,
+                    scheduler.data?.scheduler.scheduled_source_enabled ?? settings?.scheduled,
                   ),
                 ],
               ]}
@@ -1019,9 +1037,9 @@ function ServicePage() {
                 [
                   t("overview.workerCard.sources"),
                   workerSourceStatusLabel(t, scheduler.data?.scheduler, {
-                    scheduled: scheduledSourceEnabled,
-                    routine: routineSourceEnabled,
-                    eventQueue: eventQueueSourceEnabled,
+                    scheduled: Boolean(settings?.scheduled),
+                    routine: Boolean(settings?.routine),
+                    eventQueue: Boolean(settings?.event_queue),
                   }),
                 ],
               ]}
@@ -1032,17 +1050,27 @@ function ServicePage() {
                 max={20}
                 step={1}
                 allowDecimal={false}
-                disabled={runtimeActive}
-                value={maxConsecutiveErrors}
+                clampBehavior="strict"
+                disabled={!settings}
+                value={settings?.max_consecutive_errors ?? ""}
                 onChange={(value) => {
                   if (typeof value === "number") {
-                    setMaxConsecutiveErrors(value);
+                    save({ max_consecutive_errors: value });
                   }
                 }}
               />
             </ServiceRuntimeSection>
           </div>
-          <ServiceKeepAwakeSettings />
+          <ServiceKeepAwakeSettings
+            enabled={Boolean(settings?.keep_awake)}
+            disabled={!settings}
+            onChange={(keep_awake) => save({ keep_awake })}
+          />
+          {saveError ? (
+            <Alert color="danger" title={t("service.saveError")}>
+              {saveError.message}
+            </Alert>
+          ) : null}
           {startMutation.error ? (
             <Alert color="danger" title={t("overview.startError")}>
               {startMutation.error.message}
@@ -2949,17 +2977,16 @@ function ServiceRuntimeSection({
   );
 }
 
-function ServiceKeepAwakeSettings() {
+function ServiceKeepAwakeSettings({
+  enabled,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean;
+  disabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const keepAwake = useQuery({
-    queryKey: ["service-keep-awake"],
-    queryFn: getServiceKeepAwake,
-  });
-  const keepAwakeMutation = useMutation({
-    mutationFn: (enabled: boolean) => updateServiceKeepAwake({ enabled }),
-    onSuccess: (data) => queryClient.setQueryData(["service-keep-awake"], data),
-  });
   return (
     <div className="service-unit-panel">
       <Group justify="space-between" align="center" wrap="nowrap">
@@ -2974,16 +3001,11 @@ function ServiceKeepAwakeSettings() {
         </div>
         <Switch
           aria-label={t("service.keepAwake.title")}
-          checked={Boolean(keepAwake.data?.enabled)}
-          disabled={!keepAwake.data || keepAwakeMutation.isPending}
-          onChange={(event) => keepAwakeMutation.mutate(event.currentTarget.checked)}
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) => onChange(event.currentTarget.checked)}
         />
       </Group>
-      {keepAwakeMutation.error ? (
-        <Alert color="danger" title={t("service.keepAwake.saveError")}>
-          {keepAwakeMutation.error.message}
-        </Alert>
-      ) : null}
     </div>
   );
 }
@@ -3278,109 +3300,30 @@ function formatTime(value: string | null | undefined) {
   }).format(date);
 }
 
-export type CommandRunRecord = {
-  traceId: string;
-  person: string;
-  command: string;
-  startedAt: string;
-  status: "running" | "success" | "failed";
-  output?: string;
-  error?: string;
-};
-
-export function commandOutputText(record: CommandRunRecord): string {
-  if (record.status === "failed") {
-    const detail = record.error || JSON.stringify({ trace_id: record.traceId }, null, 2);
-    return record.output?.trim() ? `${detail}\n---\n${record.output}` : detail;
+// What a command run printed, and how it failed, read from its trace: every
+// screen sees the same run, also after it ended while no screen was open.
+export function commandOutputText(summary: TraceSummary, records: TraceRecord[]): string {
+  const output = records
+    .filter((item) => item.kind === "io" && item.type === "command.output")
+    .map((item) => String(item.payload.output ?? ""))
+    .join("");
+  if (summary.status !== "failed") {
+    return output;
   }
-  return record.output ?? "";
-}
-
-export const SERVICE_PREFERENCES_KEY = "guildbotics.service.preferences";
-
-// The Service screen remembers the run targets and tuning the user last chose so
-// the next launch starts from the same configuration instead of resetting to the
-// built-in defaults.
-export type ServicePreferences = {
-  scheduledSourceEnabled: boolean;
-  routineSourceEnabled: boolean;
-  eventQueueSourceEnabled: boolean;
-  routineIntervalMinutes: number;
-  maxConsecutiveErrors: number;
-};
-
-export const DEFAULT_SERVICE_PREFERENCES: ServicePreferences = {
-  scheduledSourceEnabled: true,
-  routineSourceEnabled: true,
-  eventQueueSourceEnabled: true,
-  routineIntervalMinutes: 10,
-  maxConsecutiveErrors: 3,
-};
-
-function clampStoredInteger(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.round(value)));
-}
-
-export function loadServicePreferences(): ServicePreferences {
-  try {
-    const raw = window.localStorage.getItem(SERVICE_PREFERENCES_KEY);
-    if (!raw) {
-      return { ...DEFAULT_SERVICE_PREFERENCES };
-    }
-    const parsed = JSON.parse(raw) as Partial<ServicePreferences>;
-    return {
-      scheduledSourceEnabled:
-        typeof parsed.scheduledSourceEnabled === "boolean"
-          ? parsed.scheduledSourceEnabled
-          : DEFAULT_SERVICE_PREFERENCES.scheduledSourceEnabled,
-      routineSourceEnabled:
-        typeof parsed.routineSourceEnabled === "boolean"
-          ? parsed.routineSourceEnabled
-          : DEFAULT_SERVICE_PREFERENCES.routineSourceEnabled,
-      eventQueueSourceEnabled:
-        typeof parsed.eventQueueSourceEnabled === "boolean"
-          ? parsed.eventQueueSourceEnabled
-          : DEFAULT_SERVICE_PREFERENCES.eventQueueSourceEnabled,
-      // Clamp to the same bounds the NumberInput controls enforce so a tampered
-      // or outdated value cannot push the inputs out of range.
-      routineIntervalMinutes: clampStoredInteger(
-        parsed.routineIntervalMinutes,
-        1,
-        1440,
-        DEFAULT_SERVICE_PREFERENCES.routineIntervalMinutes,
-      ),
-      maxConsecutiveErrors: clampStoredInteger(
-        parsed.maxConsecutiveErrors,
-        1,
-        20,
-        DEFAULT_SERVICE_PREFERENCES.maxConsecutiveErrors,
-      ),
-    };
-  } catch {
-    return { ...DEFAULT_SERVICE_PREFERENCES };
-  }
-}
-
-export function saveServicePreferences(value: ServicePreferences): void {
-  try {
-    window.localStorage.setItem(SERVICE_PREFERENCES_KEY, JSON.stringify(value));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
+  const failed = records.find((item) => item.type === "command.failed");
+  const detail = commandFailureDetail(failed ?? { trace_id: summary.trace_id });
+  return output.trim() ? `${detail}\n---\n${output}` : detail;
 }
 
 export function CommandRunDetails({
-  record,
+  summary,
   records,
   loading,
   transcriptAvailable,
   activeTab,
   onTabChange,
 }: {
-  record: CommandRunRecord;
+  summary: TraceSummary;
   records: TraceRecord[];
   loading: boolean;
   transcriptAvailable?: boolean;
@@ -3399,11 +3342,13 @@ export function CommandRunDetails({
     <>
       <Stack className="command-run-details">
         <div className="command-run-meta">
-          <Badge color={statusColor(record.status)} variant="light">
-            {t(`commands.status.${record.status}`)}
+          <Badge color={traceStatusColor(summary.status)} variant="light">
+            {t(`diagnostics.executions.status.${summary.status}`, {
+              defaultValue: summary.status,
+            })}
           </Badge>
-          <span>{record.command}</span>
-          <span>{record.person || t("commands.defaultPerson")}</span>
+          <span>{summary.command}</span>
+          <span>{summary.person_id || t("commands.defaultPerson")}</span>
         </div>
         <Tabs className="command-run-tabs" value={activeTab} onChange={onTabChange}>
           <Tabs.List>
@@ -3433,7 +3378,7 @@ export function CommandRunDetails({
           </Tabs.Panel>
           <Tabs.Panel value="output" pt="md">
             <pre className="command-output">
-              {commandOutputText(record) || t("commands.noOutput")}
+              {commandOutputText(summary, records) || t("commands.noOutput")}
             </pre>
           </Tabs.Panel>
         </Tabs>
@@ -3450,48 +3395,18 @@ export function CommandRunDetails({
   );
 }
 
-export function upsertCommandRecord(
-  records: CommandRunRecord[],
-  next: CommandRunRecord,
-): CommandRunRecord[] {
-  const existing = records.find((record) => record.traceId === next.traceId);
-  const merged = existing
-    ? {
-        ...existing,
-        ...next,
-        output: next.output ?? existing.output,
-        error: next.error ?? existing.error,
-        command: next.command || existing.command,
-        person: next.person || existing.person,
-      }
-    : next;
-  return [merged, ...records.filter((record) => record.traceId !== next.traceId)]
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    .slice(0, 20);
-}
-
-export function commandTraceRefetchInterval(
-  status: CommandRunRecord["status"] | undefined,
-): number | false {
+export function commandTraceRefetchInterval(status: string | undefined): number | false {
   return status === "running" ? 1000 : false;
 }
 
-function statusColor(status: CommandRunRecord["status"]): string {
-  if (status === "success") {
-    return "success";
-  }
-  if (status === "failed") {
-    return "danger";
-  }
-  return "info";
-}
-
-export function commandFailureDetail(event: RuntimeEvent): string {
+export function commandFailureDetail(
+  record: Partial<Pick<TraceRecord, "type" | "payload">> & { trace_id: string | null },
+): string {
   return JSON.stringify(
     {
-      trace_id: event.trace_id,
-      type: event.type,
-      payload: event.payload,
+      trace_id: record.trace_id,
+      type: record.type,
+      payload: record.payload,
     },
     null,
     2,

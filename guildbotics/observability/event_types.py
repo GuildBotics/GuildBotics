@@ -15,6 +15,15 @@ COMMAND_LIFECYCLE_EVENT_TYPES = frozenset(
     }
 )
 
+#: What a top-level command printed, kept in its trace's transcript only (an
+#: io record, never in the index) for the screens that show a run's output.
+COMMAND_OUTPUT_IO_TYPE = "command.output"
+
+#: The trace attribute that marks a run started to run a command -- not an
+#: assistant answering through one -- for the screens that list those runs.
+COMMAND_RUN_ATTRIBUTE = "run.entry"
+COMMAND_RUN_ATTRIBUTES = {COMMAND_RUN_ATTRIBUTE: "command"}
+
 #: The PR / issue a member command worked on (or read), recorded by the member
 #: CLI so the trace it runs inside can name that item as its work target. It is
 #: diagnostics only: the domain events above carry the activity itself.

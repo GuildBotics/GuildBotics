@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from guildbotics.cli import main
 from guildbotics.cli.service import _call
 from guildbotics.drivers.app_api_lock import inspect_backend_lock, read_backend_metadata
+from guildbotics.drivers.service_settings import ServiceSettings, write_service_settings
 
 
 def wait_for(predicate, process, timeout=30):
@@ -34,6 +35,11 @@ def cli_process(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(workspace))
+    # The scheduler alone, saved as the Service screen saves it: the start
+    # runs with what is saved.
+    write_service_settings(
+        ServiceSettings(scheduled=True, routine=True, event_queue=False)
+    )
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -55,7 +61,7 @@ def cli_process(tmp_path, monkeypatch):
         script = (
             "import sys; from guildbotics.cli import main, service; "
             "service._backend_command=lambda: sys.argv[1:]; "
-            "main(['start','--only','scheduler'])"
+            "main(['start'])"
         )
         log_path = tmp_path / f"cli-{len(children)}.log"
         log = log_path.open("w")

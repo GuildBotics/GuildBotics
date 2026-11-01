@@ -252,6 +252,26 @@ function runtimeUnit(target: "scheduler" | "events", overrides: Record<string, u
   };
 }
 
+function traceSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    trace_id: "trace-1",
+    source: "manual",
+    person_id: "alice",
+    command: "",
+    workflow: "",
+    title: "",
+    started_at: "2026-06-04T01:00:00Z",
+    updated_at: "2026-06-04T01:00:00Z",
+    status: "running",
+    event_count: 0,
+    log_count: 0,
+    error_count: 0,
+    span_count: 0,
+    attributes: { "run.entry": "command" },
+    ...overrides,
+  };
+}
+
 function runtimeStatus(overrides: Record<string, unknown> = {}) {
   return {
     scheduler: runtimeUnit("scheduler"),
@@ -290,7 +310,20 @@ function configWriteResponse() {
 // Wire up the routes the App/Setup pages need so we can drive the UI. Each test
 // overrides only the specific responses it asserts against.
 function serviceServer(): MockServer {
+  let settings = {
+    keep_awake: false,
+    scheduled: true,
+    routine: true,
+    event_queue: true,
+    routine_interval_minutes: 10,
+    max_consecutive_errors: 3,
+  };
   return new MockServer()
+    .on("GET", "/service/settings", () => ({ body: settings }))
+    .on("PATCH", "/service/settings", (request) => {
+      settings = { ...settings, ...(request.body as Partial<typeof settings>) };
+      return { body: settings };
+    })
     .json("GET", "/config/status", configStatus())
     .json("GET", "/team", team())
     .json("GET", "/scheduler/status", runtimeStatus())
@@ -354,28 +387,24 @@ afterEach(() => {
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
-  it("sends the real POST /scheduler/start with the CSRF value, JSON body and sources", async () => {
+  it("sends the real POST /scheduler/start with the CSRF value and no body", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    const start = await screen.findByRole("button", { name: t("overview.start") });
+    await waitFor(() => expect(start).toBeEnabled());
 
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
+    await user.click(start);
 
     await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
     const call = server.requestsFor("POST", "/scheduler/start")[0];
     expect(call.url).toBe(`${BASE}/scheduler/start`);
     expect(call.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
-    expect(call.headers["Content-Type"]).toBe("application/json");
-    expect(call.body).toMatchObject({
-      sources: { scheduled: true, routine: true, event_queue: true },
-      routine_interval_minutes: expect.any(Number),
-      max_consecutive_errors: expect.any(Number),
-    });
-    expect(call.body).not.toHaveProperty("routine_commands");
+    // How it runs is what the server saved, read by the backend at the start.
+    expect(call.body).toBeUndefined();
   });
 
-  it("encodes sources and the edited interval / max errors into the start body", async () => {
+  it("saves the edited sources, interval and max errors with real PATCH requests", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
@@ -385,6 +414,7 @@ describe("Service Runtime integration (real client + mock server)", () => {
       .getByText(t("overview.eventsCard.title"))
       .closest(".service-unit-panel")
       ?.querySelector('[role="switch"]') as HTMLElement;
+    await waitFor(() => expect(eventsSwitch).toBeEnabled());
     await user.click(eventsSwitch);
 
     const interval = screen.getByRole("textbox", { name: t("overview.routineIntervalMinutes") });
@@ -394,42 +424,15 @@ describe("Service Runtime integration (real client + mock server)", () => {
     await user.clear(maxErrors);
     await fill(user, maxErrors, "7");
 
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
-
-    await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
-    expect(server.lastBody("POST", "/scheduler/start")).toMatchObject({
-      sources: { scheduled: true, routine: true, event_queue: false },
-      routine_interval_minutes: 30,
-      max_consecutive_errors: 7,
-    });
-    expect(server.lastBody("POST", "/scheduler/start")).not.toHaveProperty("routine_commands");
-  });
-
-  it("omits routine_commands and sends only the event queue source for the event-only target", async () => {
-    const server = serviceServer();
-    const user = userEvent.setup();
-    renderApp(server, "/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    const routineSwitch = screen
-      .getByText(t("overview.routineSourceCard.title"))
-      .closest(".service-unit-panel")
-      ?.querySelector('[role="switch"]') as HTMLElement;
-    const scheduledSwitch = screen
-      .getByText(t("overview.scheduledSourceCard.title"))
-      .closest(".service-unit-panel")
-      ?.querySelector('[role="switch"]') as HTMLElement;
-    await user.click(routineSwitch);
-    await user.click(scheduledSwitch);
-
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
-
-    await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
-    const body = server.lastBody("POST", "/scheduler/start") as Record<string, unknown>;
-    expect(body).toMatchObject({
-      sources: { scheduled: false, routine: false, event_queue: true },
-    });
-    expect(body).not.toHaveProperty("routine_commands");
+    await waitFor(() =>
+      expect(server.lastBody("PATCH", "/service/settings")).toEqual({
+        max_consecutive_errors: 7,
+      }),
+    );
+    const saves = server.requestsFor("PATCH", "/service/settings");
+    expect(saves[0].headers["X-GuildBotics-CSRF"]).toBe(CSRF);
+    expect(saves[0].body).toEqual({ event_queue: false });
+    expect(saves.map((call) => call.body)).toContainEqual({ routine_interval_minutes: 30 });
   });
 
   it("sends the real POST /scheduler/stop with the token when running", async () => {
@@ -660,11 +663,15 @@ describe("Commands integration (real client + mock server)", () => {
         blocking_context: {},
       })
       .json("POST", "/commands/run", { trace_id: "evt-1", output: "hello output" })
-      .json("GET", "/diagnostics/traces/evt-1", {
-        trace_id: "evt-1",
-        summary: null,
-        records: [],
-      });
+      .json("GET", "/diagnostics/traces", { traces: [] })
+      .on("GET", "/diagnostics/traces/evt-1", () => ({
+        body: {
+          trace_id: "evt-1",
+          summary: traceSummary({ trace_id: "evt-1", command: "greet", status }),
+          records: [],
+        },
+      }));
+    let status = "running";
     const user = userEvent.setup();
     renderApp(server, "/commands");
     await screen.findByRole("heading", { name: t("commands.title") });
@@ -695,8 +702,18 @@ describe("Commands integration (real client + mock server)", () => {
     // resolves the team default.
     expect(runCall.body).not.toHaveProperty("person");
 
-    // A pushed command lifecycle event over the (real-client) websocket drives
-    // the history UI.
+    // The latest command run is asked for by the trace attribute only command
+    // runs carry.
+    const latest = server.requestsFor("GET", "/diagnostics/traces")[0];
+    expect(Object.fromEntries(latest.query)).toEqual({
+      source: "manual",
+      attr_key: "run.entry",
+      attr_value: "command",
+      limit: "1",
+    });
+
+    // A pushed command lifecycle event over the (real-client) websocket
+    // refreshes the run from the server.
     const socket = FakeWebSocket.find("/events");
     // The session cookie authenticates the stream: no token rides on it.
     expect(socket.url).toBe(`ws://${window.location.host}/api/events`);
@@ -706,17 +723,20 @@ describe("Commands integration (real client + mock server)", () => {
     socket.emit({
       type: "command.started",
       trace_id: "evt-1",
+      attributes: { "run.entry": "command" },
       payload: { command: "greet", person: "alice" },
       timestamp: "2026-06-04T01:00:00Z",
     });
-    expect(await screen.findByText(t("commands.status.running"))).toBeInTheDocument();
+    expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeInTheDocument();
 
+    status = "success";
     socket.emit({
       type: "command.finished",
       trace_id: "evt-1",
+      attributes: { "run.entry": "command" },
       payload: { command: "greet", person: "alice" },
       timestamp: "2026-06-04T01:00:01Z",
     });
-    expect(await screen.findByText(t("commands.status.success"))).toBeInTheDocument();
+    expect(await screen.findByText(t("diagnostics.executions.status.success"))).toBeInTheDocument();
   });
 });

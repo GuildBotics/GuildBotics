@@ -28,7 +28,7 @@ from fastapi.responses import (
     JSONResponse,
     RedirectResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api import decisions, ui
@@ -117,9 +117,7 @@ from guildbotics.app_api.models import (
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
-    SchedulerStartRequest,
     SchedulerStopRequest,
-    ServiceKeepAwake,
     ShutdownResponse,
     SystemAlertDismissRequest,
     SystemAlertsResponse,
@@ -141,6 +139,13 @@ from guildbotics.app_api.traces import (
     list_memory_events,
     list_traces,
     trace_detail,
+)
+from guildbotics.drivers.service_settings import (
+    ServiceSettings,
+    ServiceSettingsChange,
+    ServiceSettingsError,
+    read_service_settings,
+    update_service_settings,
 )
 from guildbotics.entities.team import Service, Team
 from guildbotics.environment.spec import guest_path
@@ -371,6 +376,21 @@ def create_app(
     ) -> JSONResponse:
         # The exception's own sentence is the reason, passed through verbatim.
         return _error_response(409, "workspace_not_configured", str(exc), {})
+
+    @app.exception_handler(ServiceSettingsError)
+    async def service_settings_error_handler(
+        request: Request, exc: ServiceSettingsError
+    ) -> JSONResponse:
+        return _error_response(
+            400,
+            "service_settings_invalid",
+            api_error_message(
+                "service_settings_invalid",
+                _request_language(request),
+                {"path": exc.path, "reason": exc.reason},
+            ),
+            {"path": str(exc.path)},
+        )
 
     @app.exception_handler(MemberConfigError)
     async def member_config_error_handler(_, exc: MemberConfigError) -> JSONResponse:
@@ -680,8 +700,8 @@ def create_app(
         return app_runtime.get_scheduler_status()
 
     @router.post("/scheduler/start")
-    def scheduler_start(request: SchedulerStartRequest) -> RuntimeStatus:
-        return app_runtime.start_scheduler(request)
+    def scheduler_start() -> RuntimeStatus:
+        return app_runtime.start_scheduler()
 
     @router.post("/scheduler/stop")
     def scheduler_stop(request: SchedulerStopRequest | None = None) -> RuntimeStatus:
@@ -703,13 +723,19 @@ def create_app(
             return app_runtime.get_scheduler_status()
         return app_runtime.stop_scheduler(force=request.force if request else False)
 
-    @router.get("/service/keep-awake")
-    def service_keep_awake() -> ServiceKeepAwake:
-        return app_runtime.get_service_keep_awake()
+    @router.get("/service/settings")
+    def service_settings() -> ServiceSettings:
+        return read_service_settings()
 
-    @router.put("/service/keep-awake")
-    def service_keep_awake_update(request: ServiceKeepAwake) -> ServiceKeepAwake:
-        return app_runtime.update_service_keep_awake(request)
+    @router.patch("/service/settings")
+    def service_settings_update(request: ServiceSettingsChange) -> ServiceSettings:
+        # The process holding the service follows the keep-awake setting at
+        # once; the rest applies at the next start.
+        try:
+            return update_service_settings(request)
+        except ValidationError as exc:
+            # Only the change and what is saved together leave nothing to run.
+            raise RequestValidationError(exc.errors()) from exc
 
     @router.post("/chat/receive-state/reset")
     def chat_receive_state_reset() -> ChatReceiveResetResponse:

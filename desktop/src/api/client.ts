@@ -153,16 +153,15 @@ export type ChatReceiveResetResponse = {
   channels_reset: number;
 };
 
-export type RuntimeSourceSelection = {
+// How the service runs, saved on the server for every screen and for
+// `guildbotics start`: every start reads it.
+export type ServiceSettings = {
+  keep_awake: boolean;
   scheduled: boolean;
   routine: boolean;
   event_queue: boolean;
-};
-
-export type SchedulerStartRequest = {
-  sources?: RuntimeSourceSelection;
-  max_consecutive_errors?: number;
-  routine_interval_minutes?: number;
+  routine_interval_minutes: number;
+  max_consecutive_errors: number;
 };
 
 export type SchedulerStopRequest = {
@@ -189,10 +188,6 @@ export type RuntimeDebugStatus = {
   enabled: boolean;
   log_level: string;
   agno_debug: boolean;
-};
-
-export type ServiceKeepAwake = {
-  enabled: boolean;
 };
 
 export type RuntimeDebugUpdateRequest = {
@@ -1161,8 +1156,8 @@ export async function getRoleOptions(language: "en" | "ja"): Promise<RoleOptions
   return request(`/config/roles?language=${encodeURIComponent(language)}`);
 }
 
-export async function startScheduler(body: SchedulerStartRequest): Promise<RuntimeStatus> {
-  return request("/scheduler/start", { method: "POST", body });
+export async function startScheduler(): Promise<RuntimeStatus> {
+  return request("/scheduler/start", { method: "POST" });
 }
 
 export async function stopScheduler(body: SchedulerStopRequest = {}): Promise<RuntimeStatus> {
@@ -1199,12 +1194,15 @@ export async function updateRuntimeDebug(
   return request("/runtime/debug", { method: "PUT", body });
 }
 
-export async function getServiceKeepAwake(): Promise<ServiceKeepAwake> {
-  return request("/service/keep-awake");
+export async function getServiceSettings(): Promise<ServiceSettings> {
+  return request("/service/settings");
 }
 
-export async function updateServiceKeepAwake(body: ServiceKeepAwake): Promise<ServiceKeepAwake> {
-  return request("/service/keep-awake", { method: "PUT", body });
+// Sends only what changed: the server keeps what another screen saved.
+export async function updateServiceSettings(
+  change: Partial<ServiceSettings>,
+): Promise<ServiceSettings> {
+  return request("/service/settings", { method: "PATCH", body: change });
 }
 
 export async function verify(): Promise<VerifyResponse> {

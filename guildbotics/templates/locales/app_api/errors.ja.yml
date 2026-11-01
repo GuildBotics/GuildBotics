@@ -39,6 +39,7 @@ ja:
   person_selection_required: "person または '<command>@person' の形でメンバーを指定してください。指定できるのは: %{available}"
   command_not_runtime_target: "選択されたコマンドファイルは、この実行の対象ではありません。"
   service_already_running: "別のバックグラウンドサービスがすでに実行中です。"
+  service_settings_invalid: "サービスの設定 %{path} を読めません。ファイルを直すか削除してください: %{reason}"
   runtime_running: "チャット受信状態をリセットする前に、サービスを停止してください。"
   invalid_activity_history_range: "アクティビティ履歴の開始は終了より前である必要があります。"
   invalid_activity_sync_range:

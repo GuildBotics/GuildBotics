@@ -57,6 +57,8 @@ from guildbotics.intelligences.agent_runtime.wire import (
 from guildbotics.intelligences.cli_agents import (
     get_cli_agent_mapping,
 )
+from guildbotics.observability.diagnostics_events import record_correlated_io
+from guildbotics.observability.event_types import COMMAND_OUTPUT_IO_TYPE
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
@@ -266,12 +268,28 @@ async def run_main_command(
         command: The command to run, read for the member it runs as.
         source: Route that started the command.
 
+    What the caller gets back as the run's output is kept in its trace, so a
+    screen shows a run's output after the run, whichever screen or command
+    started it.
+
     Returns:
         The command's outcome; for the ticket workflow, the rate-limit notice
         posted on the ticket instead, or nothing when there was no ticket.
     """
-    if command.command_name != TICKET_WORKFLOW_COMMAND:
-        return await run_in_environment(command)
+    if command.command_name == TICKET_WORKFLOW_COMMAND:
+        outcome = await _run_ticket_workflow(command, source)
+    else:
+        outcome = await run_in_environment(command)
+    if outcome.text_output:
+        record_correlated_io(
+            io_type=COMMAND_OUTPUT_IO_TYPE, payload={"output": outcome.text_output}
+        )
+    return outcome
+
+
+async def _run_ticket_workflow(
+    command: PreparedCommand, source: WorkflowSource
+) -> CommandOutcome:
     from guildbotics.drivers.ticket_selector import TicketSelector
 
     context = command.context

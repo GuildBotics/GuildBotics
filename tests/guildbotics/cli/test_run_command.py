@@ -555,10 +555,12 @@ async def test_a_local_run_records_the_run_its_trace_opens(
         f"---\nbrain: none\ntemplate_engine: jinja2\n---\n{body}",
     )
     recorded: list[tuple[str, str]] = []
+    marks: list[object] = []
 
     def _record(*, event_type: str, **_: object) -> None:
         trace = current_trace()
         recorded.append((event_type, trace.trace_id if trace is not None else ""))
+        marks.append(trace.attributes.get("run.entry") if trace is not None else None)
 
     monkeypatch.setattr("guildbotics.drivers.utils.record_correlated_event", _record)
 
@@ -573,6 +575,8 @@ async def test_a_local_run_records_the_run_its_trace_opens(
         ("command.started", record.run_id),
         (boundary, record.run_id),
     ]
+    # Listed with the Desktop's command runs.
+    assert marks == ["command", "command"]
     assert record.status == status
     assert record.source == "manual"
     assert record.execution_mode == "user_initiated"
