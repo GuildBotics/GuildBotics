@@ -80,7 +80,12 @@ def test_the_old_top_level_commands_are_gone(command):
     assert CliRunner().invoke(main, [command]).exit_code == 2
 
 
-@pytest.mark.parametrize("code,exit_code", [(1, 1), (-signal.SIGKILL, 1)])
+#: How Popen reports a child killed by SIGKILL; Windows has no such signal
+#: to name, and this module is collected there too.
+KILLED = -9
+
+
+@pytest.mark.parametrize("code,exit_code", [(1, 1), (KILLED, 1)])
 def test_a_server_that_did_not_exit_on_request_fails_the_start(
     launched, code, exit_code
 ):
