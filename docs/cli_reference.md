@@ -102,7 +102,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
-| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services with the settings saved on the Service screen; Desktop must be closed. |
 | [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
@@ -134,7 +134,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services with the settings saved on the Service screen; Desktop must be closed. |
 | [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
@@ -1642,7 +1642,8 @@ guildbotics secrets status [OPTIONS]
 
 ## `guildbotics start`
 
-Start the backend and its services; Desktop must be closed.
+Start the backend and its services with the settings saved on the
+Service screen; Desktop must be closed.
 
 ```text
 guildbotics start [OPTIONS]
@@ -1650,8 +1651,6 @@ guildbotics start [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--only [scheduler\|events]` | Start only scheduled/routine work or event reception and work. |
-| `--max-consecutive-errors INTEGER RANGE` | Stop a worker after this many consecutive workflow errors. [default: 3; x\>=1] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics stop`

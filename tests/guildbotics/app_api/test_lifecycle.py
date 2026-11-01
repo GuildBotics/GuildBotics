@@ -18,7 +18,7 @@ import pytest
 
 from guildbotics.app_api import lifecycle
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.models import SchedulerStartRequest
+from guildbotics.drivers.service_settings import ServiceSettings
 
 EXPECTED_WORKER_COUNT = 2
 EXPECTED_MEMBER_COUNT = 2
@@ -241,9 +241,7 @@ def test_scheduler_start_publishes_starting_then_running(context_factory: Any) -
     service, bus = _make_service(context_factory)
     try:
         status = service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
+            ServiceSettings(scheduled=True, routine=True, event_queue=False)
         )
 
         assert _events_for(bus, "scheduler") == [
@@ -262,9 +260,7 @@ def test_events_start_publishes_starting_then_running(context_factory: Any) -> N
     service, bus = _make_service(context_factory)
     try:
         status = service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
+            ServiceSettings(scheduled=False, routine=False, event_queue=True)
         )
 
         assert _events_for(bus, "events") == ["events.starting", "events.running"]
@@ -284,7 +280,7 @@ def test_events_start_publishes_starting_then_running(context_factory: Any) -> N
 def test_context_factory_is_used_for_runtimes(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(SchedulerStartRequest())
+        service.start(ServiceSettings())
         assert FakeScheduler.instances[0].context is context_factory.sentinel
         assert FakeRunner.instances[0].context is context_factory.sentinel
     finally:
@@ -299,11 +295,7 @@ def test_context_factory_is_used_for_runtimes(context_factory: Any) -> None:
 def test_only_scheduler_starts_only_scheduler(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
         assert len(FakeScheduler.instances) == 1
         assert FakeRunner.instances == []
     finally:
@@ -315,11 +307,7 @@ def test_only_events_starts_event_listener_and_event_queue_worker(
 ) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
-        )
+        service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
         assert len(FakeScheduler.instances) == 1
         worker = FakeScheduler.instances[0]
         assert worker.scheduled_source_enabled is False
@@ -333,7 +321,7 @@ def test_only_events_starts_event_listener_and_event_queue_worker(
 def test_both_targets_start_when_only_is_none(context_factory: Any) -> None:
     service, bus = _make_service(context_factory)
     try:
-        status = service.start(SchedulerStartRequest())
+        status = service.start(ServiceSettings())
         assert len(FakeScheduler.instances) == 1
         assert len(FakeRunner.instances) == 1
         assert status.scheduler.state == "running"
@@ -352,16 +340,8 @@ def test_both_targets_start_when_only_is_none(context_factory: Any) -> None:
 
 def test_service_lock_is_shared_by_scheduler_and_events(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
+    service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
 
     service_lock = FakeServiceLock.instances[0]
     assert len(service_lock.acquire_calls) == 1
@@ -386,11 +366,7 @@ def test_status_poll_does_not_release_lock_during_start(context_factory: Any) ->
     service._scheduler.start = blocked_start  # type: ignore[method-assign]
     start_thread = threading.Thread(
         target=service.start,
-        args=(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            ),
-        ),
+        args=(ServiceSettings(scheduled=True, routine=True, event_queue=False),),
     )
     start_thread.start()
     try:
@@ -408,11 +384,7 @@ def test_event_runner_natural_stop_releases_lock_without_status_poll(
     context_factory: Any,
 ) -> None:
     service, _bus = _make_service(context_factory)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
-    )
+    service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
     # Stop the scheduler first so the event listener is the final active target.
     service._scheduler.stop()
 
@@ -429,18 +401,10 @@ def test_event_runner_natural_stop_releases_lock_without_status_poll(
 def test_restart_scheduler_does_not_spawn_duplicate(context_factory: Any) -> None:
     service, bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
         first_count = len(FakeScheduler.instances)
 
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
 
         assert len(FakeScheduler.instances) == first_count == 1
         # No additional starting/running events from the second call.
@@ -455,16 +419,8 @@ def test_restart_scheduler_does_not_spawn_duplicate(context_factory: Any) -> Non
 def test_restart_events_does_not_spawn_duplicate(context_factory: Any) -> None:
     service, bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
-        )
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
-        )
+        service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
+        service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
 
         assert len(FakeScheduler.instances) == 1
         assert len(FakeRunner.instances) == 1
@@ -486,8 +442,10 @@ def test_scheduler_metadata_reflects_request_and_summary(context_factory: Any) -
     service, _bus = _make_service(context_factory)
     try:
         service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False},
+            ServiceSettings(
+                scheduled=True,
+                routine=True,
+                event_queue=False,
                 max_consecutive_errors=5,
                 routine_interval_minutes=7,
             )
@@ -507,11 +465,7 @@ def test_scheduler_metadata_reflects_request_and_summary(context_factory: Any) -
 def test_events_metadata_reflects_summary(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
-        )
+        service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
         status = service.get_status().events
         assert status.subscription_count == 1
         assert status.listener_count == 1
@@ -523,11 +477,7 @@ def test_events_metadata_reflects_summary(context_factory: Any) -> None:
 def test_scheduler_metadata_coerces_member_routines(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
         FakeScheduler.instances[0].summary["member_routines"] = [
             {
                 "person_id": "alice",
@@ -545,11 +495,7 @@ def test_scheduler_metadata_coerces_member_routines(context_factory: Any) -> Non
 
 def test_stop_clears_member_routines(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     FakeScheduler.instances[0].summary["member_routines"] = [
         {
             "person_id": "alice",
@@ -567,11 +513,7 @@ def test_stop_clears_member_routines(context_factory: Any) -> None:
 def test_get_status_refreshes_scheduler_cycle_metadata(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory)
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
         FakeScheduler.instances[0].summary["worker_count"] = REFRESHED_WORKER_COUNT
         # get_status -> _refresh_locked re-reads the live summary.
         assert service.get_status().scheduler.worker_count == REFRESHED_WORKER_COUNT
@@ -586,7 +528,7 @@ def test_get_status_refreshes_scheduler_cycle_metadata(context_factory: Any) -> 
 
 def test_stop_stops_events_before_scheduler(context_factory: Any) -> None:
     service, bus = _make_service(context_factory)
-    service.start(SchedulerStartRequest())
+    service.start(ServiceSettings())
 
     order: list[str] = []
     runner = FakeRunner.instances[0]
@@ -625,11 +567,7 @@ def test_graceful_scheduler_shutdown_waits_without_timeout(
     context_factory: Any,
 ) -> None:
     service, _bus = _make_service(context_factory, stop_timeout_seconds=4.5)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     scheduler = FakeScheduler.instances[0]
 
     service.stop()
@@ -639,11 +577,7 @@ def test_graceful_scheduler_shutdown_waits_without_timeout(
 
 def test_force_scheduler_shutdown_uses_stop_timeout(context_factory: Any) -> None:
     service, _bus = _make_service(context_factory, stop_timeout_seconds=4.5)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     scheduler = FakeScheduler.instances[0]
 
     service.stop(force=True)
@@ -655,11 +589,7 @@ def test_force_stop_during_graceful_stop_publishes_single_stop_transition(
     context_factory: Any,
 ) -> None:
     service, bus = _make_service(context_factory)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     scheduler = FakeScheduler.instances[0]
     scheduler.block_graceful_shutdown = True
 
@@ -689,11 +619,7 @@ def test_scheduler_stop_timeout_marks_failed_with_running_true(
     context_factory: Any,
 ) -> None:
     service, bus = _make_service(context_factory, stop_timeout_seconds=0.1)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     scheduler = FakeScheduler.instances[0]
     # Prevent the scheduler thread from ever terminating.
     thread = service._scheduler._thread
@@ -717,11 +643,7 @@ def test_events_stop_timeout_marks_failed_with_running_true(
     context_factory: Any,
 ) -> None:
     service, bus = _make_service(context_factory, stop_timeout_seconds=0.1)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": True}
-        )
-    )
+    service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
     runner = FakeRunner.instances[0]
     # Runner refuses to stop and stays alive past the join timeout.
     runner.block_stop = True
@@ -752,11 +674,7 @@ def test_scheduler_start_context_factory_exception_marks_failed() -> None:
     )
 
     with pytest.raises(RuntimeError, match="no context"):
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
 
     status = service.get_status().scheduler
     assert status.state == "failed"
@@ -782,11 +700,7 @@ def test_events_start_context_factory_exception_marks_member_worker_failed() -> 
     )
 
     with pytest.raises(RuntimeError, match="no events context"):
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": False, "routine": False, "event_queue": True}
-            )
-        )
+        service.start(ServiceSettings(scheduled=False, routine=False, event_queue=True))
 
     status = service.get_status().scheduler
     assert status.state == "failed"
@@ -808,9 +722,7 @@ def test_events_start_failure_stops_new_member_worker(context_factory: Any) -> N
     try:
         with pytest.raises(RuntimeError, match="socket rejected"):
             service.start(
-                SchedulerStartRequest(
-                    sources={"scheduled": False, "routine": False, "event_queue": True}
-                )
+                ServiceSettings(scheduled=False, routine=False, event_queue=True)
             )
     finally:
         FakeRunner.start = original_start  # type: ignore[method-assign]
@@ -862,11 +774,7 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
 
     FakeScheduler.__init__ = patched_init  # type: ignore[method-assign]
     try:
-        service.start(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
-        )
+        service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
         # Wait on the emitted event, without polling status as a release trigger.
         assert _wait_until(lambda: status_at_failure)
     finally:
@@ -903,11 +811,7 @@ def test_status_refresh_after_thread_terminates_naturally(
     context_factory: Any,
 ) -> None:
     service, bus = _make_service(context_factory)
-    service.start(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
-        )
-    )
+    service.start(ServiceSettings(scheduled=True, routine=True, event_queue=False))
     scheduler = FakeScheduler.instances[0]
 
     # Let the scheduler loop finish on its own (no stop() call).

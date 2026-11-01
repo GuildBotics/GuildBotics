@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from guildbotics.observability.event_types import COMMAND_OUTPUT_IO_TYPE
 from guildbotics.utils.rate_limit_display import rate_limit_reset_display
 
 
@@ -85,12 +86,13 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
             "llm.response",
             "cli_agent.request",
             "cli_agent.response",
+            COMMAND_OUTPUT_IO_TYPE,
         }
         return _presentation(
             label_key=f"diagnostics.executions.ioTypes.{io_key}" if known else "",
             label=event_type or "I/O",
             message=message
-            or _first_text(payload, "message", "prompt", "stdout")
+            or _first_text(payload, "message", "prompt", "stdout", "output")
             or event_type,
             tone="info",
             effort=_effort_level(payload),

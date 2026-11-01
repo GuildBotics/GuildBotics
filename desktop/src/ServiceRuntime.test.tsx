@@ -1,5 +1,5 @@
 import { createTheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
@@ -12,15 +12,16 @@ import { App } from "./App";
 import {
   getConfigStatus,
   getSchedulerStatus,
-  getServiceKeepAwake,
+  getServiceSettings,
   getTeam,
   resetChatReceiveState,
   startScheduler,
   stopScheduler,
-  updateServiceKeepAwake,
+  updateServiceSettings,
   type ConfigStatus,
   type RuntimeStatus,
   type RuntimeUnitStatus,
+  type ServiceSettings,
 } from "./api/client";
 import i18n from "./i18n";
 import { TestMantineProvider } from "./test/TestMantineProvider";
@@ -46,8 +47,8 @@ vi.mock("./api/client", async (importOriginal) => {
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
     getSchedulerStatus: vi.fn(),
-    getServiceKeepAwake: vi.fn(),
-    updateServiceKeepAwake: vi.fn(),
+    getServiceSettings: vi.fn(),
+    updateServiceSettings: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getHotkeys: vi.fn(async () => ({ quick_run: "", commands: {} })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
@@ -64,13 +65,22 @@ const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
 const resetChatReceiveStateMock = vi.mocked(resetChatReceiveState);
-const getServiceKeepAwakeMock = vi.mocked(getServiceKeepAwake);
-const updateServiceKeepAwakeMock = vi.mocked(updateServiceKeepAwake);
+const getServiceSettingsMock = vi.mocked(getServiceSettings);
+const updateServiceSettingsMock = vi.mocked(updateServiceSettings);
+
+// The server's saved settings: every screen reads them, each change is merged
+// into them, and every start runs with them.
+let saved: ServiceSettings;
 
 beforeEach(() => {
-  // The Service screen now persists run-target preferences, so clear storage
-  // between tests to keep each case starting from the built-in defaults.
-  window.localStorage.clear();
+  saved = {
+    keep_awake: false,
+    scheduled: true,
+    routine: true,
+    event_queue: true,
+    routine_interval_minutes: 10,
+    max_consecutive_errors: 3,
+  };
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue({
     project: { name: "Demo", language_code: "en", language_name: "English" },
@@ -81,10 +91,11 @@ beforeEach(() => {
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   resetChatReceiveStateMock.mockReset().mockResolvedValue({ members_reset: 1, channels_reset: 3 });
-  getServiceKeepAwakeMock.mockReset().mockResolvedValue({ enabled: false });
-  updateServiceKeepAwakeMock
-    .mockReset()
-    .mockImplementation(async (body) => ({ enabled: body.enabled }));
+  getServiceSettingsMock.mockReset().mockImplementation(async () => structuredClone(saved));
+  updateServiceSettingsMock.mockReset().mockImplementation(async (change) => {
+    saved = { ...saved, ...change };
+    return structuredClone(saved);
+  });
 });
 
 describe("Service Runtime screen", () => {
@@ -152,29 +163,84 @@ describe("Service Runtime screen", () => {
     ).toHaveClass("stopping");
   });
 
-  it("sends source selection when only scheduled and routine sources are enabled", async () => {
+  it("saves each change on the server and starts with what is saved", async () => {
     const user = userEvent.setup();
     renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
 
     await user.click(eventsSwitch());
+    await waitFor(() =>
+      expect(saved).toMatchObject({ scheduled: true, routine: true, event_queue: false }),
+    );
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
     await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({
-      sources: { scheduled: true, routine: true, event_queue: false },
-    });
+    // Only the change is sent, so what another screen saved stays.
+    expect(updateServiceSettingsMock).toHaveBeenCalledWith({ event_queue: false });
+    // The start sends nothing of its own: the backend reads the saved settings.
+    expect(startSchedulerMock).toHaveBeenCalledWith();
   });
 
-  it("omits routine_commands because patrol commands are configured per member", async () => {
+  it("waits to start until the last change is saved", async () => {
+    let finishSave: () => void = () => undefined;
+    updateServiceSettingsMock.mockImplementation(
+      (change) =>
+        new Promise((resolve) => {
+          finishSave = () => {
+            saved = { ...saved, ...change };
+            resolve(structuredClone(saved));
+          };
+        }),
+    );
     const user = userEvent.setup();
     renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
+    const start = screen.getByRole("button", { name: t("overview.start") });
 
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
+    await user.click(eventsSwitch());
 
-    await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    expect(startSchedulerMock.mock.calls[0][0]).not.toHaveProperty("routine_commands");
+    await waitFor(() => expect(start).toBeDisabled());
+    act(() => finishSave());
+    await waitFor(() => expect(start).toBeEnabled());
+  });
+
+  it("does not let a read already under way undo a change", async () => {
+    let answerRead: () => void = () => undefined;
+    let finishSave: () => void = () => undefined;
+    updateServiceSettingsMock.mockImplementation(
+      (change) =>
+        new Promise((resolve) => {
+          finishSave = () => {
+            saved = { ...saved, ...change };
+            resolve(structuredClone(saved));
+          };
+        }),
+    );
+    const user = userEvent.setup();
+    renderApp("/service");
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
+    // A read that started before the change answers with what was saved then.
+    const before = structuredClone(saved);
+    getServiceSettingsMock.mockImplementationOnce(
+      () => new Promise((resolve) => (answerRead = () => resolve(before))),
+    );
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(getServiceSettingsMock).toHaveBeenCalledTimes(2));
+
+    await user.click(eventsSwitch());
+    await act(async () => {
+      answerRead();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(eventsSwitch()).not.toBeChecked();
+    act(() => finishSave());
+    await waitFor(() => expect(getServiceSettingsMock).toHaveBeenCalledTimes(3));
+    expect(eventsSwitch()).not.toBeChecked();
+    focusManager.setFocused(undefined);
   });
 
   it("keeps this machine awake during the service once switched on, even while running", async () => {
@@ -190,12 +256,12 @@ describe("Service Runtime screen", () => {
     await user.click(keepAwake);
 
     await waitFor(() => expect(keepAwake).toBeChecked());
-    expect(updateServiceKeepAwakeMock).toHaveBeenCalledWith({ enabled: true });
+    expect(updateServiceSettingsMock).toHaveBeenCalledWith({ keep_awake: true });
   });
 
-  it("shows the saved keep-awake setting and why saving it failed", async () => {
-    getServiceKeepAwakeMock.mockResolvedValue({ enabled: true });
-    updateServiceKeepAwakeMock.mockRejectedValue(new Error("disk full"));
+  it("shows the saved setting again and why saving a change failed", async () => {
+    saved.keep_awake = true;
+    updateServiceSettingsMock.mockRejectedValue(new Error("disk full"));
     const user = userEvent.setup();
     renderApp("/service");
     const keepAwake = await screen.findByRole("switch", { name: t("service.keepAwake.title") });
@@ -203,9 +269,18 @@ describe("Service Runtime screen", () => {
 
     await user.click(keepAwake);
 
-    expect(await screen.findByText(t("service.keepAwake.saveError"))).toBeInTheDocument();
+    expect(await screen.findByText(t("service.saveError"))).toBeInTheDocument();
     expect(screen.getByText("disk full")).toBeInTheDocument();
-    expect(keepAwake).toBeChecked();
+    await waitFor(() => expect(keepAwake).toBeChecked());
+  });
+
+  it("says why it cannot read the settings and does not start", async () => {
+    getServiceSettingsMock.mockRejectedValue(new Error("service.yml: broken"));
+    renderApp("/service");
+
+    expect(await screen.findByText(t("service.loadError"))).toBeInTheDocument();
+    expect(screen.getByText("service.yml: broken")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("overview.start") })).toBeDisabled();
   });
 
   it("keeps diagnostics settings off the service screen", async () => {
@@ -216,34 +291,21 @@ describe("Service Runtime screen", () => {
     expect(screen.queryByText(t("diagnostics.transcripts.title"))).not.toBeInTheDocument();
   });
 
-  it("omits routine_commands and sends only the event queue source when event-only is selected", async () => {
+  it("keeps the last source on, so there is always something to start", async () => {
     const user = userEvent.setup();
     renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
 
     await user.click(routineSourceSwitch());
     await user.click(scheduledSourceSwitch());
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
-    await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    const body = startSchedulerMock.mock.calls[0][0];
-    expect(body).toMatchObject({
-      sources: { scheduled: false, routine: false, event_queue: true },
-    });
-    expect(body).not.toHaveProperty("routine_commands");
-  });
-
-  it("disables start when both targets are disabled", async () => {
-    const user = userEvent.setup();
-    renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    await user.click(routineSourceSwitch());
-    await user.click(scheduledSourceSwitch());
-    await user.click(eventsSwitch());
-
-    expect(screen.getByRole("button", { name: t("overview.start") })).toBeDisabled();
-    expect(screen.getByText(t("service.noTargetTitle"))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(saved).toMatchObject({ scheduled: false, routine: false, event_queue: true }),
+    );
+    expect(eventsSwitch()).toBeChecked();
+    expect(eventsSwitch()).toBeDisabled();
+    expect(routineSourceSwitch()).toBeEnabled();
+    expect(screen.getByRole("button", { name: t("overview.start") })).toBeEnabled();
   });
 
   it("disables start and shows a setup link when project config is missing", async () => {
@@ -261,44 +323,51 @@ describe("Service Runtime screen", () => {
     );
   });
 
-  it("reflects routine interval and max consecutive errors in the start payload", async () => {
+  it("saves the patrol interval and the failure limit", async () => {
     const user = userEvent.setup();
     renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    const interval = await screen.findByRole("textbox", {
+      name: t("overview.routineIntervalMinutes"),
+    });
+    await waitFor(() => expect(interval).toHaveValue("10"));
 
-    const interval = screen.getByRole("textbox", { name: t("overview.routineIntervalMinutes") });
     await user.clear(interval);
     await user.type(interval, "30");
     const maxErrors = screen.getByRole("textbox", { name: t("overview.maxConsecutiveErrors") });
     await user.clear(maxErrors);
     await user.type(maxErrors, "7");
 
-    await user.click(screen.getByRole("button", { name: t("overview.start") }));
-
-    await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
-    expect(startSchedulerMock.mock.calls[0][0]).toMatchObject({
-      routine_interval_minutes: 30,
-      max_consecutive_errors: 7,
-    });
+    await waitFor(() =>
+      expect(saved).toMatchObject({ routine_interval_minutes: 30, max_consecutive_errors: 7 }),
+    );
   });
 
-  it("remembers the source toggles across remounts", async () => {
+  it("shows another screen's saved settings", async () => {
+    Object.assign(saved, { scheduled: false, routine: true, event_queue: false });
+    saved.routine_interval_minutes = 3;
+    renderApp("/service");
+
+    await waitFor(() => expect(routineSourceSwitch()).toBeChecked());
+    expect(eventsSwitch()).not.toBeChecked();
+    expect(scheduledSourceSwitch()).not.toBeChecked();
+    expect(screen.getByRole("textbox", { name: t("overview.routineIntervalMinutes") })).toHaveValue(
+      "3",
+    );
+  });
+
+  it("keeps the settings editable while the service runs, for its next start", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({ scheduler: runtimeUnit("scheduler", { state: "running", running: true }) }),
+    );
     const user = userEvent.setup();
-    const first = renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
+    renderApp("/service");
+    await screen.findByRole("button", { name: t("overview.stop") });
+    expect(screen.getByText(t("service.settingsApplyAtNextStart"))).toBeInTheDocument();
+    await waitFor(() => expect(eventsSwitch()).toBeEnabled());
 
     await user.click(eventsSwitch());
-    await user.click(scheduledSourceSwitch());
-    await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
-    await waitFor(() => expect(scheduledSourceSwitch()).not.toBeChecked());
 
-    first.unmount();
-    renderApp("/service");
-    await screen.findByRole("heading", { name: t("service.title") });
-
-    await waitFor(() => expect(eventsSwitch()).not.toBeChecked());
-    await waitFor(() => expect(scheduledSourceSwitch()).not.toBeChecked());
-    expect(routineSourceSwitch()).toBeChecked();
+    await waitFor(() => expect(saved.event_queue).toBe(false));
   });
 
   it("renders the running state and offers a stop action", async () => {

@@ -33,7 +33,6 @@ from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.models import (
     CommandAuthoringRequest,
     CommandRunRequest,
-    SchedulerStartRequest,
     TroubleshootingFocus,
     TroubleshootingRequest,
 )
@@ -53,6 +52,7 @@ from guildbotics.drivers.service_lock import (
     ServiceLockMetadata,
     ServiceLockUnavailableError,
 )
+from guildbotics.drivers.service_settings import ServiceSettings
 from guildbotics.entities import Person, Project, Team
 from guildbotics.environment import member_broker
 from guildbotics.environment.spec import guest_path
@@ -1097,6 +1097,8 @@ async def test_run_command_publishes_started_and_finished_events(
     assert events[1]["payload"] == {"command": "demo", "person": "bot"}
     assert {event["trace_id"] for event in events} == {response.trace_id}
     assert {event["source"] for event in events} == {"manual"}
+    # Marked as a command run, apart from the assistants that run commands.
+    assert {event["attributes"]["run.entry"] for event in events} == {"command"}
 
 
 @pytest.mark.asyncio
@@ -1317,6 +1319,8 @@ async def test_run_command_publishes_failed_event_for_command_error(
         for event in event_bus.snapshot_events()
         if event["type"] == "command.failed"
     ]
+    # The run failed after it started, so the screen is sent to its trace.
+    assert exc_info.value.context == {"trace_id": failed[0]["trace_id"]}
     # One classification for every recording site (``command_failure_payload``).
     assert failed[0]["payload"] == {
         "command": "demo",
@@ -1632,13 +1636,13 @@ def test_start_scheduler_maps_service_lock_conflict_to_http_conflict(
         started_at="2026-07-12T10:00:00+09:00",
     )
 
-    def reject_start(_request: SchedulerStartRequest) -> None:
+    def reject_start(_settings: ServiceSettings) -> None:
         raise ServiceLockUnavailableError(metadata)
 
     monkeypatch.setattr(runtime._lifecycle, "start", reject_start)
 
     with pytest.raises(AppApiError) as caught:
-        runtime.start_scheduler(SchedulerStartRequest())
+        runtime.start_scheduler()
 
     assert caught.value.code == "service_already_running"
     assert caught.value.status_code == HTTP_CONFLICT
@@ -2477,6 +2481,7 @@ async def test_a_command_that_cannot_be_resolved_never_ran(
 
     assert (caught.value.code, caught.value.status_code) == ("command_error", 400)
     assert "missing" in caught.value.message
+    assert caught.value.context == {}
     assert runtime.event_bus.snapshot_events() == []
     assert runtime._accepted_command_ids == set()
 

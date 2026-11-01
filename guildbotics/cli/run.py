@@ -23,6 +23,7 @@ from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import TaskRunCoordinator, WorkRejectedError
 from guildbotics.drivers.utils import command_boundary
 from guildbotics.environment.member_broker import install_member_cli
+from guildbotics.observability.event_types import COMMAND_RUN_ATTRIBUTES
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.env_loader import load_guildbotics_env
 
@@ -100,7 +101,12 @@ async def _run_custom_command(
         command = prepare_command(context, command_name, command_args, identifier, cwd)
         person_id = command.context.person.person_id
         with (
-            trace_scope("manual", command=command_name, person_id=person_id) as trace,
+            trace_scope(
+                "manual",
+                command=command_name,
+                person_id=person_id,
+                attributes=COMMAND_RUN_ATTRIBUTES,
+            ) as trace,
             TaskRunCoordinator().track_work(
                 source="manual",
                 person_id=person_id,

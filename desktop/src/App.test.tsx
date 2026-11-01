@@ -3,16 +3,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { HashRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   App,
   commandFailureDetail,
+  commandOutputText,
   commandTraceRefetchInterval,
-  DEFAULT_SERVICE_PREFERENCES,
-  loadServicePreferences,
-  saveServicePreferences,
-  SERVICE_PREFERENCES_KEY,
   isStopTimeoutPending,
   matchesRecordFilter,
   matchesRecordScopeFilter,
@@ -28,8 +25,6 @@ import {
   shortTraceId,
   systemAlertMessage,
   systemAlertSetupTarget,
-  upsertCommandRecord,
-  type CommandRunRecord,
 } from "./App";
 import {
   dismissSystemAlert,
@@ -40,7 +35,7 @@ import {
   runScenarioDiagnostics,
   verify,
 } from "./api/client";
-import type { RuntimeEvent, RuntimeUnitStatus } from "./api/client";
+import type { RuntimeEvent, RuntimeUnitStatus, TraceSummary } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
@@ -488,55 +483,64 @@ describe("commandTraceRefetchInterval", () => {
   });
 });
 
-describe("upsertCommandRecord", () => {
-  function record(overrides: Partial<CommandRunRecord>): CommandRunRecord {
+describe("commandOutputText", () => {
+  function summary(status: string): TraceSummary {
     return {
-      traceId: "req-1",
-      person: "alice",
+      trace_id: "run-1",
+      source: "manual",
+      person_id: "alice",
       command: "demo",
-      startedAt: "2026-06-04T01:00:00Z",
-      status: "running",
-      ...overrides,
+      workflow: "",
+      title: "",
+      started_at: "2026-06-04T01:00:00Z",
+      updated_at: "2026-06-04T01:00:00Z",
+      status,
+      event_count: 2,
+      log_count: 0,
+      error_count: 0,
+      span_count: 0,
+      attributes: {},
     };
   }
-
-  it("prepends a new request", () => {
-    const existing = [record({ traceId: "req-0", startedAt: "2026-06-04T00:00:00Z" })];
-
-    const next = upsertCommandRecord(existing, record({ traceId: "req-1" }));
-
-    expect(next.map((entry) => entry.traceId)).toEqual(["req-1", "req-0"]);
+  const printed = makeTraceRecord({
+    kind: "io",
+    type: "command.output",
+    payload: { output: "report written" },
+  });
+  const failed = makeTraceRecord({
+    type: "command.failed",
+    trace_id: "run-1",
+    payload: { code: "", message: "boom" },
   });
 
-  it("updates an existing request and keeps prior output when not provided", () => {
-    const existing = [record({ traceId: "req-1", status: "running", output: "partial" })];
-
-    const next = upsertCommandRecord(existing, record({ traceId: "req-1", status: "success" }));
-
-    expect(next).toHaveLength(1);
-    expect(next[0]).toMatchObject({ status: "success", output: "partial" });
-  });
-
-  it("sorts records by startedAt descending and caps at 20", () => {
-    const many = Array.from({ length: 25 }, (_, index) =>
-      record({
-        traceId: `req-${index}`,
-        startedAt: `2026-06-04T00:${String(index).padStart(2, "0")}:00Z`,
-      }),
+  it("reads what the run printed from its trace", () => {
+    expect(commandOutputText(summary("success"), [makeTraceRecord(), printed])).toBe(
+      "report written",
     );
+    expect(commandOutputText(summary("running"), [makeTraceRecord()])).toBe("");
+  });
 
-    const next = upsertCommandRecord([], many[0]);
-    const filled = many.slice(1).reduce((acc, item) => upsertCommandRecord(acc, item), next);
+  it("puts how a run failed before what it printed", () => {
+    const text = commandOutputText(summary("failed"), [failed, printed]);
+    const [detail, output] = text.split("\n---\n");
 
-    expect(filled).toHaveLength(20);
-    expect(filled[0]?.traceId).toBe("req-24");
+    expect(JSON.parse(detail)).toEqual({
+      trace_id: "run-1",
+      type: "command.failed",
+      payload: { code: "", message: "boom" },
+    });
+    expect(output).toBe("report written");
+  });
+
+  it("names the run when its failure was not recorded", () => {
+    expect(JSON.parse(commandOutputText(summary("failed"), []))).toEqual({ trace_id: "run-1" });
   });
 });
 
 describe("commandFailureDetail", () => {
-  it("serializes request id, type, and payload as pretty JSON", () => {
+  it("serializes trace id, type, and payload as pretty JSON", () => {
     const detail = commandFailureDetail(
-      runtimeEvent({
+      makeTraceRecord({
         type: "command.failed",
         trace_id: "req-9",
         payload: { code: "boom", message: "oops" },
@@ -882,59 +886,6 @@ describe("isStopTimeoutPending", () => {
   });
 });
 
-describe("service preferences persistence", () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
-  it("returns the defaults when nothing is stored", () => {
-    expect(loadServicePreferences()).toEqual(DEFAULT_SERVICE_PREFERENCES);
-  });
-
-  it("round-trips saved preferences", () => {
-    saveServicePreferences({
-      scheduledSourceEnabled: false,
-      routineSourceEnabled: true,
-      eventQueueSourceEnabled: true,
-      routineIntervalMinutes: 25,
-      maxConsecutiveErrors: 7,
-    });
-    expect(loadServicePreferences()).toEqual({
-      scheduledSourceEnabled: false,
-      routineSourceEnabled: true,
-      eventQueueSourceEnabled: true,
-      routineIntervalMinutes: 25,
-      maxConsecutiveErrors: 7,
-    });
-  });
-
-  it("falls back to defaults for missing or wrongly typed fields", () => {
-    window.localStorage.setItem(
-      SERVICE_PREFERENCES_KEY,
-      JSON.stringify({ scheduledSourceEnabled: false, selectedRoutine: 42 }),
-    );
-    expect(loadServicePreferences()).toEqual({
-      ...DEFAULT_SERVICE_PREFERENCES,
-      scheduledSourceEnabled: false,
-    });
-  });
-
-  it("clamps out-of-range numbers to the input bounds", () => {
-    window.localStorage.setItem(
-      SERVICE_PREFERENCES_KEY,
-      JSON.stringify({ routineIntervalMinutes: 5000, maxConsecutiveErrors: 0 }),
-    );
-    const prefs = loadServicePreferences();
-    expect(prefs.routineIntervalMinutes).toBe(1440);
-    expect(prefs.maxConsecutiveErrors).toBe(1);
-  });
-
-  it("returns the defaults when stored JSON is corrupt", () => {
-    window.localStorage.setItem(SERVICE_PREFERENCES_KEY, "{not json");
-    expect(loadServicePreferences()).toEqual(DEFAULT_SERVICE_PREFERENCES);
-  });
-});
-
 function renderApp() {
   const theme = createTheme({
     primaryColor: "dark",
@@ -979,10 +930,6 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_chat_provider: "",
     member_routines: [],
   };
-}
-
-function runtimeEvent(overrides: Partial<RuntimeEvent>): RuntimeEvent {
-  return makeRuntimeEvent({ trace_id: "req-1", ...overrides });
 }
 
 describe("traceTitle / traceSubtitle", () => {

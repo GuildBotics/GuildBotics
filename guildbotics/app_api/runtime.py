@@ -69,8 +69,6 @@ from guildbotics.app_api.models import (
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
-    SchedulerStartRequest,
-    ServiceKeepAwake,
     SystemAlertsResponse,
     TeamSummary,
     TranscriptSettingsStatus,
@@ -111,11 +109,8 @@ from guildbotics.drivers.execution import (
     WorkRejectedError,
 )
 from guildbotics.drivers.member_context import resolve_person
-from guildbotics.drivers.service_lock import (
-    ServiceLockUnavailableError,
-    service_keeps_awake,
-    set_service_keeps_awake,
-)
+from guildbotics.drivers.service_lock import ServiceLockUnavailableError
+from guildbotics.drivers.service_settings import read_service_settings
 from guildbotics.entities import Person, Project, Team
 from guildbotics.environment.command_environment import inspected_directories
 from guildbotics.environment.contract import (
@@ -147,7 +142,10 @@ from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DEFAULT_DIAGNOSTICS_MAX_BYTES
-from guildbotics.observability.event_types import TARGET_RECORDED_EVENT_TYPE
+from guildbotics.observability.event_types import (
+    COMMAND_RUN_ATTRIBUTES,
+    TARGET_RECORDED_EVENT_TYPE,
+)
 from guildbotics.observability.interactive_sessions import InteractiveSessionStore
 from guildbotics.observability.session_transcripts import (
     transcript_detail,
@@ -160,7 +158,7 @@ from guildbotics.setup.setup_service import (
     PersonConfigSummary,
     SimplePersonSetupService,
 )
-from guildbotics.utils.correlation import new_id, trace_scope
+from guildbotics.utils.correlation import new_id, require_trace, trace_scope
 from guildbotics.utils.env_loader import (
     HOME_ENV_PROTECTED_KEYS,
     apply_debug_env_to_process,
@@ -241,15 +239,21 @@ class _Execution:
     #: conversation, whose session each of its runs resumes.
     work: Work | None = None
 
-    def failure(self, exc: CommandError | CliAgentExecutionError) -> AppApiError:
+    def failure(
+        self, exc: CommandError | CliAgentExecutionError, *, trace_id: str = ""
+    ) -> AppApiError:
         """The App API error a failed run becomes.
 
         A command drives foreign agents: an AI CLI tool that exits non-zero, a
         provider that rejects the credential, a response the prompt cannot
         use. Each is a failed run the screen must explain with its own reason.
+        A run that started names its trace, where the screen finds the rest.
         """
         return AppApiError(
-            self.failure_code, reason=str(exc), status_code=self.failure_status
+            self.failure_code,
+            reason=str(exc),
+            status_code=self.failure_status,
+            context={"trace_id": trace_id} if trace_id else None,
         )
 
 
@@ -617,6 +621,7 @@ class AppRuntime:
                 args=request.args,
                 cwd=lambda: command_cwd(request.cwd) or host_command_cwd(),
                 failure_code="command_error",
+                attributes=COMMAND_RUN_ATTRIBUTES,
             ),
             person=request.person,
             message=lambda _access: request.message,
@@ -817,16 +822,16 @@ class AppRuntime:
                 },
             )
             if isinstance(exc, CommandError | CliAgentExecutionError):
-                raise execution.failure(exc) from exc
+                raise execution.failure(exc, trace_id=require_trace().trace_id) from exc
             raise
         self.event_bus.publish_event(
             "command.finished", {"command": execution.label, "person": person_id}
         )
         return outcome
 
-    def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
+    def start_scheduler(self) -> RuntimeStatus:
         try:
-            return self._lifecycle.start(request)
+            return self._lifecycle.start(read_service_settings())
         except ServiceLockUnavailableError as exc:
             metadata = exc.metadata
             raise AppApiError(
@@ -848,14 +853,6 @@ class AppRuntime:
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
-
-    def get_service_keep_awake(self) -> ServiceKeepAwake:
-        return ServiceKeepAwake(enabled=service_keeps_awake())
-
-    def update_service_keep_awake(self, request: ServiceKeepAwake) -> ServiceKeepAwake:
-        # The process holding the service, this one or a CLI, follows the file.
-        set_service_keeps_awake(request.enabled)
-        return self.get_service_keep_awake()
 
     def get_system_alerts(self) -> SystemAlertsResponse:
         return self._system_alerts.list_alerts(

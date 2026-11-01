@@ -57,6 +57,8 @@ from guildbotics.intelligences.agent_runtime.wire import (
 from guildbotics.intelligences.cli_agents import (
     get_cli_agent_mapping,
 )
+from guildbotics.observability.diagnostics_events import record_correlated_io
+from guildbotics.observability.event_types import COMMAND_OUTPUT_IO_TYPE
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
@@ -299,7 +301,9 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     the one its trace is -- and the work it does: its workflow run's, the one
     the caller named, or else the run's own manual work.
     What it returns is read as the host reads anything from it: its result
-    only as the type the caller asked for.
+    only as the type the caller asked for. What it printed is kept in its
+    trace, so a screen shows a run's output after the run, whichever screen
+    or command started it.
 
     Args:
         command: The command to run, read for the member it runs as.
@@ -357,7 +361,12 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
                 reply = await environment.execute(request)
     finally:
         await window.close()
-    return _outcome(command, reply)
+    outcome = _outcome(command, reply)
+    if outcome.text_output:
+        record_correlated_io(
+            io_type=COMMAND_OUTPUT_IO_TYPE, payload={"output": outcome.text_output}
+        )
+    return outcome
 
 
 def _outcome(command: PreparedCommand, reply: CommandReply) -> CommandOutcome:

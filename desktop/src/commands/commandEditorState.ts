@@ -4,7 +4,6 @@ import type {
   CommandFileDetail,
   CommandInputs,
 } from "../api/client";
-import type { CommandRunRecord } from "../App";
 
 export const COMMAND_EDITOR_STATE_KEY = "guildbotics.commands.editorState";
 
@@ -45,7 +44,8 @@ export function saveEditorRatio(ratio: number): void {
 
 // Per-workspace UI state persisted between sessions. Draft source content,
 // revision and validation errors are intentionally excluded: the disk file is
-// always the source of truth and is re-fetched on load.
+// always the source of truth and is re-fetched on load. Runs are not UI state:
+// they are read from the server, which every screen shares.
 export type CommandEditorPersisted = {
   selectedFileId: string | null;
   person: string | null;
@@ -54,8 +54,6 @@ export type CommandEditorPersisted = {
   message: string;
   cwd: string;
   showAdvanced: boolean;
-  history: CommandRunRecord[];
-  activeTraceId: string | null;
   activeTab: string | null;
 };
 
@@ -67,26 +65,11 @@ export const EMPTY_EDITOR_STATE: CommandEditorPersisted = {
   message: "",
   cwd: "",
   showAdvanced: false,
-  history: [],
-  activeTraceId: null,
   activeTab: "events",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateRunRecord(value: unknown): value is CommandRunRecord {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.traceId === "string" &&
-    typeof value.person === "string" &&
-    typeof value.command === "string" &&
-    typeof value.startedAt === "string" &&
-    (value.status === "running" || value.status === "success" || value.status === "failed") &&
-    (value.output === undefined || typeof value.output === "string") &&
-    (value.error === undefined || typeof value.error === "string")
-  );
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -124,10 +107,6 @@ export function loadEditorState(storageDir?: string): CommandEditorPersisted {
       message: typeof parsed.message === "string" ? parsed.message : "",
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
       showAdvanced: parsed.showAdvanced === true,
-      history: Array.isArray(parsed.history)
-        ? (parsed.history.filter(validateRunRecord) as CommandRunRecord[]).slice(0, 50)
-        : [],
-      activeTraceId: typeof parsed.activeTraceId === "string" ? parsed.activeTraceId : null,
       activeTab: typeof parsed.activeTab === "string" ? parsed.activeTab : "events",
     };
   } catch {

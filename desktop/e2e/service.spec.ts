@@ -11,7 +11,7 @@ import { readStackContext, test } from "./stack-context";
 // This journey starts only the event-trigger source (chat handling), observes
 // the UI reach a running state driven by the REAL backend status/websocket
 // events, then stops and observes stopped. It proves that the three source
-// toggles select the runtime units sent to the backend.
+// toggles, saved on the backend, select the runtime units it starts.
 
 const RUN_BUTTON = "Run";
 const STOP_BUTTON = "Stop";
@@ -23,8 +23,17 @@ function panel(page: Page, title: string): Locator {
 // Mantine renders the switch as a visually-hidden <input> with a visible track
 // rendered from the input's <label>, so the input itself is not click-actionable
 // in a real browser. Clicking the visible track toggles it the way a user would.
-async function toggleTarget(panelLocator: Locator): Promise<void> {
-  await panelLocator.locator(".service-unit-switch .mantine-Switch-track").click();
+// The choice is saved on the backend and outlives the test, so the switch is
+// set to what the test needs rather than flipped.
+async function setTarget(panelLocator: Locator, included: boolean): Promise<void> {
+  const target = panelLocator.getByRole("switch", { name: "Include in service run" });
+  // The switches show the saved settings once they have loaded.
+  await expect(panelLocator.page().getByRole("textbox", { name: /interval/i })).not.toHaveValue("");
+  if ((await target.isChecked()) !== included) {
+    await expect(target).toBeEnabled();
+    await panelLocator.locator(".service-unit-switch .mantine-Switch-track").click();
+  }
+  await expect(target).toBeChecked({ checked: included });
 }
 
 async function ensureStopped(page: Page): Promise<void> {
@@ -58,10 +67,11 @@ test("starts the events target, reaches running via real events, then stops", as
   const eventsPanel = panel(page, "Event triggers");
   const scheduledPanel = panel(page, "Scheduled commands");
 
-  // Disable the ticket patrol target and scheduled commands so the event
-  // triggers alone are started.
-  await toggleTarget(patrolPanel);
-  await toggleTarget(scheduledPanel);
+  // Leave the event triggers alone in the run: the last source left on cannot
+  // be switched off, so it is switched on first.
+  await setTarget(eventsPanel, true);
+  await setTarget(patrolPanel, false);
+  await setTarget(scheduledPanel, false);
 
   const start = page.getByRole("button", { name: RUN_BUTTON });
   await expect(start).toBeEnabled();

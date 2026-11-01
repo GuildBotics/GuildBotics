@@ -216,14 +216,14 @@ const resources = {
       service: {
         title: "Service Runtime",
         sourceTarget: "Include in service run",
-        noTargetTitle: "No service selected",
-        noTargetBody:
-          "Select patrol commands, scheduled commands, or event triggers before starting.",
+        loadError: "Could not read the service settings",
+        settingsApplyAtNextStart:
+          "Changes to what runs, the patrol interval, and the failure limit apply the next time the service starts.",
+        saveError: "Could not save the service settings",
         keepAwake: {
           title: "Keep this machine awake",
           description:
             "While the service runs, this machine does not go to sleep when left idle. It always stays awake while a command runs. Closing the lid or choosing Sleep still puts it to sleep. This setting applies to this machine only.",
-          saveError: "Failed to save the sleep setting",
         },
       },
       diagnostics: {
@@ -467,6 +467,7 @@ const resources = {
             llm_response: "LLM response",
             cli_agent_request: "CLI request",
             cli_agent_response: "CLI response",
+            command_output: "Command output",
           },
           spanEvents: {
             finished: "Call finished",
@@ -1378,6 +1379,7 @@ const resources = {
         cwd: "Working directory",
         cwdDescription: "Blank uses the exchange folder: {{cwd}}",
         noRunsYet: "No command result yet.",
+        runStartFailed: "The command could not start",
         output: "Output",
         events: "Events",
         noOutput: "No output.",
@@ -1477,11 +1479,6 @@ const resources = {
           chat_service: "Chat",
         },
         requirementUnmet: "{{requirement}}: {{reason}}",
-        status: {
-          running: "Running",
-          success: "Success",
-          failed: "Failed",
-        },
       },
       hotkey: {
         label: "Hotkey",
@@ -2337,13 +2334,14 @@ const resources = {
       service: {
         title: "サービス実行",
         sourceTarget: "サービス実行に含める",
-        noTargetTitle: "開始対象が選択されていません",
-        noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
+        loadError: "サービスの設定を読み込めませんでした",
+        settingsApplyAtNextStart:
+          "実行する対象・巡回間隔・連続失敗の回数の変更は、次にサービスを開始したときから反映されます。",
+        saveError: "サービスの設定を保存できませんでした",
         keepAwake: {
           title: "このマシンをスリープさせない",
           description:
             "サービスの実行中、操作がなくてもこのマシンがスリープしないようにします。コマンドの実行中は、この設定に関係なくスリープしません。蓋を閉じたときや手動でスリープしたときは対象外です。この設定はこのマシンだけに保存されます。",
-          saveError: "スリープの設定を保存できませんでした",
         },
       },
       diagnostics: {
@@ -2587,6 +2585,7 @@ const resources = {
             llm_response: "LLM レスポンス",
             cli_agent_request: "CLI リクエスト",
             cli_agent_response: "CLI レスポンス",
+            command_output: "コマンドの出力",
           },
           spanEvents: {
             finished: "呼び出し完了",
@@ -2904,6 +2903,7 @@ const resources = {
         cwd: "作業ディレクトリ",
         cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",
         noRunsYet: "コマンド実行結果はまだありません。",
+        runStartFailed: "コマンドを開始できませんでした",
         output: "出力",
         events: "イベント",
         noOutput: "出力はありません。",
@@ -3004,11 +3004,6 @@ const resources = {
           chat_service: "チャット",
         },
         requirementUnmet: "{{requirement}}：{{reason}}",
-        status: {
-          running: "実行中",
-          success: "成功",
-          failed: "失敗",
-        },
       },
       hotkey: {
         label: "ホットキー",

@@ -27,6 +27,7 @@ from guildbotics.runtime.workflow_invocation import (
 from guildbotics.utils.correlation import trace_scope
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
+DEFAULT_CONSECUTIVE_ERROR_LIMIT = 3
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
 
 
@@ -34,7 +35,7 @@ class TaskScheduler:
     def __init__(
         self,
         context: Context,
-        consecutive_error_limit: int = 3,
+        consecutive_error_limit: int = DEFAULT_CONSECUTIVE_ERROR_LIMIT,
         routine_interval_minutes: int = DEFAULT_ROUTINE_INTERVAL_MINUTES,
         service_run_id: str | None = None,
         scheduled_source_enabled: bool = True,

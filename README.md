@@ -297,7 +297,7 @@ Press **Validate settings** under **Setup → Verification** in the desktop app 
 
 Open the **Service** screen in the desktop app and press **Run**. A worker starts for each active member and runs the work of the selected sources in order.
 
-The screen has three execution sources, each toggled individually with **Include in service run** (only while the service is stopped).
+The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so a start from any screen, or from `guildbotics start`, runs with them. A change made while the service runs applies from its next start.
 
 - **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
@@ -518,12 +518,16 @@ guildbotics kill               # force stop immediately
 
 `guildbotics start` launches the same backend as Desktop and starts its services. Close Desktop first. The first Ctrl-C waits for in-flight work; a second Ctrl-C cancels it. Use `guildbotics stop --force` to request cancellation after a timeout, or `guildbotics kill` for an immediate forced stop. For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
 
-By default `guildbotics start` starts both the member workers (patrol / scheduled / queued events) and the event listener. `--only` narrows what runs, but the member workers start in either case.
+`guildbotics start` runs with the settings saved on the **Service** screen: the sources to include, the patrol interval, and the failure limit (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)). On a Hub without Desktop, open the screen with `guildbotics open` while the service runs; a change applies from the next start. Whether the machine stays awake while the service waits is on the same screen and applies at once. The settings are saved in the workspace's `.guildbotics/local/service.yml`; to choose them before the first start, write the file by hand (keys left out keep their defaults):
 
-- `--only scheduler`: runs only patrol and scheduled commands; the event listener does not start (no Slack events are received)
-- `--only events`: only receives events and runs queued events; patrol and scheduled commands do not run
-
-Whether the machine stays awake while the service waits is the same setting as in the desktop app. Without the desktop app, write `keep_awake: true` in the workspace's `.guildbotics/local/service.yml`; a change made while the service runs takes effect as well (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)).
+```yaml
+keep_awake: false             # keep the machine awake while the service waits
+scheduled: true               # scheduled commands
+routine: true                 # patrol commands
+event_queue: true             # event triggers (at least one of the three stays true)
+routine_interval_minutes: 10  # 1-1440
+max_consecutive_errors: 3     # 1-20
+```
 
 **Running commands** (equivalent to running from the **Edit Command** screen in the desktop app):
 
@@ -750,7 +754,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
 | Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
 | Cannot read vulnerability alerts (403) | Check **Dependabot alerts: Read-only** and target repository access for the member's GitHub App or fine-grained PAT. For an App, approve updated permissions for the installation; for a PAT, edit the token's permissions and obtain any required organization approval. See [GitHub account setup](#prepare-a-github-account-for-the-ai-agent). A 403 alone does not establish the cause |
-| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
+| Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (`guildbotics start` runs with the same settings) |
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
 | AI CLI turns do not start, or an alert says this device cannot run them | Open **Setup → Agent execution environment** and check **Status on this device** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon / Windows Hypervisor Platform / KVM), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and credentials must be saved for the tool on this machine (use the login command shown on the screen). Saved credentials do not guarantee successful authentication. While the environment is building, work is deferred, not failed |

@@ -25,12 +25,8 @@ from guildbotics.app_api.models import (
     RuntimeActiveWork,
     RuntimeStatus,
     RuntimeUnitStatus,
-    SchedulerStartRequest,
 )
 from guildbotics.setup.setup_service import PersonTaskScheduleInput
-
-DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
-DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 
 
 def test_command_authoring_edit_requires_file_revision_identity() -> None:
@@ -100,54 +96,6 @@ def test_task_schedule_requires_command() -> None:
     with pytest.raises(ValidationError) as exc_info:
         PersonTaskScheduleInput(command="   ", schedules=[])
     assert "command is required" in str(exc_info.value)
-
-
-# --- SchedulerStartRequest validation --------------------------------------
-
-
-def test_scheduler_start_request_defaults() -> None:
-    request = SchedulerStartRequest()
-    assert request.sources.scheduled is True
-    assert request.sources.routine is True
-    assert request.sources.event_queue is True
-    assert request.max_consecutive_errors == DEFAULT_MAX_CONSECUTIVE_ERRORS
-    assert request.routine_interval_minutes == DEFAULT_ROUTINE_INTERVAL_MINUTES
-
-
-def test_scheduler_start_request_accepts_source_selection() -> None:
-    request = SchedulerStartRequest(
-        sources={"scheduled": False, "routine": False, "event_queue": True}
-    )
-    assert request.sources.scheduled is False
-    assert request.sources.routine is False
-    assert request.sources.event_queue is True
-
-
-def test_scheduler_start_request_rejects_empty_source_selection() -> None:
-    with pytest.raises(ValidationError):
-        SchedulerStartRequest(
-            sources={"scheduled": False, "routine": False, "event_queue": False}
-        )
-
-
-@pytest.mark.parametrize("value", [0, -1, -100])
-def test_scheduler_start_request_rejects_non_positive_max_errors(value: int) -> None:
-    with pytest.raises(ValidationError):
-        SchedulerStartRequest(max_consecutive_errors=value)
-
-
-@pytest.mark.parametrize("value", [0, -1, -5])
-def test_scheduler_start_request_rejects_non_positive_interval(value: int) -> None:
-    with pytest.raises(ValidationError):
-        SchedulerStartRequest(routine_interval_minutes=value)
-
-
-def test_scheduler_start_request_accepts_minimum_values() -> None:
-    request = SchedulerStartRequest(
-        max_consecutive_errors=1, routine_interval_minutes=1
-    )
-    assert request.max_consecutive_errors == 1
-    assert request.routine_interval_minutes == 1
 
 
 # --- Path JSON serialization -----------------------------------------------

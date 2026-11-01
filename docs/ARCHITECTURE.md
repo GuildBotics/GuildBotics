@@ -1070,6 +1070,9 @@ access and member key spelling in the package.
   spans, and request/response I/O are stored as one JSONL transcript per execution or system
   session under `run/sessions/` (`session_transcripts.py`). `standard` detail omits high-volume
   thinking/delta events and bounds AI CLI tool stderr to its final 8 KiB; `full` keeps them.
+  What a command printed is an I/O record of its trace (`command.output`, written by
+  `run_in_environment`), so the Edit Command screen shows a run's output from the
+  server, also after the run ended while no screen was open.
   Session transcripts default to 30-day retention. Memory audit remains a separate store
   under `documents/memory_events/<device_id>.jsonl`: the device appends to and trims its
   own bounded journal, and readers merge the journals in timestamp order.
@@ -1268,7 +1271,10 @@ a monorepo on purpose.
   `guildbotics-app-api` when packaged), passing their parent PID to the watchdog.
   The backend owns `app-api.lock` for its lifetime and `service.lock` only while
   services run. The CLI waits for its child's port notice, then uses the local
-  owner-token API; `--only` selects scheduler sources. `/scheduler/stop` defaults
+  owner-token API. `/scheduler/start` takes no body: every start, from any screen or
+  the CLI, runs with the service settings saved in `local/service.yml`
+  (`drivers/service_settings.py`), which screens change one setting at a time with
+  `PATCH /service/settings`. `/scheduler/stop` defaults
   to waiting; CLI stop/kill use `wait=false` to acknowledge the stop before draining
   and wait for the process themselves, escalating with `force=true` if needed.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API

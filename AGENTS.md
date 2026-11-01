@@ -223,8 +223,10 @@ help / docstring が正であり、member コマンドの一行説明は
   `python -m guildbotics.app_api`、配布版は CLI と同じディレクトリの `guildbotics-app-api`。
   引数は渡さず、環境変数で workspace / owner=cli / 親 PID を渡す。固定ポートの通知後、
   このマシンの owner token を proof で確認して `/api/scheduler/start` を呼ぶ。
-  `--only scheduler` は scheduled/routine、`--only events` は event_queue を選び、
-  `--max-consecutive-errors` は 1 以上。巡回・受信を組み立てるのはバックエンドだけ。
+  start は本文を持たず、画面からの開始と同じく、サービスの設定（経路・巡回間隔・
+  連続失敗の回数・スリープ抑止。`drivers/service_settings.py`、ワークスペースの
+  `local/service.yml`）をバックエンドが読んで開始する。画面は `PATCH /api/service/settings`
+  で変えた項目だけを送る。巡回・受信を組み立てるのはバックエンドだけ。
 - バックエンドは全生存期間で `~/.guildbotics/data/run/app-api.lock` を保持する。
   owner（cli / desktop）と PID はここに記録する。後から起動した側は owner に応じた案内を出す。
   Desktop 起動中は CLI からサービスを開始せず Desktop のサービス画面を案内し、

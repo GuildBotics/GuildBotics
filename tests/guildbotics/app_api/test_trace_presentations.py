@@ -449,6 +449,15 @@ def _io(io_type: str, payload: dict) -> dict:
     return {"kind": "io", "type": io_type, "message": "", "payload": payload}
 
 
+def test_a_command_output_record_reads_as_the_output() -> None:
+    presentation = normalize_trace_presentation(
+        _io("command.output", {"output": "Report written."})
+    )
+
+    assert presentation.label_key == "diagnostics.executions.ioTypes.command_output"
+    assert presentation.message == "Report written."
+
+
 def test_a_request_record_surfaces_only_its_resolved_effort_level() -> None:
     presentation = normalize_trace_presentation(
         _io(

@@ -607,24 +607,6 @@ class ActivityHistoryResponse(BaseModel):
     unsupported_event_sources: list[str] = Field(default_factory=list)
 
 
-class RuntimeSourceSelection(BaseModel):
-    scheduled: bool = True
-    routine: bool = True
-    event_queue: bool = True
-
-    @model_validator(mode="after")
-    def require_one_enabled(self) -> RuntimeSourceSelection:
-        if not (self.scheduled or self.routine or self.event_queue):
-            raise ValueError("at least one runtime source must be enabled")
-        return self
-
-
-class SchedulerStartRequest(BaseModel):
-    sources: RuntimeSourceSelection = Field(default_factory=RuntimeSourceSelection)
-    max_consecutive_errors: int = Field(default=3, ge=1)
-    routine_interval_minutes: int = Field(default=10, ge=1)
-
-
 class SchedulerStopRequest(BaseModel):
     force: bool = False
     wait: bool = True
@@ -707,12 +689,6 @@ class RuntimeDebugStatus(BaseModel):
     enabled: bool
     log_level: str
     agno_debug: bool
-
-
-class ServiceKeepAwake(BaseModel):
-    """Whether the service keeps this machine out of idle sleep while it runs."""
-
-    enabled: bool
 
 
 class TranscriptSettingsUpdateRequest(BaseModel):

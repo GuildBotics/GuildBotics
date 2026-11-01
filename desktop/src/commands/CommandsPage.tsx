@@ -38,6 +38,7 @@ import {
   getConfigStatus,
   getTeam,
   getTraceDetail,
+  getTraces,
   listCommandFiles,
   runCommand,
   subscribeEvents,
@@ -47,13 +48,9 @@ import {
   type CommandFileSummary,
   type CommandAuthoringRequest,
   type CommandAuthoringResponse,
+  type TraceDetailResponse,
 } from "../api/client";
-import {
-  commandFailureDetail,
-  commandTraceRefetchInterval,
-  upsertCommandRecord,
-  type CommandRunRecord,
-} from "../App";
+import { commandTraceRefetchInterval } from "../App";
 import { isTauriRuntime, openLocalFile } from "../desktopWindow";
 import { setNavigationGuard } from "../navigationGuard";
 import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
@@ -66,7 +63,7 @@ import {
   buildFileRunArgs,
   clampEditorRatio,
   deriveSaveStatus,
-  EMPTY_EDITOR_STATE,
+  type CommandEditorPersisted,
   loadEditorRatio,
   loadEditorState,
   saveEditorRatio,
@@ -90,9 +87,11 @@ type PendingAuthoringProposal = {
   baseContent?: string;
 };
 
-function stringPayload(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
+// Command runs carry this trace attribute, apart from the assistants that
+// answer through a command: those are not what the run console shows.
+const COMMAND_RUN_ATTRIBUTE = "run.entry";
+const COMMAND_RUN = "command";
+const COMMAND_RUNS_QUERY_KEY = ["command-runs"];
 
 function newConversationId(): string {
   return globalThis.crypto.randomUUID();
@@ -112,12 +111,22 @@ function authoringResponseMessage(response: CommandAuthoringResponse, proposalRe
 }
 
 export function CommandsPage() {
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  if (config.isLoading) {
+    return null;
+  }
+  // The editor's UI state is the workspace's: each workspace's editor starts
+  // from what was saved for that workspace.
+  const storageDir = config.data?.storage_dir ?? undefined;
+  return <CommandsWorkspace key={storageDir ?? ""} storageDir={storageDir} />;
+}
+
+function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({ queryKey: ["team"], queryFn: getTeam, retry: false });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
-  const storageDir = config.data?.storage_dir ?? undefined;
   const configDir = config.data?.config_dir ?? "";
 
   const [initial] = useState(() => loadEditorState(storageDir));
@@ -129,33 +138,10 @@ export function CommandsPage() {
   const [message, setMessage] = useState(initial.message);
   const [cwd, setCwd] = useState(initial.cwd);
   const [showAdvanced, setShowAdvanced] = useState(initial.showAdvanced);
-  const [history, setHistory] = useState<CommandRunRecord[]>(initial.history);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(initial.activeTraceId);
+  // The run started here or seen starting; until one is, the latest run.
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+  const [runStartError, setRunStartError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>(initial.activeTab ?? "events");
-
-  // `storageDir` arrives asynchronously from the config query, so the initial
-  // useState may run before it is known. Re-hydrate from the per-workspace key
-  // whenever it resolves or changes, and suppress persistence until then so a
-  // half-initialized state is never written to the wrong workspace's key.
-  const [hydratedDir, setHydratedDir] = useState<string | undefined>(storageDir);
-  useEffect(() => {
-    if (!storageDir || storageDir === hydratedDir) {
-      return;
-    }
-    const restored = loadEditorState(storageDir);
-    setSelectedFileId(restored.selectedFileId);
-    setPerson(restored.person);
-    setAuthoringPersonId(null);
-    setArgValues(restored.argValues);
-    setExtraArgs(restored.extraArgs);
-    setMessage(restored.message);
-    setCwd(restored.cwd);
-    setShowAdvanced(restored.showAdvanced);
-    setHistory(restored.history);
-    setActiveTraceId(restored.activeTraceId);
-    setActiveTab(restored.activeTab ?? "events");
-    setHydratedDir(storageDir);
-  }, [storageDir, hydratedDir]);
 
   const [draftContent, setDraftContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -163,8 +149,6 @@ export function CommandsPage() {
   const [conflict, setConflict] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const loadedKeyRef = useRef<string>("");
-  const selectedFileIdRef = useRef<string | null>(selectedFileId);
-  selectedFileIdRef.current = selectedFileId;
   const [pendingProposal, setPendingProposal] = useState<PendingAuthoringProposal | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -225,6 +209,7 @@ export function CommandsPage() {
     }
     const linked = files.find((file) => file.command === linkedCommand);
     if (linked) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the selection follows the file list and the link, which arrive from outside
       setSelectedFileId(linked.id);
     } else if (!selectedFileId || !files.some((file) => file.id === selectedFileId)) {
       setSelectedFileId(files[0].id);
@@ -505,7 +490,7 @@ export function CommandsPage() {
       // Build the run payload from the just-saved file so edited frontmatter
       // (args / inputs / command) is honored, not the pre-save definition.
       const runFile = dirty ? await saveMutation.mutateAsync() : detail;
-      setActiveTraceId(null);
+      setRunStartError(null);
       setActiveTab("events");
       const args = buildFileRunArgs(runFile, argValues, extraArgs);
       const response = await runCommand({
@@ -519,30 +504,16 @@ export function CommandsPage() {
       });
       setActiveTraceId(response.trace_id);
       setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
-          traceId: response.trace_id,
-          person: runPerson,
-          command: runFile.command,
-          startedAt: new Date().toISOString(),
-          status: "success",
-          output: response.output,
-        }),
-      );
     } catch (error) {
-      const traceId = `local-${Date.now()}`;
-      setActiveTraceId(traceId);
-      setActiveTab("output");
-      setHistory((current) =>
-        upsertCommandRecord(current, {
-          traceId,
-          person: runPerson,
-          command: detail.command,
-          startedAt: new Date().toISOString(),
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
+      // A run that started and failed is shown from its trace; one that never
+      // started has nothing recorded, so only its reason is shown.
+      const traceId = error instanceof ApiRequestError ? error.context.trace_id : undefined;
+      if (typeof traceId === "string") {
+        setActiveTraceId(traceId);
+        setActiveTab("output");
+      } else {
+        setRunStartError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       setRunBusy(false);
     }
@@ -559,73 +530,67 @@ export function CommandsPage() {
     selectedPerson,
   ]);
 
-  // Command lifecycle events keep the run history in sync with the service.
+  const latestRun = useQuery({
+    queryKey: COMMAND_RUNS_QUERY_KEY,
+    queryFn: () =>
+      getTraces({
+        source: "manual",
+        attrKey: COMMAND_RUN_ATTRIBUTE,
+        attrValue: COMMAND_RUN,
+        limit: 1,
+      }),
+    enabled: hasProjectConfig,
+  });
+
+  // Command lifecycle events follow a run started from any screen.
   useEffect(() => {
     return subscribeEvents((event) => {
-      if (!event.type.startsWith("command.") || !event.trace_id) {
+      if (
+        !event.type.startsWith("command.") ||
+        !event.trace_id ||
+        event.attributes?.[COMMAND_RUN_ATTRIBUTE] !== COMMAND_RUN
+      ) {
         return;
       }
-      const base = {
-        traceId: event.trace_id,
-        person: stringPayload(event.payload.person),
-        command: stringPayload(event.payload.command),
-        startedAt: event.timestamp,
-      };
       if (event.type === "command.started") {
         setActiveTraceId(event.trace_id);
-        setHistory((current) => upsertCommandRecord(current, { ...base, status: "running" }));
-      } else if (event.type === "command.failed") {
-        setHistory((current) =>
-          upsertCommandRecord(current, {
-            ...base,
-            status: "failed",
-            error: commandFailureDetail(event),
-          }),
-        );
-      } else if (event.type === "command.finished") {
-        setHistory((current) => upsertCommandRecord(current, { ...base, status: "success" }));
       }
+      void queryClient.invalidateQueries({ queryKey: COMMAND_RUNS_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ["diagnostics-trace", event.trace_id] });
     });
-  }, []);
+  }, [queryClient]);
 
-  const selectedRecord = useMemo(
-    () => history.find((record) => record.traceId === activeTraceId) ?? history[0] ?? null,
-    [activeTraceId, history],
-  );
-  const visibleTraceId = selectedRecord?.traceId ?? activeTraceId;
-  const traceDetail = useQuery({
-    queryKey: ["diagnostics-trace", visibleTraceId],
-    queryFn: () => getTraceDetail(visibleTraceId as string),
-    enabled: Boolean(visibleTraceId) && !visibleTraceId?.startsWith("local-"),
-    refetchInterval: commandTraceRefetchInterval(selectedRecord?.status),
+  const runDetail = (traceId: string | null) => ({
+    queryKey: ["diagnostics-trace", traceId],
+    queryFn: () => getTraceDetail(traceId as string),
+    enabled: Boolean(traceId),
+    refetchInterval: (query: { state: { data?: TraceDetailResponse } }) =>
+      commandTraceRefetchInterval(query.state.data?.summary?.status),
   });
+  const activeRun = useQuery(runDetail(activeTraceId));
+  // A run this workspace does not know -- one the event stream replays from
+  // before a workspace switch -- gives way to the latest run.
+  const followed = activeRun.isFetched && !activeRun.data?.summary ? null : activeTraceId;
+  const visibleTraceId = followed ?? latestRun.data?.traces[0]?.trace_id ?? null;
+  const traceDetail = useQuery(runDetail(visibleTraceId));
   const traceRecords = useMemo(
     () => [...(traceDetail.data?.records ?? [])].reverse(),
     [traceDetail.data?.records],
   );
 
   // Persist the editor UI state (never the draft source) per workspace.
-  const persistRef = useRef(EMPTY_EDITOR_STATE);
-  persistRef.current = {
-    selectedFileId,
-    person,
-    argValues,
-    extraArgs,
-    message,
-    cwd,
-    showAdvanced,
-    history,
-    activeTraceId,
-    activeTab,
-  };
   useEffect(() => {
-    // Only persist once the state has been hydrated for this workspace, so the
-    // window between a workspace switch and its re-hydration cannot overwrite
-    // the new workspace's saved state with the previous one.
-    if (!storageDir || storageDir !== hydratedDir) {
-      return;
-    }
-    const handle = window.setTimeout(() => saveEditorState(persistRef.current, storageDir), 400);
+    const state: CommandEditorPersisted = {
+      selectedFileId,
+      person,
+      argValues,
+      extraArgs,
+      message,
+      cwd,
+      showAdvanced,
+      activeTab,
+    };
+    const handle = window.setTimeout(() => saveEditorState(state, storageDir), 400);
     return () => window.clearTimeout(handle);
   }, [
     selectedFileId,
@@ -635,16 +600,15 @@ export function CommandsPage() {
     message,
     cwd,
     showAdvanced,
-    history,
-    activeTraceId,
     activeTab,
     storageDir,
-    hydratedDir,
   ]);
 
   // Warn before the window/tab closes with unsaved edits.
   const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
       if (dirtyRef.current) {
@@ -911,7 +875,9 @@ export function CommandsPage() {
                     executionStatus={dirty ? null : (executionStatusQuery.data ?? null)}
                     runBusy={runBusy || authoringMutation.isPending}
                     onSaveAndRun={() => void saveAndRun()}
-                    selectedRecord={selectedRecord}
+                    runTraceId={visibleTraceId}
+                    runSummary={traceDetail.data?.summary ?? null}
+                    runStartError={runStartError}
                     traceRecords={traceRecords}
                     traceLoading={traceDetail.isFetching && !traceDetail.data}
                     transcriptAvailable={traceDetail.data?.transcript_available}

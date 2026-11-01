@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { CommandFileDetail } from "../api/client";
 import {
   blockingMessageKey,
+  COMMAND_EDITOR_STATE_KEY,
   buildFileRunArgs,
   splitCommandLine,
   deriveSaveStatus,
@@ -120,14 +121,28 @@ describe("editor state persistence", () => {
         message: "m",
         cwd: "/tmp",
         showAdvanced: true,
-        history: [],
-        activeTraceId: null,
         activeTab: "output",
       },
       "/workspace/a",
     );
 
     const loaded = loadEditorState("/workspace/a");
+    // Runs are the server's: no screen keeps a history of its own.
+    const stored = Object.entries(window.localStorage)
+      .filter(([key]) => key.startsWith(COMMAND_EDITOR_STATE_KEY))
+      .map(([, value]) => Object.keys(JSON.parse(value) as object));
+    expect(stored).toEqual([
+      [
+        "selectedFileId",
+        "person",
+        "argValues",
+        "extraArgs",
+        "message",
+        "cwd",
+        "showAdvanced",
+        "activeTab",
+      ],
+    ]);
     expect(loaded.selectedFileId).toBe("greet-id");
     expect(loaded.showAdvanced).toBe(true);
     expect(loaded.cwd).toBe("/tmp");

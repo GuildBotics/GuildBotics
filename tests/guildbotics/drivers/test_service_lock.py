@@ -17,8 +17,12 @@ from guildbotics.drivers.service_lock import (
     ServiceLock,
     ServiceLockUnavailableError,
     inspect_service_lock,
-    service_keeps_awake,
-    set_service_keeps_awake,
+)
+from guildbotics.drivers.service_settings import (
+    ServiceSettings,
+    ServiceSettingsError,
+    read_service_settings,
+    write_service_settings,
 )
 from guildbotics.utils import advisory_lock as advisory_lock_module
 
@@ -157,25 +161,34 @@ def test_the_service_lets_the_machine_sleep_unless_set_otherwise(
     held = wakepy.modecount()
     service_lock.release()
 
-    assert service_keeps_awake() is False
+    assert read_service_settings().keep_awake is False
     assert held == 0
 
 
 def test_the_service_keeps_the_machine_awake_while_held_when_set(
     tmp_path, workspace
 ) -> None:
-    set_service_keeps_awake(True)
+    _set_keep_awake(True)
     service_lock = ServiceLock(tmp_path / "service.lock")
 
     service_lock.acquire(workspace=workspace)
     held = wakepy.modecount()
     service_lock.release()
 
-    assert (workspace / ".guildbotics" / "local" / "service.yml").read_text(
-        encoding="utf-8"
-    ) == "keep_awake: true\n"
+    assert (
+        yaml.safe_load(
+            (workspace / ".guildbotics" / "local" / "service.yml").read_text(
+                encoding="utf-8"
+            )
+        )["keep_awake"]
+        is True
+    )
     assert held == 1
     assert wakepy.modecount() == 0
+
+
+def _set_keep_awake(enabled: bool) -> None:
+    write_service_settings(ServiceSettings(keep_awake=enabled))
 
 
 def _wait_until(predicate, timeout: float = 5.0) -> bool:
@@ -202,7 +215,7 @@ def test_a_held_service_follows_the_setting_however_it_is_written(
 
     def switch(enabled: bool) -> None:
         if write == "api":
-            set_service_keeps_awake(enabled)
+            _set_keep_awake(enabled)
         else:
             settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text(
@@ -225,7 +238,7 @@ def test_a_held_service_follows_the_setting_however_it_is_written(
 def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
     tmp_path, workspace, quick_poll, caplog
 ) -> None:
-    set_service_keeps_awake(True)
+    _set_keep_awake(True)
     settings = workspace / ".guildbotics" / "local" / "service.yml"
     service_lock = ServiceLock(tmp_path / "service.lock")
     service_lock.acquire(workspace=workspace)
@@ -234,7 +247,7 @@ def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
             _replace(settings, "keep_awake: [")
             assert _wait_until(
                 lambda: any(
-                    "keep-awake setting cannot be read" in record.getMessage()
+                    "service settings cannot be read" in record.getMessage()
                     for record in caplog.records
                 )
             )
@@ -252,7 +265,7 @@ def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
     assert held_while_unreadable == 1
     assert released is True
     assert len(warned) == 1
-    assert "keep-awake setting cannot be read" in warned[0]
+    assert "service settings cannot be read" in warned[0]
 
 
 def _replace(path: Path, text: str) -> None:
@@ -269,7 +282,7 @@ def test_a_held_service_reads_the_setting_only_when_it_changes(
     the file open for the writer's save to land on."""
     reads = []
     polls = []
-    original = service_lock_module.service_keeps_awake
+    original = service_lock_module.read_service_settings
     signature = service_lock_module._signature
 
     def polled(path):
@@ -281,14 +294,14 @@ def test_a_held_service_reads_the_setting_only_when_it_changes(
         reads.append(workspace)
         return original(workspace)
 
-    monkeypatch.setattr(service_lock_module, "service_keeps_awake", counting)
+    monkeypatch.setattr(service_lock_module, "read_service_settings", counting)
     monkeypatch.setattr(service_lock_module, "_signature", polled)
     service_lock = ServiceLock(tmp_path / "service.lock")
     service_lock.acquire(workspace=workspace)
     try:
         assert _wait_until(lambda: len(polls) >= 3)
         unchanged = len(reads)
-        set_service_keeps_awake(True)
+        _set_keep_awake(True)
         followed = _wait_until(lambda: wakepy.modecount() == 1)
         polled_at_change = len(polls)
         assert _wait_until(lambda: len(polls) >= polled_at_change + 2)
@@ -309,7 +322,7 @@ def test_a_released_service_no_longer_follows_the_setting(
     service_lock.acquire(workspace=workspace)
     service_lock.release()
 
-    set_service_keeps_awake(True)
+    _set_keep_awake(True)
 
     assert wakepy.modecount() == 0
     assert [
@@ -327,7 +340,7 @@ def test_an_unreadable_setting_fails_the_start_without_holding_the_lock(
     settings.parent.mkdir(parents=True)
     settings.write_text("keep_awake: [", encoding="utf-8")
 
-    with pytest.raises(yaml.YAMLError):
+    with pytest.raises(ServiceSettingsError):
         ServiceLock(path).acquire(workspace=workspace)
 
     assert inspect_service_lock(path).locked is False

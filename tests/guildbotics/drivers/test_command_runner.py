@@ -413,6 +413,35 @@ async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output", ["hello from the run", ""], ids=["printed", "silent"]
+)
+async def test_what_a_run_printed_is_kept_in_its_trace_only(
+    monkeypatch, tmp_path, output
+):
+    """Every command runs in its environment, so a screen shows any run's
+    output after the run from its trace, whichever route started it. The
+    output is an io record: the transcript keeps it, the index does not."""
+    from guildbotics.observability import diagnostics_events
+    from guildbotics.observability.diagnostics_store import DiagnosticsStore
+
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    monkeypatch.setattr(diagnostics_events, "_STORE", store)
+    _environment(monkeypatch, CommandReply(text_output=output))
+
+    outcome = await command_runner.run_in_environment(_prepared())
+
+    recorded = [
+        (item["kind"], item["payload"])
+        for item in store.get_records("trace")
+        if item.get("type") == "command.output"
+    ]
+    assert outcome.text_output == output
+    assert recorded == ([("io", {"output": output})] if output else [])
+    assert not [item for item in store._records if item.get("type") == "command.output"]
+
+
+@pytest.mark.asyncio
 async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured_with(
     monkeypatch,
 ):

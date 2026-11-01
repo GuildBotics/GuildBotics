@@ -40,6 +40,7 @@ en:
   person_selection_required: "Specify a person using person or '<command>@person'. Available: %{available}"
   command_not_runtime_target: "The selected command file is not the runtime execution target."
   service_already_running: "Another background service is already running."
+  service_settings_invalid: "The service settings in %{path} cannot be read. Fix or delete the file: %{reason}"
   runtime_running: "Stop the service before resetting chat receive state."
   invalid_activity_history_range: "Activity history start must be before end."
   invalid_activity_sync_range:

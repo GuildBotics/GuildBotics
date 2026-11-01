@@ -90,7 +90,7 @@ ELSEWHERE = {
     ("POST", "/workspace"): "selects a workspace",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
-    ("PUT", "/service/keep-awake"): "local/service.yml is device-specific by design",
+    ("PATCH", "/service/settings"): "local/service.yml is device-specific by design",
 }
 
 #: What each provider's setup operation does instead of writing shared config.
@@ -340,7 +340,7 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
         (method, route.path)
         for route in client.app.routes  # type: ignore[attr-defined]
         for method in getattr(route, "methods", set())
-        if method in {"POST", "PUT", "DELETE"}
+        if method in {"POST", "PUT", "PATCH", "DELETE"}
     }
 
     assert routing_table == declared
