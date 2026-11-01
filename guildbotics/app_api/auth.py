@@ -32,6 +32,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from guildbotics.app_api.errors import AppApiError, api_error_message
 from guildbotics.utils.fileio import atomic_write_text
 from guildbotics.utils.local_api import (
+    LANGUAGE_HEADER,
     NONCE_PATTERN,
     TOKEN_ID_PATTERN,
     base_url,
@@ -50,9 +51,6 @@ CSRF_HEADER = "X-GuildBotics-CSRF"
 CODE_TTL_SECONDS = 60
 SESSION_SECONDS = 30 * 24 * 3600
 _OWNER_FILE = "owner-file"
-#: The header the screen sends naming its display language, so error
-#: sentences come back in the language the screen is in.
-LANGUAGE_HEADER = "X-GuildBotics-Language"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_STATE_BYTES = 512
 _CLIENT = re.compile(r"[A-Za-z0-9 ._-]{1,64}")

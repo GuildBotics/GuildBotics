@@ -35,6 +35,7 @@ LOCAL_API_IMPORTS = {
     # The server: it reads its own records and the port it listens on.
     "app_api/api.py": {"API_PREFIX", "PROOF_PATH", "server_port"},
     "app_api/auth.py": {
+        "LANGUAGE_HEADER",
         "NONCE_PATTERN",
         "TOKEN_ID_PATTERN",
         "base_url",

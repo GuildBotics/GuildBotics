@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.errors import api_error_message
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.cli.desktop_commands import run_on_desktop
@@ -20,6 +21,7 @@ from guildbotics.drivers.app_api_lock import hold_backend_lock
 from guildbotics.utils import local_api
 from guildbotics.utils.local_api import (
     API_PREFIX,
+    LANGUAGE_HEADER,
     PORT_ENV,
     PROOF_PATH,
     client_tokens,
@@ -219,6 +221,23 @@ def test_the_genuine_server_proves_itself_before_the_token_is_attached(genuine):
     assert "authorization" not in proof.headers
     token = owner_token_path(8765).read_text("utf-8").strip()
     assert health.headers["authorization"] == f"Bearer {token}"
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_the_server_answers_in_the_language_the_cli_shows(
+    genuine, monkeypatch, language
+):
+    monkeypatch.setattr(local_api, "get_language", lambda: language)
+    with connect_local_api(timeout=5.0) as client:
+        assert client is not None
+        answer = client.post("/commands/run", json={})
+    assert answer.status_code == 422
+    assert answer.json()["message"] == api_error_message(
+        "validation_error", language, {}
+    )
+    proof, run = genuine
+    assert LANGUAGE_HEADER.lower() not in proof.headers
+    assert run.headers[LANGUAGE_HEADER] == language
 
 
 def test_a_token_the_server_does_not_know_is_not_sent(genuine):

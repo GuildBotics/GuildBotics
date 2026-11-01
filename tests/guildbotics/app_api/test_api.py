@@ -19,7 +19,7 @@ from guildbotics.app_api.api import create_app
 from guildbotics.drivers.app_api_lock import TEARDOWN_BUDGET_SECONDS
 from guildbotics.app_api.auth import SECURITY_HEADERS
 from guildbotics.app_api.command_input_files import CommandInputFileStore
-from guildbotics.app_api.errors import AppApiError
+from guildbotics.app_api.errors import AppApiError, api_error_message
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
@@ -72,7 +72,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.utils.correlation import trace_scope
-from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH
+from guildbotics.utils.local_api import API_PREFIX, LANGUAGE_HEADER, PROOF_PATH
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 from guildbotics.workspace.identity import ensure_device_identity
@@ -99,6 +99,7 @@ HTTP_FORBIDDEN = 403
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_INTERNAL_SERVER_ERROR = 500
 HTTP_CONFLICT = 409
+HTTP_SERVICE_UNAVAILABLE = 503
 THREAD_WAIT_SECONDS = 10.0
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
@@ -615,7 +616,6 @@ def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
 def test_a_secret_store_that_cannot_be_used_is_a_503_with_its_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: str
 ) -> None:
-    from guildbotics.app_api.auth import LANGUAGE_HEADER
     from guildbotics.utils.i18n_tool import t
     from guildbotics.utils.keychain import SecretStoreError
 
@@ -3181,6 +3181,55 @@ def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
 
     assert response.status_code == HTTP_OK
     assert runtime.stop_force is True
+
+
+def test_a_run_a_force_stop_cancels_answers_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller of a cancelled run learns why, in its language, instead of a
+    bare 500."""
+    runtime = AppRuntime(EventBus())
+    team = Team(
+        project=Project(name="demo"),
+        members=[Person(person_id="bot", name="Bot", is_active=True)],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda message="": type("ContextStub", (), {"team": team})(),
+    )
+    started = threading.Event()
+
+    async def run_until_cancelled(*_: Any) -> CommandOutcome:
+        started.set()
+        await asyncio.sleep(30)
+        return CommandOutcome(result="unreachable", text_output="unreachable")
+
+    stub_commands(monkeypatch, run_until_cancelled)
+    client = owner_client(create_app(runtime=runtime))
+    answers: list[Any] = []
+    request = threading.Thread(
+        target=lambda: answers.append(
+            client.post(
+                "/commands/run",
+                json={"command": "demo", "person": "bot"},
+                headers={LANGUAGE_HEADER: "ja"},
+            )
+        )
+    )
+    request.start()
+    assert started.wait(10)
+
+    stopped = client.post("/scheduler/stop", json={"force": True})
+    request.join(10)
+
+    assert stopped.status_code == HTTP_OK
+    [answer] = answers
+    assert answer.status_code == HTTP_SERVICE_UNAVAILABLE
+    body = answer.json()
+    assert body["code"] == "command_cancelled"
+    assert body["message"] == api_error_message("command_cancelled", "ja", {})
+    assert body["context"]["trace_id"]
 
 
 def test_a_drain_before_the_exit_can_still_be_cancelled(tmp_path, monkeypatch):

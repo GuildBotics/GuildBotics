@@ -7,6 +7,7 @@ en:
   member_request_too_large: "The member transport request exceeds its size limit or has no metadata."
   cli_agent_usage_failed: "Could not retrieve %{label} usage. The cause has not been identified. Check again or open the error details in the tool's settings."
   command_workspace_changing: "The server's workspace is being switched. Try again after it finishes."
+  command_cancelled: "The run was cancelled because the service or the server stopped. Its record shows how far it got."
   # One key per sentence. A code that answers several situations nests one
   # key per situation; the pair of this file and errors.ja.yml is what keeps
   # the two languages saying the same thing.

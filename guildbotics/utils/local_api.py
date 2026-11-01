@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.i18n_tool import get_language
 
 DEFAULT_PORT = 8765
 #: Moves the port for every program on this machine at once: the server and
@@ -27,6 +28,9 @@ DEFAULT_PORT = 8765
 PORT_ENV = "GUILDBOTICS_SERVER_PORT"
 API_PREFIX = "/api"
 PROOF_PATH = "/local-api/proof"
+#: The header a client names its display language with, so error sentences
+#: come back in the language it shows.
+LANGUAGE_HEADER = "X-GuildBotics-Language"
 #: The nonce is fixed-length lowercase hex, so it can never contain the
 #: separator of the proof message.
 NONCE_PATTERN = "^[0-9a-f]{64}$"
@@ -136,7 +140,6 @@ def _account(port: int) -> str:
 @contextmanager
 def connect_local_api(
     *,
-    headers: dict[str, str] | None = None,
     timeout: float | None,
     consent: bool = False,
     port: int | None = None,
@@ -153,8 +156,8 @@ def connect_local_api(
     reaches the server the port leads to, the Hub's through a forward.
 
     Whatever listens on the port first sees only a token id and a fresh nonce,
-    and the token is attached only after it answers with the proof that it
-    knows the token's digest. A port taken over while the server is down, or a
+    and the token, with the caller's language, is attached only after it
+    answers with the proof that it knows the token's digest. A port taken over while the server is down, or a
     replayed answer, therefore never receives the token or anything sent with
     it. The proof is the only evidence: a health answer says nothing about who
     holds the port.
@@ -162,7 +165,6 @@ def connect_local_api(
     port = port or server_port()
     with httpx.Client(
         base_url=base_url(port) + API_PREFIX,
-        headers=headers,
         trust_env=False,
         timeout=timeout,
     ) as client:
@@ -171,6 +173,7 @@ def connect_local_api(
             if parsed is not None and _proves_token(client, *parsed):
                 # Later requests usually reuse the connection the proof came over.
                 client.headers["Authorization"] = f"Bearer {token}"
+                client.headers[LANGUAGE_HEADER] = get_language()
                 yield client
                 return
         yield None
