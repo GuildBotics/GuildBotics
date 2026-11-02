@@ -10,6 +10,9 @@ uv run --no-sync python scripts/generate-wire-schema.py --check
 各 JSON は JSON Schema Draft 2020-12 の独立した文書で、参照先は同じ文書の
 `$defs` に含みます。ファイル名と root の `title` は生成する型名です。
 既存の dataclass・TypedDict・Pydantic model は直接 `TypeAdapter` に渡します。
+判別付き union の注釈も保持します。union 内の variant では、判別に必要な tag を
+必須にするため、schema の `required` に追加します。Python の既定値と、単独の
+variant の schema は変更しません。
 
 `<Call>Arguments` は `HostWindow` の受け取り側の引数・既定値から生成します。
 `<Call>Result` は生成スクリプトの `HOST_RESULTS` が指定する返却データの型です。

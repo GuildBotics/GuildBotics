@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import get_type_hints
 
 from pydantic import ConfigDict, TypeAdapter, create_model
+from pydantic.json_schema import GenerateJsonSchema
 
 from guildbotics.capabilities.artifact_archive import Unpacked
 from guildbotics.commands.authoring import CommandAuthoringResult
@@ -96,6 +97,26 @@ TYPES = (
 )
 
 
+class WireJsonSchema(GenerateJsonSchema):
+    """Make tags mandatory where a discriminated union needs them.
+
+    A model alone may default its tag, but a union cannot select a model
+    without that tag. Keep the original Python defaults unchanged.
+    """
+
+    def tagged_union_schema(self, schema):
+        result = super().tagged_union_schema(schema)
+        discriminator = result.get("discriminator")
+        if discriminator:
+            tag = discriminator["propertyName"]
+            for choice in result["oneOf"]:
+                variant = self.resolve_ref_schema(choice)
+                required = variant.setdefault("required", [])
+                if tag not in required:
+                    required.append(tag)
+        return result
+
+
 def build_schemas() -> dict[str, str]:
     """Build one self-contained schema per named wire type and call side."""
     if set(HOST_RESULTS) != _CALLS:
@@ -104,7 +125,7 @@ def build_schemas() -> dict[str, str]:
     types["Entry"] = wire.Entry
     for call, result in HOST_RESULTS.items():
         method = getattr(HostWindow, call)
-        hints = get_type_hints(method)
+        hints = get_type_hints(method, include_extras=True)
         fields = {
             name: (
                 hints[name],
@@ -124,7 +145,7 @@ def build_schemas() -> dict[str, str]:
         f"{name}.json": json.dumps(
             {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
-                **TypeAdapter(typ).json_schema(),
+                **TypeAdapter(typ).json_schema(schema_generator=WireJsonSchema),
                 "title": name,
             },
             ensure_ascii=False,

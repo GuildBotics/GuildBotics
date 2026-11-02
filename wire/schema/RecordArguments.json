@@ -138,7 +138,8 @@
       "required": [
         "span",
         "tool",
-        "failed"
+        "failed",
+        "type"
       ],
       "title": "CredentialEntry",
       "type": "object"
@@ -182,7 +183,8 @@
         "span",
         "conversation",
         "generation",
-        "event"
+        "event",
+        "type"
       ],
       "title": "EventEntry",
       "type": "object"
@@ -223,7 +225,8 @@
       "required": [
         "span",
         "io_type",
-        "payload"
+        "payload",
+        "type"
       ],
       "title": "IoEntry",
       "type": "object"
@@ -345,7 +348,8 @@
         "slot",
         "tool",
         "model_specified",
-        "status"
+        "status",
+        "type"
       ],
       "title": "SummaryEntry",
       "type": "object"
@@ -356,7 +360,16 @@
   "properties": {
     "entries": {
       "items": {
-        "anyOf": [
+        "discriminator": {
+          "mapping": {
+            "credential": "#/$defs/CredentialEntry",
+            "event": "#/$defs/EventEntry",
+            "io": "#/$defs/IoEntry",
+            "summary": "#/$defs/SummaryEntry"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
           {
             "$ref": "#/$defs/EventEntry"
           },
