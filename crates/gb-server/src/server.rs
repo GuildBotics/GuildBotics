@@ -1,15 +1,16 @@
 //! The server's process: one server per machine, on the port every program
 //! of the machine names, telling whoever started it that it listens.
 
-use std::fs::File;
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use gb_base::files::FileLock;
+
 use crate::api::{self, Api};
 use crate::auth::ServerAuth;
-use crate::{home, i18n};
+use crate::i18n;
 
 /// Names the port the server listens on.
 pub const PORT_ENV: &str = "GUILDBOTICS_SERVER_PORT";
@@ -34,63 +35,21 @@ pub fn port() -> anyhow::Result<u16> {
 /// held for the server's whole life, naming its process and port so that
 /// whoever stops it reaches it. Its record is what the Python version writes
 /// after the byte it reserves for locking on Windows.
-pub struct ServerLock(#[allow(dead_code)] File);
+pub struct ServerLock(#[allow(dead_code)] FileLock);
 
 impl ServerLock {
     pub fn hold(data: &Path, port: u16) -> anyhow::Result<ServerLock> {
-        let path = data.join("run").join("app-api.lock");
-        std::fs::create_dir_all(path.parent().expect("a parent"))?;
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&path)?;
-        if file.try_lock().is_err() {
+        let Some(lock) = FileLock::try_hold(&data.join("run/app-api.lock"))? else {
             anyhow::bail!(i18n::t("en", "runtime.service_lock.already_running", &[]));
-        }
+        };
         let record = serde_json::json!({"pid": std::process::id(), "port": port});
+        let mut file = lock.file();
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
         file.write_all(format!(" {record}\n").as_bytes())?;
         file.sync_all()?;
-        Ok(ServerLock(file))
+        Ok(ServerLock(lock))
     }
-}
-
-/// The name of this machine the screens show: the device identity's, else
-/// the host name, as the Python version names a new device.
-fn machine_name(data: &Path) -> String {
-    let recorded = std::fs::read(data.join("device.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|device| device["display_name"].as_str().map(str::to_string));
-    recorded.unwrap_or_else(|| {
-        let host = host_name();
-        let short = host.split('.').next().unwrap_or_default();
-        if short.is_empty() {
-            "GuildBotics device".into()
-        } else {
-            short.into()
-        }
-    })
-}
-
-#[cfg(unix)]
-fn host_name() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: the buffer is valid for its length, and gethostname writes at
-    // most that many bytes.
-    let written = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if written != 0 {
-        return String::new();
-    }
-    let end = buffer.iter().position(|b| *b == 0).unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
-}
-
-#[cfg(not(unix))]
-fn host_name() -> String {
-    std::env::var("COMPUTERNAME").unwrap_or_default()
 }
 
 /// Tells the launcher, as the only line stdout ever carries, that this
@@ -125,7 +84,7 @@ impl Server {
     /// the loopback port, keeps the owner token, and says that it listens.
     pub async fn start() -> anyhow::Result<Server> {
         let port = port()?;
-        let data = home::data()?;
+        let data = gb_base::home::data()?;
         let lock = ServerLock::hold(&data, port)?;
         // Only the process that holds the port touches the credentials of
         // the server on it, so a failed bind leaves a running server's
@@ -134,10 +93,18 @@ impl Server {
         let auth = ServerAuth::open(&data, port)?;
         // Before the notice: the launcher reads the owner token once told.
         announce(port)?;
+        // A workspace that cannot be opened leaves the server running for
+        // the screens to choose another.
+        let workspace = gb_workspace::selection::restore(&data, |name| std::env::var_os(name))
+            .unwrap_or_else(|e| {
+                tracing::error!("cannot open the selected workspace: {e:#}");
+                None
+            });
         let api = Arc::new(Api {
             auth,
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
-            machine_name: machine_name(&data),
+            data,
+            workspace,
         });
         Ok(Server {
             lock,
@@ -161,6 +128,7 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::Read;
 
     use super::*;
@@ -192,18 +160,5 @@ mod tests {
         drop(held);
         ServerLock::hold(data.path(), 8766).unwrap();
         assert_eq!(read_lock(&path), Some((std::process::id(), 8766)));
-    }
-
-    #[test]
-    fn the_machine_is_named_by_its_device_identity_else_its_host() {
-        let data = tempfile::tempdir().unwrap();
-        let host = machine_name(data.path());
-        assert!(!host.is_empty() && !host.contains('.'), "{host}");
-        std::fs::write(
-            data.path().join("device.json"),
-            r#"{"schema_version": 4, "device_id": "x", "display_name": "hub", "os": "macos"}"#,
-        )
-        .unwrap();
-        assert_eq!(machine_name(data.path()), "hub");
     }
 }

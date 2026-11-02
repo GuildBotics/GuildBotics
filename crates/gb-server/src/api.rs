@@ -4,6 +4,7 @@
 //! headers, and every route is the owner's except the few that say why they
 //! cannot be.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{FromRequest, Request, State};
@@ -16,6 +17,8 @@ use loopback_auth::Refusal;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
+
+use gb_workspace::identity;
 
 use crate::auth::{Denied, SESSION_SECONDS, ServerAuth};
 use crate::i18n;
@@ -33,7 +36,10 @@ pub struct Api {
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
     pub instance_id: String,
-    pub machine_name: String,
+    /// The machine's own records: `<machine root>/data`.
+    pub data: PathBuf,
+    /// The workspace the server opened, if any.
+    pub workspace: Option<PathBuf>,
 }
 
 type Shared = Arc<Api>;
@@ -143,14 +149,40 @@ async fn authenticate(State(api): State<Shared>, req: Request, next: Next) -> Re
     }
 }
 
+/// The server, the workspace it opened by the identity a client compares
+/// with the one it means, and this machine by its name. The identities are
+/// read, or created on first use, on every answer.
 async fn health(State(api): State<Shared>) -> Response {
+    let identities = {
+        let api = api.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let device = identity::ensure_device_identity(&api.data)?;
+            let workspace = match &api.workspace {
+                Some(workspace) => Some(identity::ensure_workspace_identity(workspace)?),
+                None => None,
+            };
+            Ok((device.display_name, workspace.map(|w| w.workspace_id)))
+        })
+        .await
+    };
+    let (machine_name, workspace_id) = match identities {
+        Ok(Ok(identities)) => identities,
+        Ok(Err(e)) => {
+            tracing::error!("cannot read the identities: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(e) => {
+            tracing::error!("cannot read the identities: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "workspace_id": null,
+        "workspace_id": workspace_id,
         "service_instance_id": api.instance_id,
-        "workspace": null,
-        "machine_name": api.machine_name,
+        "workspace": api.workspace,
+        "machine_name": machine_name,
     }))
     .into_response()
 }

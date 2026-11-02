@@ -111,6 +111,8 @@ paths = [
   "Cargo.lock",
   # gb-server embeds the locale files it says things from.
   "guildbotics/templates/locales/**",
+  # The records both versions write, which the golden tests read.
+  "records/**",
   "rust-toolchain*",
   ".cargo/**",
   "clippy.toml",

@@ -34,6 +34,8 @@ fn server_command(dir: &Path, port: u16) -> Command {
         .env("GUILDBOTICS_SERVER_PORT", port.to_string())
         .env("BRANVIL_DATA_DIR", dir.join("branvil"))
         .env("NO_COLOR", "1")
+        .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
+        .env_remove("GUILDBOTICS_CONFIG_DIR")
         .stdin(Stdio::null());
     command
 }
@@ -64,7 +66,11 @@ impl Server {
     }
 
     fn start_on(dir: &Path, port: u16) -> Server {
-        let mut child = server_command(dir, port)
+        Server::spawn(server_command(dir, port), dir, port)
+    }
+
+    fn spawn(mut command: Command, dir: &Path, port: u16) -> Server {
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -163,6 +169,10 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(health["status"], "ok");
     assert!(!health["machine_name"].as_str().unwrap().is_empty());
+    assert_eq!(
+        (&health["workspace"], &health["workspace_id"]),
+        (&Value::Null, &Value::Null)
+    );
     assert!(!health["service_instance_id"].as_str().unwrap().is_empty());
     assert_eq!(headers["x-frame-options"], "DENY");
 
@@ -283,6 +293,93 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
             .unwrap();
         assert_eq!(response.status(), status);
     }
+    server.stop();
+}
+
+impl Server {
+    /// The health the owner reads.
+    async fn health(&self) -> Value {
+        let response = self
+            .http
+            .get(self.url("/api/health"))
+            .bearer_auth(self.owner_token())
+            .send()
+            .await
+            .unwrap();
+        let (status, _, health) = body(response).await;
+        assert_eq!(status, StatusCode::OK, "{health}");
+        health
+    }
+}
+
+/// `path` as the Python version names a host path: without the links the
+/// OS puts at the top, such as macOS's `/var`.
+fn host_name(path: &Path) -> PathBuf {
+    let parent = std::fs::canonicalize(path.parent().unwrap()).unwrap();
+    parent.join(path.file_name().unwrap())
+}
+
+#[tokio::test]
+async fn the_server_opens_the_workspace_selected_and_names_it_by_its_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let selected = host_name(&dir.path().join("selected"));
+    std::fs::create_dir(&selected).unwrap();
+    let data = dir.path().join("home/data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        data.join("active-workspace.json"),
+        json!({"workspace": selected, "config_dir": selected.join(".guildbotics/config")})
+            .to_string(),
+    )
+    .unwrap();
+    let server = Server::start(dir.path());
+
+    let health = server.health().await;
+    assert_eq!(health["workspace"], json!(selected));
+    let identity: Value = serde_json::from_slice(
+        &std::fs::read(selected.join(".guildbotics/state/workspace.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(health["workspace_id"], identity["workspace_id"]);
+    let device: Value =
+        serde_json::from_slice(&std::fs::read(data.join("device.json")).unwrap()).unwrap();
+    assert_eq!(health["machine_name"], device["display_name"]);
+    assert_eq!(server.health().await, health);
+    let registered: Vec<PathBuf> =
+        serde_json::from_slice(&std::fs::read(data.join("workspaces.json")).unwrap()).unwrap();
+    assert_eq!(registered, [selected]);
+    server.stop();
+
+    // A workspace named explicitly wins over the selected one.
+    let named = host_name(&dir.path().join("named"));
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &named);
+    let server = Server::spawn(command, dir.path(), port);
+    let health = server.health().await;
+    assert_eq!(health["workspace"], json!(named));
+    assert!(named.join(".guildbotics/state/workspace.json").is_file());
+    server.stop();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_workspace_reached_through_a_link_is_not_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = host_name(&dir.path().join("real"));
+    std::fs::create_dir(&real).unwrap();
+    let link = host_name(&dir.path().join("link"));
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &link);
+    let server = Server::spawn(command, dir.path(), port);
+    let health = server.health().await;
+    assert_eq!(
+        (&health["workspace"], &health["workspace_id"]),
+        (&Value::Null, &Value::Null)
+    );
+    assert!(!real.join(".guildbotics").exists());
     server.stop();
 }
 

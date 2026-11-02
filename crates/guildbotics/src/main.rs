@@ -70,7 +70,7 @@ fn start() -> anyhow::Result<u8> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_LOG").unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("branvil=info,gb_server=info,guildbotics=info")
+                tracing_subscriber::EnvFilter::new("branvil=info,gb_server=info,gb_workspace=info,gb_observability=info,guildbotics=info")
             }),
         )
         .with_writer(std::io::stderr)
