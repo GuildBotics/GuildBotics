@@ -407,6 +407,26 @@ uv run --no-sync lint-imports
 uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
 
+HTTP と CLI の外側から確かめる黒箱テスト（通常の `test` ジョブにも含まれる）:
+
+```bash
+uv run --no-sync python -m pytest tests/blackbox -n auto
+# 起動コマンドを差し替え、同じテストを別のサーバー実装へ向ける
+GUILDBOTICS_BLACKBOX_SERVER='/absolute/path/to/server' \
+  uv run --no-sync python -m pytest tests/blackbox -n auto
+```
+
+既定の起動コマンドはテストと同じ Python の `-m guildbotics.app_api`。
+`GUILDBOTICS_BLACKBOX_SERVER` は shell を通さず引数へ分割するので、引数や引用符は使えるが
+shell の展開・リダイレクトは使えない。差し替え先も `GUILDBOTICS_SERVER_PORT` の loopback ポートと
+`GUILDBOTICS_APP_API_PORT=<port>` の stdout 通知、`/api/health`、一時 HOME の owner token、
+ワークスペースの YAML 設定という同じ契約を使う。fixture がテストごとにサーバーを起動し、終了時に止める。
+GuildBotics のモジュールは import せず、HTTP と CLI の子プロセスだけで検査する。
+HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離し、local provider だけを使う。
+サービスは空の schedule だけを動かし、runtime の配置を一時 HOME 内で拒否して image の取得を防ぐ。
+Python の子プロセスは loopback 以外の socket 接続・名前解決も拒否する。
+ネイティブの差し替え先にはこの Python 用の制限は及ばないため、同じ local 設定と外部 HTTP 通信を拒む proxy を渡す。
+
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
 `npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
