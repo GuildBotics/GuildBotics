@@ -103,12 +103,16 @@ def _seed(workspace: Path, home: Path, provider) -> None:
         workspace / ".guildbotics/local/service.yml",
         {"scheduled": True, "routine": False, "event_queue": False},
     )
-    # As in desktop/e2e/start-stack.mjs: fail before placing a runtime or
-    # fetching an image when service start attempts snapshot upkeep.
+    block_runtime(home)
+    provider.seed()
+
+
+def block_runtime(home: Path) -> None:
+    """As in desktop/e2e/start-stack.mjs: fail before placing a runtime or
+    fetching an image when service start attempts snapshot upkeep."""
     runtime = home / ".guildbotics/data/msb"
     runtime.parent.mkdir(parents=True, exist_ok=True)
     runtime.touch()
-    provider.seed()
 
 
 def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str, str]:
@@ -190,10 +194,17 @@ def running_stack(tmp_path: Path, *, environment=None):
     _seed(workspace, home, provider)
     if environment is not None:
         environment.adopt(workspace, home)
+    with serving(tmp_path, workspace, home, provider) as stack:
+        yield stack
+
+
+@contextmanager
+def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overrides):
+    """Serve ``workspace`` with ``home``; ``overrides`` replace child variables."""
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
-    env = _environment(tmp_path, workspace, home, port)
+    env = _environment(tmp_path, workspace, home, port) | overrides
     command = shlex.split(os.environ.get("GUILDBOTICS_BLACKBOX_SERVER", "")) or [
         sys.executable,
         "-m",

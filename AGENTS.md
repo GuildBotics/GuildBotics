@@ -473,6 +473,30 @@ desktop E2E と同じ環境変数を使い、その端末の runtime とワー�
 CLI → サーバー → 隔離環境 → member broker を貫く読み取りを確認する。
 実機テストの opt-in として扱い、CI 内や pytest-xdist での並列実行は拒否する。
 
+本番のワークスペースが積み重ねたファイルを別の実装が同じように読めるかは、本番の写しを読んだ応答
+（golden）と比べて確かめる（`tests/blackbox/test_golden.py`）。写しは
+`uv run --no-sync python -m tests.blackbox.golden <workspace> <identity root> <dir>` で作る。
+キーチェーンの名前空間（両方の store の `local/secrets.json`。写すと、OS のキーチェーンを使うサーバーが
+本番の値を読める）と、読み取りが使わない machine の状態（clones・member_git・snapshot・アップロードされた
+入力）は写さない（合成データで `test_copy_leaves_production_behind` が確かめる）。写しはサービスを開始せず、transcript を期限切れで消さず、Branvil の接続先を使えない
+ポートにする。写しと golden は本番の内容を含むので、リポジトリではなく
+Hub の `~/Documents/GuildBotics/blackbox-golden/<日付>/` に置く。テストは実行ごとに写しを一時
+directory へ複製し、別の HOME・ポートのサーバーに読ませる（loopback を含めて、サーバーからの HTTP は
+使えない proxy に向ける）:
+
+```bash
+# Python 版で golden を記録する（golden/ が既にあれば失敗する）
+GUILDBOTICS_BLACKBOX_GOLDEN=$HOME/Documents/GuildBotics/blackbox-golden/<日付> \
+  GUILDBOTICS_BLACKBOX_GOLDEN_RECORD=1 \
+  uv run --no-sync python -m pytest tests/blackbox/test_golden.py -p no:xdist
+# 別のサーバー実装の応答を golden と比べる（違った read の名前と、応答の置き場所を表示する）
+GUILDBOTICS_BLACKBOX_GOLDEN=$HOME/Documents/GuildBotics/blackbox-golden/<日付> \
+  GUILDBOTICS_BLACKBOX_SERVER='/absolute/path/to/server' \
+  uv run --no-sync python -m pytest tests/blackbox/test_golden.py -p no:xdist
+```
+
+golden を記録し直したら、トークンの形の値が入っていないことを確かめる。
+
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、これらに加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
 `npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
