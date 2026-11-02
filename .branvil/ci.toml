@@ -23,7 +23,7 @@ uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-uv run --no-sync python -m pytest tests/ -n auto --durations=30
+GUILDBOTICS_BLACKBOX_PROVIDER=local uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }

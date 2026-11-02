@@ -422,10 +422,35 @@ shell の展開・リダイレクトは使えない。差し替え先も `GUILDB
 `GUILDBOTICS_APP_API_PORT=<port>` の stdout 通知、`/api/health`、一時 HOME の owner token、
 ワークスペースの YAML 設定という同じ契約を使う。fixture がテストごとにサーバーを起動し、終了時に止める。
 GuildBotics のモジュールは import せず、HTTP と CLI の子プロセスだけで検査する。
-HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離し、local provider だけを使う。
+HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離する。
+`GUILDBOTICS_BLACKBOX_PROVIDER` で provider を選ぶ（現在は既定の `local`。CI も明示的に `local`）。
+`tests/blackbox/providers.py` のアダプターが provider の設定、remote の用意、人のマージ、CI の完了を受け持ち、
+チケットと関係、push・PR・マージ、head と base に応じた readiness の3経路は member CLI だけで同じ筋書きを流す。
+local のマージ API は無いため、fixture が bare remote とホストの状態ファイルへ人のマージ結果を記録し、
+メンバーから merged・チケットの closed/done を読めることを確かめる。local 自体のマージ処理を検証するものではない。
+一時 checkout からの push にだけ `member git push --workspace-mode current` を使う。
 サービスは空の schedule だけを動かし、runtime の配置を一時 HOME 内で拒否して image の取得を防ぐ。
 Python の子プロセスは loopback 以外の socket 接続・名前解決も拒否する。
 ネイティブの差し替え先にはこの Python 用の制限は及ばないため、同じ local 設定と外部 HTTP 通信を拒む proxy を渡す。
+
+同梱コマンドを `guildbotics run` で実際の microVM に実行させる黒箱テストは、通常の CI では
+`GUILDBOTICS_E2E_ENVIRONMENT_FROM` が未指定である理由を示して skip する。
+実機では、オーナーの明示的な承認を得て立ち会ってもらい、隔離環境が ready なワークスペースを指定して
+次を個別に実行する（環境変数の設定だけでは承認・立ち会いの代わりにならない）:
+
+```bash
+GUILDBOTICS_E2E_ENVIRONMENT_FROM=/absolute/path/to/ready-workspace \
+  uv run --no-sync python -m pytest tests/blackbox/test_run.py -p no:xdist -v -rs
+```
+
+desktop E2E と同じ環境変数を使い、その端末の runtime とワークスペースの snapshot を一時 HOME・
+ワークスペースへリンクし、宣言だけをコピーする。設定・メンバー・keyring は一時のもので、
+実機の資格情報を引き継がず、build・service start・LLM 実行はしない。
+一時 directory は Windows の mount 制約に合わせて実機の HOME の `.guildbotics-blackbox/` に作り、
+終了時にリンクごと削除する。元の runtime・snapshot は削除しない。
+`repository/issue_inspect`・`repository/pr_inspect`・`repository/pr_checks` の結果で、
+CLI → サーバー → 隔離環境 → member broker を貫く読み取りを確認する。
+実機テストの opt-in として扱い、CI 内や pytest-xdist での並列実行は拒否する。
 
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →

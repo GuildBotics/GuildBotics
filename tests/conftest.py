@@ -49,6 +49,7 @@ REAL_DEVICE_OPT_INS = frozenset(
         "GUILDBOTICS_COPILOT_SMOKE",
         "GUILDBOTICS_GROK_SMOKE",
         "GUILDBOTICS_ANTIGRAVITY_SMOKE",
+        "GUILDBOTICS_E2E_ENVIRONMENT_FROM",
     }
 )
 #: What a command's isolated environment is booted with and lends a turn's
@@ -243,7 +244,13 @@ def _configure_windows_basetemp(config: pytest.Config) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     global _PHASE_DURATION_OUTPUT
     config.stash[_REAL_DEVICE_ENABLED] = frozenset(
-        flag for flag in REAL_DEVICE_OPT_INS if os.environ.get(flag) == "1"
+        flag
+        for flag in REAL_DEVICE_OPT_INS
+        if (
+            bool(os.environ.get(flag))
+            if flag == "GUILDBOTICS_E2E_ENVIRONMENT_FROM"
+            else os.environ.get(flag) == "1"
+        )
     )
     if config.stash[_REAL_DEVICE_ENABLED]:
         if os.environ.get("CI"):
@@ -374,7 +381,14 @@ def pytest_collection_modifyitems(
     for item in items:
         flag = _real_device_flag(item)
         if flag is not None and flag not in enabled:
-            item.add_marker(pytest.mark.skip(reason=f"Set {flag}=1 to run this test."))
+            value = (
+                "a workspace whose isolated environment is ready on this device"
+                if flag == "GUILDBOTICS_E2E_ENVIRONMENT_FROM"
+                else "1"
+            )
+            item.add_marker(
+                pytest.mark.skip(reason=f"Set {flag}={value} to run this test.")
+            )
         if flag is not None and item.get_closest_marker("timeout") is None:
             item.add_marker(pytest.mark.timeout(30 * 60))
 

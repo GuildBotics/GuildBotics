@@ -1,6 +1,7 @@
 """Fresh server and local Git remote fixtures for blackbox journeys."""
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -14,13 +15,12 @@ def stack(tmp_path: Path):
         yield instance
 
 
-@pytest.fixture
-def repository(stack, tmp_path: Path):
-    """A local provider's bare remote with a real feature commit."""
-    seed = tmp_path / "seed"
-    seed.mkdir()
+@dataclass
+class Checkout:
+    path: Path
+    env: dict[str, str]
 
-    def git(*arguments):
+    def git(self, *arguments):
         return subprocess.run(
             [
                 "git",
@@ -30,28 +30,51 @@ def repository(stack, tmp_path: Path):
                 "user.email=blackbox@example.test",
                 *arguments,
             ],
-            cwd=seed,
-            env=stack.env,
+            cwd=self.path,
+            env=self.env,
             capture_output=True,
             text=True,
             check=True,
             timeout=10,
         ).stdout.strip()
 
-    git("init", "-q", "-b", "main")
-    (seed / "README.md").write_text("base\n", encoding="utf-8")
-    git("add", "README.md")
-    git("commit", "-q", "-m", "base")
-    git("switch", "-q", "-c", "feature")
-    (seed / "README.md").write_text("feature\n", encoding="utf-8")
-    git("add", "README.md")
-    git("commit", "-q", "-m", "feature")
-    head = git("rev-parse", "HEAD")
-    git("switch", "-q", "main")
-    remote = (
-        stack.workspace
-        / ".guildbotics/local/services/code/acme%2Fteam%2Fdemo/repository.git"
-    )
-    remote.parent.mkdir(parents=True)
-    git("clone", "-q", "--bare", str(seed), str(remote))
-    return head
+    def commit(self, name, content):
+        (self.path / name).write_text(content, encoding="utf-8")
+        self.git("add", name)
+        self.git("commit", "-q", "-m", "blackbox change")
+        return self.git("rev-parse", "HEAD")
+
+    def push(self, stack):
+        return stack.member(
+            "git",
+            "push",
+            "--repo-path",
+            str(self.path),
+            "--workspace-mode",
+            "current",
+            cwd=self.path,
+        )
+
+
+@pytest.fixture
+def checkout(stack, tmp_path: Path):
+    """A throwaway checkout; provider setup alone populates the remote directly."""
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    setup = Checkout(seed, stack.env)
+    setup.git("init", "-q", "-b", "main")
+    setup.commit("README.md", "base\n")
+    stack.provider.provision_repository(setup)
+    work = tmp_path / "work"
+    setup.git("clone", "-q", stack.provider.clone_url, str(work))
+    result = Checkout(work, stack.env)
+    result.git("switch", "-q", "-c", "feature")
+    result.commit("README.md", "feature\n")
+    return result
+
+
+@pytest.fixture
+def repository(stack, checkout):
+    """A real feature commit, pushed through the public member interface."""
+    checkout.push(stack)
+    return checkout.git("rev-parse", "HEAD")
