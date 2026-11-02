@@ -1,0 +1,22 @@
+[package]
+name = "gb-config"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "GuildBotics' configuration as running a command reads it: the team, and which file a command name runs with what it declares"
+license = "MIT"
+repository = "https://github.com/GuildBotics/GuildBotics"
+publish = false
+
+[dependencies]
+anyhow = "1"
+gb-wire = { path = "../gb-wire" }
+serde-saphyr = "2.0.0"
+serde_json = "1.0.154"
+tracing = "0.1"
+unicode-ident = "1"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+gb-base = { path = "../gb-base" }
+tempfile = "3.27.0"

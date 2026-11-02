@@ -86,6 +86,8 @@ paths = [
   "Cargo.lock",
   # gb-server embeds the locale files it says things from.
   "guildbotics/templates/locales/**",
+  # gb-wire generates its types from the schemas.
+  "wire/schema/**",
   "rust-toolchain*",
   ".cargo/**",
   "clippy.toml",
@@ -113,6 +115,10 @@ paths = [
   "guildbotics/templates/locales/**",
   # The records both versions write, which the golden tests read.
   "records/**",
+  # gb-wire generates its types from the schemas, and the golden tests read
+  # the wire's cases and the bundled commands.
+  "wire/**",
+  "guildbotics/templates/commands/**",
   "rust-toolchain*",
   ".cargo/**",
   "clippy.toml",

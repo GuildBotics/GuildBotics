@@ -1,0 +1,2234 @@
+{
+ "bundled": {
+  "resolved": {
+   "ask@ja": "templates/commands/ask.ja.md",
+   "ask@en": "templates/commands/ask.en.md",
+   "assistants/author_command@ja": "templates/commands/assistants/author_command.py",
+   "assistants/author_command@en": "templates/commands/assistants/author_command.py",
+   "assistants/troubleshoot@ja": "templates/commands/assistants/troubleshoot.py",
+   "assistants/troubleshoot@en": "templates/commands/assistants/troubleshoot.py",
+   "diagnostics/cli_agent@ja": "templates/commands/diagnostics/cli_agent.md",
+   "diagnostics/cli_agent@en": "templates/commands/diagnostics/cli_agent.md",
+   "examples/reports/ai_news_digest@ja": "templates/commands/examples/reports/ai_news_digest.ja.md",
+   "examples/reports/ai_news_digest@en": "templates/commands/examples/reports/ai_news_digest.en.md",
+   "examples/reports/morning_summary@ja": "templates/commands/examples/reports/morning_summary.ja.md",
+   "examples/reports/morning_summary@en": "templates/commands/examples/reports/morning_summary.en.md",
+   "examples/reports/tools/fetch_ai_news@ja": "templates/commands/examples/reports/tools/fetch_ai_news.py",
+   "examples/reports/tools/fetch_ai_news@en": "templates/commands/examples/reports/tools/fetch_ai_news.py",
+   "functions/author_command@ja": "templates/commands/functions/author_command.ja.md",
+   "functions/author_command@en": "templates/commands/functions/author_command.en.md",
+   "functions/convert_object@ja": "templates/commands/functions/convert_object.ja.md",
+   "functions/convert_object@en": "templates/commands/functions/convert_object.en.md",
+   "functions/get_os_ui_language@ja": "templates/commands/functions/get_os_ui_language.py",
+   "functions/get_os_ui_language@en": "templates/commands/functions/get_os_ui_language.py",
+   "functions/handle_chat_event@ja": "templates/commands/functions/handle_chat_event.ja.md",
+   "functions/handle_chat_event@en": "templates/commands/functions/handle_chat_event.en.md",
+   "functions/handle_ticket@ja": "templates/commands/functions/handle_ticket.ja.md",
+   "functions/handle_ticket@en": "templates/commands/functions/handle_ticket.en.md",
+   "functions/identify_item@ja": "templates/commands/functions/identify_item.ja.md",
+   "functions/identify_item@en": "templates/commands/functions/identify_item.en.md",
+   "functions/talk_as@ja": "templates/commands/functions/talk_as.ja.md",
+   "functions/talk_as@en": "templates/commands/functions/talk_as.en.md",
+   "functions/troubleshoot@ja": "templates/commands/functions/troubleshoot.ja.md",
+   "functions/troubleshoot@en": "templates/commands/functions/troubleshoot.en.md",
+   "repository/issue_inspect@ja": "templates/commands/repository/issue_inspect.py",
+   "repository/issue_inspect@en": "templates/commands/repository/issue_inspect.py",
+   "repository/pr_checks@ja": "templates/commands/repository/pr_checks.py",
+   "repository/pr_checks@en": "templates/commands/repository/pr_checks.py",
+   "repository/pr_inspect@ja": "templates/commands/repository/pr_inspect.py",
+   "repository/pr_inspect@en": "templates/commands/repository/pr_inspect.py",
+   "repository/security_alerts@ja": "templates/commands/repository/security_alerts.py",
+   "repository/security_alerts@en": "templates/commands/repository/security_alerts.py",
+   "workflows/chat_conversation_workflow@ja": "templates/commands/workflows/chat_conversation_workflow.py",
+   "workflows/chat_conversation_workflow@en": "templates/commands/workflows/chat_conversation_workflow.py",
+   "workflows/chat_post_command@ja": "templates/commands/workflows/chat_post_command.py",
+   "workflows/chat_post_command@en": "templates/commands/workflows/chat_post_command.py",
+   "workflows/ticket_driven_workflow@ja": "templates/commands/workflows/ticket_driven_workflow.py",
+   "workflows/ticket_driven_workflow@en": "templates/commands/workflows/ticket_driven_workflow.py"
+  },
+  "access": {
+   "templates/commands/ask.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/ask.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/assistants/author_command.py": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/assistants/troubleshoot.py": {
+    "read_only": true,
+    "inspects": [
+     "config",
+     "diagnostics"
+    ]
+   },
+   "templates/commands/diagnostics/cli_agent.md": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/examples/reports/ai_news_digest.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/examples/reports/ai_news_digest.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/examples/reports/morning_summary.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/examples/reports/morning_summary.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/examples/reports/tools/fetch_ai_news.py": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/author_command.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/author_command.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/convert_object.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/convert_object.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/get_os_ui_language.py": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/handle_chat_event.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/handle_chat_event.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/handle_ticket.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/handle_ticket.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/identify_item.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/identify_item.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/talk_as.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/talk_as.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/troubleshoot.en.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/functions/troubleshoot.ja.md": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/repository/issue_inspect.py": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/repository/pr_checks.py": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/repository/pr_inspect.py": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/repository/security_alerts.py": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/workflows/chat_conversation_workflow.py": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/workflows/chat_post_command.py": {
+    "read_only": false,
+    "inspects": []
+   },
+   "templates/commands/workflows/ticket_driven_workflow.py": {
+    "read_only": false,
+    "inspects": []
+   }
+  },
+  "python_metadata": {
+   "templates/commands/assistants/author_command.py": {
+    "description": "Answer a request from the command editor screen or propose command changes.",
+    "read_only": true,
+    "inputs": {
+     "message": "required"
+    }
+   },
+   "templates/commands/assistants/troubleshoot.py": {
+    "description": "Answer a troubleshooting question from the diagnostics screen.",
+    "read_only": true,
+    "inspects": [
+     "diagnostics",
+     "config"
+    ],
+    "inputs": {
+     "message": "required"
+    }
+   },
+   "templates/commands/examples/reports/tools/fetch_ai_news.py": {},
+   "templates/commands/functions/get_os_ui_language.py": {},
+   "templates/commands/repository/issue_inspect.py": {
+    "description": {
+     "en": "Inspect a ticket, its comments, its lane, its related tickets, its attachments, and the pull requests that refer to it.",
+     "ja": "チケットの本文・コメント・レーン・関係するチケット・添付と、参照している PR を確認します。"
+    },
+    "read_only": true
+   },
+   "templates/commands/repository/pr_checks.py": {
+    "description": {
+     "en": "Check pull-request CI and readiness, with optional failed log tails.",
+     "ja": "PR の CI・完了可否と、必要に応じて失敗ログを確認します。"
+    },
+    "read_only": true
+   },
+   "templates/commands/repository/pr_inspect.py": {
+    "description": {
+     "en": "Inspect a pull request, optionally including feedback and diff coordinates.",
+     "ja": "PR を確認します。レビューの会話と差分座標も取得できます。"
+    },
+    "read_only": true
+   },
+   "templates/commands/repository/security_alerts.py": {
+    "description": {
+     "en": "Read a page of dependency vulnerability alerts or one alert; requires a ready execution environment.",
+     "ja": "依存ライブラリの脆弱性アラートを1ページまたは個別に確認します。実行環境の準備が必要です。"
+    },
+    "read_only": true
+   },
+   "templates/commands/workflows/chat_conversation_workflow.py": {},
+   "templates/commands/workflows/chat_post_command.py": {},
+   "templates/commands/workflows/ticket_driven_workflow.py": {
+    "name": {
+     "en": "Ticket-driven workflow",
+     "ja": "チケット駆動ワークフロー"
+    },
+    "description": {
+     "en": "Poll the board for one actionable ticket or PR and delegate it to the AI CLI tool.",
+     "ja": "対応可能なチケットまたは PR を1件取得し、AI CLIツールへ委譲します。"
+    },
+    "routine": true
+   }
+  }
+ },
+ "workspaces": [
+  {
+   "id": "commands_and_team",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage: ja-JP\n",
+    "team/members/aiko/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: false\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "commands/hello.md": "---\nread_only: true\n---\nHello\n",
+    "commands/hello.ja.md": "こんにちは\n",
+    "team/members/aiko/commands/hello.py": "def main(context):\n    return 'aiko'\n",
+    "team/members/aiko/commands/only_aiko.sh": "echo aiko\n",
+    "commands/functions/get_os_ui_language.py": "def main(context):\n    return {}\n",
+    "commands/x.metadata.yml": "description: not a command\n",
+    "commands/dup.md": "---\ndescription: one\ndescription: two\nread_only: true\n---\nbody\n",
+    "commands/empty_fields.md": "---\nread_only:\ninspects:\n---\nbody\n",
+    "commands/twice.yml": "read_only: false\nread_only: true\ninspects: [config, diagnostics, config]\ncommands: []\n",
+    "commands/bad.md": "---\nread_only: maybe\n---\n",
+    "team/members/lax/member.yml": "is_active: false\nis_active: \"yes\"\n",
+    "commands/cr.md": "---\rread_only: true\r---\rbody\r",
+    "commands/y.yml": "read_only: y\ncommands: []\n",
+    "commands/capitalized.md": "---\nread_only: True\n---\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko Takahashi\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: Owner\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: kenji\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n",
+    "team/members/lax/identity.yml": "person_id: lax\nname: Lax\nperson_type: agent\n"
+   },
+   "resolve": [
+    [
+     "hello",
+     "ja",
+     null
+    ],
+    [
+     "hello",
+     "en",
+     null
+    ],
+    [
+     "hello",
+     "ja",
+     "aiko"
+    ],
+    [
+     "hello.py",
+     "ja",
+     "aiko"
+    ],
+    [
+     "hello.md",
+     "ja",
+     null
+    ],
+    [
+     "only_aiko",
+     "en",
+     "aiko"
+    ],
+    [
+     "only_aiko",
+     "en",
+     null
+    ],
+    [
+     "functions/get_os_ui_language",
+     "ja",
+     null
+    ],
+    [
+     "functions/talk_as",
+     "ja",
+     null
+    ],
+    [
+     "functions/talk_as",
+     "fr",
+     null
+    ],
+    [
+     "x.metadata",
+     "en",
+     null
+    ],
+    [
+     "missing",
+     "en",
+     null
+    ],
+    [
+     "hello",
+     "ja",
+     "../x"
+    ]
+   ],
+   "expected": {
+    "resolved": {
+     "hello@ja@None": "config/commands/hello.ja.md",
+     "hello@en@None": "config/commands/hello.md",
+     "hello@ja@aiko": "config/commands/hello.ja.md",
+     "hello.py@ja@aiko": "config/team/members/aiko/commands/hello.py",
+     "hello.md@ja@None": "config/commands/hello.ja.md",
+     "only_aiko@en@aiko": "config/team/members/aiko/commands/only_aiko.sh",
+     "only_aiko@en@None": null,
+     "functions/get_os_ui_language@ja@None": "config/commands/functions/get_os_ui_language.py",
+     "functions/talk_as@ja@None": "templates/commands/functions/talk_as.ja.md",
+     "functions/talk_as@fr@None": "templates/commands/functions/talk_as.en.md",
+     "x.metadata@en@None": null,
+     "missing@en@None": null,
+     "hello@ja@../x": "invalid person"
+    },
+    "access": {
+     "commands/bad.md": null,
+     "commands/capitalized.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/cr.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/dup.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/empty_fields.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/functions/get_os_ui_language.py": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/hello.ja.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/hello.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/twice.yml": {
+      "read_only": true,
+      "inspects": [
+       "config",
+       "diagnostics"
+      ]
+     },
+     "commands/y.yml": null
+    },
+    "team": {
+     "language": "ja",
+     "default_person_id": "aiko",
+     "members": [
+      {
+       "person_id": "aaron",
+       "name": "Aaron",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "abe",
+       "name": "Abe",
+       "person_type": "human",
+       "is_active": true
+      },
+      {
+       "person_id": "aiko",
+       "name": "Aiko Takahashi",
+       "person_type": "agent",
+       "is_active": true
+      },
+      {
+       "person_id": "kenji",
+       "name": "Kenji",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "lax",
+       "name": "Lax",
+       "person_type": "agent",
+       "is_active": true
+      },
+      {
+       "person_id": "owner",
+       "name": "Owner",
+       "person_type": "human",
+       "is_active": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_configured_default",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage: en\ndefault_person_id: kenji\n",
+    "team/members/aiko/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: false\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko Takahashi\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: Owner\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: kenji\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n"
+   },
+   "resolve": [],
+   "expected": {
+    "resolved": {},
+    "access": {},
+    "team": {
+     "language": "en",
+     "default_person_id": "kenji",
+     "members": [
+      {
+       "person_id": "aaron",
+       "name": "Aaron",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "abe",
+       "name": "Abe",
+       "person_type": "human",
+       "is_active": true
+      },
+      {
+       "person_id": "aiko",
+       "name": "Aiko Takahashi",
+       "person_type": "agent",
+       "is_active": true
+      },
+      {
+       "person_id": "kenji",
+       "name": "Kenji",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "owner",
+       "name": "Owner",
+       "person_type": "human",
+       "is_active": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_field_in_the_other_file",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage: ja-JP\n",
+    "team/members/aiko/member.yml": "name: Aiko\nis_active: true\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: false\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko Takahashi\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: Owner\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: kenji\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n"
+   },
+   "resolve": [],
+   "expected": {
+    "resolved": {},
+    "access": {},
+    "team": null
+   }
+  },
+  {
+   "id": "an_identity_of_another_member",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage: ja-JP\n",
+    "team/members/aiko/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: false\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko Takahashi\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: Owner\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: aiko\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n"
+   },
+   "resolve": [],
+   "expected": {
+    "resolved": {},
+    "access": {},
+    "team": null
+   }
+  },
+  {
+   "id": "a_language_of_no_text",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage:\n",
+    "team/members/aiko/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: false\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aiko/commands/hello.py": "def main(context):\n    return 'aiko'\n",
+    "team/members/aiko/commands/only_aiko.sh": "echo aiko\n",
+    "team/members/lax/member.yml": "is_active: false\nis_active: \"yes\"\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko Takahashi\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: Owner\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: kenji\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n",
+    "team/members/lax/identity.yml": "person_id: lax\nname: Lax\nperson_type: agent\n"
+   },
+   "resolve": [],
+   "expected": {
+    "resolved": {},
+    "access": {},
+    "team": null
+   }
+  }
+ ],
+ "python_sources": [
+  {
+   "id": "semicolons",
+   "source": "import os; COMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_trailing_semicolon",
+   "source": "COMMAND_METADATA = {'read_only': True};\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "crlf_continuation",
+   "source": "COMMAND_METADATA = \\\r\n{'read_only': True}\r\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "crlf_in_a_triple_quoted_string",
+   "source": "COMMAND_METADATA = {\"description\": \"\"\"a\r\nb\"\"\", \"read_only\": True}\r\n",
+   "expected": {
+    "metadata": {
+     "description": "a\nb",
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_f_string_with_its_own_quotes",
+   "source": "d = {}\nX = f\"{d[\"it's\"]}\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_f_string_with_a_bracket_in_a_string",
+   "source": "def fn(x):\n    return x\nv = f\"{fn(\"(\")}\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_f_string_format_spec",
+   "source": "x, w = 1, 3\nv = f\"{x:>{w}} {{literal}}\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_decorator_and_a_main_block",
+   "source": "import functools\n@functools.cache\ndef f():\n    pass\n\nif __name__ == '__main__':\n    COMMAND_METADATA = {}\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_annotation_alone_then_a_declaration",
+   "source": "COMMAND_METADATA: dict\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "two_targets_then_a_declaration",
+   "source": "COMMAND_METADATA = OTHER = {'read_only': False}\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "printed_not_assigned",
+   "source": "COMMAND_METADATA = {'read_only': True}\nprint(COMMAND_METADATA)\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "inspects_as_a_tuple",
+   "source": "COMMAND_METADATA = {'read_only': True, 'inspects': ('config',)}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": null
+   }
+  },
+  {
+   "id": "inspects_twice",
+   "source": "COMMAND_METADATA = {'inspects': ['config', 'config']}\n",
+   "expected": {
+    "metadata": {
+     "inspects": [
+      "config",
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": false,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "numbers_and_keys",
+   "source": "COMMAND_METADATA = {'args': {1: 'a', None: 'b'}, 'n': (-1, 0x10, 1_000, 2.5e1), 'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "args": {
+      "1": "a",
+      "null": "b"
+     },
+     "n": [
+      -1,
+      16,
+      1000,
+      25.0
+     ],
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declared_twice",
+   "source": "COMMAND_METADATA = {'read_only': True}\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "not_a_literal",
+   "source": "COMMAND_METADATA = dict(read_only=True)\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "keys_that_are_no_strings",
+   "source": "COMMAND_METADATA = {1: True}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "read_only_as_text",
+   "source": "COMMAND_METADATA = {'read_only': 'yes'}\n",
+   "expected": {
+    "metadata": {
+     "read_only": "yes"
+    },
+    "access": null
+   }
+  },
+  {
+   "id": "read_only_none",
+   "source": "COMMAND_METADATA = {'read_only': None, 'inspects': None}\n",
+   "expected": {
+    "metadata": {
+     "read_only": null,
+     "inspects": null
+    },
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_compound_statement_on_one_line",
+   "source": "if True: pass; COMMAND_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_class_on_one_line",
+   "source": "class C: x = 1; COMMAND_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_while_on_one_line",
+   "source": "while False: pass; COMMAND_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_form_feed_before_the_indentation",
+   "source": "def f():\n    pass\n\f    COMMAND_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_format_spec_with_a_hash_and_no_declaration",
+   "source": "x = 1\nv = f\"{x:#06x}\"\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "format_specs_before_a_declaration",
+   "source": "n = 1\nv = f\"{n:#06x} {n:'^10} {n!r:>{n}} {n=}\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_annotation_with_an_equals_sign",
+   "source": "from typing import Annotated\nF = dict\nCOMMAND_METADATA: Annotated[dict, F(a=1)] = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_parenthesized_target",
+   "source": "(COMMAND_METADATA) = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_parenthesized_annotated_target",
+   "source": "(COMMAND_METADATA): dict = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "nested_parentheses_around_the_target",
+   "source": "((COMMAND_METADATA)) = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_continuation_between_the_name_and_the_equals_sign",
+   "source": "COMMAND_METADATA \\\n= {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_continuation_before_the_annotation",
+   "source": "COMMAND_METADATA\\\n: dict = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_name_written_in_fullwidth",
+   "source": "ＣＯＭＭＡＮＤ_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_list_target",
+   "source": "[COMMAND_METADATA] = [{'read_only': True, 'inspects': ['config']}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_tuple_target",
+   "source": "COMMAND_METADATA, X = {'read_only': True, 'inspects': ['config']}, 1\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_subscript_target",
+   "source": "COMMAND_METADATA = {}\nCOMMAND_METADATA['read_only'] = True\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_augmented_assignment",
+   "source": "COMMAND_METADATA = {}\nCOMMAND_METADATA |= {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_walrus",
+   "source": "(COMMAND_METADATA := {'read_only': True, 'inspects': ['config']})\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_lambda_with_a_default",
+   "source": "COMMAND_METADATA = lambda a=1: a\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "a_type_alias",
+   "source": "type COMMAND_METADATA = dict\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_after_decorated_def",
+   "source": "@d\ndef f(): pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_after_oneline_compound",
+   "source": "if x: pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_compare_eq",
+   "source": "COMMAND_METADATA: a == b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_lambda_colon",
+   "source": "COMMAND_METADATA: lambda: 0 = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_lambda_default",
+   "source": "COMMAND_METADATA: lambda x=1: x = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_le",
+   "source": "COMMAND_METADATA: a <= b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_ne",
+   "source": "COMMAND_METADATA: a != b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_none_value",
+   "source": "COMMAND_METADATA: dict = None\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ann_only_then_decl",
+   "source": "COMMAND_METADATA: dict\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_ternary",
+   "source": "COMMAND_METADATA: a if b else c = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_assign_none",
+   "source": "COMMAND_METADATA = None\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_bs_after_semicolon",
+   "source": "x = 1; \\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_after_semicolon_indented",
+   "source": "x = 1; \\\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_colon",
+   "source": "COMMAND_METADATA \\\n: dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_eq",
+   "source": "COMMAND_METADATA \\\n= {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_eq_indented",
+   "source": "COMMAND_METADATA \\\n        = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_leading_line",
+   "source": "\\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_then_semicolon",
+   "source": "x = 1 \\\n; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_combining_mark_before",
+   "source": "é = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_cr_only_newlines",
+   "source": "x = 1\rCOMMAND_METADATA = {\"read_only\": True}\r",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_decl_eof_no_newline",
+   "source": "COMMAND_METADATA = {\"read_only\": True}",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_double_paren_target",
+   "source": "((COMMAND_METADATA)) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_dup_hidden_bs",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nx = 1; \\\nCOMMAND_METADATA = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_ff",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\n    \fCOMMAND_METADATA = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_fstring",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nx = f\"{1:='''}\"\nCOMMAND_METADATA = {}\n#'''}\"\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_nfkc",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_paren",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\n(COMMAND_METADATA) = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ff_prefix",
+   "source": "\fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_multiline_field",
+   "source": "x = f\"{1 +\n2}\"\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_nested_quote_desync",
+   "source": "x = f\"{\"'''\"}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_walrus_spec_desync",
+   "source": "x = f\"{1:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_global_then_decl",
+   "source": "global COMMAND_METADATA; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_latin1_cookie",
+   "source": "# -*- coding: latin-1 -*-\nx = 'é'\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_line_after_tab_comment",
+   "source": "\t# c\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_match_softkw_name",
+   "source": "match = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_match_stmt_before",
+   "source": "match x:\n    case 1:\n        pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_middle_dot_name_before",
+   "source": "a·b = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_dashed_lowline",
+   "source": "COMMAND﹍METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_doublestruck",
+   "source": "ℂOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_fullwidth",
+   "source": "ＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_fullwidth_lowline",
+   "source": "COMMAND＿METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_math_bold",
+   "source": "𝐂OMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_modifier",
+   "source": "COMMAND_ᴹᴱᵀᴬᴰᴬᵀᴬ = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_paren_ann",
+   "source": "(ＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_roman",
+   "source": "ⅭOⅯⅯANⅮ_ⅯETAⅮATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_vertical_lowline",
+   "source": "COMMAND︳METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_wavy_lowline",
+   "source": "COMMAND﹏METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_other_id_start_before",
+   "source": "℘ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_ann_target",
+   "source": "(COMMAND_METADATA): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_ann_target_multiline",
+   "source": "(\n    COMMAND_METADATA\n): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_target",
+   "source": "(COMMAND_METADATA) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_target_multiline",
+   "source": "( # t\nCOMMAND_METADATA\n) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_semicolon_after",
+   "source": "COMMAND_METADATA = {\"read_only\": True}; x = 1\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_semicolon_before",
+   "source": "x = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_spaces_then_ff",
+   "source": "    \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_string_prefix_names",
+   "source": "rb = f = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_tab_then_ff",
+   "source": "\t\fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_tstring_walrus_spec_desync",
+   "source": "x = t\"{1:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_type_softkw_name",
+   "source": "type = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_type_stmt_before",
+   "source": "type T = int\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_value_bs",
+   "source": "COMMAND_METADATA = \\\n{\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_value_walrus",
+   "source": "COMMAND_METADATA = (x := {\"read_only\": True})\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_value_yield",
+   "source": "COMMAND_METADATA = yield\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ff_spaces_ff",
+   "source": "\f  \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_conv_walrus_spec",
+   "source": "x = f\"{1!r:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_nested_spec_walrus",
+   "source": "x = f\"{1:{2:='''}}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_space_walrus_spec",
+   "source": "x = f\"{1 :='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fullwidth_class_name",
+   "source": "ｃｌａｓｓ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fullwidth_if_name",
+   "source": "ｉｆ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_lowline_paren_ann",
+   "source": "(COMMAND＿METADATA): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_spaces_ff_after_block",
+   "source": "if x:\n    pass\n  \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_ann_attr",
+   "source": "m.COMMAND_METADATA: dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_ann_only",
+   "source": "COMMAND_METADATA: dict\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_attr_target",
+   "source": "m.COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_augassign",
+   "source": "COMMAND_METADATA |= {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_comment",
+   "source": "# COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_compare_stmt",
+   "source": "COMMAND_METADATA == {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_docstring",
+   "source": "\"\"\"\nCOMMAND_METADATA = {\"read_only\": True}\n\"\"\"\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_in_class",
+   "source": "class C:\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_in_def_oneline",
+   "source": "def f(): COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_list_target",
+   "source": "[COMMAND_METADATA] = [{\"read_only\": True}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_multi_target",
+   "source": "COMMAND_METADATA = x = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_multi_target_paren",
+   "source": "(COMMAND_METADATA) = (x) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_oneline_if",
+   "source": "if TYPE_CHECKING: COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_oneline_if_bs",
+   "source": "if x: pass; \\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_starred_target",
+   "source": "*COMMAND_METADATA, = [{\"read_only\": True}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_subscript_target",
+   "source": "COMMAND_METADATA[0] = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_tuple_target",
+   "source": "COMMAND_METADATA, = ({\"read_only\": True},)\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_type_alias",
+   "source": "type COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_type_checking",
+   "source": "if TYPE_CHECKING:\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_walrus_stmt",
+   "source": "(COMMAND_METADATA := {\"read_only\": True})\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_after_a_comment_in_a_field",
+   "source": "a = 1\nx = f\"\"\"{a # c\n:=\" }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\ny: int = 1  # }\"\"\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_after_a_continuation_in_a_field",
+   "source": "a = 1\nx = f\"\"\"{a\\\n:=\" }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\ny: int = 1  # }\"\"\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_with_a_quote_after_a_comment",
+   "source": "a = 1\nx = f\"\"\"{a # c\n:=' }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  }
+ ]
+}
