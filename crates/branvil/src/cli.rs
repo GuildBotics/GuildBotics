@@ -176,10 +176,17 @@ pub fn init(
     Ok(())
 }
 
-/// Runs the service until a signal stops it; the exit status is 3 when the
-/// stop interrupted running CI jobs (`Ci::stop`).
-pub async fn serve(config: Config) -> anyhow::Result<u8> {
-    let (interrupt, terminate) = stop_signals()?;
+/// Runs the service until `interrupt` or `terminate` (`stop_signals`) stops
+/// it; the exit status is 3 when the stop interrupted running CI jobs
+/// (`Ci::stop`). With `announce`, it says on stdout when it listens and when
+/// it waits for repository operations (`scripts/serve.sh` reads them);
+/// otherwise only its log does.
+pub async fn serve(
+    config: Config,
+    interrupt: impl Future<Output = ()> + Send + 'static,
+    terminate: impl Future<Output = ()> + Send + 'static,
+    announce: bool,
+) -> anyhow::Result<u8> {
     let layout = config.layout();
     layout.create()?;
     let store = Store::open(
@@ -250,8 +257,12 @@ pub async fn serve(config: Config) -> anyhow::Result<u8> {
     crate::domain::attachments::start(app.clone());
 
     let router = crate::http::router(app.clone());
-    println!("branvil listening on http://{bound} (base URL {base_url})");
-    std::io::stdout().flush()?;
+    if announce {
+        println!("branvil listening on http://{bound} (base URL {base_url})");
+        std::io::stdout().flush()?;
+    } else {
+        tracing::info!("listening on http://{bound} (base URL {base_url})");
+    }
     // SIGTERM stops CI first (`Ci::stop`: no new jobs, the running ones
     // finish) while the server keeps serving the runners and everyone else;
     // SIGINT (Ctrl-C), also during that wait, skips it. Then the event streams
@@ -273,7 +284,7 @@ pub async fn serve(config: Config) -> anyhow::Result<u8> {
                 tracing::info!("stopping: no new CI jobs; waiting for the running ones (SIGINT skips the wait)");
                 tokio::select! {
                     _ = &mut interrupt => {},
-                    stopped = ci.stop() => match stopped {
+                    stopped = ci.stop(announce) => match stopped {
                         Ok(n) => cut = n,
                         Err(e) => tracing::warn!("stopping: cannot wait for the running CI jobs: {e}"),
                     },
@@ -307,14 +318,15 @@ pub async fn serve(config: Config) -> anyhow::Result<u8> {
     let close = app.close();
     tokio::pin!(close);
     if futures_util::poll!(close.as_mut()).is_pending() {
-        // scripts/serve.sh waits for a serve that says this (as for CI jobs).
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(
-            out,
-            "branvil stopping: waiting for the started repository operations to finish"
-        )
-        .and_then(|_| out.flush());
-        drop(out);
+        if announce {
+            // scripts/serve.sh waits for a serve that says this (as for CI jobs).
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(
+                out,
+                "branvil stopping: waiting for the started repository operations to finish"
+            )
+            .and_then(|_| out.flush());
+        }
         tracing::info!("stopping: waiting for the started repository operations");
         close.await;
     }
@@ -327,7 +339,7 @@ const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// SIGINT and SIGTERM, taken over before `serve` starts any repository work:
 /// their default action would end the process in the middle of it.
-fn stop_signals() -> std::io::Result<(impl Future<Output = ()>, impl Future<Output = ()>)> {
+pub fn stop_signals() -> std::io::Result<(impl Future<Output = ()>, impl Future<Output = ()>)> {
     #[cfg(unix)]
     let signals = {
         use tokio::signal::unix::{SignalKind, signal};

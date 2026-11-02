@@ -23,7 +23,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 
 | Module | Responsibility |
 | --- | --- |
-| `main.rs`, `cli.rs` | clap commands: `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), `admin notify` (reads only the webhook credential, online or offline), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
+| `lib.rs`, `main.rs`, `cli.rs` | clap commands (`main.rs` is the `branvil` executable; another one runs the same commands under its own, and the service in its process, through `lib.rs`): `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), `admin notify` (reads only the webhook credential, online or offline), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
 | `config.rs` | `branvil.toml`, data directory layout, loopback-only listen, fixed base URL |
 | `store.rs` | redb tables, order-preserving keys, JSON records, bounded blocking executor (`Store::read` / `Store::write`), the schema version and the upgrade frame (exclusive open, reads, then a copy and one write transaction) |
 | `upgrade.rs` | what the upgrade from the previous schema version changes in the records (replaced at each version) |
@@ -33,6 +33,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | `git.rs` | Git commands with a sanitized environment (no `GIT_*` of the service, no system/global config), time/output/concurrency limits |
 | `smart_http.rs` | `git http-backend` as CGI with Basic auth and streaming bodies |
 | `hooks.rs` | Branvil-owned hook scripts and the `branvil hook` entry point they exec |
+| `invocation.rs` | how Branvil's commands are started again on the running executable (the hook scripts, the automatic runner): none before them on `branvil`, the prefix another executable installed (`guildbotics branvil`) |
 | `refs.rs` | the ref-change boundary: snapshot recording, journal, startup recovery, push policy |
 | `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (`[ci] runner = "auto"`) |
 | `runner/` | `branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |

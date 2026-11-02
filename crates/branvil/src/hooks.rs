@@ -28,13 +28,17 @@ pub const SECRET_HEADER: &str = "x-branvil-hook";
 
 /// Writes the hook scripts for the running executable.
 pub fn install(layout: &Layout) -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?;
-    let exe = exe.to_string_lossy().replace('\'', r"'\''");
     std::fs::create_dir_all(layout.hooks())?;
     for hook in ["pre-receive", "post-receive"] {
+        let (exe, words) = crate::invocation::command(&["hook", hook])?;
+        let command = std::iter::once(exe.into_os_string())
+            .chain(words)
+            .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+            .collect::<Vec<_>>()
+            .join(" ");
         let path = layout.hooks().join(hook);
         let script = format!(
-            "#!/bin/sh\n# Written by Branvil at startup. Repository hooks never run.\nexec '{exe}' hook {hook}\n"
+            "#!/bin/sh\n# Written by Branvil at startup. Repository hooks never run.\nexec {command}\n"
         );
         std::fs::write(&path, script)?;
         make_executable(&path)?;

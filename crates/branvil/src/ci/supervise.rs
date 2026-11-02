@@ -81,7 +81,7 @@ pub fn start(app: Shared, url: String) {
                 continue;
             }
             let exe = match mint_token(&app).await.map_err(|e| e.message).and_then(|t| {
-                std::env::current_exe()
+                crate::invocation::command(&["runner"])
                     .map(|exe| (t, exe))
                     .map_err(|e| format!("cannot find the branvil binary: {e}"))
             }) {
@@ -97,9 +97,9 @@ pub fn start(app: Shared, url: String) {
                     continue;
                 }
             };
-            let (token, exe) = exe;
+            let (token, (exe, words)) = exe;
             let mut cmd = tokio::process::Command::new(exe);
-            cmd.arg("runner")
+            cmd.args(words)
                 .arg("--url")
                 .arg(&url)
                 .arg("--data-dir")
@@ -109,6 +109,8 @@ pub fn start(app: Shared, url: String) {
                 .env("BRANVIL_TOKEN", token)
                 .env_remove("BRANVIL_FAILPOINT")
                 .stdin(std::process::Stdio::null())
+                // The service's stdout carries only its own notices.
+                .stdout(std::io::stderr())
                 .kill_on_drop(true);
             let started = std::time::Instant::now();
             match cmd.spawn() {

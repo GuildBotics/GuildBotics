@@ -772,8 +772,9 @@ impl Ci {
     /// `ci.stop_wait_secs`. The checks
     /// still running then are interrupted and queued again in their place,
     /// ahead of the jobs queued meanwhile (which run after the next start);
-    /// it returns how many.
-    pub async fn stop(&self) -> AppResult<usize> {
+    /// it returns how many. With `announce`, it says on stdout that it waits
+    /// (`cli::serve`).
+    pub async fn stop(&self, announce: bool) -> AppResult<usize> {
         let wait = self.inner.config.stop_wait_secs;
         let deadline = Instant::now() + Duration::from_secs(wait);
         let _ = self.inner.stopping.set(queue::later(&util::now(), wait));
@@ -804,7 +805,7 @@ impl Ci {
             if running != told {
                 // scripts/serve.sh reads the first one, as it reads the line
                 // that says the service is ready; nobody may read it now.
-                if told == 0 {
+                if told == 0 && announce {
                     use std::io::Write;
                     let mut out = std::io::stdout().lock();
                     let _ = writeln!(
@@ -1167,7 +1168,7 @@ mod tests {
                 .iter()
                 .all(Check::succeeded)
         );
-        let stopped = tokio::time::timeout(Duration::from_millis(500), ci.stop())
+        let stopped = tokio::time::timeout(Duration::from_millis(500), ci.stop(false))
             .await
             .unwrap()
             .unwrap();
