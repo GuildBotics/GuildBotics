@@ -28,9 +28,9 @@ def test_blackbox_sources_do_not_import_guildbotics():
 
 
 def test_children_use_temporary_home_keyring_and_loopback_only(tmp_path, monkeypatch):
-    workspace, home = tmp_path / "workspace", tmp_path / "home"
+    # As running_stack lays it out: the run directory is HOME.
+    workspace, home = tmp_path / "workspace", tmp_path
     workspace.mkdir()
-    home.mkdir(exist_ok=True)
     # None of these host settings may reach either the server or its CLI.
     for name in (
         "GUILDBOTICS_CONFIG_DIR",
@@ -54,8 +54,8 @@ from pathlib import Path
 import keyring
 
 home = Path.home()
-assert Path.cwd().parent == home.parent
-assert Path(tempfile.gettempdir()).parent == home.parent
+assert Path.cwd().parent == home
+assert Path(tempfile.gettempdir()).parent == home
 assert 'ambient-setting-must-not-be-inherited' not in os.environ.values()
 assert type(keyring.get_keyring()).__name__ == 'FileKeyring'
 keyring.set_password('blackbox-test', 'user', 'throwaway-test-value')
