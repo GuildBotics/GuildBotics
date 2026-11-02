@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "effort": {
+      "default": "",
+      "title": "Effort",
+      "type": "string"
+    },
+    "error_category": {
+      "default": "",
+      "title": "Error Category",
+      "type": "string"
+    },
+    "error_details": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Error Details",
+      "type": "object"
+    },
+    "finish_reason": {
+      "default": "",
+      "title": "Finish Reason",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "provider_session_id": {
+      "default": "",
+      "title": "Provider Session Id",
+      "type": "string"
+    },
+    "provider_turn_id": {
+      "default": "",
+      "title": "Provider Turn Id",
+      "type": "string"
+    },
+    "returncode": {
+      "title": "Returncode",
+      "type": "integer"
+    },
+    "stderr": {
+      "title": "Stderr",
+      "type": "string"
+    },
+    "stdout": {
+      "title": "Stdout",
+      "type": "string"
+    },
+    "usage": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Usage",
+      "type": "object"
+    }
+  },
+  "required": [
+    "stdout",
+    "stderr",
+    "returncode"
+  ],
+  "title": "CliAgentExecutionResult",
+  "type": "object"
+}

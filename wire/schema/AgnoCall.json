@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "ResolvedEffort": {
+      "additionalProperties": false,
+      "description": "The outcome of resolving an effort request.\n\nAttributes:\n    requested: The value as supplied by the winning source, unchanged.\n    resolved: The level actually adopted, or ``\"\"`` when unspecified.\n    source: Where the winning value came from (``runtime`` / ``frontmatter``\n        / ``\"\"`` when nothing was specified).",
+      "properties": {
+        "requested": {
+          "default": "",
+          "title": "Requested",
+          "type": "string"
+        },
+        "resolved": {
+          "default": "",
+          "title": "Resolved",
+          "type": "string"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "title": "ResolvedEffort",
+      "type": "object"
+    },
+    "SpanContext": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "span_id": {
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "call_id",
+        "parent_id",
+        "name"
+      ],
+      "title": "SpanContext",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One request to the model of a member's slot.\n\n``output_schema`` is the JSON Schema of the output the brain expects, if\nany; ``span`` the span the request is recorded under.",
+  "properties": {
+    "brain": {
+      "title": "Brain",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "effort": {
+      "$ref": "#/$defs/ResolvedEffort"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "output_schema": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output Schema"
+    },
+    "session_state": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Session State",
+      "type": "object"
+    },
+    "slot": {
+      "title": "Slot",
+      "type": "string"
+    },
+    "span": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpanContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "brain",
+    "slot",
+    "effort",
+    "description",
+    "message"
+  ],
+  "title": "AgnoCall",
+  "type": "object"
+}

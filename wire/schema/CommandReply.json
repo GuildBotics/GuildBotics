@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "CommandFailure": {
+      "description": "How the command failed: ``command`` for a command's own failure (a\n``CommandError``), and the AI CLI tool's failure the error came from, if\nany, as the tool reported it (``cli_agent``, ``message`` and ``result``).",
+      "properties": {
+        "cli_agent": {
+          "default": "",
+          "title": "Cli Agent",
+          "type": "string"
+        },
+        "cli_agent_message": {
+          "default": "",
+          "title": "Cli Agent Message",
+          "type": "string"
+        },
+        "cli_agent_result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cli Agent Result"
+        },
+        "command": {
+          "title": "Command",
+          "type": "boolean"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "type",
+        "message"
+      ],
+      "title": "CommandFailure",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How the command ended: its result and text output, or its failure.",
+  "properties": {
+    "failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CommandFailure"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "result": {
+      "default": null,
+      "title": "Result"
+    },
+    "text_output": {
+      "default": "",
+      "title": "Text Output",
+      "type": "string"
+    }
+  },
+  "title": "CommandReply",
+  "type": "object"
+}

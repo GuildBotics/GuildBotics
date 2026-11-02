@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "ConversationKey": {
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "person_id": {
+          "title": "Person Id",
+          "type": "string"
+        },
+        "work_identity": {
+          "title": "Work Identity",
+          "type": "string"
+        },
+        "work_kind": {
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id",
+        "adapter",
+        "work_kind",
+        "work_identity"
+      ],
+      "title": "ConversationKey",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "context_cursor": {
+      "default": "",
+      "title": "Context Cursor",
+      "type": "string"
+    },
+    "context_size_tokens": {
+      "default": 0,
+      "title": "Context Size Tokens",
+      "type": "integer"
+    },
+    "context_used_tokens": {
+      "default": 0,
+      "title": "Context Used Tokens",
+      "type": "integer"
+    },
+    "created_at": {
+      "default": "",
+      "title": "Created At",
+      "type": "string"
+    },
+    "effective_effort": {
+      "default": "",
+      "title": "Effective Effort",
+      "type": "string"
+    },
+    "effective_model": {
+      "default": "",
+      "title": "Effective Model",
+      "type": "string"
+    },
+    "generation": {
+      "default": 0,
+      "title": "Generation",
+      "type": "integer"
+    },
+    "healthy": {
+      "default": true,
+      "title": "Healthy",
+      "type": "boolean"
+    },
+    "input_tokens": {
+      "default": 0,
+      "title": "Input Tokens",
+      "type": "integer"
+    },
+    "key": {
+      "$ref": "#/$defs/ConversationKey"
+    },
+    "last_event_id": {
+      "default": "",
+      "title": "Last Event Id",
+      "type": "string"
+    },
+    "last_run_id": {
+      "default": "",
+      "title": "Last Run Id",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "output_tokens": {
+      "default": 0,
+      "title": "Output Tokens",
+      "type": "integer"
+    },
+    "provider": {
+      "default": "",
+      "title": "Provider",
+      "type": "string"
+    },
+    "provider_session_id": {
+      "default": "",
+      "title": "Provider Session Id",
+      "type": "string"
+    },
+    "provider_turn_id": {
+      "default": "",
+      "title": "Provider Turn Id",
+      "type": "string"
+    },
+    "rotation_reason": {
+      "default": "",
+      "title": "Rotation Reason",
+      "type": "string"
+    },
+    "turn_count": {
+      "default": 0,
+      "title": "Turn Count",
+      "type": "integer"
+    },
+    "updated_at": {
+      "default": "",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "key"
+  ],
+  "title": "ConversationRecord",
+  "type": "object"
+}

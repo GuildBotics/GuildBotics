@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "CommandAccess": {
+      "description": "What a command declares about the access of its AI CLI turns.\n\nMirrors the ``read_only`` / ``inspects`` metadata. A command declares it\nand every turn of its run is held to it: a read-only command's turns can\nchange nothing, which is what lets the run take no execution lease and no\nmanual-command reservation. ``inspects`` is independent of that: what a\ncommand needs to read is its work's business.",
+      "properties": {
+        "inspects": {
+          "default": [],
+          "items": {
+            "enum": [
+              "diagnostics",
+              "config"
+            ],
+            "type": "string"
+          },
+          "title": "Inspects",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "read_only": {
+          "default": false,
+          "title": "Read Only",
+          "type": "boolean"
+        }
+      },
+      "title": "CommandAccess",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What the running command is, as its environment is told.\n\n``run_id`` is the run the command's grant covers, and ``work_kind`` and\n``work_identity`` the work it does, which key the member's conversation\nwith each tool its turns run. ``access`` is what the command declared, and ``inspected``\nthe directories its turns inspect, as the environment spells them.\n``mounts`` is what the microVM mounted, by where, and whether a command or\na turn may work under it (see :func:`admits`).",
+  "properties": {
+    "access": {
+      "$ref": "#/$defs/CommandAccess"
+    },
+    "inspected": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Inspected",
+      "type": "object"
+    },
+    "mounts": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "title": "Mounts",
+      "type": "object"
+    },
+    "person_id": {
+      "title": "Person Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "work_identity": {
+      "title": "Work Identity",
+      "type": "string"
+    },
+    "work_kind": {
+      "title": "Work Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "person_id",
+    "run_id",
+    "work_kind",
+    "work_identity",
+    "trace_id",
+    "access"
+  ],
+  "title": "CommandFacts",
+  "type": "object"
+}

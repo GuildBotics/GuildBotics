@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The member CLI identity output read by the guest.",
+  "properties": {
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "person_id": {
+      "title": "Person Id",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    },
+    "user_id": {
+      "title": "User Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "user_id",
+    "display_name",
+    "person_id"
+  ],
+  "title": "ChatIdentityOutput",
+  "type": "object"
+}

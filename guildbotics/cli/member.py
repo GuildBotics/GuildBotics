@@ -4,7 +4,7 @@ import asyncio
 import io
 import json
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -824,9 +824,9 @@ def chat_post(
 async def _chat_evidence(
     person: str,
     evidence_type: str,
-    use: Callable[[MemberChatCapabilityService], Awaitable[dict[str, Any]]],
+    use: Callable[[MemberChatCapabilityService], Awaitable[Mapping[str, Any]]],
 ) -> dict[str, Any]:
-    payload = await _chat(person, use)
+    payload = dict(await _chat(person, use))
     RunStore().append_evidence(current_run_id(), evidence_type, payload)
     return payload
 

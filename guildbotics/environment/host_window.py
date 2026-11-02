@@ -66,6 +66,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     TURN_WORKING_DIRECTORY,
     CommandFacts,
     CredentialEntry,
+    EndTurnResult,
     Entry,
     EventEntry,
     HostCallError,
@@ -245,7 +246,7 @@ class HostWindow:
         }
 
     @validate_call
-    async def end_turn(self, turn_grant: str) -> dict[str, str]:
+    async def end_turn(self, turn_grant: str) -> EndTurnResult:
         """End the running turn, revoking what it was lent; ``refusal`` is
         why the login it was lent could not be used, if it could not."""
         if self._turn is None or not secrets.compare_digest(

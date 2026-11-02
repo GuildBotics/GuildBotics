@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "AgentEvent": {
+      "properties": {
+        "approval": {
+          "default": "",
+          "title": "Approval",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "title": "Command",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "item_id": {
+          "default": "",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AgentEventKind"
+        },
+        "message": {
+          "default": "",
+          "title": "Message",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "provider_session_id": {
+          "default": "",
+          "title": "Provider Session Id",
+          "type": "string"
+        },
+        "provider_turn_id": {
+          "default": "",
+          "title": "Provider Turn Id",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "AgentEventKind": {
+      "enum": [
+        "process",
+        "turn",
+        "assistant",
+        "command",
+        "file_change",
+        "tool",
+        "approval",
+        "usage",
+        "failed"
+      ],
+      "title": "AgentEventKind",
+      "type": "string"
+    },
+    "ConversationKey": {
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "person_id": {
+          "title": "Person Id",
+          "type": "string"
+        },
+        "work_identity": {
+          "title": "Work Identity",
+          "type": "string"
+        },
+        "work_kind": {
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id",
+        "adapter",
+        "work_kind",
+        "work_identity"
+      ],
+      "title": "ConversationKey",
+      "type": "object"
+    },
+    "SpanContext": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "span_id": {
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "call_id",
+        "parent_id",
+        "name"
+      ],
+      "title": "SpanContext",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A turn's event, of the conversation it belongs to.",
+  "properties": {
+    "context_cursor": {
+      "default": "",
+      "title": "Context Cursor",
+      "type": "string"
+    },
+    "conversation": {
+      "$ref": "#/$defs/ConversationKey"
+    },
+    "event": {
+      "$ref": "#/$defs/AgentEvent"
+    },
+    "generation": {
+      "title": "Generation",
+      "type": "integer"
+    },
+    "span": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpanContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "type": {
+      "const": "event",
+      "default": "event",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "span",
+    "conversation",
+    "generation",
+    "event"
+  ],
+  "title": "EventEntry",
+  "type": "object"
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from guildbotics.entities.team import Person
 from guildbotics.runtime.port import SemanticReaction, WorkflowStatus
@@ -30,6 +30,45 @@ class ChatIdentity:
     # Human-readable name of the workspace the credential belongs to, so the
     # setup GUI can show which workspace a pasted token actually reaches.
     workspace: str = ""
+
+
+class ChatIdentityOutput(TypedDict):
+    """The member CLI identity output read by the guest."""
+
+    service: str
+    user_id: str
+    display_name: str
+    person_id: str
+
+
+class ChatPostOutput(TypedDict):
+    """The member CLI post/reply output read by the guest."""
+
+    service: str
+    channel_id: str
+    message_id: str
+    thread_id: str
+    occurred_at: str
+    text: str
+    posted: bool
+
+
+class ChatReactionOutput(TypedDict):
+    """The member CLI reaction output read by the guest."""
+
+    service: str
+    channel_id: str
+    message_id: str
+    reaction: SemanticReaction
+    reacted: bool
+
+
+class ChatChannelOutput(TypedDict):
+    """The member CLI channel lookup output read by the guest."""
+
+    service: str
+    channel_name: str
+    channel_id: str
 
 
 @dataclass(slots=True)

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cwd": {
+      "title": "Cwd",
+      "type": "string"
+    },
+    "participant_labels": {
+      "default": "",
+      "title": "Participant Labels",
+      "type": "string"
+    },
+    "tool": {
+      "title": "Tool",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tool",
+    "cwd"
+  ],
+  "title": "BeginTurnArguments",
+  "type": "object"
+}

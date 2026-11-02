@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The chat event a chat workflow run answers, in its source thread.",
+  "properties": {
+    "channel_id": {
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "self_user_id": {
+      "title": "Self User Id",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    },
+    "thread_id": {
+      "title": "Thread Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "channel_id",
+    "thread_id",
+    "event_id",
+    "self_user_id"
+  ],
+  "title": "ChatSubject",
+  "type": "object"
+}

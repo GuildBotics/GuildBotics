@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "ConversationKey": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "person_id": {
+          "title": "Person Id",
+          "type": "string"
+        },
+        "work_identity": {
+          "title": "Work Identity",
+          "type": "string"
+        },
+        "work_kind": {
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id",
+        "adapter",
+        "work_kind",
+        "work_identity"
+      ],
+      "title": "ConversationKey",
+      "type": "object"
+    },
+    "ResumePolicy": {
+      "enum": [
+        "fresh",
+        "resume",
+        "auto"
+      ],
+      "title": "ResumePolicy",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "key": {
+      "$ref": "#/$defs/ConversationKey"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/ResumePolicy"
+    }
+  },
+  "required": [
+    "key",
+    "policy"
+  ],
+  "title": "ResolveArguments",
+  "type": "object"
+}

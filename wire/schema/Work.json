@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "ChatSubject": {
+      "description": "The chat event a chat workflow run answers, in its source thread.",
+      "properties": {
+        "channel_id": {
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "self_user_id": {
+          "title": "Self User Id",
+          "type": "string"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "channel_id",
+        "thread_id",
+        "event_id",
+        "self_user_id"
+      ],
+      "title": "ChatSubject",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The work a command run does, settled by the host that starts the run.\n\n``kind`` and ``identity`` key the member's conversation with each AI CLI\ntool; a ticket is identified by its URL, which is also its subject.\n``chat`` is the subject of a chat workflow run. Nothing the run passes\nchanges any of it.",
+  "properties": {
+    "chat": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatSubject"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "identity": {
+      "title": "Identity",
+      "type": "string"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "identity"
+  ],
+  "title": "Work",
+  "type": "object"
+}

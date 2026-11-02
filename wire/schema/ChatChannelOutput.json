@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The member CLI channel lookup output read by the guest.",
+  "properties": {
+    "channel_id": {
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "channel_name": {
+      "title": "Channel Name",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "channel_name",
+    "channel_id"
+  ],
+  "title": "ChatChannelOutput",
+  "type": "object"
+}

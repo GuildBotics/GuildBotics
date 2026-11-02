@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "CommandAuthoringChange": {
+      "additionalProperties": false,
+      "description": "One command source creation or update proposed by the assistant.",
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "markdown",
+            "python",
+            "shell",
+            "yaml"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "create",
+            "update"
+          ],
+          "title": "Operation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "command",
+        "format",
+        "content"
+      ],
+      "title": "CommandAuthoringChange",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One answer or explicit multi-command change proposal.",
+  "properties": {
+    "action": {
+      "enum": [
+        "answer",
+        "propose_changes"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "changes": {
+      "items": {
+        "$ref": "#/$defs/CommandAuthoringChange"
+      },
+      "maxItems": 10,
+      "title": "Changes",
+      "type": "array"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action",
+    "message"
+  ],
+  "title": "CommandAuthoringResult",
+  "type": "object"
+}

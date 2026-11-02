@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A turn the host started: the grant its member commands carry, the\nenvironment, working directory and home its provider starts with, the\nmicroVM's mounts (by where, and whether read-only), and the member\nbroker's MCP server (``name``, ``url`` and ``authorization``).",
+  "properties": {
+    "cwd": {
+      "title": "Cwd",
+      "type": "string"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Env",
+      "type": "object"
+    },
+    "home": {
+      "title": "Home",
+      "type": "string"
+    },
+    "member": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Member",
+      "type": "object"
+    },
+    "mounts": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "title": "Mounts",
+      "type": "object"
+    },
+    "turn_grant": {
+      "title": "Turn Grant",
+      "type": "string"
+    }
+  },
+  "required": [
+    "turn_grant",
+    "env",
+    "cwd",
+    "home",
+    "mounts",
+    "member"
+  ],
+  "title": "HostTurn",
+  "type": "object"
+}

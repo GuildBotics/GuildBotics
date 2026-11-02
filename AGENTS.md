@@ -736,6 +736,7 @@ desktop TypeScript 開発時の品質確認:
 ## 変更時の実務ルール
 
 - ソースコード内のコメントと docstring は英語で書く。docstring は Google スタイルを使う
+- host と guest の wire の型を変更したら、`uv run --no-sync python scripts/generate-wire-schema.py` で `wire/schema/` を再生成してコミットする。host 窓口の呼び出しを追加したら、生成スクリプトの `HOST_RESULTS` に結果の型も登録する（CI の `--check` と `tests/guildbotics/test_wire_schema.py` が差分・登録漏れを検出する）。
 - 挙動変更時は、対応テストを `tests/guildbotics/...` に追加・更新する
 - コマンド仕様変更時は、`docs/custom_command_guide.en.md` / `docs/custom_command_guide.ja.md` の整合性も確認する
 - CLI のオプションやコマンド変更時は、新しいオプションに help を書き、`uv run --no-sync python scripts/generate-cli-reference.py` で `docs/cli_reference.md` を再生成して commit する（忘れると CI の `--check` ステップと `tests/guildbotics/cli/test_cli_reference.py` が fail する）。あわせて `README.md` / `README.ja.md` の使用例も確認する

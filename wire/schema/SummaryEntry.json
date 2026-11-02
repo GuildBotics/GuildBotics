@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "SpanContext": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "span_id": {
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "call_id",
+        "parent_id",
+        "name"
+      ],
+      "title": "SpanContext",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a turn's span ended, and what it ran on.",
+  "properties": {
+    "duration_ms": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration Ms"
+    },
+    "effort": {
+      "default": "",
+      "title": "Effort",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "model_specified": {
+      "title": "Model Specified",
+      "type": "boolean"
+    },
+    "slot": {
+      "title": "Slot",
+      "type": "string"
+    },
+    "span": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpanContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "finished",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "tool": {
+      "title": "Tool",
+      "type": "string"
+    },
+    "type": {
+      "const": "summary",
+      "default": "summary",
+      "title": "Type",
+      "type": "string"
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Usage"
+    }
+  },
+  "required": [
+    "span",
+    "slot",
+    "tool",
+    "model_specified",
+    "status"
+  ],
+  "title": "SummaryEntry",
+  "type": "object"
+}

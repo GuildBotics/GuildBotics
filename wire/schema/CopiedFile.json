@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A regular file copied: its path relative to the copy, and its state.",
+  "properties": {
+    "executable": {
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "sha256",
+    "executable"
+  ],
+  "title": "CopiedFile",
+  "type": "object"
+}
