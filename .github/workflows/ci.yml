@@ -1,14 +1,17 @@
 name: CI
 
-# Branvil's CI (.branvil/ci.toml) runs the full test suite, the Markdown links,
-# and the Desktop frontend checks. This workflow runs only what it cannot: the
-# Windows contracts.
+# Branvil's CI (.branvil/ci.toml) runs every check it can on Linux. This
+# workflow runs only what it cannot: the Windows contracts, and Clippy on the
+# code built for macOS alone (`#[cfg(target_os = "macos")]`).
 
 on:
   push:
     branches:
       - main
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test-windows:
@@ -55,3 +58,42 @@ jobs:
             ${{ runner.temp }}/pytest-windows.xml
             ${{ runner.temp }}/pytest-windows-phases.json
           if-no-files-found: error
+
+  clippy-macos:
+    # The job runs for every change, so its check always reports; Clippy runs
+    # only when the change concerns the Rust code.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # A pull request is compared with the first parent of its merge commit,
+      # the base, and a push with main before it: the diff is what the change
+      # brings to main. A rename lists both of its paths; a failing diff fails
+      # the job rather than skipping its checks.
+      - name: Detect changes
+        id: changes
+        env:
+          BASE: ${{ github.event_name == 'push' && github.event.before || 'HEAD^1' }}
+        run: |
+          changed="$(git -c core.quotePath=false diff --name-only --no-renames "$BASE" HEAD)"
+          rust=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/ci.yml | *.rs | Cargo.toml | */Cargo.toml | Cargo.lock | rust-toolchain*) rust=true ;;
+            esac
+          done <<<"$changed"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
+      # The version and components of rust-toolchain.toml.
+      - name: Install Rust
+        if: steps.changes.outputs.rust == 'true'
+        run: rustup toolchain install
+
+      - name: Clippy
+        if: steps.changes.outputs.rust == 'true'
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings

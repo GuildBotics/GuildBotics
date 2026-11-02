@@ -11,9 +11,9 @@
 #   - Node.js 24, as the Desktop workflows run it, for the frontend checks of
 #     the CI jobs (in the environment snapshot, the build's own Node.js, at the
 #     version GuildBotics pins, replaces it)
-#   - the Rust toolchain and the Tauri system libraries for `cargo check` /
-#     `scripts/desktop-test-rust.sh`; `cargo` is cargo-wrapper.sh, which first
-#     cleans a target directory built under other build conditions
+#   - the Rust toolchain for the Cargo workspace's checks, and the Tauri
+#     system libraries; `cargo` is cargo-wrapper.sh, which first cleans a
+#     target directory built under other build conditions
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
@@ -38,6 +38,7 @@ FROM node:24.22.1-bookworm
 
 ARG UV_VERSION=0.13.5
 ARG PYTHON_VERSION=3.15
+# The channel of rust-toolchain.toml: the jobs cannot install another one.
 ARG RUST_VERSION=1.96.0
 ARG LYCHEE_VERSION=0.24.2
 # Keep in step with `@playwright/test` in desktop/package-lock.json; a newer

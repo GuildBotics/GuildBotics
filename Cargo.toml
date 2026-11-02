@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/*"]
+# CI keeps uv's cache under .ci, where `uv sync` builds the sdists of Python
+# packages with Cargo: without this, Cargo takes them for members.
+exclude = [".ci"]
+resolver = "3"
+
+# Profiles apply only here, at the workspace's root: Cargo ignores those of a
+# member. docker/agent-environment/cargo-wrapper.sh records these tables in the
+# target directory and cleans it when they change.
+
+# Line numbers are enough for the backtraces; full debug info, and any for
+# dependencies, made the development `target` several gigabytes.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

@@ -1,0 +1,1588 @@
+/* Branvil GUI styles.
+ *
+ * The first and last parts are copied from GuildBotics Desktop
+ * (desktop/src/styles.css): its design tokens and its overrides of Mantine
+ * components, so Branvil looks like a part of it. Keep them identical when
+ * GuildBotics changes them. Branvil's own layout is in between. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Tier 1: Literal Tokens (oklch) */
+  --literal-slate-50: oklch(0.98 0.005 240);
+  --literal-slate-100: oklch(0.95 0.01 240);
+  --literal-slate-200: oklch(0.89 0.015 240);
+  --literal-slate-300: oklch(0.82 0.02 240);
+  --literal-slate-700: oklch(0.35 0.03 240);
+  --literal-slate-800: oklch(0.27 0.025 240);
+  --literal-slate-900: oklch(0.21 0.02 240);
+  --literal-slate-950: oklch(0.15 0.015 240);
+
+  --literal-teal-50: oklch(0.97 0.015 170);
+  --literal-teal-100: oklch(0.94 0.025 170);
+  --literal-teal-200: oklch(0.88 0.045 170);
+  --literal-teal-600: oklch(0.58 0.13 170);
+  --literal-teal-700: oklch(0.48 0.12 170);
+  --literal-teal-800: oklch(0.38 0.1 170);
+  --literal-teal-900: oklch(0.28 0.08 170);
+
+  --literal-amber-50: oklch(0.98 0.015 80);
+  --literal-amber-100: oklch(0.95 0.03 80);
+  --literal-amber-600: oklch(0.76 0.15 80);
+  --literal-amber-700: oklch(0.66 0.15 80);
+
+  --literal-red-50: oklch(0.97 0.02 25);
+  --literal-red-100: oklch(0.93 0.04 25);
+  --literal-red-600: oklch(0.55 0.22 25);
+  --literal-red-700: oklch(0.45 0.2 25);
+
+  --literal-purple-50: oklch(0.97 0.02 290);
+  --literal-purple-100: oklch(0.93 0.04 290);
+  --literal-purple-600: oklch(0.55 0.22 290);
+  --literal-purple-700: oklch(0.45 0.2 290);
+
+  /* Tier 2: Semantic UI Tokens (light-dark dynamic) */
+  --color-bg-base: light-dark(#ffffff, var(--literal-slate-950));
+  --color-bg-sidebar: light-dark(var(--literal-slate-50), var(--literal-slate-950));
+  --color-bg-panel: light-dark(#ffffff, var(--literal-slate-800));
+  --color-bg-panel-subtle: light-dark(var(--literal-slate-50), var(--literal-slate-900));
+  --color-bg-hover: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.06));
+  --color-bg-hover-subtle: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03));
+
+  --color-border: light-dark(var(--literal-slate-200), var(--literal-slate-800));
+  --color-border-subtle: light-dark(var(--literal-slate-100), var(--literal-slate-900));
+  --shadow-premium-light:
+    0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 12px rgba(0, 0, 0, 0.03), 0 12px 24px rgba(0, 0, 0, 0.04);
+  --shadow-premium-dark:
+    0 1px 2px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.2), 0 12px 24px rgba(0, 0, 0, 0.25);
+  --shadow-premium: light-dark(var(--shadow-premium-light), var(--shadow-premium-dark));
+
+  --color-text-main: light-dark(var(--literal-slate-900), var(--literal-slate-50));
+  --color-text-subtle: light-dark(var(--literal-slate-700), var(--literal-slate-300));
+  --color-text-muted: light-dark(oklch(0.55 0.01 240), oklch(0.65 0.01 240));
+
+  /* Brand / Active Tokens */
+  --color-brand: var(--literal-teal-600);
+  --color-brand-hover: var(--literal-teal-700);
+  --color-brand-active: var(--literal-teal-800);
+  --color-brand-bg-subtle: light-dark(var(--literal-teal-50), var(--literal-teal-900));
+  --color-brand-border-subtle: light-dark(var(--literal-teal-200), var(--literal-teal-800));
+
+  /* Semantic Alerts */
+  --color-success: oklch(0.62 0.17 150);
+  --color-success-bg: light-dark(oklch(0.97 0.02 150), oklch(0.2 0.06 150));
+  --color-success-border: light-dark(oklch(0.85 0.05 150), oklch(0.35 0.08 150));
+  --color-success-text: light-dark(oklch(0.35 0.1 150), oklch(0.85 0.05 150));
+
+  --color-warning: var(--literal-amber-700);
+  --color-warning-bg: light-dark(var(--literal-amber-50), oklch(0.22 0.05 80));
+  --color-warning-border: light-dark(var(--literal-amber-100), oklch(0.35 0.08 80));
+  --color-warning-text: light-dark(var(--literal-amber-700), var(--literal-amber-100));
+
+  --color-danger: var(--literal-red-600);
+  --color-danger-bg: light-dark(var(--literal-red-50), oklch(0.2 0.06 25));
+  --color-danger-border: light-dark(var(--literal-red-100), oklch(0.35 0.08 25));
+  --color-danger-text: light-dark(var(--literal-red-700), var(--literal-red-100));
+
+  --color-info: var(--literal-purple-600);
+  --color-info-bg: light-dark(var(--literal-purple-50), oklch(0.2 0.06 290));
+  --color-info-border: light-dark(var(--literal-purple-100), oklch(0.35 0.08 290));
+  --color-info-text: light-dark(var(--literal-purple-700), var(--literal-purple-100));
+
+  /* Application specificity */
+  color: var(--color-text-main);
+  background: var(--color-bg-base);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* Mantine sets the body's colors; the workspace area takes the base color. */
+
+/* Plain links read as Mantine's anchors; navigation links set their own look. */
+a {
+  color: var(--mantine-color-anchor);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.nav-item:hover,
+.setup-nav-item:hover,
+.list-row:hover,
+.card .key:hover {
+  text-decoration: none;
+}
+
+/* ---- shell (as GuildBotics' .shell / .sidebar / .workspace) ---- */
+.shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  background: var(--color-bg-sidebar);
+  color: var(--color-text-main);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  overflow-y: auto;
+  padding: 44px 24px 24px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-separator {
+  border-top: 1px solid var(--color-border);
+  margin: 6px 0;
+}
+
+.nav-item {
+  align-items: center;
+  border-radius: 6px;
+  color: var(--color-text-subtle);
+  display: flex;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  text-decoration: none;
+}
+
+.nav-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.nav-item.active {
+  background: var(--color-brand-bg-subtle);
+  border-top-left-radius: 2px;
+  border-bottom-left-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--color-brand);
+  color: light-dark(var(--literal-teal-800), #ffffff);
+  font-weight: 700;
+}
+
+.sidebar-field-label {
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar-input {
+  background: var(--color-bg-panel-subtle);
+  border-color: var(--color-border);
+  color: var(--color-text-main);
+}
+
+.sidebar-language {
+  margin-top: auto;
+}
+
+.workspace {
+  background: var(--color-bg-base);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 42px 24px 24px 24px;
+}
+
+.workspace > * {
+  min-width: 0;
+}
+
+/* A page that fills the height instead of scrolling (the board). */
+.workspace-fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+}
+
+.guide {
+  margin: 15vh auto 0;
+  max-width: 460px;
+  padding: 0 24px;
+}
+
+/* ---- page header ---- */
+.page-crumb {
+  color: var(--mantine-color-dimmed);
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+
+.page-key {
+  color: var(--mantine-color-dimmed);
+  font-weight: 400;
+  margin-right: 6px;
+}
+
+.page-meta {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 14px;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.editable-title {
+  align-items: center;
+  border-radius: 6px;
+  cursor: text;
+  display: inline-flex;
+  margin-left: -6px;
+  padding: 0 6px;
+}
+
+.editable-title:hover,
+.editable-title:focus-visible {
+  background: var(--color-bg-hover);
+}
+
+.editable-title .pencil {
+  color: var(--mantine-color-dimmed);
+  margin-left: 10px;
+  opacity: 0;
+}
+
+.editable-title:hover .pencil,
+.editable-title:focus-visible .pencil {
+  opacity: 1;
+}
+
+/* ---- two-column detail page (the ticket) ---- */
+.detail {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+
+.detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- posts: a body or a comment, a header strip over its text ---- */
+.post {
+  overflow: hidden;
+}
+
+.post-head {
+  align-items: center;
+  background: var(--color-bg-hover-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px 8px 20px;
+}
+
+.post-body {
+  padding: 16px 20px 20px;
+}
+
+.comment {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  scroll-margin-top: 16px;
+}
+
+.comment[data-target] {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+.comment .post-head {
+  min-height: 0;
+  padding: 8px 12px;
+}
+
+.comment .post-body {
+  padding: 10px 12px;
+}
+
+.comment.notice {
+  border-style: dashed;
+}
+
+.comment.approve {
+  border-left: 4px solid var(--color-success);
+}
+
+.comment.request_changes {
+  border-left: 4px solid var(--color-danger);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Indented, so a comment on a line of code stands apart from the conversation's comments. */
+.thread {
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-brand-border-subtle);
+  border-radius: 6px;
+  margin-left: 32px;
+  overflow: hidden;
+}
+
+.thread > summary {
+  align-items: center;
+  background: var(--color-bg-panel-subtle);
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 14px;
+  gap: 10px;
+  list-style: none;
+  padding: 8px 12px;
+}
+
+.thread > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A commit is one line between the posts, so a reader sees what was pushed after a review. */
+.timeline-commit {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* ---- Markdown ---- */
+.markdown {
+  color: var(--color-text-main);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px;
+}
+
+.markdown :not(pre) > code {
+  background: var(--color-bg-hover);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 5px;
+}
+
+.markdown pre {
+  min-height: 0;
+  white-space: pre;
+}
+
+.markdown figure[data-diagram] {
+  margin: 0 0 8px;
+}
+
+.markdown figure[data-diagram] button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+.markdown figure[data-diagram] button:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.markdown figure[data-diagram] img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-full-size {
+  display: block;
+}
+
+.markdown figure[data-diagram] summary {
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.markdown [data-diagram-error] {
+  color: var(--mantine-color-red-text);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.markdown a {
+  color: var(--mantine-color-anchor);
+}
+
+/* The service supplies the kind and state; SVG masks are GUI-owned icons. */
+.markdown a[data-branvil-kind] {
+  font-weight: 500;
+}
+
+.markdown a[data-branvil-kind]::before {
+  content: "";
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.25em;
+  vertical-align: -0.12em;
+  background: var(--color-success-text);
+  mask: var(--reference-icon) center / contain no-repeat;
+}
+
+.markdown a[data-branvil-kind="ticket"] {
+  --reference-icon: url("./assets/references/ticket-open.svg");
+}
+
+.markdown a[data-branvil-kind="ticket"][data-branvil-state="closed"] {
+  --reference-icon: url("./assets/references/ticket-closed.svg");
+}
+
+.markdown a[data-branvil-kind="pull"] {
+  --reference-icon: url("./assets/references/pull-open.svg");
+}
+
+.markdown a[data-branvil-kind="pull"][data-branvil-state="closed"] {
+  --reference-icon: url("./assets/references/pull-closed.svg");
+}
+
+.markdown a[data-branvil-kind="pull"][data-branvil-state="merged"] {
+  --reference-icon: url("./assets/references/pull-merged.svg");
+}
+
+.markdown a[data-branvil-state="closed"]::before {
+  background: var(--color-danger-text);
+}
+
+.markdown a[data-branvil-kind="ticket"][data-branvil-state="closed"]::before,
+.markdown a[data-branvil-state="merged"]::before {
+  background: var(--color-info-text);
+}
+
+/* An attached screenshot shrinks to the column instead of widening the page. */
+.markdown img {
+  height: auto;
+  max-width: 100%;
+}
+
+/* The table scrolls inside its own box so a wide grid does not widen the page.
+   display:block is what lets overflow apply to a table. */
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  margin: 0 0 8px;
+  max-width: 100%;
+  overflow: auto;
+  width: max-content;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--color-border);
+  /* anywhere on .markdown would shrink a wide table instead of scrolling it. */
+  overflow-wrap: normal;
+  padding: 6px 12px;
+}
+
+.markdown th {
+  background: var(--color-bg-panel-subtle);
+  font-weight: 700;
+  text-align: left;
+}
+
+.markdown th[align="left"],
+.markdown td[align="left"] {
+  text-align: left;
+}
+
+.markdown th[align="center"],
+.markdown td[align="center"] {
+  text-align: center;
+}
+
+.markdown th[align="right"],
+.markdown td[align="right"] {
+  text-align: right;
+}
+
+code,
+pre,
+.mono {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+pre {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ---- the board ---- */
+.board-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.board-toolbar .board-search {
+  flex: 1 1 260px;
+  max-width: 380px;
+}
+
+.lanes {
+  display: grid;
+  flex: 1;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(240px, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.lane {
+  background: var(--color-bg-panel-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 12px 0 8px;
+}
+
+.lane.drop-target {
+  outline: 2px dashed var(--color-brand);
+  outline-offset: -2px;
+}
+
+.lane-head {
+  align-items: center;
+  display: flex;
+  font-size: 14px;
+  font-weight: 700;
+  gap: 8px;
+  margin: 0;
+  padding: 0 14px 10px;
+}
+
+.lane-cards {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 12px 8px;
+}
+
+.lane-cards > li.dragging {
+  opacity: 0.4;
+}
+
+.lane-cards > li.insert-before {
+  border-top: 3px solid var(--color-brand);
+  border-radius: 2px;
+  padding-top: 4px;
+}
+
+.lane-empty {
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin: 0;
+  padding: 16px 4px;
+  text-align: center;
+}
+
+.lane-foot {
+  border-top: 1px solid var(--color-border-subtle);
+  padding: 8px 8px 0;
+}
+
+.lane-composer {
+  display: grid;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.card {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  box-shadow: var(--shadow-premium);
+  cursor: grab;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  position: relative;
+}
+
+.card:hover {
+  border-color: var(--color-border);
+}
+
+.card.busy {
+  opacity: 0.6;
+}
+
+.card .key {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.card .title {
+  color: var(--color-text-main);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0;
+  /* A word longer than the card (a test's name) breaks instead of widening it. */
+  overflow-wrap: anywhere;
+}
+
+.card .title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The card's first row keeps clear of its menu in the top right corner. */
+.card-head {
+  padding-right: 18px;
+}
+
+.card-who {
+  align-items: center;
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.card-menu {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+}
+
+/* What a card lets you change in place (its children, lane, assignee): one look. */
+.card-control {
+  align-items: center;
+  background: transparent;
+  /* --color-border is the card's own colour in dark mode. */
+  border: 1px solid light-dark(var(--literal-slate-200), var(--literal-slate-700));
+  border-radius: 6px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  gap: 6px;
+  line-height: 1.4;
+  padding: 1px 6px;
+}
+
+.card-control:hover:not(:disabled),
+.card-control:focus-visible {
+  background: var(--color-brand-bg-subtle);
+  border-color: var(--color-brand);
+  /* As the active page in the sidebar: the brand colour itself is too faint for small text on its subtle fill. */
+  color: light-dark(var(--literal-teal-800), #ffffff);
+}
+
+.card-control:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.card-control:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.card.dim {
+  opacity: 0.4;
+}
+
+/* ---- the relations of a workspace's tickets ---- */
+/* Only the figure scrolls, both ways; the header and the filters stay above it. */
+.relations-scroll {
+  background: var(--color-bg-panel-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Layers, bottom up: the lines with their hit areas and "×" (.rel-lines),
+   the cards (.relations-canvas), the hovered line again (.rel-front), the line
+   being drawn. Outside a drag, the pointer goes through the layout around the
+   cards to the lines; during one, the frames and the background take it as
+   drop targets. */
+.relations-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  min-width: 100%;
+  /* The hint of the line being drawn does not grow the scrolled area. */
+  overflow: clip;
+  position: relative;
+  width: max-content;
+}
+
+.relations-canvas {
+  flex: 1;
+  min-height: 160px;
+  padding: 20px;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
+
+.rel-card,
+.relations-content.relating .relations-canvas {
+  pointer-events: auto;
+}
+
+.relations-canvas.drop-target {
+  outline: 2px dashed var(--color-brand);
+  outline-offset: -4px;
+}
+
+.relations-empty {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.rel-level {
+  align-items: flex-start;
+  display: flex;
+  gap: 64px;
+}
+
+.rel-column {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rel-card {
+  border-radius: 10px;
+  width: 260px;
+}
+
+.rel-node.dragging,
+.rel-frame.dragging > .rel-card {
+  opacity: 0.4;
+}
+
+/* An open parent: its card is the header of the frame its children are in,
+   as wide as the frame, so it reads as the frame's and its handle and lines
+   sit on the frame's edges. */
+.rel-frame {
+  background: var(--color-bg-hover-subtle);
+  border: 1px solid var(--color-brand-border-subtle);
+  border-radius: 12px;
+  display: grid;
+}
+
+.rel-frame > .rel-card {
+  min-width: 260px;
+  width: auto;
+}
+
+.card.parent {
+  background: var(--color-brand-bg-subtle);
+}
+
+/* The header of the frame of new tickets: a parent's, in another colour, and not dragged. */
+.card.fresh {
+  background: var(--color-info-bg);
+  cursor: default;
+}
+
+.rel-frame > .rel-card > .card {
+  border: 0;
+  border-bottom: 1px solid var(--color-brand-border-subtle);
+  border-radius: 11px 11px 0 0;
+  box-shadow: none;
+}
+
+.rel-frame > .rel-level {
+  padding: 16px;
+}
+
+/* Where a dropped card goes among its siblings: a line in the gap beside one,
+   drawn over the gap so nothing moves under the pointer. */
+.rel-node,
+.rel-frame {
+  position: relative;
+}
+
+.insert-before::before,
+.insert-after::before {
+  background: var(--color-brand);
+  border-radius: 2px;
+  content: "";
+  height: 3px;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+.insert-before::before {
+  top: -10px;
+}
+
+.insert-after::before {
+  bottom: -10px;
+}
+
+/* A gap the card cannot go into: a dashed line, and why. */
+.refused::before {
+  background: none;
+  border-top: 2px dashed var(--color-text-muted);
+}
+
+.rel-refused {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-premium);
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  left: 8px;
+  padding: 2px 8px;
+  pointer-events: none;
+  position: absolute;
+  right: 8px;
+  text-align: center;
+  transform: translateY(-50%);
+  z-index: 3;
+}
+
+.rel-refused.before {
+  top: -9px;
+}
+
+.rel-refused.after {
+  top: calc(100% + 9px);
+}
+
+.rel-node.drop-target .card,
+.rel-frame.drop-target {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* The handle a dependency is drawn from, on the right edge of a hovered card. */
+.rel-handle {
+  background: var(--color-brand);
+  border: 2px solid var(--color-bg-panel);
+  border-radius: 50%;
+  cursor: crosshair;
+  height: 14px;
+  position: absolute;
+  right: -8px;
+  top: calc(50% - 7px);
+  touch-action: none;
+  visibility: hidden;
+  width: 14px;
+}
+
+.card:hover > .rel-handle {
+  visibility: visible;
+}
+
+.rel-lines,
+.rel-front,
+.rel-draft {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+}
+
+.rel-front {
+  z-index: 2;
+}
+
+.rel-draft {
+  z-index: 3;
+}
+
+.rel-lines marker path {
+  fill: var(--color-text-muted);
+}
+
+.rel-front marker path,
+.rel-draft marker path {
+  fill: var(--color-brand);
+}
+
+.rel-edge-line,
+.rel-draft > path {
+  fill: none;
+  stroke: var(--color-text-muted);
+  stroke-width: 1.5;
+}
+
+.rel-front .rel-edge-line,
+.rel-draft > path {
+  stroke: var(--color-brand);
+  stroke-width: 2;
+}
+
+.rel-edge.dashed .rel-edge-line {
+  stroke-dasharray: 6 4;
+}
+
+.rel-front .rel-edge:not(.front) {
+  visibility: hidden;
+}
+
+.rel-edge-hit {
+  fill: none;
+  pointer-events: stroke;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.rel-edge foreignObject {
+  overflow: visible;
+  pointer-events: all;
+}
+
+/* Shown while its line is hovered or it has the focus (it stays focusable while unseen). */
+.rel-edge-remove {
+  align-items: center;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-danger);
+  border-radius: 50%;
+  color: var(--color-danger);
+  cursor: pointer;
+  display: flex;
+  font-size: 14px;
+  height: 22px;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0;
+  padding: 0;
+  width: 22px;
+}
+
+.rel-edge:hover .rel-edge-remove,
+.rel-edge:focus-within .rel-edge-remove {
+  opacity: 1;
+}
+
+/* While a card or a line is dragged, the lines take no pointer. */
+.relations-content.relating .rel-edge-hit,
+.relations-content.relating .rel-edge foreignObject {
+  pointer-events: none;
+}
+
+.rel-draft-hint {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-brand);
+  border-radius: 6px;
+  box-shadow: var(--shadow-premium);
+  color: light-dark(var(--literal-teal-800), #ffffff);
+  font-size: 12px;
+  padding: 2px 8px;
+  pointer-events: none;
+  position: absolute;
+  white-space: nowrap;
+  z-index: 3;
+}
+
+/* ---- lists (as GuildBotics' .trace-list) ---- */
+.list {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  overflow: hidden;
+}
+
+.list-header,
+.list-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+}
+
+.list-header {
+  background: var(--color-bg-panel-subtle);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.list-row {
+  color: var(--color-text-main);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.list-row + .list-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.list-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.list-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pull-list {
+  grid-template-columns: minmax(90px, 120px) max-content minmax(160px, 1fr) max-content max-content 110px 124px max-content;
+  column-gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.pull-cols {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.pull-list > .empty-row {
+  grid-column: 1 / -1;
+}
+
+.empty-row {
+  color: var(--color-text-muted);
+  padding: 16px;
+}
+
+/* ---- checks, files, logs ---- */
+.check-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 14px;
+  gap: 8px;
+  margin: 0 -8px;
+  padding: 8px;
+  text-align: left;
+  width: calc(100% + 16px);
+}
+
+.check-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.file {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.file + .file {
+  margin-top: 8px;
+}
+
+.file > summary {
+  align-items: center;
+  background: var(--color-bg-panel-subtle);
+  cursor: pointer;
+  display: flex;
+  font-size: 14px;
+  gap: 10px;
+  list-style: none;
+  padding: 8px 12px;
+}
+
+.file > summary::-webkit-details-marker {
+  display: none;
+}
+
+.add {
+  color: var(--color-success);
+}
+
+.del {
+  color: var(--color-danger);
+}
+
+.patch {
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 70vh;
+  min-height: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+.patch > span {
+  display: block;
+  padding: 0 12px;
+}
+
+.patch > .add {
+  background: var(--color-success-bg);
+  color: inherit;
+}
+
+.patch > .del {
+  background: var(--color-danger-bg);
+  color: inherit;
+}
+
+.patch > .hunk {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.log-text {
+  font-size: 12px;
+  max-height: 60vh;
+}
+
+/* ---- the publish preview ---- */
+.preview {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.preview pre {
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+  font-size: 14px;
+  min-height: 0;
+  padding: 0;
+}
+
+/* ---- people: avatar triggers and review marks ---- */
+.people-trigger {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 2px;
+  padding: 0;
+}
+
+.review-mark-anchor {
+  display: inline-flex;
+  position: relative;
+}
+
+.review-mark {
+  align-items: center;
+  border: 2px solid var(--color-bg-base);
+  border-radius: 999px;
+  bottom: -3px;
+  color: #ffffff;
+  display: inline-flex;
+  height: 15px;
+  justify-content: center;
+  position: absolute;
+  right: -4px;
+  width: 15px;
+}
+
+.review-mark.approve {
+  background: var(--color-success);
+}
+
+.review-mark.request_changes {
+  background: var(--color-danger);
+}
+
+.review-mark.comment {
+  background: var(--color-text-muted);
+}
+
+.review-mark.pending {
+  background: var(--color-warning);
+  bottom: -1px;
+  height: 11px;
+  right: -2px;
+  width: 11px;
+}
+
+.review-mark.stale {
+  background: var(--color-bg-base);
+  border-color: currentColor;
+}
+
+.review-mark.stale.approve {
+  color: var(--color-success);
+}
+
+.review-mark.stale.request_changes {
+  color: var(--color-danger);
+}
+
+.review-mark.stale.comment {
+  color: var(--color-text-muted);
+}
+
+.avatar-none {
+  border: 1px dashed var(--mantine-color-default-border);
+}
+
+/* ---- settings (as GuildBotics' .setup-layout / .setup-nav) ---- */
+.setup-layout {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 270px minmax(0, 1fr);
+}
+
+.setup-nav,
+.setup-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setup-nav-group + .setup-nav-group {
+  border-top: 1px solid var(--color-border);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.nav-label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 10px 10px 4px;
+  text-transform: uppercase;
+}
+
+.setup-nav-item {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--color-text-main);
+  display: flex;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 10px;
+  text-decoration: none;
+}
+
+.setup-nav-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.setup-nav-item.active {
+  background: var(--color-brand-bg-subtle);
+  color: var(--color-brand-hover);
+  font-weight: 600;
+}
+
+.setting-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-height: 36px;
+}
+
+.setting-row-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.secret {
+  user-select: all;
+  word-break: break-all;
+}
+
+/* dl as GuildBotics' */
+dl {
+  display: grid;
+  font-size: 14px;
+  gap: 8px 16px;
+  grid-template-columns: max-content 1fr;
+  margin: 0;
+}
+
+dt {
+  color: var(--color-text-subtle);
+}
+
+dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--color-bg-panel-subtle);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-main);
+  border-radius: 6px;
+  margin: 0;
+  min-height: 44px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (max-width: 900px) {
+  .shell,
+  .setup-layout,
+  .detail {
+    grid-template-columns: 1fr;
+  }
+
+  .shell {
+    height: auto;
+    overflow: visible;
+  }
+
+  .lanes {
+    grid-template-columns: repeat(4, 260px);
+    overflow-x: auto;
+  }
+}
+
+
+/* ==========================================================================
+   Design System Custom Overrides & Aesthetics Tune-up
+   ========================================================================== */
+
+/* Alert Indicator Colors resolver */
+.mantine-Alert-root[data-color="success"] {
+  --alert-indicator-color: var(--color-success);
+}
+.mantine-Alert-root[data-color="warning"] {
+  --alert-indicator-color: var(--color-warning);
+}
+.mantine-Alert-root[data-color="danger"] {
+  --alert-indicator-color: var(--color-danger);
+}
+.mantine-Alert-root[data-color="info"] {
+  --alert-indicator-color: var(--color-info);
+}
+
+.mantine-Alert-icon[data-color="success"] {
+  color: var(--color-success) !important;
+}
+.mantine-Alert-icon[data-color="warning"] {
+  color: var(--color-warning) !important;
+}
+.mantine-Alert-icon[data-color="danger"] {
+  color: var(--color-danger) !important;
+}
+.mantine-Alert-icon[data-color="info"] {
+  color: var(--color-info) !important;
+}
+
+/* 2. Global Badge Slate Neutralization */
+.mantine-Badge-root[data-color="neutral"] {
+  background-color: var(--color-bg-hover) !important;
+  color: var(--color-text-subtle) !important;
+  border: 1px solid var(--color-border-subtle) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Badge-root[data-color="info"] {
+  background-color: var(--color-bg-hover-subtle) !important;
+  color: var(--color-text-subtle) !important;
+  border: 1px solid var(--color-border-subtle) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Badge-root[data-color="success"] {
+  background-color: var(--color-success-bg) !important;
+  color: var(--color-success-text) !important;
+  border: 1px solid var(--color-success-border) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Badge-root[data-color="warning"] {
+  background-color: var(--color-warning-bg) !important;
+  color: var(--color-warning-text) !important;
+  border: 1px solid var(--color-warning-border) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Badge-root[data-color="danger"] {
+  background-color: var(--color-danger-bg) !important;
+  color: var(--color-danger-text) !important;
+  border: 1px solid var(--color-danger-border) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+/* Global outline badges (e.g. TEAM, PERSONAL, MEMORY) -> monotone slate */
+.mantine-Badge-root[data-variant="outline"] {
+  background-color: transparent !important;
+  color: var(--color-text-muted) !important;
+  border: 1px solid var(--color-border) !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+/* 3. Global Danger Button Styler (Avoid cheap red fill) */
+.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
+    :disabled
+  ) {
+  background-color: transparent !important;
+  color: var(--color-danger) !important;
+  border: 1px solid var(--color-danger-border) !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
+    :disabled
+  ):hover {
+  background-color: var(--color-danger-bg) !important;
+}
+
+.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
+    :disabled
+  ) {
+  background-color: var(--color-danger) !important;
+  color: #ffffff !important;
+  border-radius: 6px !important;
+}
+
+.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
+    :disabled
+  ):hover {
+  background-color: var(--literal-red-700) !important;
+}
+
+/* 5. Inner Element Border Radius (規格化) */
+.mantine-Button-root,
+.mantine-Select-input,
+.mantine-TextInput-input,
+.mantine-PasswordInput-input,
+.mantine-NumberInput-input,
+.mantine-Switch-track {
+  border-radius: 6px !important;
+}
+
+/* One continuous path; each node keeps its explanation below the line. */
+.journey { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.journey-stop { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0 2px; font-size: 12px; text-align: center; overflow-wrap: anywhere; color: var(--mantine-color-dimmed); }
+@media (max-width: 36em) { .journey-stop { font-size: 11px; letter-spacing: -0.02em; } }
+.journey-stop:not(:last-child)::after { content: ""; position: absolute; top: 13px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 2px; background: var(--mantine-color-default-border); }
+.journey-stop[data-state="done"]::after { background: var(--color-success); }
+.journey-dot { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--mantine-color-default-border); background: var(--mantine-color-body); font-size: 12px; font-weight: 700; }
+.journey-stop[data-state="done"] .journey-dot { color: var(--color-success-text); background: var(--color-success-bg); border-color: var(--color-success-border); }
+.journey-stop[data-state="now"] { color: var(--mantine-color-text); font-weight: 700; }
+.journey-stop[data-state="now"] .journey-dot { color: var(--color-brand); border-color: var(--color-brand); }
+.journey-stop[data-state="turn"] { color: var(--color-warning-text); font-weight: 700; }
+.journey-stop[data-state="turn"] .journey-dot { background: var(--color-warning-bg); border-color: var(--color-warning); }
+.journey-stop[data-state="failed"] { color: var(--color-danger-text); font-weight: 700; }
+.journey-stop[data-state="failed"] .journey-dot { background: var(--color-danger-bg); border-color: var(--color-danger); }
