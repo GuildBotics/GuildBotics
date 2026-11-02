@@ -982,13 +982,15 @@ async fn a_read_only_command_runs_in_a_microvm_of_its_own() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{ran}");
-    let output: Value =
-        serde_json::from_str(ran["output"].as_str().unwrap()).unwrap_or_else(|_| panic!("{ran}"));
+    // The command's result as its text output spells it, told the host's
+    // language.
     let language = gb_environment::language::ui_language().await.unwrap();
-    assert_eq!(output["input"], "こんにちは");
+    let output: Vec<&str> = ran["output"].as_str().unwrap().lines().collect();
+    assert_eq!(output[0], "input: こんにちは", "{ran}");
     assert_eq!(
-        output["language_code"].as_str(),
-        Some(language.split('_').next().unwrap())
+        output[1],
+        format!("language_code: {}", language.split('_').next().unwrap()),
+        "{ran}"
     );
     let (types, _) = trace_records(&workspace, ran["trace_id"].as_str().unwrap());
     assert_eq!(types, ["command.started", "command.finished"]);
