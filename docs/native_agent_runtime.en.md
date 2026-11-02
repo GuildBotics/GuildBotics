@@ -967,7 +967,7 @@ rotates the session.
 GitHub Copilot's account quota comes from a different path than that ACP turn: the
 Copilot SDK server protocol (JSON-RPC with `Content-Length` framing) that the same
 CLI serves through `copilot --headless --stdio`. GuildBotics pins GitHub Copilot CLI
-1.0.103 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
+1.0.105 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
 After `connect`, `account.getQuota` answers with `quotaSnapshots`
 keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
 carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
@@ -995,7 +995,7 @@ turn-count, and token-total limits do. This is the same situation as Grok.
 Account quotas are a separate path from those per-turn counters. From Antigravity
 CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
 slash command without starting an agent turn, spending quota, or leaving a
-conversation. GuildBotics pins Antigravity CLI 1.4.7 in the isolated environment
+conversation. GuildBotics pins Antigravity CLI 1.4.12 in the isolated environment
 and verified the structured payload on 1.2.13: `command.data.groups[].buckets[]`
 carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
 `reset_time`. Those buckets become the same usage meters the Activity view already

@@ -70,10 +70,10 @@ UV_VERSION = "0.13.5"
 #: has, so a Node.js release is a recipe change and not a new base image.
 #: The digests are those ``SHASUMS256.txt`` gives each archive, by the
 #: architecture ``uname -m`` names.
-NODE_VERSION = "24.22.1"
+NODE_VERSION = "24.22.2"
 NODE_SHA256 = {
-    "x86_64": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
-    "aarch64": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+    "x86_64": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
+    "aarch64": "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2",
 }
 _NODE_PLATFORMS = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
 #: The Python GuildBotics' own code runs with inside the microVM, and where
