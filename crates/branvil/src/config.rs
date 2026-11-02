@@ -292,20 +292,7 @@ pub fn default_data_dir() -> anyhow::Result<PathBuf> {
 
 /// Validates a base URL: `http(s)://host:port` with nothing after it.
 pub fn normalize_base_url(value: &str) -> anyhow::Result<String> {
-    let trimmed = value.trim_end_matches('/');
-    let rest = trimmed
-        .strip_prefix("http://")
-        .or_else(|| trimmed.strip_prefix("https://"))
-        .context("base_url must start with http:// or https://")?;
-    if rest.is_empty()
-        || rest.contains('/')
-        || rest.contains('?')
-        || rest.contains('#')
-        || rest.contains('@')
-    {
-        bail!("base_url must be scheme://host:port with no path, query, or credentials");
-    }
-    Ok(trimmed.to_string())
+    loopback_auth::normalize_base_url(value).map_err(anyhow::Error::msg)
 }
 
 impl Config {
@@ -369,17 +356,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base_url_is_scheme_host_port_only() {
-        assert_eq!(
-            normalize_base_url("http://127.0.0.1:7878/").unwrap(),
-            "http://127.0.0.1:7878"
-        );
-        assert!(normalize_base_url("http://127.0.0.1:7878/x").is_err());
-        assert!(normalize_base_url("ftp://x").is_err());
-        assert!(normalize_base_url("http://u:p@x:1").is_err());
-    }
 
     #[test]
     fn non_loopback_listen_is_refused() {

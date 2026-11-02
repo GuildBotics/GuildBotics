@@ -1,0 +1,17 @@
+[package]
+name = "loopback-auth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "The web authentication of a single-owner service on a loopback address: single-use codes, PKCE, Host and Origin checks, session cookies and CSRF"
+license = "MIT"
+repository = "https://github.com/GuildBotics/GuildBotics"
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+http = "1.5.0"
+rand = "0.10.3"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+url = "2.5.8"

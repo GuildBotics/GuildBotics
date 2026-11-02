@@ -15,6 +15,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use futures_util::Stream;
+use loopback_auth::Refusal;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
@@ -166,10 +167,7 @@ struct Enter {
 async fn session_create(State(app): State<Shared>, J(input): J<Enter>) -> R {
     let (view, id) = members::enter(&app, input.code).await?;
     let max_age = app.config.limits.session_hours * 3600;
-    let cookie = format!(
-        "{}={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}",
-        auth::SESSION_COOKIE
-    );
+    let cookie = loopback_auth::session_set_cookie(auth::SESSION_COOKIE, &id, max_age);
     let mut resp = ok(view);
     resp.headers_mut().insert(
         header::SET_COOKIE,
@@ -1080,60 +1078,22 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsa
 
 /// Host and Origin checks (DNS-rebinding protection) and security headers.
 async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response {
-    let path = req.uri().path().to_string();
-    if !path.starts_with("/-/hooks/") {
-        let host = req
-            .headers()
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !allowed_host(&app.base_url, &host) {
-            return AppError::new(
-                StatusCode::MISDIRECTED_REQUEST,
+    if !req.uri().path().starts_with("/-/hooks/")
+        && let Err(refusal) = loopback_auth::check_request(&app.base_url, req.headers())
+    {
+        return match refusal {
+            Refusal::Misdirected => AppError::new(
+                refusal.status(),
                 "misdirected",
                 "This Host is not Branvil's.",
-            )
-            .into_response();
+            ),
+            Refusal::CrossOrigin => AppError::forbidden("Cross-origin requests are refused."),
         }
-        if let Some(origin) = req.headers().get(header::ORIGIN) {
-            let scheme = app.base_url.split("://").next().unwrap_or("http");
-            let expected = format!("{scheme}://{host}");
-            if origin.to_str().map(|o| o.to_ascii_lowercase()).ok() != Some(expected) {
-                return AppError::forbidden("Cross-origin requests are refused.").into_response();
-            }
-        }
+        .into_response();
     }
     let mut resp = next.run(req).await;
-    let h = resp.headers_mut();
-    h.insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static(CSP));
+    loopback_auth::secure(resp.headers_mut(), CSP);
     resp
-}
-
-/// The base URL's host and port, or a loopback name with that port.
-pub fn allowed_host(base_url: &str, host: &str) -> bool {
-    let (scheme, authority) = base_url.split_once("://").unwrap_or(("http", base_url));
-    let default_port = if scheme == "https" { "443" } else { "80" };
-    let (base_host, port) = split_host_port(&authority.to_ascii_lowercase(), default_port);
-    let (req_host, req_port) = split_host_port(host, default_port);
-    req_port == port
-        && [base_host.as_str(), "localhost", "127.0.0.1", "[::1]"].contains(&req_host.as_str())
-}
-
-/// `host:port` → (host, port); an IPv6 host keeps its brackets.
-fn split_host_port(value: &str, default_port: &str) -> (String, String) {
-    match value.rsplit_once(':') {
-        Some((h, p)) if !p.contains(']') && (!h.contains(':') || h.ends_with(']')) => {
-            (h.to_string(), p.to_string())
-        }
-        _ => (value.to_string(), default_port.to_string()),
-    }
 }
 
 /// Replays the first response of a repeated `Idempotency-Key` (per member,
@@ -1414,25 +1374,4 @@ pub fn router(app: Shared) -> Router {
         .fallback(gui)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::allowed_host;
-
-    #[test]
-    fn hosts_are_the_base_url_or_loopback_with_its_port() {
-        let base = "http://127.0.0.1:7878";
-        assert!(allowed_host(base, "127.0.0.1:7878"));
-        assert!(allowed_host(base, "localhost:7878"));
-        assert!(allowed_host(base, "[::1]:7878"));
-        assert!(!allowed_host(base, "127.0.0.1:7879"));
-        assert!(!allowed_host(base, "evil.example:7878"));
-        assert!(!allowed_host(base, "127.0.0.1"));
-        assert!(!allowed_host(base, ""));
-        assert!(allowed_host("http://branvil.test:80", "branvil.test"));
-        assert!(allowed_host("http://branvil.test", "branvil.test:80"));
-        assert!(allowed_host("http://[::1]:7878", "localhost:7878"));
-        assert!(!allowed_host("http://[::1]", "[::1]:7878"));
-    }
 }

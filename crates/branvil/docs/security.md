@@ -47,7 +47,8 @@ itself speaks plain HTTP on loopback only).
   styles are allowed because the GUI's components set their look through
   `style` attributes — Markdown never carries a `style` attribute, see below),
   `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
-  `Referrer-Policy: no-referrer`. No CORS header is ever sent
+  `Referrer-Policy: no-referrer`: the guard adds each one a response does not
+  set itself, and no route sets its own. No CORS header is ever sent
   [`tests/security.rs` `hosts_and_origins_are_checked_on_every_kind_of_route`,
   `tests/tickets.rs` `sessions_need_csrf_and_hosts_are_checked`].
 
@@ -58,7 +59,7 @@ itself speaks plain HTTP on loopback only).
 - `Host` must be the base URL's host and port, or `localhost`, `127.0.0.1`,
   `[::1]` with that port; anything else is `421 misdirected`. This holds for
   the API, Git Smart HTTP, and GUI pages [`tests/security.rs`, unit
-  `hosts_are_the_base_url_or_loopback_with_its_port`].
+  `hosts_are_the_base_url_or_loopback_with_its_port` of `loopback-auth`].
 - A request with an `Origin` must have exactly `scheme://Host`; `null` and
   other origins are `403` [`tests/security.rs`].
 
@@ -118,7 +119,7 @@ itself speaks plain HTTP on loopback only).
   `a_local_app_gets_an_owner_token_through_the_consent_exchange`,
   `the_consent_exchange_refuses_what_does_not_match_the_code`, units
   `codes_work_once_and_expire`, `redirects_are_loopback_http_only`,
-  `verifiers_match_their_s256_challenge`,
+  `verifiers_match_their_s256_challenge` of `loopback-auth`,
   `web/src/__tests__/authorize.test.tsx`].
 - A session is a 32-byte random id in a `branvil_session` cookie (`HttpOnly`,
   `SameSite=Strict`, `Path=/`, `Max-Age` of `limits.session_hours`, default

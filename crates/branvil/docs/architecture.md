@@ -19,6 +19,8 @@ branvil runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      
 
 ## Modules (`src/`)
 
+The pieces of the authentication that do not depend on Branvil's records (single-use codes, the consent's redirect and PKCE checks, the Host and Origin checks with the security headers, session cookies and CSRF, hashing and randomness) are in the [`loopback-auth`](../../loopback-auth) crate, which knows neither Branvil nor GuildBotics so that GuildBotics' server can share it.
+
 | Module | Responsibility |
 | --- | --- |
 | `main.rs`, `cli.rs` | clap commands: `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), `admin notify` (reads only the webhook credential, online or offline), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |

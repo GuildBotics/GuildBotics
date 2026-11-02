@@ -3,7 +3,6 @@
 //! CSRF secret, and the checks of what a member's kind may do.
 
 use axum::http::{HeaderMap, Method};
-use subtle::ConstantTimeEq;
 
 use crate::app::App;
 use crate::config::{Layout, restrict};
@@ -60,10 +59,6 @@ impl Caller {
     }
 }
 
-fn hash_secret(secret: &str) -> String {
-    util::hex(&util::sha256(secret.as_bytes()))
-}
-
 /// Creates a token for a member inside a write transaction and returns the
 /// stored record and the token text (shown once).
 pub fn issue_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, String)> {
@@ -73,7 +68,7 @@ pub fn issue_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, Stri
         id: format!("tok_{id}"),
         member: fold(member),
         label: label.to_string(),
-        hash: hash_secret(&secret),
+        hash: loopback_auth::digest(&secret),
         created_at: util::now(),
         last_used_at: None,
     };
@@ -171,8 +166,7 @@ pub fn check_token(r: &impl Rd, text: &str) -> AppResult<Option<(Member, Token)>
     let Some(token) = r.get::<Token>(store::TOKENS, &Token::key(&id))? else {
         return Ok(None);
     };
-    let computed = hash_secret(secret);
-    if !bool::from(computed.as_bytes().ct_eq(token.hash.as_bytes())) {
+    if !loopback_auth::digest_matches(secret, &token.hash) {
         return Ok(None);
     }
     let Some(member) = r.get::<Member>(store::MEMBERS, &Member::key(&token.member))? else {
@@ -224,27 +218,11 @@ pub async fn authenticate_token(app: &App, text: &str) -> AppResult<Member> {
 }
 
 pub fn session_key(id: &str) -> Vec<u8> {
-    Key::new()
-        .s(&util::hex(&util::sha256(id.as_bytes())))
-        .bytes()
-}
-
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    for value in headers.get_all(axum::http::header::COOKIE) {
-        let Ok(text) = value.to_str() else { continue };
-        for part in text.split(';') {
-            if let Some((k, v)) = part.trim().split_once('=')
-                && k == name
-            {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
+    Key::new().s(&loopback_auth::digest(id)).bytes()
 }
 
 pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
-    cookie_value(headers, SESSION_COOKIE)
+    loopback_auth::cookie_value(headers, SESSION_COOKIE)
 }
 
 /// Loads a valid session and its member.
@@ -285,7 +263,7 @@ pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> Ap
             .get(CSRF_HEADER)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if !bool::from(sent.as_bytes().ct_eq(session.csrf.as_bytes())) {
+        if !loopback_auth::csrf_matches(sent, &session.csrf) {
             return Err(AppError::new(
                 axum::http::StatusCode::FORBIDDEN,
                 "csrf_mismatch",
