@@ -35,24 +35,33 @@ class Stack:
     env: dict[str, str]
     api: httpx.Client
     provider: object
+    log: Path
 
     @property
     def config_dir(self) -> str:
         return str(self.workspace / ".guildbotics/config")
 
     def cli(self, *arguments: str, content=None, cwd=None, timeout=30):
-        result = subprocess.run(
-            [sys.executable, "-m", "guildbotics.cli", *arguments],
-            cwd=cwd or self.workspace,
-            env=self.env,
-            input=content,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-        assert result.returncode == 0, result.stderr
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "guildbotics.cli", *arguments],
+                cwd=cwd or self.workspace,
+                env=self.env,
+                input=content,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"Timed out{self._server_log()}") from exc
+        assert result.returncode == 0, f"{result.stderr}{self._server_log()}"
         return result.stdout
+
+    def _server_log(self) -> str:
+        """The server's own log names the cause the CLI reports only as an error."""
+        tail = self.log.read_bytes()[-4000:].decode("utf-8", errors="replace")
+        return f"\n--- server log ---\n{tail}"
 
     def member(self, *arguments: str, content: str | None = None, cwd=None):
         options = ["--person", PERSON, "--format", "json"]
@@ -184,9 +193,10 @@ def _stop(process: subprocess.Popen) -> None:
 def running_stack(tmp_path: Path, *, environment=None):
     from tests.blackbox.providers import PROVIDERS
 
-    workspace, home = tmp_path / "workspace", tmp_path / "home"
+    # The run directory is HOME itself: the runtime opens unix sockets under
+    # HOME/.guildbotics/data/msb, and macOS caps their paths at 103 bytes.
+    workspace, home = tmp_path / "workspace", tmp_path
     workspace.mkdir()
-    home.mkdir(exist_ok=True)
     selected = os.environ.get("GUILDBOTICS_BLACKBOX_PROVIDER", "local")
     if selected not in PROVIDERS:
         raise ValueError(f"Unknown blackbox provider: {selected}")
@@ -269,7 +279,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
                     )
                     time.sleep(0.05)
                 api.timeout = httpx.Timeout(10)
-                yield Stack(workspace, env, api, provider)
+                yield Stack(workspace, env, api, provider, tmp_path / "server.log")
         finally:
             _stop(process)
             reader.join(timeout=2)

@@ -25,10 +25,12 @@ def device_environment():
 
 @pytest.fixture
 def stack(device_environment):
-    # Windows cannot mount a workspace under the OS temporary directory.
-    root = device_environment.home / ".guildbotics-blackbox"
+    # Windows cannot mount a workspace under the OS temporary directory, and
+    # the run directory is the server's HOME, under which the runtime's unix
+    # sockets must stay within macOS's 103 bytes: keep the path short.
+    root = device_environment.home / ".gbb"
     root.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="run-", dir=root) as directory:
+    with tempfile.TemporaryDirectory(prefix="", dir=root) as directory:
         with running_stack(Path(directory), environment=device_environment) as stack:
             status = json.loads(stack.cli("environment", "status", "--format", "json"))
             assert status["refusal"] == "", status["refusal"]

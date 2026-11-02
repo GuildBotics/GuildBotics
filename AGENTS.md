@@ -467,8 +467,10 @@ GUILDBOTICS_E2E_ENVIRONMENT_FROM=/absolute/path/to/ready-workspace \
 desktop E2E と同じ環境変数を使い、その端末の runtime とワークスペースの snapshot を一時 HOME・
 ワークスペースへリンクし、宣言だけをコピーする。設定・メンバー・keyring は一時のもので、
 実機の資格情報を引き継がず、build・service start・LLM 実行はしない。
-一時 directory は Windows の mount 制約に合わせて実機の HOME の `.guildbotics-blackbox/` に作り、
-終了時にリンクごと削除する。元の runtime・snapshot は削除しない。
+一時 directory は Windows の mount 制約に合わせて実機の HOME の `.gbb/` に作り、
+終了時にリンクごと削除する。その directory がサーバーの HOME になり、runtime はその下の
+`.guildbotics/data/msb` に Unix ソケットを開く。macOS のパスの上限（103 バイト）に収まるのはユーザー名が
+8 バイトまでで、超えるとテストの失敗に runtime の理由（パスが長すぎる）がサーバーのログとして出る。元の runtime・snapshot は削除しない。
 `repository/issue_inspect`・`repository/pr_inspect`・`repository/pr_checks` の結果で、
 CLI → サーバー → 隔離環境 → member broker を貫く読み取りを確認する。
 実機テストの opt-in として扱い、CI 内や pytest-xdist での並列実行は拒否する。
