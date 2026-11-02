@@ -1,0 +1,383 @@
+{
+  "$defs": {
+    "AgentEvent": {
+      "properties": {
+        "approval": {
+          "default": "",
+          "title": "Approval",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "title": "Command",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "item_id": {
+          "default": "",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AgentEventKind"
+        },
+        "message": {
+          "default": "",
+          "title": "Message",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "provider_session_id": {
+          "default": "",
+          "title": "Provider Session Id",
+          "type": "string"
+        },
+        "provider_turn_id": {
+          "default": "",
+          "title": "Provider Turn Id",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "AgentEventKind": {
+      "enum": [
+        "process",
+        "turn",
+        "assistant",
+        "command",
+        "file_change",
+        "tool",
+        "approval",
+        "usage",
+        "failed"
+      ],
+      "title": "AgentEventKind",
+      "type": "string"
+    },
+    "ConversationKey": {
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "person_id": {
+          "title": "Person Id",
+          "type": "string"
+        },
+        "work_identity": {
+          "title": "Work Identity",
+          "type": "string"
+        },
+        "work_kind": {
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id",
+        "adapter",
+        "work_kind",
+        "work_identity"
+      ],
+      "title": "ConversationKey",
+      "type": "object"
+    },
+    "CredentialEntry": {
+      "description": "What a turn proved of its tool's login on this device.",
+      "properties": {
+        "failed": {
+          "title": "Failed",
+          "type": "boolean"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpanContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "type": {
+          "const": "credential",
+          "default": "credential",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span",
+        "tool",
+        "failed"
+      ],
+      "title": "CredentialEntry",
+      "type": "object"
+    },
+    "EventEntry": {
+      "description": "A turn's event, of the conversation it belongs to.",
+      "properties": {
+        "context_cursor": {
+          "default": "",
+          "title": "Context Cursor",
+          "type": "string"
+        },
+        "conversation": {
+          "$ref": "#/$defs/ConversationKey"
+        },
+        "event": {
+          "$ref": "#/$defs/AgentEvent"
+        },
+        "generation": {
+          "title": "Generation",
+          "type": "integer"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpanContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "event",
+          "default": "event",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span",
+        "conversation",
+        "generation",
+        "event"
+      ],
+      "title": "EventEntry",
+      "type": "object"
+    },
+    "IoEntry": {
+      "description": "A turn's request or response, the stderr of a response whole.",
+      "properties": {
+        "io_type": {
+          "enum": [
+            "cli_agent.request",
+            "cli_agent.response"
+          ],
+          "title": "Io Type",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpanContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "io",
+          "default": "io",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span",
+        "io_type",
+        "payload"
+      ],
+      "title": "IoEntry",
+      "type": "object"
+    },
+    "SpanContext": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "span_id": {
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "call_id",
+        "parent_id",
+        "name"
+      ],
+      "title": "SpanContext",
+      "type": "object"
+    },
+    "SummaryEntry": {
+      "description": "How a turn's span ended, and what it ran on.",
+      "properties": {
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        },
+        "effort": {
+          "default": "",
+          "title": "Effort",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "model_specified": {
+          "title": "Model Specified",
+          "type": "boolean"
+        },
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpanContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "finished",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "type": {
+          "const": "summary",
+          "default": "summary",
+          "title": "Type",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage"
+        }
+      },
+      "required": [
+        "span",
+        "slot",
+        "tool",
+        "model_specified",
+        "status"
+      ],
+      "title": "SummaryEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/EventEntry"
+          },
+          {
+            "$ref": "#/$defs/IoEntry"
+          },
+          {
+            "$ref": "#/$defs/SummaryEntry"
+          },
+          {
+            "$ref": "#/$defs/CredentialEntry"
+          }
+        ]
+      },
+      "title": "Entries",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entries"
+  ],
+  "title": "RecordArguments",
+  "type": "object"
+}

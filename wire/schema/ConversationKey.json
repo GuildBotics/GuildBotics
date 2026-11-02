@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "adapter": {
+      "title": "Adapter",
+      "type": "string"
+    },
+    "person_id": {
+      "title": "Person Id",
+      "type": "string"
+    },
+    "work_identity": {
+      "title": "Work Identity",
+      "type": "string"
+    },
+    "work_kind": {
+      "title": "Work Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "person_id",
+    "adapter",
+    "work_kind",
+    "work_identity"
+  ],
+  "title": "ConversationKey",
+  "type": "object"
+}

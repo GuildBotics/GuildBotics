@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The exit code and streams of one member invocation.",
+  "properties": {
+    "exit_code": {
+      "title": "Exit Code",
+      "type": "integer"
+    },
+    "stderr": {
+      "title": "Stderr",
+      "type": "string"
+    },
+    "stdout": {
+      "title": "Stdout",
+      "type": "string"
+    }
+  },
+  "required": [
+    "exit_code",
+    "stdout",
+    "stderr"
+  ],
+  "title": "MemberCommandResult",
+  "type": "object"
+}

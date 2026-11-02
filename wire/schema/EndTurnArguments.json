@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "turn_grant": {
+      "title": "Turn Grant",
+      "type": "string"
+    }
+  },
+  "required": [
+    "turn_grant"
+  ],
+  "title": "EndTurnArguments",
+  "type": "object"
+}

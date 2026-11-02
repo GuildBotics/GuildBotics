@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a command declares about the access of its AI CLI turns.\n\nMirrors the ``read_only`` / ``inspects`` metadata. A command declares it\nand every turn of its run is held to it: a read-only command's turns can\nchange nothing, which is what lets the run take no execution lease and no\nmanual-command reservation. ``inspects`` is independent of that: what a\ncommand needs to read is its work's business.",
+  "properties": {
+    "inspects": {
+      "default": [],
+      "items": {
+        "enum": [
+          "diagnostics",
+          "config"
+        ],
+        "type": "string"
+      },
+      "title": "Inspects",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "read_only": {
+      "default": false,
+      "title": "Read Only",
+      "type": "boolean"
+    }
+  },
+  "title": "CommandAccess",
+  "type": "object"
+}

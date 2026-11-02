@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "WorkTarget": {
+      "additionalProperties": false,
+      "description": "The ticket or pull request a command worked on, in one shape for every\ncommand: the member CLI records it as the work target of its trace.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "ticket",
+            "pull_request"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "url",
+        "title",
+        "label"
+      ],
+      "title": "WorkTarget",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One bounded resource page, with the work target it was read of when\nthat is one ticket or pull request.",
+  "properties": {
+    "continuation": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Continuation"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkTarget"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ReadPage",
+  "type": "object"
+}

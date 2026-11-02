@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The member CLI reaction output read by the guest.",
+  "properties": {
+    "channel_id": {
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "message_id": {
+      "title": "Message Id",
+      "type": "string"
+    },
+    "reacted": {
+      "title": "Reacted",
+      "type": "boolean"
+    },
+    "reaction": {
+      "enum": [
+        "ack",
+        "agree",
+        "celebrate",
+        "support"
+      ],
+      "title": "Reaction",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "channel_id",
+    "message_id",
+    "reaction",
+    "reacted"
+  ],
+  "title": "ChatReactionOutput",
+  "type": "object"
+}

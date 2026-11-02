@@ -1,0 +1,76 @@
+{
+  "$defs": {
+    "ChatSubject": {
+      "description": "The chat event a chat workflow run answers, in its source thread.",
+      "properties": {
+        "channel_id": {
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "self_user_id": {
+          "title": "Self User Id",
+          "type": "string"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "channel_id",
+        "thread_id",
+        "event_id",
+        "self_user_id"
+      ],
+      "title": "ChatSubject",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Everything the chat workflow needs to run one AI CLI turn: the payload\nof a chat workflow's invocation, whose work is the turn's ``subject``.",
+  "properties": {
+    "attempt": {
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "context_cursor": {
+      "title": "Context Cursor",
+      "type": "string"
+    },
+    "effort": {
+      "default": "",
+      "title": "Effort",
+      "type": "string"
+    },
+    "message_id": {
+      "title": "Message Id",
+      "type": "string"
+    },
+    "prompt": {
+      "additionalProperties": true,
+      "title": "Prompt",
+      "type": "object"
+    },
+    "subject": {
+      "$ref": "#/$defs/ChatSubject"
+    }
+  },
+  "required": [
+    "attempt",
+    "subject",
+    "message_id",
+    "context_cursor",
+    "prompt"
+  ],
+  "title": "ChatTurn",
+  "type": "object"
+}

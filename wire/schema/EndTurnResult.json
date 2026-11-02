@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Why a turn's borrowed login could not be used, or an empty reason.",
+  "properties": {
+    "refusal": {
+      "title": "Refusal",
+      "type": "string"
+    }
+  },
+  "required": [
+    "refusal"
+  ],
+  "title": "EndTurnResult",
+  "type": "object"
+}

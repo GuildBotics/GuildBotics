@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A regular file the command changed: its new content (base64), and\nwhether it is executable when the command made it or changed that; or\nthat it was deleted. A file whose bit the command left keeps the host's\nmode, whatever happened to it there meanwhile.",
+  "properties": {
+    "content": {
+      "title": "Content",
+      "type": "string"
+    },
+    "deleted": {
+      "title": "Deleted",
+      "type": "boolean"
+    },
+    "executable": {
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "ChangedFile",
+  "type": "object"
+}

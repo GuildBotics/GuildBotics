@@ -9,9 +9,13 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import RunStore, current_run_id
 from guildbotics.entities.team import Person
 from guildbotics.runtime.chat_service import (
+    ChatChannelOutput,
     ChatEvent,
+    ChatIdentityOutput,
     ChatMessageRef,
+    ChatPostOutput,
     ChatPostResult,
+    ChatReactionOutput,
     ChatService,
 )
 from guildbotics.runtime.member_invocation import current_member_invocation
@@ -57,7 +61,7 @@ class MemberChatCapabilityService:
             ],
         }
 
-    async def identity(self) -> dict[str, Any]:
+    async def identity(self) -> ChatIdentityOutput:
         identity = await self.chat_service.get_bot_identity()
         return {
             "service": self.service_name,
@@ -66,7 +70,7 @@ class MemberChatCapabilityService:
             "person_id": self.person.person_id,
         }
 
-    async def resolve_channel(self, channel_name: str) -> dict[str, Any]:
+    async def resolve_channel(self, channel_name: str) -> ChatChannelOutput:
         """Name the channel ``channel_name`` is, without reading or writing it;
         ``channel_id`` is empty when there is none of that name."""
         channel_id = await self.chat_service.resolve_channel_id(channel_name)
@@ -129,7 +133,7 @@ class MemberChatCapabilityService:
         channel_id: str | None,
         channel_name: str | None,
         body: str,
-    ) -> dict[str, Any]:
+    ) -> ChatPostOutput:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         rendered_body = self._render_participant_text(body)
         ensure_chat_current(self.person.person_id)
@@ -146,7 +150,7 @@ class MemberChatCapabilityService:
         thread_id: str | None,
         message_url: str | None = None,
         body: str,
-    ) -> dict[str, Any]:
+    ) -> ChatPostOutput:
         ref = await self._reference(channel_id, channel_name, thread_id, message_url)
         rendered_body = self._render_participant_text(body)
         ensure_chat_current(self.person.person_id)
@@ -155,7 +159,7 @@ class MemberChatCapabilityService:
         )
         return self._posted(result, rendered_body)
 
-    def _posted(self, result: ChatPostResult, text: str) -> dict[str, Any]:
+    def _posted(self, result: ChatPostResult, text: str) -> ChatPostOutput:
         return {
             "service": self.service_name,
             "channel_id": result.channel_id,
@@ -174,18 +178,18 @@ class MemberChatCapabilityService:
         message_id: str | None,
         message_url: str | None = None,
         reaction: SemanticReaction,
-    ) -> dict[str, Any]:
+    ) -> ChatReactionOutput:
         ref = await self._reference(channel_id, channel_name, message_id, message_url)
         ensure_chat_current(self.person.person_id)
         await self.chat_service.add_reaction(ref.channel_id, ref.message_id, reaction)
-        payload = {
+        payload: ChatReactionOutput = {
             "service": self.service_name,
             "channel_id": ref.channel_id,
             "message_id": ref.message_id,
             "reaction": reaction,
             "reacted": True,
         }
-        RunStore().append_evidence(current_run_id(), "chat_reaction", payload)
+        RunStore().append_evidence(current_run_id(), "chat_reaction", dict(payload))
         return payload
 
     async def _reference(

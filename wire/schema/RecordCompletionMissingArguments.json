@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attempt": {
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "error": {
+      "title": "Error",
+      "type": "string"
+    },
+    "max_attempts": {
+      "title": "Max Attempts",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "attempt",
+    "max_attempts",
+    "error"
+  ],
+  "title": "RecordCompletionMissingArguments",
+  "type": "object"
+}

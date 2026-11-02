@@ -217,6 +217,12 @@ class HostTurn:
     member: dict[str, str]
 
 
+class EndTurnResult(TypedDict):
+    """Why a turn's borrowed login could not be used, or an empty reason."""
+
+    refusal: str
+
+
 #: The workspace's own state a command may let its AI CLI turns inspect:
 #: ``diagnostics`` is the recorded runs, ``config`` the workspace
 #: configuration and the packaged templates it falls back to.

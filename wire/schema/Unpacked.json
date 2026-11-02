@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Where a download was written, as its reader reports it.",
+  "properties": {
+    "destination": {
+      "title": "Destination",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "destination",
+    "files"
+  ],
+  "title": "Unpacked",
+  "type": "object"
+}

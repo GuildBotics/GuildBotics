@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The member CLI post/reply output read by the guest.",
+  "properties": {
+    "channel_id": {
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "message_id": {
+      "title": "Message Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "posted": {
+      "title": "Posted",
+      "type": "boolean"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "thread_id": {
+      "title": "Thread Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "channel_id",
+    "message_id",
+    "thread_id",
+    "occurred_at",
+    "text",
+    "posted"
+  ],
+  "title": "ChatPostOutput",
+  "type": "object"
+}

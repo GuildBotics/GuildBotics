@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "SpanContext": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "span_id": {
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "call_id",
+        "parent_id",
+        "name"
+      ],
+      "title": "SpanContext",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A turn's request or response, the stderr of a response whole.",
+  "properties": {
+    "io_type": {
+      "enum": [
+        "cli_agent.request",
+        "cli_agent.response"
+      ],
+      "title": "Io Type",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "span": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpanContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "type": {
+      "const": "io",
+      "default": "io",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "span",
+    "io_type",
+    "payload"
+  ],
+  "title": "IoEntry",
+  "type": "object"
+}
