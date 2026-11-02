@@ -19,6 +19,25 @@ pub fn hex(data: &[u8]) -> String {
     out
 }
 
+/// HMAC-SHA256 (RFC 2104).
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut block_key = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        block_key[..32].copy_from_slice(&sha256(key));
+    } else {
+        block_key[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new();
+    inner.update(block_key.map(|b| b ^ 0x36));
+    inner.update(message);
+    let inner_hash = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(block_key.map(|b| b ^ 0x5c));
+    outer.update(inner_hash);
+    outer.finalize().into()
+}
+
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     rand::fill(&mut buf);
@@ -62,6 +81,15 @@ mod tests {
         assert!(digest_matches("secret", &kept));
         assert!(!digest_matches("secret!", &kept));
         assert!(!digest_matches("secret", ""));
+    }
+
+    #[test]
+    fn hmac_matches_rfc4231_case_2() {
+        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+        assert_eq!(
+            hex(&mac),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
     }
 
     #[test]
