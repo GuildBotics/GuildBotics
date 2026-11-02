@@ -1,7 +1,6 @@
 //! Small helpers shared by every module: names, time, hashing, randomness.
 
-pub use loopback_auth::{b64, hex, random_bytes, random_secret, sha256, unb64};
-use sha2::{Digest, Sha256};
+pub use loopback_auth::{b64, hex, hmac_sha256, random_bytes, random_secret, sha256, unb64};
 
 use crate::error::AppError;
 
@@ -59,25 +58,6 @@ pub fn validate_member_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// HMAC-SHA256 (RFC 2104).
-pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
-    const BLOCK: usize = 64;
-    let mut block_key = [0u8; BLOCK];
-    if key.len() > BLOCK {
-        block_key[..32].copy_from_slice(&sha256(key));
-    } else {
-        block_key[..key.len()].copy_from_slice(key);
-    }
-    let mut inner = Sha256::new();
-    inner.update(block_key.map(|b| b ^ 0x36));
-    inner.update(message);
-    let inner_hash = inner.finalize();
-    let mut outer = Sha256::new();
-    outer.update(block_key.map(|b| b ^ 0x5c));
-    outer.update(inner_hash);
-    outer.finalize().into()
-}
-
 /// A new ULID: the current time and 80 random bits.
 pub fn ulid() -> ulid::Ulid {
     let ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
@@ -121,15 +101,6 @@ mod tests {
         assert!(validate_path("demo").is_err());
         assert!(validate_path("acme//demo").is_err());
         assert!(validate_path("acme/../demo").is_err());
-    }
-
-    #[test]
-    fn hmac_matches_rfc4231_case_2() {
-        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
-        assert_eq!(
-            hex(&mac),
-            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-        );
     }
 
     #[test]

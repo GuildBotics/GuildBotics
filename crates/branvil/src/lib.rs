@@ -349,13 +349,22 @@ pub async fn serve(
     terminate: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<u8> {
     invocation.install();
+    cli::serve(serve_config()?, interrupt, terminate, false).await
+}
+
+/// Whether `branvil init` has made the data directory `serve` would use.
+pub fn initialized() -> anyhow::Result<bool> {
+    Ok(serve_config()?.layout().db().exists())
+}
+
+/// The configuration `branvil serve` uses without options.
+fn serve_config() -> anyhow::Result<config::Config> {
     let data_dir = match std::env::var_os(DATA_DIR_ENV) {
         // As `--data-dir` refuses it: not the current directory.
         Some(dir) if dir.is_empty() => anyhow::bail!("{DATA_DIR_ENV} is empty"),
         dir => dir.map(PathBuf::from),
     };
-    let config = config::Config::load(None, data_dir.as_deref(), None, None)?;
-    cli::serve(config, interrupt, terminate, false).await
+    config::Config::load(None, data_dir.as_deref(), None, None)
 }
 
 /// The configuration, when one can be read, for default client settings.

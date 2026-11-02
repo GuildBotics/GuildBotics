@@ -16,5 +16,7 @@ mod session;
 pub use codes::{CODE_SECONDS, Codes};
 pub use consent::{loopback_redirect, valid_challenge, valid_client, verifier_matches};
 pub use origin::{Refusal, allowed_host, check_request, normalize_base_url, secure};
-pub use secret::{b64, digest, digest_matches, hex, random_bytes, random_secret, sha256, unb64};
+pub use secret::{
+    b64, digest, digest_matches, hex, hmac_sha256, random_bytes, random_secret, sha256, unb64,
+};
 pub use session::{cookie_value, csrf_matches, session_set_cookie};
