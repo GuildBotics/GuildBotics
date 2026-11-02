@@ -1,0 +1,130 @@
+[
+  {
+    "id": "same",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a",
+    "expected": true
+  },
+  {
+    "id": "child",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a/b",
+    "expected": true
+  },
+  {
+    "id": "sibling",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/ab",
+    "expected": false
+  },
+  {
+    "id": "trailing-cwd",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a/",
+    "expected": true
+  },
+  {
+    "id": "trailing-mount",
+    "mounts": {
+      "/a/": true
+    },
+    "cwd": "/a/b",
+    "expected": true
+  },
+  {
+    "id": "no-mount",
+    "mounts": {},
+    "cwd": "/a",
+    "expected": false
+  },
+  {
+    "id": "deny",
+    "mounts": {
+      "/a": false
+    },
+    "cwd": "/a",
+    "expected": false
+  },
+  {
+    "id": "deep-deny",
+    "mounts": {
+      "/a": true,
+      "/a/private": false
+    },
+    "cwd": "/a/private/x",
+    "expected": false
+  },
+  {
+    "id": "deep-allow",
+    "mounts": {
+      "/a": false,
+      "/a/open": true
+    },
+    "cwd": "/a/open/x",
+    "expected": true
+  },
+  {
+    "id": "parent-spelling",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a/../b",
+    "expected": true
+  },
+  {
+    "id": "dot-spelling",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a/./b",
+    "expected": true
+  },
+  {
+    "id": "repeated-slash",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/a//b",
+    "expected": true
+  },
+  {
+    "id": "relative",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "a/b",
+    "expected": false
+  },
+  {
+    "id": "noncanonical-mount",
+    "mounts": {
+      "/a/..": true
+    },
+    "cwd": "/a/../b",
+    "expected": true
+  },
+  {
+    "id": "root",
+    "mounts": {
+      "/": true
+    },
+    "cwd": "/elsewhere",
+    "expected": true
+  },
+  {
+    "id": "outside",
+    "mounts": {
+      "/a": true
+    },
+    "cwd": "/b",
+    "expected": false
+  }
+]

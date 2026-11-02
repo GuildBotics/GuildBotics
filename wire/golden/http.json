@@ -1,0 +1,844 @@
+[
+  {
+    "id": "success",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": {
+        "value": "日本語"
+      }
+    },
+    "response": {
+      "status": 200,
+      "json": {
+        "result": {
+          "value": "日本語"
+        }
+      }
+    },
+    "client": {
+      "result": {
+        "value": "日本語"
+      }
+    }
+  },
+  {
+    "id": "bad-bearer",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Host": "localhost",
+        "Authorization": "Bearer wrong-dummy"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": null
+    },
+    "response": {
+      "status": 401,
+      "text": ""
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "refused",
+        "message": "The host refused the call (401).",
+        "details": {}
+      }
+    }
+  },
+  {
+    "id": "bad-host",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Host": "evil.example",
+        "Authorization": "Bearer golden-dummy"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": null
+    },
+    "response": {
+      "status": 421,
+      "text": ""
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "refused",
+        "message": "The host refused the call (421).",
+        "details": {}
+      }
+    }
+  },
+  {
+    "id": "refused",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "HostCallError",
+        "category": "refused",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 403,
+      "json": {
+        "error": {
+          "category": "refused",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "refused",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "unavailable",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "HostCallError",
+        "category": "unavailable",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "unavailable",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "unavailable",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "failed",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "HostCallError",
+        "category": "failed",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "failed",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "failed",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "authentication",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "authentication",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "authentication",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "authentication",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "rate_limited",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "rate_limited",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "rate_limited",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "rate_limited",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "protocol",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "protocol",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "protocol",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "protocol",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "process",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "process",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "process",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "process",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "timeout",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "timeout",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "timeout",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "timeout",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "cancelled",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "cancelled",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "cancelled",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "cancelled",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "session_unavailable",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "session_unavailable",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "session_unavailable",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "session_unavailable",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "unsupported_version",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "unsupported_version",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "unsupported_version",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "unsupported_version",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "configuration",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "configuration",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "configuration",
+          "message": "Golden failure",
+          "details": {
+            "retry": false,
+            "reason": "日本語"
+          }
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "AgentRuntimeError",
+        "category": "configuration",
+        "message": "Golden failure",
+        "details": {
+          "retry": false,
+          "reason": "日本語"
+        }
+      }
+    }
+  },
+  {
+    "id": "oversized-result",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "oversized": true
+    },
+    "response": {
+      "status": 422,
+      "json": {
+        "error": {
+          "category": "failed",
+          "message": "The call's result is too large.",
+          "details": {}
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "failed",
+        "message": "The call's result is too large.",
+        "details": {}
+      }
+    }
+  },
+  {
+    "id": "invalid-json",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "localhost:1234"
+      },
+      "text": "not json"
+    },
+    "action": {
+      "result": null
+    },
+    "response": {
+      "status": 403,
+      "json": {
+        "error": {
+          "category": "refused",
+          "message": "A call takes a JSON object.",
+          "details": {}
+        }
+      }
+    },
+    "client": {
+      "error": {
+        "type": "HostCallError",
+        "category": "refused",
+        "message": "A call takes a JSON object.",
+        "details": {}
+      }
+    }
+  },
+  {
+    "id": "allowed-127.0.0.1:1234",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "127.0.0.1:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": {
+        "value": "日本語"
+      }
+    },
+    "response": {
+      "status": 200,
+      "json": {
+        "result": {
+          "value": "日本語"
+        }
+      }
+    },
+    "client": {
+      "result": {
+        "value": "日本語"
+      }
+    }
+  },
+  {
+    "id": "allowed-[::1]:1234",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "[::1]:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": {
+        "value": "日本語"
+      }
+    },
+    "response": {
+      "status": 200,
+      "json": {
+        "result": {
+          "value": "日本語"
+        }
+      }
+    },
+    "client": {
+      "result": {
+        "value": "日本語"
+      }
+    }
+  },
+  {
+    "id": "allowed-host.microsandbox.internal:1234",
+    "request": {
+      "method": "POST",
+      "path": "/host/probe",
+      "headers": {
+        "Authorization": "Bearer golden-dummy",
+        "Host": "host.microsandbox.internal:1234"
+      },
+      "json": {
+        "value": "日本語"
+      }
+    },
+    "action": {
+      "result": {
+        "value": "日本語"
+      }
+    },
+    "response": {
+      "status": 200,
+      "json": {
+        "result": {
+          "value": "日本語"
+        }
+      }
+    },
+    "client": {
+      "result": {
+        "value": "日本語"
+      }
+    }
+  }
+]
