@@ -910,6 +910,1325 @@
      "inspects": []
     }
    }
+  },
+  {
+   "id": "a_parenthesized_target",
+   "source": "(COMMAND_METADATA) = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_parenthesized_annotated_target",
+   "source": "(COMMAND_METADATA): dict = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "nested_parentheses_around_the_target",
+   "source": "((COMMAND_METADATA)) = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_continuation_between_the_name_and_the_equals_sign",
+   "source": "COMMAND_METADATA \\\n= {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_continuation_before_the_annotation",
+   "source": "COMMAND_METADATA\\\n: dict = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_name_written_in_fullwidth",
+   "source": "ＣＯＭＭＡＮＤ_METADATA = {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    },
+    "access": {
+     "read_only": true,
+     "inspects": [
+      "config"
+     ]
+    }
+   }
+  },
+  {
+   "id": "a_list_target",
+   "source": "[COMMAND_METADATA] = [{'read_only': True, 'inspects': ['config']}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_tuple_target",
+   "source": "COMMAND_METADATA, X = {'read_only': True, 'inspects': ['config']}, 1\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_subscript_target",
+   "source": "COMMAND_METADATA = {}\nCOMMAND_METADATA['read_only'] = True\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "an_augmented_assignment",
+   "source": "COMMAND_METADATA = {}\nCOMMAND_METADATA |= {'read_only': True, 'inspects': ['config']}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_walrus",
+   "source": "(COMMAND_METADATA := {'read_only': True, 'inspects': ['config']})\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_lambda_with_a_default",
+   "source": "COMMAND_METADATA = lambda a=1: a\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "a_type_alias",
+   "source": "type COMMAND_METADATA = dict\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_after_decorated_def",
+   "source": "@d\ndef f(): pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_after_oneline_compound",
+   "source": "if x: pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_compare_eq",
+   "source": "COMMAND_METADATA: a == b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_lambda_colon",
+   "source": "COMMAND_METADATA: lambda: 0 = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_lambda_default",
+   "source": "COMMAND_METADATA: lambda x=1: x = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_le",
+   "source": "COMMAND_METADATA: a <= b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_ne",
+   "source": "COMMAND_METADATA: a != b = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_none_value",
+   "source": "COMMAND_METADATA: dict = None\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ann_only_then_decl",
+   "source": "COMMAND_METADATA: dict\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_ann_ternary",
+   "source": "COMMAND_METADATA: a if b else c = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_assign_none",
+   "source": "COMMAND_METADATA = None\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_bs_after_semicolon",
+   "source": "x = 1; \\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_after_semicolon_indented",
+   "source": "x = 1; \\\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_colon",
+   "source": "COMMAND_METADATA \\\n: dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_eq",
+   "source": "COMMAND_METADATA \\\n= {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_before_eq_indented",
+   "source": "COMMAND_METADATA \\\n        = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_leading_line",
+   "source": "\\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_bs_then_semicolon",
+   "source": "x = 1 \\\n; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_combining_mark_before",
+   "source": "é = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_cr_only_newlines",
+   "source": "x = 1\rCOMMAND_METADATA = {\"read_only\": True}\r",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_decl_eof_no_newline",
+   "source": "COMMAND_METADATA = {\"read_only\": True}",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_double_paren_target",
+   "source": "((COMMAND_METADATA)) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_dup_hidden_bs",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nx = 1; \\\nCOMMAND_METADATA = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_ff",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\n    \fCOMMAND_METADATA = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_fstring",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nx = f\"{1:='''}\"\nCOMMAND_METADATA = {}\n#'''}\"\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_nfkc",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\nＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_dup_hidden_paren",
+   "source": "COMMAND_METADATA = {\"read_only\": True}\n(COMMAND_METADATA) = {}\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ff_prefix",
+   "source": "\fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_multiline_field",
+   "source": "x = f\"{1 +\n2}\"\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_nested_quote_desync",
+   "source": "x = f\"{\"'''\"}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_walrus_spec_desync",
+   "source": "x = f\"{1:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_global_then_decl",
+   "source": "global COMMAND_METADATA; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_latin1_cookie",
+   "source": "# -*- coding: latin-1 -*-\nx = 'é'\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_line_after_tab_comment",
+   "source": "\t# c\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_match_softkw_name",
+   "source": "match = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_match_stmt_before",
+   "source": "match x:\n    case 1:\n        pass\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_middle_dot_name_before",
+   "source": "a·b = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_dashed_lowline",
+   "source": "COMMAND﹍METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_doublestruck",
+   "source": "ℂOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_fullwidth",
+   "source": "ＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_fullwidth_lowline",
+   "source": "COMMAND＿METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_math_bold",
+   "source": "𝐂OMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_modifier",
+   "source": "COMMAND_ᴹᴱᵀᴬᴰᴬᵀᴬ = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_paren_ann",
+   "source": "(ＣＯＭＭＡＮＤ_ＭＥＴＡＤＡＴＡ): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_roman",
+   "source": "ⅭOⅯⅯANⅮ_ⅯETAⅮATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_vertical_lowline",
+   "source": "COMMAND︳METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nfkc_wavy_lowline",
+   "source": "COMMAND﹏METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_other_id_start_before",
+   "source": "℘ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_ann_target",
+   "source": "(COMMAND_METADATA): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_ann_target_multiline",
+   "source": "(\n    COMMAND_METADATA\n): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_target",
+   "source": "(COMMAND_METADATA) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_paren_target_multiline",
+   "source": "( # t\nCOMMAND_METADATA\n) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_semicolon_after",
+   "source": "COMMAND_METADATA = {\"read_only\": True}; x = 1\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_semicolon_before",
+   "source": "x = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_spaces_then_ff",
+   "source": "    \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_string_prefix_names",
+   "source": "rb = f = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_tab_then_ff",
+   "source": "\t\fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_tstring_walrus_spec_desync",
+   "source": "x = t\"{1:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_type_softkw_name",
+   "source": "type = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_type_stmt_before",
+   "source": "type T = int\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_value_bs",
+   "source": "COMMAND_METADATA = \\\n{\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_value_walrus",
+   "source": "COMMAND_METADATA = (x := {\"read_only\": True})\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_value_yield",
+   "source": "COMMAND_METADATA = yield\n",
+   "expected": {
+    "metadata": null,
+    "access": null
+   }
+  },
+  {
+   "id": "declares_ff_spaces_ff",
+   "source": "\f  \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_conv_walrus_spec",
+   "source": "x = f\"{1!r:='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_nested_spec_walrus",
+   "source": "x = f\"{1:{2:='''}}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fstring_space_walrus_spec",
+   "source": "x = f\"{1 :='''}\"\nCOMMAND_METADATA = {\"read_only\": True}\n#'''}\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fullwidth_class_name",
+   "source": "ｃｌａｓｓ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_fullwidth_if_name",
+   "source": "ｉｆ = 1; COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_lowline_paren_ann",
+   "source": "(COMMAND＿METADATA): dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_spaces_ff_after_block",
+   "source": "if x:\n    pass\n  \fCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_ann_attr",
+   "source": "m.COMMAND_METADATA: dict = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_ann_only",
+   "source": "COMMAND_METADATA: dict\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_attr_target",
+   "source": "m.COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_augassign",
+   "source": "COMMAND_METADATA |= {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_comment",
+   "source": "# COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_compare_stmt",
+   "source": "COMMAND_METADATA == {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_docstring",
+   "source": "\"\"\"\nCOMMAND_METADATA = {\"read_only\": True}\n\"\"\"\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_in_class",
+   "source": "class C:\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_in_def_oneline",
+   "source": "def f(): COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_list_target",
+   "source": "[COMMAND_METADATA] = [{\"read_only\": True}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_multi_target",
+   "source": "COMMAND_METADATA = x = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_multi_target_paren",
+   "source": "(COMMAND_METADATA) = (x) = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_oneline_if",
+   "source": "if TYPE_CHECKING: COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_oneline_if_bs",
+   "source": "if x: pass; \\\nCOMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_starred_target",
+   "source": "*COMMAND_METADATA, = [{\"read_only\": True}]\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_subscript_target",
+   "source": "COMMAND_METADATA[0] = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_tuple_target",
+   "source": "COMMAND_METADATA, = ({\"read_only\": True},)\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_type_alias",
+   "source": "type COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_type_checking",
+   "source": "if TYPE_CHECKING:\n    COMMAND_METADATA = {\"read_only\": True}\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "declares_nothing_walrus_stmt",
+   "source": "(COMMAND_METADATA := {\"read_only\": True})\n",
+   "expected": {
+    "metadata": {},
+    "access": {
+     "read_only": false,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_after_a_comment_in_a_field",
+   "source": "a = 1\nx = f\"\"\"{a # c\n:=\" }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\ny: int = 1  # }\"\"\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_after_a_continuation_in_a_field",
+   "source": "a = 1\nx = f\"\"\"{a\\\n:=\" }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\ny: int = 1  # }\"\"\"\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
+  },
+  {
+   "id": "a_spec_with_a_quote_after_a_comment",
+   "source": "a = 1\nx = f\"\"\"{a # c\n:=' }\"\"\"\nCOMMAND_METADATA = {'read_only': True}\n",
+   "expected": {
+    "metadata": {
+     "read_only": true
+    },
+    "access": {
+     "read_only": true,
+     "inspects": []
+    }
+   }
   }
  ]
 }

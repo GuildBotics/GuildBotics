@@ -12,6 +12,7 @@
 //! this reader cannot read through, rather than read as declaring nothing.
 
 use serde_json::{Map, Number, Value};
+use unicode_normalization::UnicodeNormalization;
 
 const NAME: &str = "COMMAND_METADATA";
 
@@ -29,6 +30,10 @@ pub struct Unreadable;
 
 /// The module's declaration: empty when it declares none.
 pub fn command_metadata(source: &str) -> Result<Declaration, Unreadable> {
+    // A byte order mark is no character of a module Python reads as text.
+    if source.starts_with('\u{feff}') {
+        return Err(Unreadable);
+    }
     // Python reads a module with universal newlines.
     let source = source.replace("\r\n", "\n").replace('\r', "\n");
     let mut declarations = Vec::new();
@@ -45,39 +50,46 @@ pub fn command_metadata(source: &str) -> Result<Declaration, Unreadable> {
 }
 
 /// What a top-level statement assigns to `COMMAND_METADATA`; `None` when it
-/// assigns nothing to it, alone.
+/// assigns nothing to it, alone. The statement is read as Python's grammar has
+/// it, not by its spelling: its target is what comes before its first `=` (or
+/// the `:` of an annotation) outside brackets, a declaration when that is the
+/// name alone, in any parentheses (`(COMMAND_METADATA): dict = {...}`).
+/// Several targets, a tuple, a subscript, or an augmented assignment declare
+/// nothing, as in the Python version.
 fn declared(statement: &str) -> Option<Result<Declaration, Unreadable>> {
-    let rest = statement.strip_prefix(NAME)?;
-    if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+    let mut lexer = Lexer::new(statement);
+    let mut target = Vec::new();
+    let annotated = loop {
+        match lexer.next_token() {
+            Err(e) => return Some(Err(e)),
+            Ok(None | Some(Token::Newline)) => return None,
+            Ok(Some(Token::Punct('='))) if lexer.depth == 0 => break false,
+            Ok(Some(Token::Punct(':'))) if lexer.depth == 0 => break true,
+            Ok(Some(token)) => target.push(token),
+        }
+    };
+    if !is_the_name(&target) {
         return None;
     }
-    let rest = rest.trim_start();
-    let value = if let Some(annotated) = rest.strip_prefix(':') {
-        // `NAME: annotation = value`; an annotation alone assigns nothing.
-        let mut tokens = Lexer::new(annotated);
+    if annotated {
+        // `NAME: annotation = value`; an annotation alone assigns nothing. A
+        // lambda's parameters, up to its `:`, may hold a `=` of their own.
+        let mut in_lambda = false;
         loop {
-            match tokens.next_token() {
-                Ok(Some(Token::Punct('='))) if tokens.depth == 0 => break,
-                Ok(Some(_)) => {}
-                Ok(None) => return None,
+            match lexer.next_token() {
                 Err(e) => return Some(Err(e)),
+                Ok(None | Some(Token::Newline)) => return None,
+                Ok(Some(Token::Name(name))) if lexer.depth == 0 && name == "lambda" => {
+                    in_lambda = true;
+                }
+                Ok(Some(Token::Punct(':'))) if lexer.depth == 0 => in_lambda = false,
+                Ok(Some(Token::Punct('='))) if lexer.depth == 0 && !in_lambda => break,
+                Ok(Some(_)) => {}
             }
         }
-        &annotated[tokens.position..]
-    } else {
-        let after = rest.strip_prefix('=')?;
-        if after.starts_with('=') {
-            return None;
-        }
-        after
-    };
-    // `NAME = OTHER = value` assigns to two names, which the Python version
-    // does not take for a declaration.
-    let mut targets = Lexer::new(value);
-    if let (Ok(Some(Token::Name(_))), Ok(Some(Token::Punct('=')))) =
-        (targets.next_token(), targets.next_token())
-        && targets.peek() != Some('=')
-    {
+    }
+    let value = &statement[lexer.position..];
+    if !annotated && assigns_again(value) {
         return None;
     }
     let mut parser = Parser {
@@ -97,6 +109,39 @@ fn declared(statement: &str) -> Option<Result<Declaration, Unreadable>> {
     }))
 }
 
+/// Whether `target` is the declared name alone, in any parentheses; the name
+/// compared as Python compares identifiers, normalized to NFKC.
+fn is_the_name(target: &[Token]) -> bool {
+    let mut inner = target;
+    while let [Token::Punct('('), rest @ .., Token::Punct(')')] = inner {
+        inner = rest;
+    }
+    matches!(inner, [Token::Name(name)] if name.nfkc().eq(NAME.chars()))
+}
+
+/// Whether what follows a target's `=` is another target and `=`: a chained
+/// assignment (`NAME = OTHER = value`), which names several targets.
+fn assigns_again(value: &str) -> bool {
+    let mut lexer = Lexer::new(value);
+    loop {
+        match lexer.next_token() {
+            Ok(Some(Token::Punct('='))) if lexer.depth == 0 => return true,
+            Ok(Some(Token::Name(name))) if !KEYWORDS.contains(&name.as_str()) => {}
+            Ok(Some(Token::Punct('(' | ')' | '[' | ']' | ',' | '.' | '*'))) => {}
+            _ => return false,
+        }
+    }
+}
+
+/// Keywords that start an expression, which no target is.
+const KEYWORDS: &[&str] = &["lambda", "not", "await", "yield", "None", "True", "False"];
+
+/// Python's operators of more than one character, longest first.
+const OPERATORS: &[&str] = &[
+    "**=", "//=", ">>=", "<<=", "...", "==", "!=", "<=", ">=", ":=", "->", "+=", "-=", "*=", "/=",
+    "%=", "&=", "|=", "^=", "@=", "**", "//", "<<", ">>",
+];
+
 /// The keywords that start a compound statement, whose line holds its body
 /// after the colon, `;`-separated statements and all, never a top-level one.
 const COMPOUND: &[&str] = &[
@@ -108,7 +153,13 @@ const COMPOUND: &[&str] = &[
 /// at the first column (a form feed resets the column), outside any bracket or
 /// string, split at their `;`; none of a compound statement's line.
 fn statements(source: &str) -> Result<Vec<String>, Unreadable> {
-    let at_column_zero = |line: &str| !line.trim_start_matches('\x0c').starts_with([' ', '\t']);
+    // A form feed sets the column back to zero: what came before it counts
+    // for nothing.
+    let at_column_zero = |line: &str| {
+        let indentation = line.len() - line.trim_start_matches([' ', '\t', '\x0c']).len();
+        let after_form_feed = line[..indentation].rfind('\x0c').map_or(0, |i| i + 1);
+        indentation == after_form_feed
+    };
     let mut statements = Vec::new();
     let mut lexer = Lexer::new(source);
     let mut start = 0;
@@ -151,6 +202,8 @@ enum Token {
     /// template string, or one with a named escape.
     Opaque,
     Punct(char),
+    /// An operator of more than one character (`==`, `:=`, `+=`, ...).
+    Op(&'static str),
     Newline,
 }
 
@@ -215,9 +268,10 @@ impl<'a> Lexer<'a> {
             }
         }
         let c = self.peek().expect("a character");
-        if c.is_alphabetic() || c == '_' {
+        // An identifier, by the characters Python's identifiers are made of.
+        if unicode_ident::is_xid_start(c) || c == '_' {
             let start = self.position;
-            while self.peek().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            while self.peek().is_some_and(unicode_ident::is_xid_continue) {
                 self.bump();
             }
             let word = &self.text[start..self.position];
@@ -248,6 +302,10 @@ impl<'a> Lexer<'a> {
         }
         if c == '\'' || c == '"' {
             return self.string("").map(Some);
+        }
+        if let Some(op) = OPERATORS.iter().find(|op| self.rest().starts_with(**op)) {
+            self.position += op.len();
+            return Ok(Some(Token::Op(op)));
         }
         self.bump();
         match c {
@@ -352,7 +410,9 @@ impl<'a> Lexer<'a> {
         self.depth += 1;
         while self.depth > outer {
             match self.next_token()?.ok_or(Unreadable)? {
-                Token::Punct(':') if self.depth == outer + 1 => {
+                // A `:` of the field's own starts its format spec, even
+                // before a `=`: a walrus in a field is in parentheses.
+                Token::Punct(':') | Token::Op(":=") if self.depth == outer + 1 => {
                     loop {
                         match self.bump().ok_or(Unreadable)? {
                             '{' => self.replacement_field()?,
@@ -635,6 +695,7 @@ def main():
             "COMMAND_METADATA = {'read_only': True} + {}\n",
             "COMMAND_METADATA = {'a': 1}\nCOMMAND_METADATA = {'b': 2}\n",
             "x = 'unterminated\nCOMMAND_METADATA = {'read_only': True}\n",
+            "\u{feff}COMMAND_METADATA = {'read_only': True}\n",
         ] {
             assert_eq!(read(source), Err(Unreadable), "{source}");
         }
