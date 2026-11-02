@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _run(test_file: Path, *args: str, env: dict[str, str] | None = None):
     return subprocess.run(
@@ -252,7 +254,16 @@ def pytest_sessionfinish(session):
     assert "late.example" in result.stdout
 
 
-def test_real_device_requires_explicit_opt_in(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "flag,disabled,enabled_value",
+    [
+        ("GUILDBOTICS_CONTRACT_PROBE", "0", "1"),
+        ("GUILDBOTICS_E2E_ENVIRONMENT_FROM", "", "/ready/workspace"),
+    ],
+)
+def test_real_device_requires_explicit_opt_in(
+    tmp_path: Path, flag: str, disabled: str, enabled_value: str
+) -> None:
     test_file = tmp_path / "test_real_device.py"
     test_file.write_text(
         """
@@ -266,15 +277,15 @@ def test_real_device(request):
     assert guard.exempt
     assert request.node.get_closest_marker("timeout").args == (1800,)
     guard._check("example.com")
-""",
+        """.replace("GUILDBOTICS_CONTRACT_PROBE", flag),
         encoding="utf-8",
     )
-    env = {**os.environ, "GUILDBOTICS_CONTRACT_PROBE": "0"}
+    env = {**os.environ, flag: disabled}
     env.pop("CI", None)
     skipped = _run(test_file, env=env)
     assert "1 skipped" in skipped.stdout, skipped.stdout + skipped.stderr
 
-    env["GUILDBOTICS_CONTRACT_PROBE"] = "1"
+    env[flag] = enabled_value
     enabled = _run(test_file, env=env)
     assert "1 passed" in enabled.stdout, enabled.stdout + enabled.stderr
 

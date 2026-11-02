@@ -34,30 +34,33 @@ class Stack:
     workspace: Path
     env: dict[str, str]
     api: httpx.Client
+    provider: object
 
     @property
     def config_dir(self) -> str:
         return str(self.workspace / ".guildbotics/config")
 
-    def cli(self, *arguments: str, content: str | None = None):
+    def cli(self, *arguments: str, content=None, cwd=None, timeout=30):
         result = subprocess.run(
             [sys.executable, "-m", "guildbotics.cli", *arguments],
-            cwd=self.workspace,
+            cwd=cwd or self.workspace,
             env=self.env,
             input=content,
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=30,
+            timeout=timeout,
         )
         assert result.returncode == 0, result.stderr
         return result.stdout
 
-    def member(self, *arguments: str, content: str | None = None):
+    def member(self, *arguments: str, content: str | None = None, cwd=None):
         options = ["--person", PERSON, "--format", "json"]
         if content is not None:
             options.append("--content-stdin")
-        return json.loads(self.cli("member", *arguments, *options, content=content))
+        return json.loads(
+            self.cli("member", *arguments, *options, content=content, cwd=cwd)
+        )
 
 
 def _yaml(path: Path, value: dict) -> None:
@@ -65,7 +68,7 @@ def _yaml(path: Path, value: dict) -> None:
     path.write_text(yaml.safe_dump(value), encoding="utf-8")
 
 
-def _seed(workspace: Path, home: Path) -> None:
+def _seed(workspace: Path, home: Path, provider) -> None:
     """Write only documented configuration and local-provider seed files."""
     config = workspace / ".guildbotics/config"
     _yaml(
@@ -73,11 +76,7 @@ def _seed(workspace: Path, home: Path) -> None:
         {
             "name": "Blackbox",
             "language": "en",
-            "services": {
-                "code_hosting_service": {"name": "local", "owner": "acme/team"},
-                "ticket_service": {"name": "local", "owner": "acme/team"},
-                "chat_service": {"name": "local"},
-            },
+            "services": provider.services,
         },
     )
     _yaml(
@@ -109,13 +108,7 @@ def _seed(workspace: Path, home: Path) -> None:
     runtime = home / ".guildbotics/data/msb"
     runtime.parent.mkdir(parents=True, exist_ok=True)
     runtime.touch()
-    tracker = (
-        workspace / ".guildbotics/local/services/tickets/acme%2Fteam%2Fdemo-tickets"
-    )
-    tracker.mkdir(parents=True)
-    (tracker / "tracker.json").write_text(
-        json.dumps({"repository": REPOSITORY, "labels": []}), encoding="utf-8"
-    )
+    provider.seed()
 
 
 def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str, str]:
@@ -184,11 +177,19 @@ def _stop(process: subprocess.Popen) -> None:
 
 
 @contextmanager
-def running_stack(tmp_path: Path):
+def running_stack(tmp_path: Path, *, environment=None):
+    from tests.blackbox.providers import PROVIDERS
+
     workspace, home = tmp_path / "workspace", tmp_path / "home"
     workspace.mkdir()
     home.mkdir(exist_ok=True)
-    _seed(workspace, home)
+    selected = os.environ.get("GUILDBOTICS_BLACKBOX_PROVIDER", "local")
+    if selected not in PROVIDERS:
+        raise ValueError(f"Unknown blackbox provider: {selected}")
+    provider = PROVIDERS[selected](workspace)
+    _seed(workspace, home, provider)
+    if environment is not None:
+        environment.adopt(workspace, home)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
@@ -257,7 +258,7 @@ def running_stack(tmp_path: Path):
                     )
                     time.sleep(0.05)
                 api.timeout = httpx.Timeout(10)
-                yield Stack(workspace, env, api)
+                yield Stack(workspace, env, api, provider)
         finally:
             _stop(process)
             reader.join(timeout=2)

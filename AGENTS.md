@@ -422,10 +422,35 @@ shell の展開・リダイレクトは使えない。差し替え先も `GUILDB
 `GUILDBOTICS_APP_API_PORT=<port>` の stdout 通知、`/api/health`、一時 HOME の owner token、
 ワークスペースの YAML 設定という同じ契約を使う。fixture がテストごとにサーバーを起動し、終了時に止める。
 GuildBotics のモジュールは import せず、HTTP と CLI の子プロセスだけで検査する。
-HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離し、local provider だけを使う。
+HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離する。
+`GUILDBOTICS_BLACKBOX_PROVIDER` で provider を選ぶ（現在は既定の `local`。CI も明示的に `local`）。
+`tests/blackbox/providers.py` のアダプターが provider の設定、remote の用意、人のマージ、CI の完了を受け持ち、
+チケットと関係、push・PR・マージ、head と base に応じた readiness の3経路は member CLI だけで同じ筋書きを流す。
+local のマージ API は無いため、fixture が bare remote とホストの状態ファイルへ人のマージ結果を記録し、
+メンバーから merged・チケットの closed/done を読めることを確かめる。local 自体のマージ処理を検証するものではない。
+一時 checkout からの push にだけ `member git push --workspace-mode current` を使う。
 サービスは空の schedule だけを動かし、runtime の配置を一時 HOME 内で拒否して image の取得を防ぐ。
 Python の子プロセスは loopback 以外の socket 接続・名前解決も拒否する。
 ネイティブの差し替え先にはこの Python 用の制限は及ばないため、同じ local 設定と外部 HTTP 通信を拒む proxy を渡す。
+
+同梱コマンドを `guildbotics run` で実際の microVM に実行させる黒箱テストは、通常の CI では
+`GUILDBOTICS_E2E_ENVIRONMENT_FROM` が未指定である理由を示して skip する。
+実機では、オーナーの明示的な承認を得て立ち会ってもらい、隔離環境が ready なワークスペースを指定して
+次を個別に実行する（環境変数の設定だけでは承認・立ち会いの代わりにならない）:
+
+```bash
+GUILDBOTICS_E2E_ENVIRONMENT_FROM=/absolute/path/to/ready-workspace \
+  uv run --no-sync python -m pytest tests/blackbox/test_run.py -p no:xdist -v -rs
+```
+
+desktop E2E と同じ環境変数を使い、その端末の runtime とワークスペースの snapshot を一時 HOME・
+ワークスペースへリンクし、宣言だけをコピーする。設定・メンバー・keyring は一時のもので、
+実機の資格情報を引き継がず、build・service start・LLM 実行はしない。
+一時 directory は Windows の mount 制約に合わせて実機の HOME の `.guildbotics-blackbox/` に作り、
+終了時にリンクごと削除する。元の runtime・snapshot は削除しない。
+`repository/issue_inspect`・`repository/pr_inspect`・`repository/pr_checks` の結果で、
+CLI → サーバー → 隔離環境 → member broker を貫く読み取りを確認する。
+実機テストの opt-in として扱い、CI 内や pytest-xdist での並列実行は拒否する。
 
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
@@ -605,7 +630,7 @@ desktop TypeScript 開発時の品質確認:
 - どのテストも既定で 120 秒で時間切れになり、止まらずに失敗する（`pyproject.toml` の `[tool.pytest.ini_options]` の `timeout`。pytest-timeout）。実機の隔離環境と provider CLI を使う任意実行のテストは、module の `pytestmark` に `pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE")` のように opt-in 環境変数を渡す。このマーカーのテストは 30 分で時間切れになる
 - テストは決定論的かつ hermetic に保つ。時間・乱数・環境変数・cwd・HOME・I/O は `monkeypatch` / `tmp_path` で制御し、実 home ディレクトリや外部サービスに触れない
 - `tests/conftest.py` の autouse fixture が、通常テストの `HOME`・`USERPROFILE` を `tmp_path / "home"`、`GUILDBOTICS_WORKSPACE_ROOT` を `tmp_path` に設定し、`GUILDBOTICS_CONFIG_DIR` を削除する。個別のテストや fixture では、これと違う値が必要なときだけ設定する
-- 通常の pytest は収集時から loopback（`127.0.0.1` / `::1` / `localhost`）以外の Python socket 接続と名前解決を失敗させる。子プロセスには到達不能な HTTP proxy と `GIT_ALLOW_PROTOCOL=file` を渡す。これらを無視する CLI（直接起動した `ssh` など）はテスト側で stub にする。接続試行の調査には `--network-audit` を使う。この監査で記録できるのは Python プロセス内の接続試行で、子プロセスの通信は含まない。`real_device` を付けたテストは指定した環境変数が `1` のときだけ実行し、その実行だけをネットワーク制限から除外する
+- 通常の pytest は収集時から loopback（`127.0.0.1` / `::1` / `localhost`）以外の Python socket 接続と名前解決を失敗させる。子プロセスには到達不能な HTTP proxy と `GIT_ALLOW_PROTOCOL=file` を渡す。これらを無視する CLI（直接起動した `ssh` など）はテスト側で stub にする。接続試行の調査には `--network-audit` を使う。この監査で記録できるのは Python プロセス内の接続試行で、子プロセスの通信は含まない。`real_device` を付けたテストは opt-in が有効なときだけ実行し、その実行だけをネットワーク制限から除外する。opt-in は通常、指定した環境変数の値が `1` のとき有効になる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` は空でないワークスペースのパスを指定したとき有効になる
 - `real_device` を付けた実機・provider 接続テストは、通常の CI、定期ジョブ、エージェントによる一括テストに含めず、pytest-xdist で並列実行しない。個別に実行する前に、対象と外部通信・実機の認証状態への影響を示してユーザーの明示的な承認を得る。ユーザーが実行に立ち会い、進行と結果を確認できる状態でのみ実行する。opt-in 環境変数の設定は承認や立ち会いの代わりにならない
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
 - テストコードも本体コードと同じ品質対象とする。重複 fixture や場当たり的 mock が増えた場合は helper / factory へ整理する

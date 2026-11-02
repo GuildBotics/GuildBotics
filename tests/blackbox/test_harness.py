@@ -3,12 +3,14 @@
 import ast
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tests.blackbox.environment import EnvironmentSource
 from tests.blackbox.harness import _environment, running_stack
 
 
@@ -114,3 +116,39 @@ def test_failed_start_reaps_the_server(tmp_path, monkeypatch):
     assert (tmp_path / "stopped").exists()
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "pid").read_text()), 0)
+
+
+@pytest.mark.windows
+def test_environment_adoption_and_cleanup_leave_the_source_intact(tmp_path, symlinks):
+    source = tmp_path / "source"
+    source_home = tmp_path / "device-home"
+    declaration = Path(".guildbotics/config/intelligences/agent_environment.yml")
+    snapshots = Path(".guildbotics/local/agent_environment/snapshots")
+    runtime = Path(".guildbotics/data/msb")
+    (source / declaration).parent.mkdir(parents=True)
+    (source / declaration).write_text("image: fixture\n", encoding="utf-8")
+    (source / snapshots / "ready").mkdir(parents=True)
+    (source / snapshots / "ready/disk").write_bytes(b"snapshot")
+    (source_home / runtime).mkdir(parents=True)
+    (source_home / runtime / "runtime").write_bytes(b"runtime")
+    workspace, home = tmp_path / "borrowed", tmp_path / "borrowed-home"
+    (home / runtime).parent.mkdir(parents=True)
+    (home / runtime).touch()
+    EnvironmentSource(source, source_home).adopt(workspace, home)
+    assert (workspace / declaration).read_text() == "image: fixture\n"
+    assert not (workspace / declaration).is_symlink()
+    assert (workspace / snapshots).is_symlink()
+    assert (home / runtime).is_symlink()
+    assert (workspace / snapshots / "ready/disk").read_bytes() == b"snapshot"
+    assert (home / runtime / "runtime").read_bytes() == b"runtime"
+    shutil.rmtree(workspace)
+    shutil.rmtree(home)
+    assert (source / snapshots / "ready/disk").read_bytes() == b"snapshot"
+    assert (source_home / runtime / "runtime").read_bytes() == b"runtime"
+
+
+def test_unknown_provider_does_not_silently_run_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_PROVIDER", "unknown")
+    with pytest.raises(ValueError, match="Unknown blackbox provider"):
+        with running_stack(tmp_path):
+            pytest.fail("An unknown provider must fail before starting the server")
