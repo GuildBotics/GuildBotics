@@ -1,0 +1,555 @@
+[
+ {
+  "id": "finished",
+  "trace": {
+   "source": "manual",
+   "person_id": "aiko",
+   "command": "repository/issue_inspect",
+   "workflow": "",
+   "attributes": {
+    "run.entry": "command"
+   }
+  },
+  "run": {
+   "command": "repository/issue_inspect",
+   "person": "aiko",
+   "ends": "finished"
+  },
+  "index": [
+   {
+    "kind": "event",
+    "type": "session.pointer",
+    "timestamp": "<timestamp>",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command",
+     "session.path": "sessions/<trace>.jsonl"
+    },
+    "payload": {
+     "path": "sessions/<trace>.jsonl"
+    }
+   },
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.finished",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 0,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "transcript": [
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.finished",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 0,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "status": "success"
+ },
+ {
+  "id": "failed",
+  "trace": {
+   "source": "manual",
+   "person_id": "aiko",
+   "command": "repository/issue_inspect",
+   "workflow": "",
+   "attributes": {
+    "run.entry": "command"
+   }
+  },
+  "run": {
+   "command": "repository/issue_inspect",
+   "person": "aiko",
+   "ends": {
+    "failed": {
+     "error_type": "CommandError",
+     "code": ""
+    }
+   }
+  },
+  "index": [
+   {
+    "kind": "event",
+    "type": "session.pointer",
+    "timestamp": "<timestamp>",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command",
+     "session.path": "sessions/<trace>.jsonl"
+    },
+    "payload": {
+     "path": "sessions/<trace>.jsonl"
+    }
+   },
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.failed",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "error_type": "CommandError",
+     "code": "",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 1,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "transcript": [
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.failed",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "error_type": "CommandError",
+     "code": "",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 1,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "status": "failed"
+ },
+ {
+  "id": "cancelled",
+  "trace": {
+   "source": "manual",
+   "person_id": "aiko",
+   "command": "repository/issue_inspect",
+   "workflow": "",
+   "attributes": {
+    "run.entry": "command"
+   }
+  },
+  "run": {
+   "command": "repository/issue_inspect",
+   "person": "aiko",
+   "ends": "cancelled"
+  },
+  "index": [
+   {
+    "kind": "event",
+    "type": "session.pointer",
+    "timestamp": "<timestamp>",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command",
+     "session.path": "sessions/<trace>.jsonl"
+    },
+    "payload": {
+     "path": "sessions/<trace>.jsonl"
+    }
+   },
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.failed",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "error_type": "CancelledError",
+     "code": "cancelled",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 1,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "transcript": [
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko"
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.failed",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "manual",
+    "person_id": "aiko",
+    "command": "repository/issue_inspect",
+    "workflow": "",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/issue_inspect",
+     "person": "aiko",
+     "error_type": "CancelledError",
+     "code": "cancelled",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 1,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "status": "failed"
+ },
+ {
+  "id": "the_run_names_its_command_and_not_its_member",
+  "trace": {
+   "source": "scheduled",
+   "person_id": "aiko",
+   "command": "workflows/ticket_driven_workflow",
+   "workflow": "ticket",
+   "attributes": {
+    "run.entry": "command"
+   }
+  },
+  "run": {
+   "command": "repository/pr_inspect",
+   "person": "",
+   "ends": "finished"
+  },
+  "index": [
+   {
+    "kind": "event",
+    "type": "session.pointer",
+    "timestamp": "<timestamp>",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "scheduled",
+    "person_id": "aiko",
+    "command": "repository/pr_inspect",
+    "workflow": "ticket",
+    "attributes": {
+     "run.entry": "command",
+     "session.path": "sessions/<trace>.jsonl"
+    },
+    "payload": {
+     "path": "sessions/<trace>.jsonl"
+    }
+   },
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "scheduled",
+    "person_id": "aiko",
+    "command": "repository/pr_inspect",
+    "workflow": "ticket",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/pr_inspect",
+     "person": ""
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.finished",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "scheduled",
+    "person_id": "aiko",
+    "command": "repository/pr_inspect",
+    "workflow": "ticket",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/pr_inspect",
+     "person": "",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 0,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "transcript": [
+   {
+    "kind": "event",
+    "type": "command.started",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "scheduled",
+    "person_id": "aiko",
+    "command": "repository/pr_inspect",
+    "workflow": "ticket",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/pr_inspect",
+     "person": ""
+    },
+    "timestamp": "<timestamp>"
+   },
+   {
+    "kind": "event",
+    "type": "command.finished",
+    "trace_id": "<trace>",
+    "span_id": null,
+    "parent_id": null,
+    "call_id": null,
+    "span": "",
+    "source": "scheduled",
+    "person_id": "aiko",
+    "command": "repository/pr_inspect",
+    "workflow": "ticket",
+    "attributes": {
+     "run.entry": "command"
+    },
+    "payload": {
+     "command": "repository/pr_inspect",
+     "person": "",
+     "event_count": 2,
+     "log_count": 0,
+     "error_count": 0,
+     "span_count": 0
+    },
+    "timestamp": "<timestamp>"
+   }
+  ],
+  "status": "success"
+ }
+]

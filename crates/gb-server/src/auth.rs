@@ -7,7 +7,6 @@
 //! them.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -238,11 +237,14 @@ impl ServerAuth {
                 sessions: BTreeMap::new(),
             },
         )?;
-        write_private(&path, format!("{text}\n").as_bytes())
+        Ok(gb_base::files::atomic_write(
+            &path,
+            format!("{text}\n").as_bytes(),
+        )?)
     }
 
     fn save(&self, state: &mut State, records: Records) -> anyhow::Result<()> {
-        write_private(
+        gb_base::files::atomic_write(
             &self.directory.join("auth.json"),
             &serde_json::to_vec(&records)?,
         )?;
@@ -290,28 +292,6 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder.create(path)
-}
-
-/// Replaces `path` with `content` all at once, readable by its owner only.
-fn write_private(path: &Path, content: &[u8]) -> anyhow::Result<()> {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temporary = path.with_file_name(format!(
-        ".{name}.{}",
-        loopback_auth::hex(&loopback_auth::random_bytes::<8>())
-    ));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = options.open(&temporary).and_then(|mut file| {
-        file.write_all(content)?;
-        file.sync_all()
-    });
-    if let Err(e) = written.and_then(|_| std::fs::rename(&temporary, path)) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(e.into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

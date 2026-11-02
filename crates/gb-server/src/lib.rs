@@ -4,9 +4,7 @@
 
 mod api;
 mod auth;
-mod home;
 mod i18n;
 mod server;
 
-pub use home::HOME_ENV;
 pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, Server};

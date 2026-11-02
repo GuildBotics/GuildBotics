@@ -33,18 +33,33 @@ def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None
     assert cached - {"target"} <= set(workspace["exclude"])
 
 
-#: The workspace's crates that know nothing of GuildBotics, by the workspace
-#: crates each may use: Branvil, and what Branvil and GuildBotics share.
-_NEUTRAL = {"loopback-auth": set(), "branvil": {"loopback-auth"}}
+#: Every crate of the workspace, by the workspace crates it may use. Branvil
+#: and what Branvil and GuildBotics share know nothing of GuildBotics.
+#: GuildBotics' crates follow the layers of the Python version's zones (#81):
+#: each uses only crates below it, and siblings of one layer (workspace and
+#: observability) never each other.
+_ALLOWED = {
+    "loopback-auth": set(),
+    "branvil": {"loopback-auth"},
+    "gb-base": set(),
+    "gb-workspace": {"gb-base"},
+    "gb-observability": {"gb-base"},
+    "gb-server": {"gb-base", "gb-workspace", "gb-observability", "loopback-auth"},
+    "guildbotics": {"gb-server", "branvil", "loopback-auth"},
+}
 
 
-def test_branvil_and_the_shared_crates_know_nothing_of_guildbotics() -> None:
-    for name, allowed in _NEUTRAL.items():
+def test_each_crate_uses_only_the_crates_below_it() -> None:
+    crates = {path.parent.name for path in (ROOT / "crates").glob("*/Cargo.toml")}
+    assert crates == set(_ALLOWED)
+    for name, allowed in _ALLOWED.items():
         manifest = _load(f"crates/{name}/Cargo.toml")
+        scopes = [manifest, *manifest.get("target", {}).values()]
         used = {
             dependency
+            for scope in scopes
             for table in ("dependencies", "dev-dependencies", "build-dependencies")
-            for dependency, spec in manifest.get(table, {}).items()
+            for dependency, spec in scope.get(table, {}).items()
             if isinstance(spec, dict) and "path" in spec
         }
 

@@ -1,0 +1,13 @@
+{
+ "registry": {
+  "register": [
+   "a",
+   "b",
+   "a"
+  ],
+  "text": "[\"<root>/a\", \"<root>/b\"]\n"
+ },
+ "active_workspace": "{\n  \"workspace\": \"<root>/selected\",\n  \"config_dir\": \"<root>/selected/.guildbotics/config\"\n}\n",
+ "workspace_identity": "{\n  \"created_at\": \"<created_at>\",\n  \"schema_version\": 4,\n  \"workspace_id\": \"<workspace_id>\"\n}\n",
+ "device_identity": "{\n  \"device_id\": \"<device_id>\",\n  \"display_name\": \"<display_name>\",\n  \"os\": \"<os>\",\n  \"schema_version\": 4\n}\n"
+}
