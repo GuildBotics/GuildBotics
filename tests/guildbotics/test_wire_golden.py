@@ -7,7 +7,7 @@ import io
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -191,6 +191,13 @@ async def test_host_execute_reads_fixture_reply(case):
 @pytest.mark.parametrize("case", _load("admits"), ids=lambda case: case["id"])
 def test_mount_admission(case):
     assert admits(case["mounts"], case["cwd"]) is case["expected"]
+
+
+def test_mount_fixture_excludes_parent_traversal():
+    """Do not require ports to reproduce behavior outside caller guarantees."""
+    for case in _load("admits"):
+        for path in [case["cwd"], *case["mounts"]]:
+            assert ".." not in PurePosixPath(path).parts, (case["id"], path)
 
 
 def _write_files(root, files):
