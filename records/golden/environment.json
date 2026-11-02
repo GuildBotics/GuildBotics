@@ -1,0 +1,491 @@
+{
+ "tags": [
+  {
+   "tag": "ja",
+   "expected": "ja"
+  },
+  {
+   "tag": "ja-JP",
+   "expected": "ja_JP"
+  },
+  {
+   "tag": "ja_JP",
+   "expected": "ja_JP"
+  },
+  {
+   "tag": "ja_JP.UTF-8",
+   "expected": "ja_JP"
+  },
+  {
+   "tag": "en_GB.UTF-8@euro",
+   "expected": "en_GB"
+  },
+  {
+   "tag": "de_DE@euro",
+   "expected": "de_DE"
+  },
+  {
+   "tag": "en-US",
+   "expected": "en_US"
+  },
+  {
+   "tag": "EN-us",
+   "expected": "en_US"
+  },
+  {
+   "tag": "zh-Hans-CN",
+   "expected": "zh_CN"
+  },
+  {
+   "tag": "zh-Hant-TW",
+   "expected": "zh_TW"
+  },
+  {
+   "tag": "zh-TW",
+   "expected": "zh_TW"
+  },
+  {
+   "tag": "zh_CN",
+   "expected": "zh_CN"
+  },
+  {
+   "tag": "pt-BR",
+   "expected": "pt_BR"
+  },
+  {
+   "tag": "es-419",
+   "expected": "es_419"
+  },
+  {
+   "tag": "sr-Latn-RS",
+   "expected": "sr_RS"
+  },
+  {
+   "tag": "ja-JP-u-ca-japanese",
+   "expected": "ja_JP"
+  },
+  {
+   "tag": "en-GB-oxendict",
+   "expected": "en_GB"
+  },
+  {
+   "tag": "fil-PH",
+   "expected": "fil_PH"
+  },
+  {
+   "tag": "yue-Hant-HK",
+   "expected": "yue_HK"
+  },
+  {
+   "tag": "iw-IL",
+   "expected": "he_IL"
+  },
+  {
+   "tag": "in",
+   "expected": "id"
+  },
+  {
+   "tag": "no",
+   "expected": "no"
+  },
+  {
+   "tag": "nb-NO",
+   "expected": "nb_NO"
+  },
+  {
+   "tag": "C",
+   "expected": null
+  },
+  {
+   "tag": "C.UTF-8",
+   "expected": null
+  },
+  {
+   "tag": "POSIX",
+   "expected": null
+  },
+  {
+   "tag": "und",
+   "expected": null
+  },
+  {
+   "tag": "x-klingon",
+   "expected": "x-klingon"
+  },
+  {
+   "tag": "i-klingon",
+   "expected": "tlh"
+  },
+  {
+   "tag": "en-",
+   "expected": null
+  },
+  {
+   "tag": "-en",
+   "expected": null
+  },
+  {
+   "tag": "e",
+   "expected": null
+  },
+  {
+   "tag": "english",
+   "expected": null
+  },
+  {
+   "tag": "fr_CA:fr",
+   "expected": null
+  },
+  {
+   "tag": "ja.",
+   "expected": "ja"
+  },
+  {
+   "tag": "@euro",
+   "expected": null
+  },
+  {
+   "tag": "zh-Hans",
+   "expected": "zh"
+  },
+  {
+   "tag": "art-lojban",
+   "expected": "jbo"
+  },
+  {
+   "tag": "sgn-BE-FR",
+   "expected": "sfb"
+  },
+  {
+   "tag": "en-US-x-private",
+   "expected": "en_US"
+  },
+  {
+   "tag": "ja-Latn",
+   "expected": "ja"
+  },
+  {
+   "tag": "123",
+   "expected": "123"
+  },
+  {
+   "tag": "ja-001",
+   "expected": "ja_001"
+  },
+  {
+   "tag": "de-DE-1996",
+   "expected": "de_DE"
+  },
+  {
+   "tag": "qaa",
+   "expected": "qaa"
+  },
+  {
+   "tag": "mo",
+   "expected": "ro"
+  },
+  {
+   "tag": "sh",
+   "expected": "sr"
+  },
+  {
+   "tag": "tl",
+   "expected": "fil"
+  },
+  {
+   "tag": "nb",
+   "expected": "nb"
+  },
+  {
+   "tag": "sr_RS@latin",
+   "expected": "sr_RS"
+  },
+  {
+   "tag": "en_US",
+   "expected": "en_US"
+  },
+  {
+   "tag": "pt_PT.UTF-8",
+   "expected": "pt_PT"
+  },
+  {
+   "tag": "ko-KR",
+   "expected": "ko_KR"
+  },
+  {
+   "tag": "ar-SA",
+   "expected": "ar_SA"
+  },
+  {
+   "tag": "he-IL",
+   "expected": "he_IL"
+  },
+  {
+   "tag": "zh-HK",
+   "expected": "zh_HK"
+  },
+  {
+   "tag": "ja-999",
+   "expected": "ja_ZZ"
+  },
+  {
+   "tag": "fr-CA",
+   "expected": "fr_CA"
+  },
+  {
+   "tag": "en-UK",
+   "expected": "en_GB"
+  },
+  {
+   "tag": "cmn",
+   "expected": "cmn"
+  },
+  {
+   "tag": "cmn-TW",
+   "expected": "cmn_TW"
+  },
+  {
+   "tag": "zh-yue",
+   "expected": "yue"
+  },
+  {
+   "tag": "sh-BA",
+   "expected": "sr_BA"
+  },
+  {
+   "tag": "en-1234",
+   "expected": "en"
+  },
+  {
+   "tag": "ja-JP-JP",
+   "expected": null
+  },
+  {
+   "tag": "sgn-BR",
+   "expected": "bzs"
+  },
+  {
+   "tag": "sgn_de",
+   "expected": "gsg"
+  },
+  {
+   "tag": "sgn-US.UTF-8",
+   "expected": "ase"
+  },
+  {
+   "tag": "no-bok",
+   "expected": "nb"
+  },
+  {
+   "tag": "en-GB-oed",
+   "expected": "en_GB"
+  }
+ ],
+ "macos": [
+  {
+   "stdout": "(\n    \"ja-JP\",\n    \"en-JP\"\n)\n",
+   "expected": "ja-JP"
+  },
+  {
+   "stdout": "(\n    \"en-US\"\n)\n",
+   "expected": "en-US"
+  },
+  {
+   "stdout": "(\n    ja,\n    en\n)\n",
+   "expected": "ja"
+  },
+  {
+   "stdout": "(\n    \"zh-Hans-CN\"\n)\n",
+   "expected": "zh-Hans-CN"
+  },
+  {
+   "stdout": "(\n)\n",
+   "expected": null
+  },
+  {
+   "stdout": "",
+   "expected": null
+  },
+  {
+   "stdout": "(\n    \"x\",\n    \"fr-CA\"\n)\n",
+   "expected": "fr-CA"
+  },
+  {
+   "stdout": "(\n    \"en_GB\"\n)\n",
+   "expected": "en_GB"
+  }
+ ],
+ "posix": [
+  {
+   "environ": {
+    "LANGUAGE": "ja_JP:en",
+    "LANG": "C"
+   },
+   "expected": "ja_JP"
+  },
+  {
+   "environ": {
+    "LANG": "en_US.UTF-8"
+   },
+   "expected": "en_US.UTF-8"
+  },
+  {
+   "environ": {
+    "LC_ALL": "fr_FR.UTF-8",
+    "LANG": "en_US.UTF-8"
+   },
+   "expected": "fr_FR.UTF-8"
+  },
+  {
+   "environ": {
+    "LC_MESSAGES": "de_DE",
+    "LANG": "en_US"
+   },
+   "expected": "de_DE"
+  },
+  {
+   "environ": {
+    "LANGUAGE": "",
+    "LANG": "pt_BR"
+   },
+   "expected": "pt_BR"
+  },
+  {
+   "environ": {},
+   "expected": null
+  },
+  {
+   "environ": {
+    "LANG": "C"
+   },
+   "expected": "C"
+  }
+ ],
+ "resources": [
+  {
+   "id": "absent",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\n",
+   "expected": {
+    "memory_mib": 4096,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "given",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 8192\n  cpus: 4\n",
+   "expected": {
+    "memory_mib": 8192,
+    "cpus": 4
+   }
+  },
+  {
+   "id": "memory_only",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 2048\n",
+   "expected": {
+    "memory_mib": 2048,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "empty_mapping",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources: {}\n",
+   "expected": {
+    "memory_mib": 4096,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "null",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n",
+   "expected": null
+  },
+  {
+   "id": "zero_cpus",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  cpus: 0\n",
+   "expected": null
+  },
+  {
+   "id": "negative_memory",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: -1\n",
+   "expected": null
+  },
+  {
+   "id": "float",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 4096.0\n",
+   "expected": null
+  },
+  {
+   "id": "string",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: '4096'\n",
+   "expected": null
+  },
+  {
+   "id": "boolean",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  cpus: true\n",
+   "expected": null
+  },
+  {
+   "id": "unknown_field",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  disk_mib: 10\n",
+   "expected": null
+  },
+  {
+   "id": "not_a_mapping",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources: [1, 2]\n",
+   "expected": null
+  },
+  {
+   "id": "duplicate_key",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  cpus: 2\n  cpus: 3\n",
+   "expected": {
+    "memory_mib": 4096,
+    "cpus": 3
+   }
+  },
+  {
+   "id": "large",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 1048576\n  cpus: 255\n",
+   "expected": {
+    "memory_mib": 1048576,
+    "cpus": 255
+   }
+  },
+  {
+   "id": "hex",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  cpus: 0x4\n",
+   "expected": {
+    "memory_mib": 4096,
+    "cpus": 4
+   }
+  },
+  {
+   "id": "underscore",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 8_192\n",
+   "expected": {
+    "memory_mib": 8192,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "octal",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  cpus: 010\n",
+   "expected": {
+    "memory_mib": 4096,
+    "cpus": 8
+   }
+  },
+  {
+   "id": "sexagesimal",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 1:30\n",
+   "expected": {
+    "memory_mib": 90,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "refused_elsewhere",
+   "declaration": "resources:\n  cpus: 4\n",
+   "expected": null
+  }
+ ]
+}

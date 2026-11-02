@@ -48,12 +48,14 @@ ARG PLAYWRIGHT_VERSION=1.62.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build tools.
+# Build tools. The microVM runtime crate (`microsandbox`) links libcap-ng on
+# Linux.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         pkg-config \
         libssl-dev \
+        libcap-ng-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

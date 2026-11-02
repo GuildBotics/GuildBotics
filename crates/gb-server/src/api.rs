@@ -16,7 +16,7 @@ use axum::{Json, Router};
 use loopback_auth::Refusal;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use gb_workspace::identity;
 
@@ -40,20 +40,34 @@ pub struct Api {
     pub data: PathBuf,
     /// The workspace the server opened, if any.
     pub workspace: Option<PathBuf>,
+    /// The work the server started, which outlives the request that started
+    /// it and which a stop waits for.
+    pub work: tokio_util::task::TaskTracker,
+    /// Cancelled when the server stops without waiting for its work.
+    pub cancelled: tokio_util::sync::CancellationToken,
 }
 
-type Shared = Arc<Api>;
+pub(crate) type Shared = Arc<Api>;
 
-/// An answer that is not a success: its code, and its sentence in the
-/// language the request asked for.
-struct ApiError {
+/// An answer that is not a success: its code, its sentence in the language
+/// the request asked for, and what the screen reads beside it.
+pub(crate) struct ApiError {
     status: StatusCode,
     code: &'static str,
-    language: &'static str,
+    pub(crate) language: &'static str,
+    sentence: Sentence,
+    context: Value,
+}
+
+/// A sentence of `app_api.errors` (the code's own by default), or one a
+/// lower layer already wrote.
+enum Sentence {
+    Key(&'static str, Vec<(&'static str, String)>),
+    Reason(String),
 }
 
 impl ApiError {
-    fn new(status: StatusCode, code: &'static str, headers: &HeaderMap) -> ApiError {
+    pub(crate) fn new(status: StatusCode, code: &'static str, headers: &HeaderMap) -> ApiError {
         let asked = headers
             .get(LANGUAGE_HEADER)
             .and_then(|v| v.to_str().ok())
@@ -62,23 +76,53 @@ impl ApiError {
             status,
             code,
             language: i18n::language(asked),
+            sentence: Sentence::Key(code, vec![]),
+            context: json!({}),
         }
+    }
+
+    /// Says it with the sentence `key`, given `params`.
+    pub(crate) fn key(
+        mut self,
+        key: &'static str,
+        params: Vec<(&'static str, String)>,
+    ) -> ApiError {
+        self.sentence = Sentence::Key(key, params);
+        self
+    }
+
+    /// Says it with a sentence a lower layer wrote.
+    pub(crate) fn reason(mut self, reason: String) -> ApiError {
+        self.sentence = Sentence::Reason(reason);
+        self
+    }
+
+    pub(crate) fn context(mut self, context: Value) -> ApiError {
+        self.context = context;
+        self
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let message = i18n::t(self.language, &format!("app_api.errors.{}", self.code), &[]);
+        let message = match self.sentence {
+            Sentence::Key(key, params) => {
+                let params: Vec<(&str, &str)> =
+                    params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                i18n::t(self.language, &format!("app_api.errors.{key}"), &params)
+            }
+            Sentence::Reason(reason) => reason,
+        };
         (
             self.status,
-            Json(json!({"code": self.code, "message": message, "context": {}})),
+            Json(json!({"code": self.code, "message": message, "context": self.context})),
         )
             .into_response()
     }
 }
 
 /// A JSON body, refused as `validation_error` when it does not match.
-struct Body<T>(T);
+pub(crate) struct Body<T>(pub(crate) T);
 
 impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
     type Rejection = ApiError;
@@ -106,6 +150,7 @@ pub fn router(api: Shared) -> Router {
         .route("/health", get(health))
         .route("/session/links", post(entry_link))
         .route("/session", get(session))
+        .route("/commands/run", post(crate::commands::run))
         .route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     // Each says why it cannot be the owner's.
     let anyone = Router::new()

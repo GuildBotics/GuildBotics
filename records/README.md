@@ -4,8 +4,8 @@ Python 版と Rust 版の host が、同じファイルを同じ形で読み書�
 `golden/` の値は Python 版の実装から作り、次のテストで両方の言語に通します。
 
 ```bash
-uv run --no-sync python -m pytest tests/guildbotics/test_records_golden.py tests/guildbotics/test_commands_golden.py
-cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config --test golden
+uv run --no-sync python -m pytest tests/guildbotics/test_records_golden.py tests/guildbotics/test_commands_golden.py tests/guildbotics/test_environment_golden.py
+cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p gb-environment
 ```
 
 - `files.json`: マシンとワークスペースの小さなファイルのバイト列。
@@ -33,5 +33,19 @@ cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config --te
   - `workspaces`: 小さなワークスペース（`config` と identity root の `identity` のファイル）での、
     名前と言語とメンバー（`<name>@<language>@<person>`、メンバー無しは `None`）ごとの解決先、
     ワークスペースのコマンドの宣言、チームの読み込みの結果（読めなければ `null`）。
+
+- `environment.json`: コマンドの microVM に伝える host の事実と、起動の大きさ。入力は手で書き、
+  答え（各 `expected`）は Python 版から作ります。Python 版を変えたら
+  `uv run --no-sync python -m tests.guildbotics.test_environment_golden` で答えを作り直します
+  （同時に、langcodes が別のものとして読む言語と地域のコードの一覧
+  `crates/gb-environment/src/language_aliases.json` も作り直します）。
+  - `tags`: OS の言語のタグごとの `LANGUAGE`（gettext の形、`ja_JP`。言語でなければ `null`）。
+    Rust は、言語・文字・地域だけの形で、langcodes が読み替えないコードのタグにだけ答え、
+    それ以外は `LANGUAGE` を渡しません（別の言語を伝えるより、伝えない方を選ぶ）。
+    Rust が断る例は `crates/gb-environment/tests/golden.rs` の `DECLINED` に並べます。
+  - `macos`: `defaults read -g AppleLanguages` の出力ごとのタグ。
+  - `posix`: gettext の環境変数ごとのタグ。
+  - `resources`: 宣言（`intelligences/agent_environment.yml`）ごとの memory・vCPU（宣言が断られれば
+    `null`）。Rust は `resources` だけを読み、YAML 1.1 の 60 進数は数として読まずに断ります。
 
 振る舞いを意図して変えるときは、両方の言語への影響を確かめて fixture も直します。

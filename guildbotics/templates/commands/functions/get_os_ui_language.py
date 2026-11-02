@@ -6,6 +6,9 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.runtime.context import Context
 from guildbotics.utils.os_language import os_ui_language
 
+# It reads the language the environment was started with and changes nothing.
+COMMAND_METADATA = {"read_only": True}
+
 
 def main(context: Context) -> dict[str, str]:
     """Preserve piped input and attach the operating system UI language.

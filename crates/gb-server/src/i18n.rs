@@ -16,6 +16,20 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/app_api/errors.ja.yml"),
     ),
     (
+        "intelligences.agent_environment",
+        "en",
+        include_str!(
+            "../../../guildbotics/templates/locales/intelligences/agent_environment.en.yml"
+        ),
+    ),
+    (
+        "intelligences.agent_environment",
+        "ja",
+        include_str!(
+            "../../../guildbotics/templates/locales/intelligences/agent_environment.ja.yml"
+        ),
+    ),
+    (
         "runtime.service_lock",
         "en",
         include_str!("../../../guildbotics/templates/locales/runtime/service_lock.en.yml"),
