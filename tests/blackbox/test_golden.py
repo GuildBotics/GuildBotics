@@ -82,6 +82,12 @@ def _read_all(stack, end: str) -> dict:
     for trace in reads["diagnostics/traces"]["traces"]:
         path = f"diagnostics/traces/{trace['trace_id']}"
         reads[path] = get(path)
+    # A bundled command's path is where the server is installed.
+    for read, value in reads.items():
+        if read.startswith(("commands/options", "commands/routine-options")):
+            for option in value["options"]:
+                if option["source"] == "template":
+                    del option["path"]
     return reads
 
 
