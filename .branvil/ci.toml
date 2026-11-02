@@ -115,7 +115,7 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo test --locked --workspace",
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }

@@ -784,8 +784,11 @@ To run the Rust checks:
 ```sh
 cargo fmt --all
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
+cargo nextest run --locked --workspace
 ```
+
+The tests run with [cargo-nextest](https://nexte.st/), each in a process of
+its own (`cargo install --locked cargo-nextest`).
 
 To run the GUI checks (lint, types, and the Vitest tests):
 
@@ -807,7 +810,7 @@ The integration tests start real `branvil serve` processes on free loopback
 ports and drive them with real Git clients isolated from the user's Git
 configuration and credential helpers. They are one test crate,
 [`tests/main.rs`](tests/main.rs), with a module per file:
-`cargo test -p branvil --test main tickets::` runs the tests of `tests/tickets.rs`.
+`cargo nextest run -p branvil --test main tickets::` runs the tests of `tests/tickets.rs`.
 
 ### GitHub Actions
 
