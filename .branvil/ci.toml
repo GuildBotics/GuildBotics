@@ -1,6 +1,7 @@
 # The checks of every push and pull request. GitHub Actions runs only what
-# this runner cannot: the Windows contracts (.github/workflows/ci.yml) and the
-# Desktop E2E (.github/workflows/desktop-e2e.yml).
+# this runner cannot: the Windows contracts and the macOS Clippy
+# (.github/workflows/ci.yml), and the Desktop E2E
+# (.github/workflows/desktop-e2e.yml).
 # The runner supplies the image version, CPUs, memory and network access.
 # Commands start in /work, a Git checkout of the commit with its history and
 # tags, as a user that is not root, with CI metadata only; each array entry has
@@ -9,6 +10,14 @@
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
 # PR heads select jobs by paths; default-branch and landing-gate runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
+#
+# The Rust jobs check the whole Cargo workspace. The cache restores `target`
+# built from other commits, which can look newer than the checked-out files:
+# touching the crates first makes them newer than any restored output, so
+# Cargo rebuilds the workspace's crates and reuses only the dependencies.
+# Incremental data would save little of that rebuild and fill the cache
+# (CARGO_INCREMENTAL=0; measured in crates/branvil/docs/performance.md,
+# "Branvil's own pipeline").
 
 [[jobs]]
 name = "test"
@@ -31,7 +40,7 @@ cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
 [[jobs]]
 name = "markdown-links"
 image = "guildbotics/agent-environment:dev"
-commands = ["lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills"]
+commands = ["lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates"]
 timeout_secs = 300
 
 [[jobs]]
@@ -45,20 +54,120 @@ commands = [
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["desktop/package-lock.json"] }
 
-# The `branvil` provider against a real Branvil (Branvil's README, "Checking
-# with GuildBotics"): Branvil's main cloned from GitHub, as a job reaches only
-# public networks, and its scripts/guildbotics-smoke.sh run with this commit.
+[[jobs]]
+name = "rust-fmt"
+paths = [
+  "crates/*/src/**",
+  "crates/*/tests/**",
+  "crates/*/examples/**",
+  "crates/*/Cargo.toml",
+  "crates/*/build.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+  "clippy.toml",
+  "rustfmt.toml",
+]
+image = "guildbotics/agent-environment:dev"
+commands = ["CARGO_HOME=/work/.ci/cargo-home cargo fmt --all --check"]
+timeout_secs = 300
+
+[[jobs]]
+name = "rust-clippy"
+paths = [
+  "crates/*/src/**",
+  "crates/*/tests/**",
+  "crates/*/examples/**",
+  "crates/*/Cargo.toml",
+  "crates/*/build.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+  "clippy.toml",
+  "rustfmt.toml",
+]
+image = "guildbotics/agent-environment:dev"
+commands = [
+  "find crates -exec touch -c {} +",
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
+]
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
+
+[[jobs]]
+name = "rust-test"
+paths = [
+  "crates/*/src/**",
+  "crates/*/tests/**",
+  "crates/*/examples/**",
+  "crates/*/Cargo.toml",
+  "crates/*/build.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+  "clippy.toml",
+  "rustfmt.toml",
+]
+image = "guildbotics/agent-environment:dev"
+commands = [
+  "find crates -exec touch -c {} +",
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo test --locked --workspace",
+]
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
+
+# Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
+[[jobs]]
+name = "rust-duplicates"
+paths = ["crates/**/*.rs", "jscpd.rust.json"]
+image = "guildbotics/agent-environment:dev"
+commands = ["npm_config_cache=/work/.ci/npm npx --yes jscpd@5.0.14 --config jscpd.rust.json"]
+timeout_secs = 300
+cache = { paths = [".ci/npm"], key_files = ["jscpd.rust.json"] }
+
+[[jobs]]
+name = "branvil-web"
+paths = ["crates/branvil/web/**", "crates/branvil/tests/fixtures/**"]
+image = "guildbotics/agent-environment:dev"
+commands = [
+  "cd crates/branvil/web && npm_config_cache=/work/.ci/npm npm ci",
+  "cd crates/branvil/web && npm run lint",
+  "cd crates/branvil/web && npm run typecheck",
+  "cd crates/branvil/web && npm run test",
+]
+timeout_secs = 1200
+cache = { paths = [".ci/npm"], key_files = ["crates/branvil/web/package-lock.json"] }
+artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/timing.json"] }]
+
+# The `branvil` provider against this commit's Branvil crate
+# (scripts/branvil-integration.sh): the paths of both sides.
 [[jobs]]
 name = "branvil-integration"
-paths = ["guildbotics/**", "pyproject.toml", "uv.lock", ".python-version"]
+paths = [
+  "guildbotics/**",
+  "pyproject.toml",
+  "uv.lock",
+  ".python-version",
+  "crates/*/src/**",
+  "crates/*/Cargo.toml",
+  "crates/*/build.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+  "integration/**",
+  "scripts/branvil-integration.sh",
+]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
-git clone --quiet --depth 1 https://github.com/GuildBotics/Branvil.git /tmp/branvil
 export CARGO_HOME=/work/.ci/cargo-home
+find crates -exec touch -c {} +
 UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 uv sync --extra test --extra dev
-CARGO_TARGET_DIR=/work/.ci/branvil-target CARGO_INCREMENTAL=0 \
-  /tmp/branvil/scripts/guildbotics-smoke.sh /work
+CARGO_INCREMENTAL=0 scripts/branvil-integration.sh
 ''']
 timeout_secs = 1800
-cache = { paths = [".ci/uv", ".ci/cargo-home/registry", ".ci/branvil-target"], key_files = ["uv.lock"] }
+cache = { paths = [".ci/uv", ".ci/cargo-home/registry", "target"], key_files = ["uv.lock", "Cargo.lock"] }

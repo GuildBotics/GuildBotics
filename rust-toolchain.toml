@@ -1,0 +1,8 @@
+# The Rust that CI builds with (RUST_VERSION in
+# docker/agent-environment/Dockerfile, and the macOS Clippy of
+# .github/workflows/ci.yml): with a newer one here only, using an API it added
+# would go unnoticed until CI.
+[toolchain]
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

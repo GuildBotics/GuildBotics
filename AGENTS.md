@@ -25,7 +25,10 @@
 
 - 言語: Python 3.15+（開発環境は `.python-version` で 3.15 に固定する。対応範囲の下限であり
   CI が検査する版でもあるので、手元だけ新しい版を使うと、その版で入った API を使ったことに
-  CI まで気づけない）
+  CI まで気づけない）。Rust はリポジトリ直下の Cargo workspace（member は `crates/*`）で、
+  toolchain は同じ理由で `rust-toolchain.toml` に CI と同じ版を固定する（CI の image の
+  `docker/agent-environment/Dockerfile` の `RUST_VERSION` と合わせる）。profile は member に
+  置いても使われない（Cargo は警告するだけ）ので、workspace の root の `Cargo.toml` にだけ置く
 - パッケージ: `guildbotics`
 - CLI: Click (`guildbotics.cli:main`)
 - 主用途: AI エージェント協調のための CLI / スケジューラ / カスタムコマンド実行基盤
@@ -106,6 +109,13 @@ provider の置き方:
 - microsandbox SDK を import するのは `environment/runtime.py` だけ（`one-sandbox-runtime` 契約）
 
 リポジトリ直下では `desktop/`（サーバーがブラウザへ配る React の画面）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
+
+### Branvil の crate（`crates/branvil`）
+
+- Branvil のリポジトリの main を、そのコミット（`5f2728a840be25f3c54c82b92ee1c064be754949`）のスナップショットとして写したもの。履歴は Branvil のリポジトリに残る。crate の中の規則は `crates/branvil/AGENTS.md` に書く
+- Branvil は GuildBotics を知らない crate で、依存は GuildBotics → Branvil の一方向だけ。両者を組み合わせて確かめるもの（`integration/branvil/`、`scripts/branvil-integration.sh`）は crate の外に置く
+- 本番の Branvil は、まだ Branvil のリポジトリのチェックアウトから、そのリポジトリの `scripts/serve.sh` / `scripts/update.sh` で動いている（このリポジトリの main へのマージは本番に入らない）。そのため写しには本番の運用のスクリプトを持たない。Branvil のリポジトリに入れるのは本番の Branvil で開発を止める不具合の修正だけにし、同じ修正を `crates/branvil` にも入れる。それ以外の Branvil の変更は `crates/branvil` にだけ入れる
+- 開発用の起動は `crates/branvil/scripts/dev.sh`（ビルドは開発用ベースイメージの `cargo` のラッパー `docker/agent-environment/cargo-wrapper.sh` を通す）
 
 ## 重要な実装ポイント
 
@@ -407,30 +417,43 @@ uv run --no-sync lint-imports
 uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
 
-Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
+Cargo workspace の手順（`rust-fmt` / `rust-clippy` / `rust-test` / `rust-duplicates` /
+`branvil-web` ジョブ）:
+
+```bash
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+npx --yes jscpd@5.0.14 --config jscpd.rust.json
+(cd crates/branvil/web && npm ci && npm run lint && npm run typecheck && npm run test)
+```
+
+Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、これらに加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
 `npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
 `guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
-ジョブの環境には CI メタデータしか無いため、uv/npm のキャッシュは
-`/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
-`.venv`・`node_modules` はキャッシュしない。Rust の `target` をキャッシュするのは、Branvil を build する `branvil-integration` だけ。
+ジョブの環境には CI メタデータしか無いため、uv/npm/Cargo のキャッシュは
+`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置き、`uv.lock`・`desktop/package-lock.json`・`Cargo.lock` などをキーに保存する。
+`.venv`・`node_modules` はキャッシュしない。Rust の `target` は Cargo を build するジョブがキャッシュし、
+復元した `target` より新しくなるよう `crates` に touch してから build する（workspace の crate だけを build し直す）。
+Rust の重複コードは desktop と同じ jscpd で検出する（`jscpd.rust.json`）。
 `test` は `UV_LOCKED=1` を指定する。
 ジョブは履歴とタグを持つ Git のチェックアウトで、root でない
 ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
 権限エラーのテストに CI 用の手当ては要らない。
 
-GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テスト
-（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）と、下記の Desktop E2E。
+GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テストと、
+macOS でしかコンパイルされないコード（`#[cfg(target_os = "macos")]`）の Cargo workspace 全体の
+clippy（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。clippy は Rust に関わる変更の
+ときだけ動く）と、下記の Desktop E2E。
 Branvil の CI で実行できる検査は `.branvil/ci.toml` に置き、GitHub Actions へ足さない。
 
-`branvil-integration` は、本番の `branvil` provider を実際の `branvil serve` に対して動かす
-Branvil の `scripts/guildbotics-smoke.sh`（Branvil の README の「Checking with GuildBotics」）を、
-GitHub から clone した Branvil の main とこのコミットで実行する（CI のジョブは公開ネットワークに
-しか届かない）。確かめるのはチケットと関係、push・PR・マージ、チェックによる readiness の
-3 経路だけで、それ以外は契約テストが受け持つ。必須チェックではない。`integrations/branvil/` を
-変えたら、手元でも Branvil のチェックアウトから `scripts/guildbotics-smoke.sh <このリポジトリ>` を
-実行する（`uv sync --extra test --extra dev` 済みで、Rust の toolchain があること）。失敗したら、ログが両リポジトリの
-コミットを示すので、壊したのがこのコミットか Branvil の main かを見て、壊した側で直す。
+`branvil-integration` は、本番の `branvil` provider をこのコミットの Branvil の crate の
+`branvil serve` に対して動かす `scripts/branvil-integration.sh`（`integration/branvil/test_smoke.py`）を
+実行する。確かめるのはチケットと関係、push・PR・マージ、チェックによる readiness の
+3 経路だけで、それ以外は契約テストが受け持つ。`integrations/branvil/` か Branvil の HTTP API を
+変えたら、手元でも `scripts/branvil-integration.sh` を実行する（`uv sync --extra test --extra dev`
+済みであること）。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
 host の OS 境界の契約テストだけを実行する。共有書き込みの lock の規則・状態遷移、validator、
@@ -497,7 +520,7 @@ Markdown の内部リンク・見出しアンカー検査（リポジトリル�
 `cargo install lychee --version 0.24.2 --locked` で導入できる）:
 
 ```shell
-lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills
+lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates
 ```
 
 `--scheme file` により外部 URL は検査せず、CI の `markdown-links` job と同じく
@@ -511,7 +534,7 @@ Markdown だけを検査する。PowerShell では実行後に `$LASTEXITCODE` �
 uv sync --extra dev
 ```
 
-メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.15・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。Tauri の依存で入るので最後に binary を消している）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる
+メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.15・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。Tauri の依存で入るので最後に binary を消している）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる。Rust は `rust-toolchain.toml` も同じ版を名指しする（ジョブは別の版を入れられないので、`RUST_VERSION` と一緒に上げる。`tests/test_cargo_workspace.py` が一致を確かめる）
 
 desktop frontend (`desktop/`) の品質確認:
 
@@ -554,8 +577,9 @@ Hub のサーバーのスクリプト変更時の確認:
 
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
+- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo test` を実行してから完了報告する（Branvil の結合テストは 1 つの test crate なので、1 ファイルだけなら `cargo test -p branvil --test main <file>::`）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
-- 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
+- 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`、`crates/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）
 - 型エラーや lint エラーを回避するためだけの `# type: ignore` や noqa は、理由が明確でない限り追加しない
 

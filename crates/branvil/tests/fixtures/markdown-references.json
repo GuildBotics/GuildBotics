@@ -1,0 +1,529 @@
+{
+  "base_url": "http://127.0.0.1:7878",
+  "targets": [
+    {
+      "repository": "acme/demo",
+      "kind": "ticket",
+      "number": 1,
+      "state": "open",
+      "title": "Ticket <one> \" & | [one]\nline"
+    },
+    {
+      "repository": "acme/demo",
+      "kind": "ticket",
+      "number": 2,
+      "state": "closed",
+      "title": "Closed ticket"
+    },
+    {
+      "repository": "acme/demo",
+      "kind": "pull",
+      "number": 1,
+      "state": "open",
+      "title": "PR one"
+    },
+    {
+      "repository": "acme/demo",
+      "kind": "pull",
+      "number": 2,
+      "state": "closed",
+      "title": "PR two"
+    },
+    {
+      "repository": "acme/demo",
+      "kind": "pull",
+      "number": 3,
+      "state": "merged",
+      "title": "PR three"
+    },
+    {
+      "repository": "acme/other",
+      "kind": "ticket",
+      "number": 1,
+      "state": "open",
+      "title": "Other ticket"
+    },
+    {
+      "repository": "acme/other",
+      "kind": "pull",
+      "number": 1,
+      "state": "open",
+      "title": "Other PR"
+    }
+  ],
+  "cases": [
+    {
+      "name": "local and cross repository states",
+      "source": "日本語 😀 #1 / #2 / !1 / !2 / !3. acme/other#1 acme/other!1",
+      "markdown": "日本語 😀 <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> / <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a> / <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a> / <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/2\" data-branvil-kind=\"pull\" data-branvil-state=\"closed\" title=\"PR two\">!2</a> / <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/3\" data-branvil-kind=\"pull\" data-branvil-state=\"merged\" title=\"PR three\">!3</a>. <a href=\"http://127.0.0.1:7878/acme/other/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Other ticket\">acme/other#1</a> <a href=\"http://127.0.0.1:7878/acme/other/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"Other PR\">acme/other!1</a>",
+      "found": [
+        "#1",
+        "#2",
+        "!1",
+        "!2",
+        "!3",
+        "acme/other#1",
+        "acme/other!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "#2",
+          "target": 1
+        },
+        {
+          "label": "!1",
+          "target": 2
+        },
+        {
+          "label": "!2",
+          "target": 3
+        },
+        {
+          "label": "!3",
+          "target": 4
+        },
+        {
+          "label": "acme/other#1",
+          "target": 5
+        },
+        {
+          "label": "acme/other!1",
+          "target": 6
+        }
+      ]
+    },
+    {
+      "name": "bare Branvil URLs",
+      "source": "See http://127.0.0.1:7878/acme/demo/-/tickets/1 and http://127.0.0.1:7878/acme/demo/-/pulls/3.",
+      "markdown": "See <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">http://127.0.0.1:7878/acme/demo/-/tickets/1</a> and <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/3\" data-branvil-kind=\"pull\" data-branvil-state=\"merged\" title=\"PR three\">http://127.0.0.1:7878/acme/demo/-/pulls/3</a>.",
+      "found": [
+        "http://127.0.0.1:7878/acme/demo/-/tickets/1",
+        "http://127.0.0.1:7878/acme/demo/-/pulls/3"
+      ],
+      "links": [
+        {
+          "label": "http://127.0.0.1:7878/acme/demo/-/tickets/1",
+          "target": 0
+        },
+        {
+          "label": "http://127.0.0.1:7878/acme/demo/-/pulls/3",
+          "target": 4
+        }
+      ]
+    },
+    {
+      "name": "code and links",
+      "source": "`#1 !1` [#1](https://example.com) ![#1](https://example.com/a.png)\n\n```text\n#1 !1\n```\n\n    #1 !1\n\nProse #1.",
+      "markdown": "`#1 !1` [#1](https://example.com) ![#1](https://example.com/a.png)\n\n```text\n#1 !1\n```\n\n    #1 !1\n\nProse <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>.",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "inline and block HTML",
+      "source": "Before <span><b>#1</b> !1</span> after #2. <code>#1</code> <a href=\"/x\">!1</a>\n\n<div>\n#1 !1\n</div>\n\n!1",
+      "markdown": "Before <span><b>#1</b> !1</span> after <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a>. <code>#1</code> <a href=\"/x\">!1</a>\n\n<div>\n#1 !1\n</div>\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>",
+      "found": [
+        "#2",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#2",
+          "target": 1
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "void tags and comments",
+      "source": "a <br> #1 <img src=\"/x\"> !1 <!-- #1 --> <i/> #2",
+      "markdown": "a <br> <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> <img src=\"/x\"> <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a> <!-- #1 --> <i/> <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a>",
+      "found": [
+        "#1",
+        "!1",
+        "#2"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        },
+        {
+          "label": "#2",
+          "target": 1
+        }
+      ]
+    },
+    {
+      "name": "explicit autolinks and reference links",
+      "source": "<http://127.0.0.1:7878/acme/demo/-/tickets/1> [#1][ticket]\n\n[ticket]: http://127.0.0.1:7878/acme/demo/-/tickets/1\n\n!1",
+      "markdown": "<http://127.0.0.1:7878/acme/demo/-/tickets/1> [#1][ticket]\n\n[ticket]: http://127.0.0.1:7878/acme/demo/-/tickets/1\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>",
+      "found": [
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "missing numbers and foreign repositories",
+      "source": "#999 !999 foreign/repo#1 foreign/repo!1 http://127.0.0.1:7878/acme/demo/-/tickets/999",
+      "markdown": "#999 !999 foreign/repo#1 foreign/repo!1 &#104;ttp://127.0.0.1:7878/acme/demo/-/tickets/999",
+      "found": [
+        "#999",
+        "!999",
+        "foreign/repo#1",
+        "foreign/repo!1",
+        "http://127.0.0.1:7878/acme/demo/-/tickets/999"
+      ],
+      "links": []
+    },
+    {
+      "name": "boundaries and escapes",
+      "source": "a#1 x!1 #0 !0 #1a #1_ GH-1 v1.0#1 \\#1 \\!1 (#1) !1.",
+      "markdown": "a#1 x!1 #0 !0 #1a #1_ GH-1 v1.0#1 \\#1 \\!1 (<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>) <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>.",
+      "found": [
+        "#1",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "GFM table and strikethrough",
+      "source": "| Ref | Code |\n| --- | --- |\n| #1 | `!1` |\n\n~~!1~~",
+      "markdown": "| Ref | Code |\n| --- | --- |\n| <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> | `!1` |\n\n~~<a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>~~",
+      "found": [
+        "#1",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "formatting lists and quotes",
+      "source": "**#1** and *!1*\n\n- [x] #2\n\n> quoted acme/other#1",
+      "markdown": "**<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>** and *<a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>*\n\n- [x] <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a>\n\n> quoted <a href=\"http://127.0.0.1:7878/acme/other/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Other ticket\">acme/other#1</a>",
+      "found": [
+        "#1",
+        "!1",
+        "#2",
+        "acme/other#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        },
+        {
+          "label": "#2",
+          "target": 1
+        },
+        {
+          "label": "acme/other#1",
+          "target": 5
+        }
+      ]
+    },
+    {
+      "name": "repeated identical tokens",
+      "source": "`#1` #1 [#1](https://example.com) #1 <b>#1</b>",
+      "markdown": "`#1` <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> [#1](https://example.com) <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> <b>#1</b>",
+      "found": [
+        "#1",
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "case preserving lookup",
+      "source": "ACME/DEMO#1 Acme/Other!1",
+      "markdown": "<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">ACME/DEMO#1</a> <a href=\"http://127.0.0.1:7878/acme/other/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"Other PR\">Acme/Other!1</a>",
+      "found": [
+        "ACME/DEMO#1",
+        "Acme/Other!1"
+      ],
+      "links": [
+        {
+          "label": "ACME/DEMO#1",
+          "target": 0
+        },
+        {
+          "label": "Acme/Other!1",
+          "target": 6
+        }
+      ]
+    },
+    {
+      "name": "unclosed generic tag ends with paragraph",
+      "source": "Use Vec<String> here. Fixes #2.\n\nSee !1 and #1.\n",
+      "markdown": "Use Vec<String> here. Fixes #2.\n\nSee <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a> and <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>.\n",
+      "found": [
+        "!1",
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "!1",
+          "target": 2
+        },
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "unclosed tag before standalone paragraph and tight list",
+      "source": "a <span>x\n\n#2\n\n- !1\n",
+      "markdown": "a <span>x\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a>\n\n- <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>\n",
+      "found": [
+        "#2",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#2",
+          "target": 1
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "tight list sibling boundaries",
+      "source": "- Vec<String> #2\n- #1\n- !1\n",
+      "markdown": "- Vec<String> #2\n- <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>\n- <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>\n",
+      "found": [
+        "#1",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "nested list boundary",
+      "source": "- parent <span>x\n  - child #1\n- sibling !1\n",
+      "markdown": "- parent <span>x\n  - child <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>\n- sibling <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>\n",
+      "found": [
+        "#1",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "heading boundary",
+      "source": "# Vec<String> #2\n\nSee #1.\n",
+      "markdown": "# Vec<String> #2\n\nSee <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>.\n",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "paragraph to heading boundary",
+      "source": "Vec<String> #2\n\n# Heading !1\n",
+      "markdown": "Vec<String> #2\n\n# Heading <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>\n",
+      "found": [
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "quote boundary",
+      "source": "> Vec<String> #2\n\nOutside #1.\n",
+      "markdown": "> Vec<String> #2\n\nOutside <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>.\n",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "table cells and rows",
+      "source": "| Vec<String> | #1 |\n| --- | --- |\n| #2 | !1 |\n",
+      "markdown": "| Vec<String> | <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a> |\n| --- | --- |\n| <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a> | <a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a> |\n",
+      "found": [
+        "#1",
+        "#2",
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        },
+        {
+          "label": "#2",
+          "target": 1
+        },
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "standalone closing tag HTML block",
+      "source": "x <span>\n\n</span>\n\n#1\n",
+      "markdown": "x <span>\n\n</span>\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>\n",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "HTML block resets inline scope",
+      "source": "before <span>x\n\n<div>\n#1 !1\n</div>\n\n!1\n",
+      "markdown": "before <span>x\n\n<div>\n#1 !1\n</div>\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/pulls/1\" data-branvil-kind=\"pull\" data-branvil-state=\"open\" title=\"PR one\">!1</a>\n",
+      "found": [
+        "!1"
+      ],
+      "links": [
+        {
+          "label": "!1",
+          "target": 2
+        }
+      ]
+    },
+    {
+      "name": "code block resets inline scope",
+      "source": "Vec<String>\n\n~~~\n#1 !1\n~~~\n\n#1\n",
+      "markdown": "Vec<String>\n\n~~~\n#1 !1\n~~~\n\n<a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>\n",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    },
+    {
+      "name": "inline formatting and breaks keep HTML scope",
+      "source": "before <span>**#1** *!1* ~~#2~~ [#1](https://example.com) ![!1](https://example.com/x)\n#1</span> after #2\n",
+      "markdown": "before <span>**#1** *!1* ~~#2~~ [#1](https://example.com) ![!1](https://example.com/x)\n#1</span> after <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/2\" data-branvil-kind=\"ticket\" data-branvil-state=\"closed\" title=\"Closed ticket\">#2</a>\n",
+      "found": [
+        "#2"
+      ],
+      "links": [
+        {
+          "label": "#2",
+          "target": 1
+        }
+      ]
+    },
+    {
+      "name": "unresolved URL after unclosed tag",
+      "source": "Vec<String>\n\nhttp://127.0.0.1:7878/acme/demo/-/tickets/999",
+      "markdown": "Vec<String>\n\n&#104;ttp://127.0.0.1:7878/acme/demo/-/tickets/999",
+      "found": [
+        "http://127.0.0.1:7878/acme/demo/-/tickets/999"
+      ],
+      "links": []
+    },
+    {
+      "name": "thematic break within tight item",
+      "source": "- before <span>x\n  ***\n  #1\n",
+      "markdown": "- before <span>x\n  ***\n  <a href=\"http://127.0.0.1:7878/acme/demo/-/tickets/1\" data-branvil-kind=\"ticket\" data-branvil-state=\"open\" title=\"Ticket &lt;one&gt; &quot; &amp; &#124; [one]&#10;line\">#1</a>\n",
+      "found": [
+        "#1"
+      ],
+      "links": [
+        {
+          "label": "#1",
+          "target": 0
+        }
+      ]
+    }
+  ]
+}

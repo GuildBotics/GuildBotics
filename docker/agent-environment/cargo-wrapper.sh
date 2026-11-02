@@ -61,13 +61,17 @@ print(metadata["workspace_root"])' <<<"$metadata") || return
     as_the_command clean >&2 || return
   fi
   # The target directory does not exist here. Cargo tags one it creates as a
-  # cache (https://bford.info/cachedir/) and leaves one that exists alone, so
-  # the tag is written along with the directory.
-  mkdir -p "$target" &&
-    printf '%s\n' "Signature: 8a477f597d28d172789f06886806bc55" \
-      "# This file is a cache directory tag created by cargo." \
-      "# For information about cache directory tags see https://bford.info/cachedir/" \
-      >"$target/CACHEDIR.TAG" &&
+  # cache (https://bford.info/cachedir/), and on macOS leaves it out of Time
+  # Machine's backups, but leaves one that exists alone, so both are done along
+  # with the directory.
+  mkdir -p "$target" || return
+  if type -P tmutil >/dev/null; then
+    tmutil addexclusion "$target" >&2
+  fi
+  printf '%s\n' "Signature: 8a477f597d28d172789f06886806bc55" \
+    "# This file is a cache directory tag created by cargo." \
+    "# For information about cache directory tags see https://bford.info/cachedir/" \
+    >"$target/CACHEDIR.TAG" &&
     printf '%s\n' "$conditions" >"$mark"
 }
 

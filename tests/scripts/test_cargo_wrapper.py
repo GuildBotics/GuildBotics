@@ -3,8 +3,9 @@
 The wrapper runs against a fake real cargo (REAL_CARGO) that records every call,
 answers ``metadata`` the way Cargo does (the workspace of ``--manifest-path``
 or else the nearest Cargo.toml above the working directory, and
-CARGO_TARGET_DIR when set) and removes the target directory on ``clean``, and a
-fake ``rustc`` on PATH whose ``-vV`` output the test sets.
+CARGO_TARGET_DIR when set) and removes the target directory on ``clean``, a
+fake ``rustc`` on PATH whose ``-vV`` output the test sets, and a fake macOS
+``tmutil`` on PATH that records the directories it is asked to exclude.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ class Cargo:
         self.real = tmp_path / "rustup proxies/cargo"
         self.tools = tmp_path / "tools"
         self.log = tmp_path / "cargo.log"
+        self.excluded = tmp_path / "tmutil.log"
         self.project = tmp_path / "project"
         self.target = self.project / "target"
         self.rustc = RUSTC
@@ -97,8 +99,14 @@ class Cargo:
                 self.tools / "rustc",
                 "import os\nprint(os.environ['RUSTC_VV'], end='')\n",
             ),
+            (
+                self.tools / "tmutil",
+                "import sys\n"
+                f"with open({str(self.excluded)!r}, 'a', encoding='utf-8') as log:\n"
+                "    log.write(' '.join(sys.argv[1:]) + '\\n')\n",
+            ),
         ]:
-            path.parent.mkdir(parents=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"#!{sys.executable}\n{source}", encoding="utf-8")
             path.chmod(0o755)
         self.project.mkdir()
@@ -158,10 +166,13 @@ def cargo(tmp_path: Path) -> Cargo:
     return Cargo(tmp_path)
 
 
-def assert_tagged_as_cache(target: Path) -> None:
+def assert_tagged_as_cache(cargo: Cargo, target: Path) -> None:
     """The wrapper creates the directory, so it tags it as Cargo would."""
     tag = (target / "CACHEDIR.TAG").read_text(encoding="utf-8")
     assert tag.startswith("Signature: 8a477f597d28d172789f06886806bc55\n")
+    assert cargo.excluded.read_text(encoding="utf-8").splitlines()[-1] == (
+        f"addexclusion {target}"
+    )
 
 
 def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
@@ -178,7 +189,7 @@ def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
     assert mark.startswith(RUSTC)
     assert '[profile.dev.package."*"]\ndebug = false\n' in mark
     assert "[dependencies]" not in mark
-    assert_tagged_as_cache(cargo.target)
+    assert_tagged_as_cache(cargo, cargo.target)
 
 
 def test_missing_target_is_marked_without_cleaning(cargo: Cargo) -> None:
@@ -186,7 +197,7 @@ def test_missing_target_is_marked_without_cleaning(cargo: Cargo) -> None:
 
     assert cargo.cleans() == []
     assert (cargo.target / ".build-conditions").is_file()
-    assert_tagged_as_cache(cargo.target)
+    assert_tagged_as_cache(cargo, cargo.target)
 
 
 @pytest.mark.parametrize(
@@ -292,7 +303,7 @@ def test_target_dir_of_the_command_is_the_one_kept(
 
     assert cargo.cleans() == [str(custom)]
     assert not stale.exists()
-    assert_tagged_as_cache(custom)
+    assert_tagged_as_cache(cargo, custom)
     assert (custom / ".build-conditions").is_file()
     assert unused.exists()
     assert not (cargo.target / ".build-conditions").exists()
