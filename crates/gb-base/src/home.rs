@@ -29,6 +29,28 @@ pub fn data() -> anyhow::Result<PathBuf> {
     Ok(machine_root()?.join("data"))
 }
 
+/// Names the root of the members' identities, as the Python version reads it.
+pub const IDENTITY_ROOT_ENV: &str = "GUILDBOTICS_IDENTITY_ROOT";
+
+/// The root of the members' identities, which every workspace of the machine
+/// shares: `GUILDBOTICS_IDENTITY_ROOT`, else `<machine root>/identity`.
+pub fn identity_root() -> anyhow::Result<PathBuf> {
+    match std::env::var(IDENTITY_ROOT_ENV) {
+        Ok(root) if !root.trim().is_empty() => Ok(root.trim().into()),
+        _ => Ok(machine_root()?.join("identity")),
+    }
+}
+
+/// The Python package of the checkout this executable was built from, which
+/// the server runs from: its bundled templates, and the code a command's
+/// isolated environment runs.
+pub fn python_package() -> PathBuf {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/");
+    crates.parent().expect("the checkout").join("guildbotics")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

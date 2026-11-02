@@ -7,6 +7,8 @@ uv run --no-sync python scripts/generate-wire-schema.py
 uv run --no-sync python scripts/generate-wire-schema.py --check
 ```
 
+Rust の型は `crates/gb-wire` が build のときに、この schema から `typify` で作ります。
+
 各 JSON は JSON Schema Draft 2020-12 の独立した文書で、参照先は同じ文書の
 `$defs` に含みます。ファイル名と root の `title` は生成する型名です。
 既存の dataclass・TypedDict・Pydantic model は直接 `TypeAdapter` に渡します。
