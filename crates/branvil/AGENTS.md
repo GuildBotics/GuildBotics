@@ -93,13 +93,14 @@ commands are in the repository's AGENTS.md, "開発時の基本コマンド（CI
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
+cargo nextest run --locked --workspace
 (cd web && npm ci && npm run lint && npm run typecheck && npm run test)
 ```
 
+- The tests run with cargo-nextest, each in a process of its own.
 - The integration tests are one test crate (`tests/main.rs`). To run one file:
-  `cargo test -p branvil --test main <file>::` (for example
-  `cargo test -p branvil --test main tickets::`).
+  `cargo nextest run -p branvil --test main <file>::` (for example
+  `cargo nextest run -p branvil --test main tickets::`).
 - The tests that use real microVMs (`tests/real_executor.rs`) run only with
   `BRANVIL_REAL_EXECUTOR=1`. They are not part of the usual checks.
 - When you change the HTTP API, also run the repository's

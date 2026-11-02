@@ -423,10 +423,12 @@ Cargo workspace の手順（`rust-fmt` / `rust-clippy` / `rust-test` / `rust-dup
 ```bash
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
+cargo nextest run --locked --workspace
 npx --yes jscpd@5.0.14 --config jscpd.rust.json
 (cd crates/branvil/web && npm ci && npm run lint && npm run typecheck && npm run test)
 ```
+
+テストは cargo-nextest でテストごとにプロセスを分けて動かす（開発用ベースイメージには入っている。手元では `cargo install --locked cargo-nextest`）。
 
 HTTP と CLI の外側から確かめる黒箱テスト（通常の `test` ジョブにも含まれる）:
 
@@ -605,7 +607,7 @@ Markdown だけを検査する。PowerShell では実行後に `$LASTEXITCODE` �
 uv sync --extra dev
 ```
 
-メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.15・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。Tauri の依存で入るので最後に binary を消している）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる。Rust は `rust-toolchain.toml` も同じ版を名指しする（ジョブは別の版を入れられないので、`RUST_VERSION` と一緒に上げる。`tests/test_cargo_workspace.py` が一致を確かめる）
+メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.15・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。後から足したパッケージの依存で入ったら、最後の手順で build が失敗する）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる。Rust は `rust-toolchain.toml` も同じ版を名指しする（ジョブは別の版を入れられないので、`RUST_VERSION` と一緒に上げる。`tests/test_cargo_workspace.py` が一致を確かめる）
 
 desktop frontend (`desktop/`) の品質確認:
 
@@ -648,7 +650,7 @@ Hub のサーバーのスクリプト変更時の確認:
 
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
-- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo test` を実行してから完了報告する（Branvil の結合テストは 1 つの test crate なので、1 ファイルだけなら `cargo test -p branvil --test main <file>::`）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
+- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（Branvil の結合テストは 1 つの test crate なので、1 ファイルだけなら `cargo nextest run -p branvil --test main <file>::`）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`、`crates/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）

@@ -11,9 +11,9 @@
 #   - Node.js 24, as the Desktop workflows run it, for the frontend checks of
 #     the CI jobs (in the environment snapshot, the build's own Node.js, at the
 #     version GuildBotics pins, replaces it)
-#   - the Rust toolchain for the Cargo workspace's checks, and the Tauri
-#     system libraries; `cargo` is cargo-wrapper.sh, which first cleans a
-#     target directory built under other build conditions
+#   - the Rust toolchain for the Cargo workspace's checks, with cargo-nextest
+#     for its tests; `cargo` is cargo-wrapper.sh, which first cleans a target
+#     directory built under other build conditions
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
@@ -40,6 +40,7 @@ ARG UV_VERSION=0.13.5
 ARG PYTHON_VERSION=3.15
 # The channel of rust-toolchain.toml: the jobs cannot install another one.
 ARG RUST_VERSION=1.96.0
+ARG NEXTEST_VERSION=0.9.148
 ARG LYCHEE_VERSION=0.24.2
 # Keep in step with `@playwright/test` in desktop/package-lock.json; a newer
 # lock file makes `npm run e2e:install` fetch the matching browser at run time.
@@ -47,18 +48,12 @@ ARG PLAYWRIGHT_VERSION=1.62.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build tools, and the Tauri system libraries the Linux desktop workflow installs.
+# Build tools.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         pkg-config \
         libssl-dev \
-        libwebkit2gtk-4.1-dev \
-        libgtk-3-dev \
-        libayatana-appindicator3-dev \
-        librsvg2-dev \
-        libxdo-dev \
-        patchelf \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -94,6 +89,14 @@ RUN curl -fsSL https://sh.rustup.rs \
 COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN cargo --version
 
+# cargo-nextest, which runs each test in a process of its own, for the CI's
+# rust-test job. On PATH rather than under CARGO_HOME: the jobs point
+# CARGO_HOME at their cache, and cargo finds `cargo nextest` on PATH either way.
+RUN arch="$(uname -m)" \
+    && curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz" \
+        | tar -xz -C /usr/local/bin cargo-nextest \
+    && cargo nextest --version
+
 # lychee, for the CI's markdown-links job. The static musl
 # build: the x86_64 glibc build wants a newer glibc than bookworm has.
 RUN arch="$(uname -m)" \
@@ -112,8 +115,6 @@ RUN npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
 
 # Codex enforces its permission profile with the bubblewrap it bundles, but
 # prefers one installed in the image, and Debian's 0.8.0 cannot exec Codex's
-# helper: every Codex session then fails to start. The Tauri libraries above
-# pull the package in as a dependency, so the binary is removed here; nothing
-# a turn runs needs it (WebKit's own sandbox is not exercised by `cargo check`).
-RUN rm -f /usr/bin/bwrap \
-    && ! command -v bwrap
+# helper: every Codex session then fails to start. Nothing above installs it;
+# this fails the build if a package added later pulls it in.
+RUN ! command -v bwrap
