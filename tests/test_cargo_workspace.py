@@ -31,3 +31,21 @@ def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None
     }
 
     assert cached - {"target"} <= set(workspace["exclude"])
+
+
+#: The workspace's crates that know nothing of GuildBotics, by the workspace
+#: crates each may use: Branvil, and what Branvil and GuildBotics share.
+_NEUTRAL = {"loopback-auth": set(), "branvil": {"loopback-auth"}}
+
+
+def test_branvil_and_the_shared_crates_know_nothing_of_guildbotics() -> None:
+    for name, allowed in _NEUTRAL.items():
+        manifest = _load(f"crates/{name}/Cargo.toml")
+        used = {
+            dependency
+            for table in ("dependencies", "dev-dependencies", "build-dependencies")
+            for dependency, spec in manifest.get(table, {}).items()
+            if isinstance(spec, dict) and "path" in spec
+        }
+
+        assert used <= allowed, name

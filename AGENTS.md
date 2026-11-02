@@ -113,7 +113,7 @@ provider の置き方:
 ### Branvil の crate（`crates/branvil`）
 
 - Branvil のリポジトリの main を、そのコミット（`5f2728a840be25f3c54c82b92ee1c064be754949`）のスナップショットとして写したもの。履歴は Branvil のリポジトリに残る。crate の中の規則は `crates/branvil/AGENTS.md` に書く
-- Branvil は GuildBotics を知らない crate で、依存は GuildBotics → Branvil の一方向だけ。両者を組み合わせて確かめるもの（`integration/branvil/`、`scripts/branvil-integration.sh`）は crate の外に置く
+- Branvil は GuildBotics を知らない crate で、依存は GuildBotics → Branvil の一方向だけ。Branvil と GuildBotics の両方が使う部品は、どちらも知らない中立の crate に置く（認証のうち保存先に依らない仕組みは `crates/loopback-auth`）。両者を組み合わせて確かめるもの（`integration/branvil/`、`scripts/branvil-integration.sh`）は crate の外に置く
 - 本番の Branvil は、まだ Branvil のリポジトリのチェックアウトから、そのリポジトリの `scripts/serve.sh` / `scripts/update.sh` で動いている（このリポジトリの main へのマージは本番に入らない）。そのため写しには本番の運用のスクリプトを持たない。Branvil のリポジトリに入れるのは本番の Branvil で開発を止める不具合の修正だけにし、同じ修正を `crates/branvil` にも入れる。それ以外の Branvil の変更は `crates/branvil` にだけ入れる
 - 開発用の起動は `crates/branvil/scripts/dev.sh`（ビルドは開発用ベースイメージの `cargo` のラッパー `docker/agent-environment/cargo-wrapper.sh` を通す）
 

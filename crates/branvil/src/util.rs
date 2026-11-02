@@ -1,7 +1,6 @@
 //! Small helpers shared by every module: names, time, hashing, randomness.
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+pub use loopback_auth::{b64, hex, random_bytes, random_secret, sha256, unb64};
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -60,20 +59,6 @@ pub fn validate_member_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn sha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-pub fn hex(data: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(data.len() * 2);
-    for b in data {
-        out.push(DIGITS[(b >> 4) as usize] as char);
-        out.push(DIGITS[(b & 15) as usize] as char);
-    }
-    out
-}
-
 /// HMAC-SHA256 (RFC 2104).
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     const BLOCK: usize = 64;
@@ -91,25 +76,6 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     outer.update(block_key.map(|b| b ^ 0x5c));
     outer.update(inner_hash);
     outer.finalize().into()
-}
-
-pub fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut buf = [0u8; N];
-    rand::fill(&mut buf);
-    buf
-}
-
-/// A random URL-safe secret of `n` bytes of entropy.
-pub fn random_secret<const N: usize>() -> String {
-    URL_SAFE_NO_PAD.encode(random_bytes::<N>())
-}
-
-pub fn b64(data: &[u8]) -> String {
-    URL_SAFE_NO_PAD.encode(data)
-}
-
-pub fn unb64(data: &str) -> Option<Vec<u8>> {
-    URL_SAFE_NO_PAD.decode(data).ok()
 }
 
 /// A new ULID: the current time and 80 random bits.
