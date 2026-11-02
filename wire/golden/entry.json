@@ -1,0 +1,51 @@
+[
+  {
+    "id": "success",
+    "request": {
+      "path": "/commands/probe.py",
+      "name": "probe",
+      "args": [],
+      "cwd": "/work",
+      "wants_result": true
+    },
+    "reply": {
+      "result": {
+        "value": "日本語"
+      },
+      "text_output": "done\nsecond line",
+      "failure": null
+    },
+    "stdout": "{\"result\":{\"value\":\"日本語\"},\"text_output\":\"done\\nsecond line\",\"failure\":null}\n",
+    "stderr_lines": [
+      "command print",
+      "child output"
+    ]
+  },
+  {
+    "id": "failure",
+    "request": {
+      "path": "/commands/probe.py",
+      "name": "probe",
+      "args": [],
+      "cwd": "/work",
+      "wants_result": true
+    },
+    "reply": {
+      "result": null,
+      "text_output": "",
+      "failure": {
+        "command": true,
+        "type": "CommandError",
+        "message": "Golden failure",
+        "cli_agent": "",
+        "cli_agent_message": "",
+        "cli_agent_result": null
+      }
+    },
+    "stdout": "{\"result\":null,\"text_output\":\"\",\"failure\":{\"command\":true,\"type\":\"CommandError\",\"message\":\"Golden failure\",\"cli_agent\":\"\",\"cli_agent_message\":\"\",\"cli_agent_result\":null}}\n",
+    "stderr_lines": [
+      "command print",
+      "child output"
+    ]
+  }
+]
