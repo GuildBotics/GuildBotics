@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.blackbox.golden import copy
 from tests.blackbox.harness import block_runtime, serving
 
 SOURCE = os.environ.get("GUILDBOTICS_BLACKBOX_GOLDEN", "")
@@ -43,13 +44,6 @@ VOLATILE = {
     "health": ("version", "service_instance_id", "machine_name"),
     "transcripts/settings": ("total_size_bytes", "index_size_bytes"),
 }
-
-pytestmark = [
-    pytest.mark.skipif(
-        not SOURCE, reason="GUILDBOTICS_BLACKBOX_GOLDEN names no production copy"
-    ),
-    pytest.mark.timeout(1200),
-]
 
 
 def _read_all(stack, end: str) -> dict:
@@ -107,6 +101,10 @@ def _dump(directory: Path, reads: dict, root: Path) -> None:
         )
 
 
+@pytest.mark.skipif(
+    not SOURCE, reason="GUILDBOTICS_BLACKBOX_GOLDEN names no production copy"
+)
+@pytest.mark.timeout(1200)
 def test_reads_match_golden(tmp_path):
     source = Path(SOURCE)
     root = tmp_path.resolve()
@@ -137,3 +135,60 @@ def test_reads_match_golden(tmp_path):
         != json.loads((actual / name).read_text(encoding="utf-8"))
     )
     assert not differing, f"{differing} differ from {golden}; responses in {actual}"
+
+
+def test_copy_leaves_production_behind(tmp_path, symlinks):
+    """Synthetic production: the copy names no keychain namespace or service of it."""
+    production = tmp_path / "production"
+    outside = production / "outside.yml"
+    outside.parent.mkdir()
+    outside.write_text("shared: true\n", encoding="utf-8")
+    roots = {"workspace": production / "gb", "identity": production / "identity"}
+    for root in roots.values():
+        state = root / ".guildbotics"
+        for part in ("config", "local/run"):
+            (state / part).mkdir(parents=True)
+        (state / "local/secrets.json").write_text('{"store_id": "prod"}')
+        (state / "config/secrets.yml").write_text("keys:\n- A_TOKEN\n")
+        (state / "config/link.yml").symlink_to(outside)
+    workspace = roots["workspace"] / ".guildbotics"
+    (workspace / "state").mkdir()
+    for excluded in ("clones/x", "member_git/x", "agent_environment/x", "work/x"):
+        (workspace / "local" / excluded).mkdir(parents=True)
+    (workspace / "data/workspaces").mkdir(parents=True)
+    (workspace / "local/run/command-inputs").mkdir()
+    (workspace / "local/run/diagnostics.jsonl").write_text("{}\n")
+    (workspace / "local/service.yml").write_text("start_with_server: true\n")
+    (workspace / "config/transcripts.yml").write_text("retention_days: 30\n")
+    connection = roots["identity"] / ".guildbotics/config/connections/branvil.yml"
+    connection.parent.mkdir()
+    connection.write_text("base_url: http://127.0.0.1:7878\n")
+
+    destination = tmp_path / "copy"
+    copy(roots["workspace"], roots["identity"], destination)
+
+    for name in roots:
+        copied = destination / name / ".guildbotics"
+        assert not (copied / "local/secrets.json").exists()
+        assert (copied / "config/secrets.yml").read_text() == "keys:\n- A_TOKEN\n"
+        link = copied / "config/link.yml"
+        assert not link.is_symlink() and link.read_text() == "shared: true\n"
+    copied = destination / "workspace/.guildbotics"
+    assert sorted(path.name for path in copied.iterdir()) == [
+        "config",
+        "local",
+        "state",
+    ]
+    assert sorted(path.name for path in (copied / "local").iterdir()) == [
+        "run",
+        "service.yml",
+    ]
+    assert [path.name for path in (copied / "local/run").iterdir()] == [
+        "diagnostics.jsonl"
+    ]
+    assert "start_with_server: false" in (copied / "local/service.yml").read_text()
+    assert "retention_days: 36500" in (copied / "config/transcripts.yml").read_text()
+    copied_connection = (
+        destination / "identity/.guildbotics/config/connections/branvil.yml"
+    )
+    assert copied_connection.read_text() == "base_url: http://127.0.0.1:1\n"

@@ -476,8 +476,9 @@ CLI → サーバー → 隔離環境 → member broker を貫く読み取りを
 本番のワークスペースが積み重ねたファイルを別の実装が同じように読めるかは、本番の写しを読んだ応答
 （golden）と比べて確かめる（`tests/blackbox/test_golden.py`）。写しは
 `uv run --no-sync python -m tests.blackbox.golden <workspace> <identity root> <dir>` で作る。
-キーチェーンの値と、読み取りが使わない machine の状態（clones・member_git・snapshot・アップロードされた
-入力）は写さない。写しはサービスを開始せず、transcript を期限切れで消さず、Branvil の接続先を使えない
+キーチェーンの名前空間（両方の store の `local/secrets.json`。写すと、OS のキーチェーンを使うサーバーが
+本番の値を読める）と、読み取りが使わない machine の状態（clones・member_git・snapshot・アップロードされた
+入力）は写さない（合成データで `test_copy_leaves_production_behind` が確かめる）。写しはサービスを開始せず、transcript を期限切れで消さず、Branvil の接続先を使えない
 ポートにする。写しと golden は本番の内容を含むので、リポジトリではなく
 Hub の `~/Documents/GuildBotics/blackbox-golden/<日付>/` に置く。テストは実行ごとに写しを一時
 directory へ複製し、別の HOME・ポートのサーバーに読ませる（loopback を含めて、サーバーからの HTTP は
