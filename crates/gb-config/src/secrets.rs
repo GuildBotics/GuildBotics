@@ -310,32 +310,62 @@ impl<'a> SecretStore<'a> {
         self.update(|_| ())
     }
     fn update(&self, apply: impl FnOnce(&mut BTreeMap<String, String>)) -> anyhow::Result<()> {
-        self.writes.transaction(|writer| {
-            let (id, mut values) = self.load()?;
-            let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-            apply(&mut values);
-            let key = self.device.key(true)?;
-            let cipher = Aes256Gcm::new_from_slice(&key).expect("32 byte key");
-            let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-            let plain = Zeroizing::new(serde_json::to_vec(&values)?);
-            let ciphertext = cipher
-                .encrypt(
-                    &nonce,
-                    Payload {
-                        msg: &plain,
-                        aad: Self::aad(&id).as_bytes(),
-                    },
-                )
-                .map_err(|_| anyhow::anyhow!("secret encryption failed"))?;
-            // Only ciphertext ever reaches an atomic writer or temporary file.
-            let sealed = serde_json::to_value(Sealed {
-                version: 1,
-                nonce: B64.encode(nonce),
-                ciphertext: B64.encode(ciphertext),
-            })?;
-            persist_records(&self.root, &id, &sealed, &values, |path, value| {
-                writer.write_json(path, value)
-            })
+        self.writes
+            .transaction(|writer| self.update_with(writer, apply))
+    }
+    /// Reuse a caller's identity/workspace transaction; never reacquire locks.
+    pub fn delete_many_with(
+        &self,
+        writer: &mut gb_base::shared_writes::Writer<'_>,
+        keys: &[String],
+    ) -> anyhow::Result<()> {
+        writer.check(&self.root.join("config/secrets.yml"))?;
+        let (_, values) = self.load()?;
+        if !keys.iter().any(|key| values.contains_key(key)) {
+            return Ok(());
+        }
+        self.update_with(writer, |values| {
+            for key in keys {
+                values.remove(key);
+            }
+        })
+    }
+
+    /// Reuse a caller's identity/workspace transaction; never reacquire locks.
+    pub fn update_with(
+        &self,
+        writer: &mut gb_base::shared_writes::Writer<'_>,
+        apply: impl FnOnce(&mut BTreeMap<String, String>),
+    ) -> anyhow::Result<()> {
+        writer.check(&self.root.join("config/secrets.yml"))?;
+        let (id, mut values) = self.load()?;
+        let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        apply(&mut values);
+        ensure!(
+            values.keys().all(|key| valid_key(key)),
+            "invalid secret key name"
+        );
+        let key = self.device.key(true)?;
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("32 byte key");
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let plain = Zeroizing::new(serde_json::to_vec(&values)?);
+        let ciphertext = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: &plain,
+                    aad: Self::aad(&id).as_bytes(),
+                },
+            )
+            .map_err(|_| anyhow::anyhow!("secret encryption failed"))?;
+        // Only ciphertext ever reaches an atomic writer or temporary file.
+        let sealed = serde_json::to_value(Sealed {
+            version: 1,
+            nonce: B64.encode(nonce),
+            ciphertext: B64.encode(ciphertext),
+        })?;
+        persist_records(&self.root, &id, &sealed, &values, |path, value| {
+            writer.write_json(path, value)
         })
     }
 }

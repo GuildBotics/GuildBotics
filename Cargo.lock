@@ -2070,6 +2070,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gb-setup"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gb-base",
+ "gb-config",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gb-wire"
 version = "0.1.0"
 dependencies = [

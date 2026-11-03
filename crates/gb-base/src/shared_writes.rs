@@ -163,7 +163,7 @@ pub struct Writer<'a> {
     unlocked: Option<&'a SharedWrites>,
 }
 impl Writer<'_> {
-    fn check(&self, path: &Path) -> anyhow::Result<()> {
+    pub fn check(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(writes) = self.unlocked {
             anyhow::ensure!(
                 shared_relative_path(path, Some(&writes.identity))?.is_none()

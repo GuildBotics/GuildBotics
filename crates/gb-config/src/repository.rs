@@ -34,6 +34,12 @@ pub struct ConfigSnapshot {
     pub blob_id: String,
     pub content: String,
 }
+impl ConfigSnapshot {
+    pub fn value(&self) -> anyhow::Result<serde_json::Value> {
+        crate::yaml::value(&self.content)
+            .map_err(|_| anyhow::anyhow!("invalid config YAML: {}", self.relative_path))
+    }
+}
 pub struct ConfigWriteReceipt<T> {
     pub result: T,
     pub revisions: Revisions,
@@ -47,6 +53,24 @@ pub struct ConfigView {
     config: PathBuf,
 }
 impl ConfigRepository {
+    pub fn workspace_secrets<'a>(
+        &'a self,
+        device: crate::secrets::DeviceKey<'a>,
+    ) -> anyhow::Result<crate::secrets::SecretStore<'a>> {
+        crate::secrets::SecretStore::new(&self.writes, crate::secrets::Scope::Workspace, device)
+    }
+    pub fn identity_secrets<'a>(
+        &'a self,
+        device: crate::secrets::DeviceKey<'a>,
+    ) -> anyhow::Result<crate::secrets::SecretStore<'a>> {
+        crate::secrets::SecretStore::new(&self.writes, crate::secrets::Scope::Identity, device)
+    }
+    /// The identity repository shares the same outer lock as this workspace.
+    pub fn identity_view(&self) -> ConfigView {
+        ConfigView {
+            config: self.writes.identity.join(".guildbotics/config"),
+        }
+    }
     pub fn new(writes: SharedWrites) -> anyhow::Result<Self> {
         let workspace = writes
             .workspace
