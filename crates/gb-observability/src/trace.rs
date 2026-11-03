@@ -11,13 +11,16 @@ use serde_json::{Map, Value, json};
 use crate::diagnostics::Diagnostics;
 
 /// One bounded unit of work, and where its records go.
+#[derive(Clone)]
 pub struct Trace {
     diagnostics: Diagnostics,
     id: String,
     source: String,
     person_id: String,
     workflow: String,
+    command: String,
     attributes: Map<String, Value>,
+    span: Option<SpanContext>,
 }
 
 /// How a run that did not succeed ended, as its `command.failed` names it.
@@ -42,7 +45,9 @@ impl Trace {
             source: source.into(),
             person_id: String::new(),
             workflow: String::new(),
+            command: String::new(),
             attributes: Map::new(),
+            span: None,
         }
     }
 
@@ -83,14 +88,14 @@ impl Trace {
             "kind": if event_type == "command.output" { "io" } else { "event" },
             "type": event_type,
             "trace_id": self.id,
-            "span_id": null,
-            "parent_id": null,
-            "call_id": null,
-            "span": "",
+            "span_id": self.span.as_ref().map(|s| &s.id),
+            "parent_id": self.span.as_ref().and_then(|s| s.parent_id.as_ref()),
+            "call_id": self.span.as_ref().map(|s| &s.call_id),
+            "span": self.span.as_ref().map(|s| s.name.as_str()).unwrap_or(""),
             "source": self.source,
             // The member the run names, else the trace's, as in the Python version.
             "person_id": if person_id.is_empty() { &self.person_id } else { person_id },
-            "command": command,
+            "command": if command.is_empty() { &self.command } else { command },
             "workflow": self.workflow,
             "attributes": self.attributes,
             "payload": payload,
@@ -99,6 +104,39 @@ impl Trace {
             unreachable!("an object")
         };
         self.diagnostics.record(record);
+    }
+
+    /// Join an existing execution without opening or ending a boundary.
+    pub fn join(diagnostics: &Diagnostics, id: &str) -> JoinedTrace {
+        JoinedTrace {
+            trace: Trace {
+                diagnostics: diagnostics.clone(),
+                id: id.into(),
+                source: String::new(),
+                person_id: String::new(),
+                workflow: String::new(),
+                command: String::new(),
+                attributes: Map::new(),
+                span: None,
+            },
+        }
+    }
+
+    /// A nested operation has its own span and call ids, but the same trace.
+    pub fn span(&self, name: &str) -> JoinedTrace {
+        let mut trace = self.clone();
+        trace.span = Some(SpanContext {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            call_id: uuid::Uuid::new_v4().simple().to_string(),
+            parent_id: self.span.as_ref().map(|s| s.id.clone()),
+            name: name.into(),
+        });
+        JoinedTrace { trace }
+    }
+
+    /// Write an event with this execution's correlation fields.
+    pub fn event(&self, event_type: &str, payload: Map<String, Value>) {
+        self.record(event_type, "", "", payload);
     }
 
     /// Runs `run`, the command `command` of the member `person_id`, between
@@ -169,5 +207,50 @@ impl Drop for Unended<'_> {
         payload.insert("code".into(), code.into());
         self.trace
             .record("command.failed", self.person_id, self.command, payload);
+    }
+}
+
+#[derive(Clone)]
+pub struct SpanContext {
+    pub id: String,
+    pub call_id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+}
+
+/// A participant can record operations, but cannot run an owner's boundary.
+/// Correlation is explicit, so it cannot leak to another concurrent task.
+pub struct JoinedTrace {
+    trace: Trace,
+}
+
+impl JoinedTrace {
+    /// Bind the host's span when recording work received from another process.
+    pub fn bind_span(mut self, span: SpanContext) -> Self {
+        self.trace.span = Some(span);
+        self
+    }
+
+    pub fn command(mut self, command: &str) -> Self {
+        self.trace.command = command.into();
+        self
+    }
+
+    pub fn person(mut self, person_id: &str) -> Self {
+        self.trace.person_id = person_id.into();
+        self
+    }
+
+    pub fn attribute(mut self, key: &str, value: impl Into<Value>) -> Self {
+        self.trace = self.trace.attribute(key, value);
+        self
+    }
+
+    pub fn span(&self, name: &str) -> Self {
+        self.trace.span(name)
+    }
+
+    pub fn event(&self, event_type: &str, payload: Map<String, Value>) {
+        self.trace.event(event_type, payload);
     }
 }
