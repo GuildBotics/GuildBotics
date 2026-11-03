@@ -738,46 +738,9 @@ Logging goes to stderr; `BRANVIL_LOG` takes a `tracing` filter
 
 ## Development
 
-To build and start the server with its browser GUI from this checkout:
-
-```sh
-./scripts/dev.sh
-```
-
-Requires Node.js 24 or later and npm, in addition to Rust and Git. The script
-runs `npm ci` when `web/node_modules/.package-lock.json` is missing or older
-than `web/package-lock.json`, builds the GUI and the debug binary,
-initializes `crates/branvil/data` on the first run with owner name `owner`,
-and opens the GUI after the server is ready. Later runs reuse the data and
-`branvil.toml`. Ctrl-C stops the server; restart the script to pick up code
-changes. It does not watch files.
-
-Cargo builds everything again under new names when the build conditions
-change, and leaves the old outputs in `target`. The script builds through the
-development image's `cargo` (the repository's
-`docker/agent-environment/cargo-wrapper.sh`), which runs `cargo clean` first
-when the workspace's `target` holds a record of `rustc -vV` and the
-`[profile.*]` tables of the workspace's `Cargo.toml` that differs from the
-current ones, or none.
-
-Use a different data directory and initial owner, or skip opening the browser:
-
-```sh
-./scripts/dev.sh --data-dir /path/to/dev-data --owner alice
-./scripts/dev.sh --no-open
-```
-
-`BRANVIL_DATA_DIR` also selects the data directory; `--data-dir` takes precedence.
-Relative data paths are resolved from the crate's directory. `--owner` applies
-only when initializing a new database. An existing configuration keeps its
-listen address and base URL (by default `http://127.0.0.1:7878`).
-
-If the browser cannot open, the script prints a single-use GUI link valid for
-60 seconds and keeps the server running. Both attempts use this data
-directory's credentials and URL rather than `BRANVIL_TOKEN` or `BRANVIL_URL`
-from the calling shell. `--no-open` skips both attempts. The repository's
-`tests/scripts/test_branvil_dev.py` checks the script without building or
-starting a real server.
+The repository's `scripts/dev.sh` builds the GUI and runs Branvil, on data of
+its own, inside the server of the checkout (`guildbotics server start`), and
+opens the GUI; see "開発用の起動" in the repository's `AGENTS.md`.
 
 To run the Rust checks:
 

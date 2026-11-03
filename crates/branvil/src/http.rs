@@ -167,7 +167,8 @@ struct Enter {
 async fn session_create(State(app): State<Shared>, J(input): J<Enter>) -> R {
     let (view, id) = members::enter(&app, input.code).await?;
     let max_age = app.config.limits.session_hours * 3600;
-    let cookie = loopback_auth::session_set_cookie(auth::SESSION_COOKIE, &id, max_age);
+    let name = auth::session_cookie_name(&app.base_url);
+    let cookie = loopback_auth::session_set_cookie(&name, &id, max_age);
     let mut resp = ok(view);
     resp.headers_mut().insert(
         header::SET_COOKIE,
@@ -177,7 +178,7 @@ async fn session_create(State(app): State<Shared>, J(input): J<Enter>) -> R {
 }
 
 async fn session_get(State(app): State<Shared>, headers: HeaderMap) -> R {
-    let id = auth::session_cookie(&headers).ok_or_else(AppError::unauthorized)?;
+    let id = auth::session_cookie(&app, &headers).ok_or_else(AppError::unauthorized)?;
     Ok(ok(members::current_session(&app, id).await?))
 }
 

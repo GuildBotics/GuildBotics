@@ -121,7 +121,8 @@ itself speaks plain HTTP on loopback only).
   `codes_work_once_and_expire`, `redirects_are_loopback_http_only`,
   `verifiers_match_their_s256_challenge` of `loopback-auth`,
   `web/src/__tests__/authorize.test.tsx`].
-- A session is a 32-byte random id in a `branvil_session` cookie (`HttpOnly`,
+- A session is a 32-byte random id in a `branvil_session_<port>` cookie, named
+  by the base URL's port (a browser sends a cookie to every port of a host) (`HttpOnly`,
   `SameSite=Strict`, `Path=/`, `Max-Age` of `limits.session_hours`, default
   720), stored only as its SHA-256, and a 32-byte CSRF secret. Every non-GET
   request made with the cookie must carry that session's CSRF value in

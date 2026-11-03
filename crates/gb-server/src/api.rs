@@ -161,6 +161,7 @@ pub fn router(api: Shared) -> Router {
         .route("/session", post(start_session));
     Router::new()
         .nest("/api", owners.merge(anyone))
+        .merge(crate::ui::router(crate::ui::directory()))
         .layer(middleware::from_fn_with_state(api.clone(), guard))
         .with_state(api)
 }

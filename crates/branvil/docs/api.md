@@ -128,8 +128,9 @@ repository, and upstream events, including changes in another repository.
   deletes one.
 - The GUI has no sign-in screen. `branvil open` asks for a single-use entry
   link (`POST /api/v1/session/links`), and the GUI exchanges its code with
-  `POST /api/v1/session` for the owner's `branvil_session` cookie (HttpOnly,
-  SameSite=Strict). Every non-GET request made with the cookie must carry
+  `POST /api/v1/session` for the owner's `branvil_session_<port>` cookie
+  (HttpOnly, SameSite=Strict; named by the base URL's port, so two services
+  on one machine keep their own sessions). Every non-GET request made with the cookie must carry
   `X-Branvil-CSRF: <csrf>` from the session response; Bearer requests do not
   need it. A missing or mismatched header is `403 csrf_mismatch`, before the
   handler runs. The GUI reads `GET /api/v1/session` to refresh its CSRF value

@@ -16,12 +16,14 @@ use loopback_auth::{CODE_SECONDS, Codes};
 use serde::{Deserialize, Serialize};
 
 /// Followed by the port: a browser sends a cookie to every port of a host, so
-/// one name would let the servers of two ports, or Branvil's
-/// `branvil_session`, end each other's sessions.
+/// one name would let the servers of two ports end each other's sessions,
+/// as Branvil's does too.
 const COOKIE_PREFIX: &str = "guildbotics_session";
 pub const CSRF_HEADER: &str = "x-guildbotics-csrf";
 pub const SESSION_SECONDS: i64 = 30 * 24 * 3600;
 const OWNER_FILE: &str = "owner-file";
+/// The owner token file, beside the records.
+pub(crate) const OWNER_TOKEN: &str = "owner.token";
 const TOKEN_PREFIX: &str = "gbt";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -80,7 +82,7 @@ impl ServerAuth {
     /// The credentials of the server on `port`, under `data`; the owner token
     /// file is made to hold a token that authenticates.
     pub fn open(data: &Path, port: u16) -> anyhow::Result<ServerAuth> {
-        let directory = data.join("server").join(port.to_string());
+        let directory = directory(data, port);
         create_private_dir(&directory)?;
         let records = std::fs::read(directory.join("auth.json"))
             .ok()
@@ -104,7 +106,7 @@ impl ServerAuth {
     }
 
     pub fn owner_token_path(&self) -> PathBuf {
-        self.directory.join("owner.token")
+        self.directory.join(OWNER_TOKEN)
     }
 
     /// Lets the owner through: a Bearer token, or the session cookie with that
@@ -135,11 +137,7 @@ impl ServerAuth {
     pub fn proof(&self, token_id: &str, nonce: &str) -> Option<String> {
         let state = self.state.lock().unwrap();
         let token = state.records.tokens.get(token_id)?;
-        let message = format!("guildbotics-local-api-proof\n{nonce}\n{token_id}");
-        Some(loopback_auth::hex(&loopback_auth::hmac_sha256(
-            token.digest.as_bytes(),
-            message.as_bytes(),
-        )))
+        Some(proof(&token.digest, token_id, nonce))
     }
 
     /// A single-use link into the screens, landing on `next`, a path of this
@@ -261,8 +259,17 @@ fn new_token() -> (String, String, String) {
     (id, loopback_auth::digest(&secret), text)
 }
 
+/// What the holder of a token's digest answers to a nonce.
+pub(crate) fn proof(digest: &str, token_id: &str, nonce: &str) -> String {
+    let message = format!("guildbotics-local-api-proof\n{nonce}\n{token_id}");
+    loopback_auth::hex(&loopback_auth::hmac_sha256(
+        digest.as_bytes(),
+        message.as_bytes(),
+    ))
+}
+
 /// The id and the secret of a token text.
-fn parse_token(text: &str) -> Option<(&str, &str)> {
+pub(crate) fn parse_token(text: &str) -> Option<(&str, &str)> {
     let rest = text.trim().strip_prefix(TOKEN_PREFIX)?.strip_prefix('_')?;
     let (id, secret) = rest.split_once('_')?;
     (id.len() == 16
@@ -284,6 +291,11 @@ fn iso(timestamp: f64) -> String {
     chrono::DateTime::from_timestamp_micros((timestamp * 1e6) as i64)
         .unwrap_or_default()
         .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+/// Where the credentials of the server on `port` are kept, under `data`.
+pub(crate) fn directory(data: &Path, port: u16) -> PathBuf {
+    data.join("server").join(port.to_string())
 }
 
 fn create_private_dir(path: &Path) -> std::io::Result<()> {

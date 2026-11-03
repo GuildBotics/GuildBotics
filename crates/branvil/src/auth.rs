@@ -12,7 +12,6 @@ use crate::store::{self, Key, Rd, Wtx};
 use crate::util::{self, fold};
 
 pub const TOKEN_PREFIX: &str = "bvt_";
-pub const SESSION_COOKIE: &str = "branvil_session";
 pub const CSRF_HEADER: &str = "x-branvil-csrf";
 
 /// The authenticated member of a request.
@@ -221,8 +220,20 @@ pub fn session_key(id: &str) -> Vec<u8> {
     Key::new().s(&loopback_auth::digest(id)).bytes()
 }
 
-pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
-    loopback_auth::cookie_value(headers, SESSION_COOKIE)
+/// The session cookie's name, which carries the port of the base URL: a
+/// browser sends a cookie to every port of a host, so one name would let two
+/// services on one machine end each other's sessions.
+pub fn session_cookie_name(base_url: &str) -> String {
+    match base_url.rsplit_once(':') {
+        Some((_, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("branvil_session_{port}")
+        }
+        _ => "branvil_session".into(),
+    }
+}
+
+pub fn session_cookie(app: &App, headers: &HeaderMap) -> Option<String> {
+    loopback_auth::cookie_value(headers, &session_cookie_name(&app.base_url))
 }
 
 /// Loads a valid session and its member.
@@ -251,7 +262,7 @@ pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> Ap
         let member = authenticate_token(app, token).await?;
         return Ok(Caller { member });
     }
-    let Some(id) = session_cookie(headers) else {
+    let Some(id) = session_cookie(app, headers) else {
         return Err(AppError::unauthorized());
     };
     let found = app.store.read(move |r| check_session(r, &id)).await?;
@@ -321,7 +332,12 @@ mod tests {
             "http://127.0.0.1:7878".into(),
         );
         let mut headers = HeaderMap::new();
-        headers.insert("cookie", "branvil_session=test-session".parse().unwrap());
+        headers.insert(
+            "cookie",
+            "branvil_session=other; branvil_session_7878=test-session"
+                .parse()
+                .unwrap(),
+        );
         for method in [Method::POST, Method::PATCH, Method::PUT, Method::DELETE] {
             for sent in [None, Some("wrong"), Some("test-csrf")] {
                 headers.remove(CSRF_HEADER);
@@ -345,13 +361,29 @@ mod tests {
         for method in [Method::GET, Method::HEAD] {
             assert!(authenticate(&app, &method, &headers).await.is_ok());
         }
-        headers.insert("cookie", "branvil_session=expired".parse().unwrap());
+        headers.insert("cookie", "branvil_session_7878=expired".parse().unwrap());
         assert_eq!(
             authenticate(&app, &Method::POST, &headers)
                 .await
                 .unwrap_err()
                 .code,
             "unauthorized"
+        );
+    }
+
+    #[test]
+    fn the_session_cookie_is_named_by_the_port() {
+        assert_eq!(
+            session_cookie_name("http://127.0.0.1:7879"),
+            "branvil_session_7879"
+        );
+        assert_eq!(
+            session_cookie_name("https://hub.example"),
+            "branvil_session"
+        );
+        assert_eq!(
+            session_cookie_name("http://[::1]:7878"),
+            "branvil_session_7878"
         );
     }
 

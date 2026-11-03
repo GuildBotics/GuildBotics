@@ -1,6 +1,6 @@
 // Low-level HTTP client for the Branvil API.
 //
-// Authentication is the HttpOnly `branvil_session` cookie; the CSRF value of
+// Authentication is the HttpOnly `branvil_session_<port>` cookie; the CSRF value of
 // the session is kept only in this module's memory (never in storage) and is
 // sent on every non-GET request.
 

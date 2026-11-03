@@ -16,6 +16,26 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/app_api/errors.ja.yml"),
     ),
     (
+        "app_api.ui",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/app_api/ui.en.yml"),
+    ),
+    (
+        "app_api.ui",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/app_api/ui.ja.yml"),
+    ),
+    (
+        "cli.server",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/server.en.yml"),
+    ),
+    (
+        "cli.server",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/server.ja.yml"),
+    ),
+    (
         "intelligences.agent_environment",
         "en",
         include_str!(

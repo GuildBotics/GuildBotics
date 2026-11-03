@@ -485,6 +485,138 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     server.stop();
 }
 
+/// `guildbotics open` of the machine root under `dir`, for the port, with
+/// proxies that lead nowhere: the port is reached directly.
+fn open(dir: &Path, port: u16) -> Output {
+    let mut command = Command::new(BIN);
+    for proxy in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+        command.env(proxy, "http://127.0.0.1:9");
+    }
+    command
+        .args(["open", "--print"])
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .env("GUILDBOTICS_HOME", dir.join("home"))
+        .env("GUILDBOTICS_SERVER_PORT", port.to_string())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn open_prints_an_entry_link_a_browser_enters_with_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    let opened = open(dir.path(), server.port);
+    assert_ok(&opened);
+    let url = String::from_utf8(opened.stdout).unwrap();
+    let (page, code) = url.trim().split_once('#').unwrap();
+    assert_eq!(page, server.url("/-/enter"));
+    for expected in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
+        let entered = server
+            .http
+            .post(server.url("/api/session"))
+            .json(&json!({"code": code}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(entered.status(), expected);
+    }
+    // The page the link opens, refused for another host, as every request.
+    let page = server.http.get(page).send().await.unwrap();
+    assert!(
+        [StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE].contains(&page.status()),
+        "{page:?}"
+    );
+    assert_eq!(page.headers()["x-frame-options"], "DENY");
+    let misdirected = server
+        .http
+        .get(server.url("/"))
+        .header("host", "evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(misdirected.status(), StatusCode::MISDIRECTED_REQUEST);
+    server.stop();
+}
+
+#[test]
+fn open_without_a_server_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let opened = open(dir.path(), free_port());
+    assert!(!opened.status.success());
+    assert!(opened.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&opened.stderr)
+            .starts_with("Error: This machine has no credential that the GuildBotics server")
+    );
+}
+
+/// A listener answering every request with `answer`, and the requests it
+/// read, lowercased, once no more come.
+async fn listener(answer: String) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        while let Ok(Ok((mut stream, _))) =
+            tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
+        {
+            let mut request = vec![0; 8192];
+            let read = stream.read(&mut request).await.unwrap();
+            seen.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+            stream.write_all(answer.as_bytes()).await.unwrap();
+        }
+        seen
+    });
+    (port, requests)
+}
+
+/// Whatever listens on the port sees the owner token only once it proves it
+/// knows the token's digest, and never sends the client elsewhere.
+#[tokio::test]
+async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() {
+    let json = |status: &str, headers: &str, body: &str| {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{headers}connection: close\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let (elsewhere, reached) = listener(json("200 OK", "", r#"{"proof":"0000"}"#)).await;
+    // The redirect first, while the listener it names still listens.
+    for answer in [
+        json(
+            "307 Temporary Redirect",
+            &format!("location: http://127.0.0.1:{elsewhere}/api/local-api/proof\r\n"),
+            "",
+        ),
+        json("200 OK", "", r#"{"proof":"0000"}"#),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (port, requests) = listener(answer).await;
+        let tokens = dir.path().join(format!("home/data/server/{port}"));
+        std::fs::create_dir_all(&tokens).unwrap();
+        std::fs::write(tokens.join("owner.token"), "gbt_0123456789abcdef_secret\n").unwrap();
+        let opened = tokio::task::spawn_blocking({
+            let dir = dir.path().to_path_buf();
+            move || open(&dir, port)
+        })
+        .await
+        .unwrap();
+        assert!(!opened.status.success());
+        let seen = requests.await.unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(
+            seen[0].starts_with("post /api/local-api/proof "),
+            "{seen:?}"
+        );
+        assert!(!seen[0].contains("authorization") && !seen[0].contains("secret"));
+    }
+    assert_eq!(reached.await.unwrap(), Vec::<String>::new());
+}
+
 #[test]
 fn nothing_can_write_to_stdout_after_the_notice() {
     let dir = tempfile::tempdir().unwrap();
@@ -671,6 +803,43 @@ fn set_up_branvil(dir: &Path, listen: &str) -> PathBuf {
         &["branvil", "init", "--owner", "owner", "--listen", listen],
     ));
     data
+}
+
+/// A Ctrl-C while the server still starts -- here held, after its notice,
+/// by the lock of the workspaces' registry -- stops Branvil too, which has
+/// not started yet: one is enough to end the process.
+#[test]
+fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
+    let dir = tempfile::tempdir().unwrap();
+    set_up_branvil(dir.path(), "127.0.0.1:0");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let registry = dir.path().join("home/data/workspaces.lock");
+    std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
+    let held = std::fs::File::create(&registry).unwrap();
+    held.lock().unwrap();
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let mut server = Server::spawn(command, dir.path(), port);
+    let interrupted = Command::new("kill")
+        .args(["-INT", &server.child.id().to_string()])
+        .output()
+        .unwrap();
+    assert!(interrupted.status.success());
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = server.child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            server.child.kill().unwrap();
+            panic!("one Ctrl-C did not end the server");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
 }
 
 #[test]
