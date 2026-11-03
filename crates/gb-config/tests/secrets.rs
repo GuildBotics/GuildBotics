@@ -67,6 +67,47 @@ fn assert_no_plaintext(path: &Path, needle: &[u8]) {
 }
 
 #[test]
+fn reads_files_written_by_the_python_keychain_migration() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../records/golden/secret_migration.json"
+    ))
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let writes = writes(dir.path());
+    let fake = Fake::default();
+    *fake.key.lock().unwrap() = Some(B64.encode([19; 32]));
+    for case in cases.as_array().unwrap() {
+        let (root, scope) = match case["scope"].as_str().unwrap() {
+            "identity" => (writes.identity.clone(), Scope::Identity),
+            "workspace" => (writes.workspace.clone().unwrap(), Scope::Workspace),
+            _ => panic!("unknown scope"),
+        };
+        let root = root.join(".guildbotics");
+        fs::create_dir_all(root.join("config")).unwrap();
+        fs::create_dir_all(root.join("local")).unwrap();
+        fs::write(
+            root.join("config/secrets.yml"),
+            case["index"].as_str().unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("local/secrets.json"),
+            case["local"].as_str().unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("local/secrets.enc.json"),
+            serde_json::to_vec(&case["sealed"]).unwrap(),
+        )
+        .unwrap();
+        let store = store(dir.path(), &writes, &fake, scope);
+        let expected = serde_json::from_value(case["values"].clone()).unwrap();
+        assert_eq!(store.values().unwrap(), expected);
+    }
+    assert_eq!(fake.creates.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn two_stores_share_one_immutable_key_and_persist_only_ciphertext() {
     let dir = tempfile::tempdir().unwrap();
     let writes = writes(dir.path());

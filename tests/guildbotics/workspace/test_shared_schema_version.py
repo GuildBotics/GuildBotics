@@ -275,6 +275,8 @@ def test_no_record_carries_its_own_copy_of_the_generation() -> None:
         # ``local/secrets.json`` records this machine's keychain namespace. It
         # is not a shared record, so it is not this generation.
         "guildbotics/utils/secret_store.py",
+        # The explicit cutover writes the same device-local namespace format.
+        "guildbotics/environment/secret_migration.py",
     }
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
