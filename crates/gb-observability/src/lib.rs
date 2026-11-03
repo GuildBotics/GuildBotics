@@ -3,6 +3,7 @@
 //! and the diagnostics index and transcripts the screens read.
 
 mod diagnostics;
+mod reader;
 mod trace;
 
 pub use diagnostics::Diagnostics;

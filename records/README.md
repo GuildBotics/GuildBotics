@@ -48,4 +48,13 @@ cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p g
   - `resources`: 宣言（`intelligences/agent_environment.yml`）ごとの memory・vCPU（宣言が断られれば
     `null`）。Rust は `resources` だけを読み、YAML 1.1 の 60 進数は数として読まずに断ります。
 
+- `screens.json`: コマンド画面と診断画面が読む API の応答。入力は小さな config と identity、
+  答えは Python の CommandFileService、AppRuntime、diagnostics の読み書きから作ります。
+  `uv run --no-sync python -m tests.guildbotics.test_screen_api_golden` で作り直します。
+  同じ fixture を Python の比較テスト、Rust の gb-config / gb-observability、
+  guildbotics のサーバー結合テストが読みます。実機の microVM は起動しません。
+  一覧の解決順・詳細の ID / revision / arguments / inputs、成功・失敗・実行中の
+  trace と出力の presentation を比較します。実行の受付は snapshot の無い環境で、
+  表示したファイルの照合を通った要求だけが trace を開くことを確認します。
+
 振る舞いを意図して変えるときは、両方の言語への影響を確かめて fixture も直します。

@@ -153,6 +153,10 @@ const COMPOUND: &[&str] = &[
 /// at the first column (a form feed resets the column), outside any bracket or
 /// string, split at their `;`; none of a compound statement's line.
 fn statements(source: &str) -> Result<Vec<String>, Unreadable> {
+    top_statements(source, false)
+}
+
+fn top_statements(source: &str, include_functions: bool) -> Result<Vec<String>, Unreadable> {
     // A form feed sets the column back to zero: what came before it counts
     // for nothing.
     let at_column_zero = |line: &str| {
@@ -171,6 +175,7 @@ fn statements(source: &str) -> Result<Vec<String>, Unreadable> {
         if first
             && let Some(Token::Name(word)) = &token
             && COMPOUND.contains(&word.as_str())
+            && !(include_functions && matches!(word.as_str(), "def" | "async"))
         {
             top = false;
         }
@@ -205,6 +210,124 @@ enum Token {
     /// An operator of more than one character (`==`, `:=`, `+=`, ...).
     Op(&'static str),
     Newline,
+}
+
+/// The top-level main signature, read without importing the command.
+fn main_tokens(source: &str) -> Option<Vec<Token>> {
+    for statement in top_statements(source, true).ok()? {
+        let mut lexer = Lexer::new(&statement);
+        let Some(mut first) = lexer.next_token().ok()? else {
+            continue;
+        };
+        if first == Token::Name("async".into()) {
+            first = lexer.next_token().ok()??;
+        }
+        if first != Token::Name("def".into())
+            || lexer.next_token().ok()?? != Token::Name("main".into())
+        {
+            continue;
+        }
+        if lexer.next_token().ok()?? != Token::Punct('(') {
+            return None;
+        }
+        let mut tokens = Vec::new();
+        while let Some(token) = lexer.next_token().ok()? {
+            if token == Token::Punct(')') && lexer.depth == 0 {
+                return Some(tokens);
+            }
+            tokens.push(token);
+        }
+    }
+    None
+}
+
+pub(crate) fn screen_arguments(source: &str) -> Value {
+    let Some(tokens) = main_tokens(source) else {
+        return serde_json::json!([]);
+    };
+    let mut groups = Vec::new();
+    let (mut start, mut depth) = (0, 0);
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::Punct('(' | '[' | '{') => depth += 1,
+            Token::Punct(')' | ']' | '}') => depth -= 1,
+            Token::Punct(',') if depth == 0 => {
+                groups.push(&tokens[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    groups.push(&tokens[start..]);
+    let mut keyword = false;
+    let mut index = 0;
+    let mut args = Vec::new();
+    for group in groups {
+        if group.is_empty() || group == [Token::Punct('/')] {
+            continue;
+        }
+        if group.first() == Some(&Token::Punct('*')) || group.first() == Some(&Token::Op("**")) {
+            keyword = true;
+            continue;
+        }
+        let Some(Token::Name(name)) = group.first() else {
+            return serde_json::json!([]);
+        };
+        let default = group
+            .iter()
+            .position(|t| *t == Token::Punct('='))
+            .map(|i| &group[i + 1..]);
+        if index == 0 && !keyword && ["context", "ctx", "c"].contains(&name.as_str()) {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let text = match default {
+            Some([Token::Str(s)]) => s.clone(),
+            Some([Token::Number(s)]) => s
+                .parse::<serde_json::Number>()
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
+            Some([Token::Name(s)]) if s == "True" || s == "False" => s.clone(),
+            _ => String::new(),
+        };
+        args.push(serde_json::json!({"name":name, "kind":if keyword {"keyword"} else {"positional"}, "required":default.is_none(), "default":text}));
+    }
+    args.into()
+}
+
+pub(crate) fn main_description(source: &str) -> String {
+    // A main docstring starts the suite immediately after its signature.
+    let Ok(statements) = top_statements(source, true) else {
+        return String::new();
+    };
+    for statement in statements {
+        let mut lexer = Lexer::new(&statement);
+        let mut first = lexer.next_token().ok().flatten();
+        if first == Some(Token::Name("async".into())) {
+            first = lexer.next_token().ok().flatten();
+        }
+        if first != Some(Token::Name("def".into()))
+            || lexer.next_token().ok().flatten() != Some(Token::Name("main".into()))
+        {
+            continue;
+        }
+        while let Ok(Some(token)) = lexer.next_token() {
+            if token == Token::Punct(':') && lexer.depth == 0 {
+                if let Ok(Some(Token::Str(doc))) = lexer.next_token() {
+                    return doc.trim().lines().next().unwrap_or("").to_owned();
+                }
+                // The indented suite lies after this top-level statement.
+                let offset = source.find(&statement).unwrap_or(0) + statement.len();
+                let mut body = Lexer::new(source[offset..].trim_start());
+                if let Ok(Some(Token::Str(doc))) = body.next_token() {
+                    return doc.trim().lines().next().unwrap_or("").to_owned();
+                }
+                break;
+            }
+        }
+    }
+    String::new()
 }
 
 struct Lexer<'a> {

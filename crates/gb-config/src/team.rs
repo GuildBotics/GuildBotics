@@ -63,6 +63,47 @@ pub fn valid_person_id(value: &str) -> bool {
 }
 
 impl Team {
+    /// The command executor picker, using the same participation and identity files.
+    pub fn screen_summary(&self, config: &Path, identity_root: &Path) -> anyhow::Result<Value> {
+        let project = yaml_mapping(&config.join("team/project.yml"))?;
+        let mut members = Vec::new();
+        for member in &self.members {
+            let identity = yaml_mapping(
+                &identity_root
+                    .join(".guildbotics/config/team/members")
+                    .join(&member.person_id)
+                    .join("identity.yml"),
+            )?;
+            let participation = yaml_mapping(
+                &config
+                    .join("team/members")
+                    .join(&member.person_id)
+                    .join("member.yml"),
+            )?;
+            let mut roles = std::collections::BTreeSet::new();
+            for profile in [identity.get("profile"), participation.get("profile")]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(mapping) = profile["roles"].as_object() {
+                    roles.extend(mapping.keys().cloned());
+                }
+                if let Some(list) = profile["roles"].as_array() {
+                    roles.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+            }
+            members.push(
+                serde_json::json!({"person_id":member.person_id,"name":member.name,
+                "person_type":member.person_type,"is_active":member.is_active,"roles":roles}),
+            );
+        }
+        Ok(
+            serde_json::json!({"project":{"name":project.get("name").and_then(Value::as_str).unwrap_or(""),
+            "language_code":self.language,"language_name":match self.language.as_str() {"ja"=>"日本語","en"=>"English", other=>other}},
+            "members":members,"default_person_id":self.default_person_id().unwrap_or(""),"problem":""}),
+        )
+    }
+
     /// Reads the team of the workspace whose configuration is `config`, with
     /// its members' identities under `identity_root`. A member whose identity
     /// this machine does not have is left out, as the Python version leaves

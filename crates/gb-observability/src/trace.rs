@@ -80,7 +80,7 @@ impl Trace {
         payload: Map<String, Value>,
     ) {
         let Value::Object(record) = json!({
-            "kind": "event",
+            "kind": if event_type == "command.output" { "io" } else { "event" },
             "type": event_type,
             "trace_id": self.id,
             "span_id": null,
@@ -134,6 +134,15 @@ impl Trace {
             }
         }
         ended
+    }
+
+    /// Records the nonempty text returned by a command, before its boundary ends.
+    pub fn command_output(&self, command: &str, person_id: &str, output: &str) {
+        if !output.is_empty() {
+            let mut payload = Map::new();
+            payload.insert("output".into(), output.into());
+            self.record("command.output", person_id, command, payload);
+        }
     }
 }
 

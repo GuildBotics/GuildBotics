@@ -1,0 +1,889 @@
+{
+  "config": {
+    "team/project.yml": "name: Example\nlanguage: ja\n",
+    "team/members/aiko/member.yml": "is_active: true\nprofile: {roles: {}}\n",
+    "commands/look.md": "---\nname: {en: Look, ja: 調べる}\ndescription: Inspect {target}\nread_only: true\nargs:\n  target: {default: example}\ninputs: {message: hidden}\n---\nInspect ${1}, {{ other }} and {target}\n",
+    "commands/look.fr.md": "French\n",
+    "commands/look.en.md": "---\nname: English\n---\nEnglish\n",
+    "commands/look.ja.md": "---\nname: 調べる\nread_only: true\n---\n日本語 ${1}\n",
+    "commands/nested/args.yaml": "description: 'Inspect ${2}, {place}, {{ other }}, {context} and {child}'\nargs:\n  z: {default: false}\n  a: {required: true}\ncommands: [{path: child}]\ninputs: {message: required, extra_args: optional}\n",
+    "commands/code.py": "COMMAND_METADATA = {\"inputs\": {\"extra_args\": \"optional\"}}\n\ndef main(context, path, count=2, /, flag=True, *, title=\"x\", other=None):\n    \"\"\"Inspect a file.\n\n    More detail.\n    \"\"\"\n    return path\n",
+    "commands/simple.sh": "#!/bin/sh\necho ok\n",
+    "commands/bad.md": "---\nargs: [bad]\ninputs: {message: invalid}\n---\nDraft\n",
+    "commands/ignored.metadata.yml": "name: hidden\n",
+    "commands/ask.md": "Workspace file shadowed by localized template\n",
+    "commands/nested.dir/basic.sh": "#!/bin/sh\necho basic\n",
+    "commands/variadic.py": "async def main(ctx, path, *args, title='x', **kwargs):\n    return path\n"
+  },
+  "identity": {
+    ".guildbotics/config/team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko\nperson_type: agent\n"
+  },
+  "expected": {
+    "files": {
+      "files": [
+        {
+          "id": "YmFkLm1k",
+          "command": "bad",
+          "label": "Bad",
+          "description": "",
+          "relative_path": "bad.md",
+          "format": "markdown"
+        },
+        {
+          "id": "Y29kZS5weQ",
+          "command": "code",
+          "label": "Code",
+          "description": "Inspect a file.",
+          "relative_path": "code.py",
+          "format": "python"
+        },
+        {
+          "id": "bG9vay5qYS5tZA",
+          "command": "look",
+          "label": "調べる",
+          "description": "",
+          "relative_path": "look.ja.md",
+          "format": "markdown"
+        },
+        {
+          "id": "bmVzdGVkLmRpci9iYXNpYy5zaA",
+          "command": "nested.dir/basic",
+          "label": "Basic",
+          "description": "",
+          "relative_path": "nested.dir/basic.sh",
+          "format": "shell"
+        },
+        {
+          "id": "bmVzdGVkL2FyZ3MueWFtbA",
+          "command": "nested/args",
+          "label": "Args",
+          "description": "Inspect ${2}, {place}, {{ other }}, {context} and {child}",
+          "relative_path": "nested/args.yaml",
+          "format": "yaml"
+        },
+        {
+          "id": "c2ltcGxlLnNo",
+          "command": "simple",
+          "label": "Simple",
+          "description": "",
+          "relative_path": "simple.sh",
+          "format": "shell"
+        },
+        {
+          "id": "dmFyaWFkaWMucHk",
+          "command": "variadic",
+          "label": "Variadic",
+          "description": "",
+          "relative_path": "variadic.py",
+          "format": "python"
+        }
+      ]
+    },
+    "team": {
+      "project": {
+        "name": "Example",
+        "language_code": "ja",
+        "language_name": "日本語"
+      },
+      "members": [
+        {
+          "person_id": "aiko",
+          "name": "Aiko",
+          "person_type": "agent",
+          "is_active": true,
+          "roles": []
+        }
+      ],
+      "default_person_id": "aiko",
+      "problem": ""
+    },
+    "details": [
+      {
+        "id": "YmFkLm1k",
+        "command": "bad",
+        "label": "Bad",
+        "description": "",
+        "relative_path": "bad.md",
+        "format": "markdown",
+        "content": "---\nargs: [bad]\ninputs: {message: invalid}\n---\nDraft\n",
+        "revision": "42ef98148081e12dbb03b1390bcaa872c5fef0e14b77ec6641e3221704c2d385",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "Y29kZS5weQ",
+        "command": "code",
+        "label": "Code",
+        "description": "Inspect a file.",
+        "relative_path": "code.py",
+        "format": "python",
+        "content": "COMMAND_METADATA = {\"inputs\": {\"extra_args\": \"optional\"}}\n\ndef main(context, path, count=2, /, flag=True, *, title=\"x\", other=None):\n    \"\"\"Inspect a file.\n\n    More detail.\n    \"\"\"\n    return path\n",
+        "revision": "550ac02c21bf2d062be5daec395bc535340289bc255737400a34b4f095c54c03",
+        "arguments": [
+          {
+            "name": "path",
+            "kind": "positional",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "count",
+            "kind": "positional",
+            "required": false,
+            "default": "2"
+          },
+          {
+            "name": "flag",
+            "kind": "positional",
+            "required": false,
+            "default": "True"
+          },
+          {
+            "name": "title",
+            "kind": "keyword",
+            "required": false,
+            "default": "x"
+          },
+          {
+            "name": "other",
+            "kind": "keyword",
+            "required": false,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "optional",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "bG9vay5qYS5tZA",
+        "command": "look",
+        "label": "調べる",
+        "description": "",
+        "relative_path": "look.ja.md",
+        "format": "markdown",
+        "content": "---\nname: 調べる\nread_only: true\n---\n日本語 ${1}\n",
+        "revision": "96677386ae1d4da557b1ecee98eab510e552a107bc084c60355af24c176f302c",
+        "arguments": [
+          {
+            "name": "1",
+            "kind": "positional",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "bmVzdGVkLmRpci9iYXNpYy5zaA",
+        "command": "nested.dir/basic",
+        "label": "Basic",
+        "description": "",
+        "relative_path": "nested.dir/basic.sh",
+        "format": "shell",
+        "content": "#!/bin/sh\necho basic\n",
+        "revision": "ebaef672f5efa5058b8ee0cb777cbc10c75d1f22bf95bb1a20a18d44bc81a193",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "bmVzdGVkL2FyZ3MueWFtbA",
+        "command": "nested/args",
+        "label": "Args",
+        "description": "Inspect ${2}, {place}, {{ other }}, {context} and {child}",
+        "relative_path": "nested/args.yaml",
+        "format": "yaml",
+        "content": "description: 'Inspect ${2}, {place}, {{ other }}, {context} and {child}'\nargs:\n  z: {default: false}\n  a: {required: true}\ncommands: [{path: child}]\ninputs: {message: required, extra_args: optional}\n",
+        "revision": "e2ab5b033f8ae9379f0cfd7f4da23f44fc3866c508b3a6853eb5031bbb957d36",
+        "arguments": [
+          {
+            "name": "z",
+            "kind": "keyword",
+            "required": false,
+            "default": "False"
+          },
+          {
+            "name": "a",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "2",
+            "kind": "positional",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "other",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "place",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "optional",
+          "message": "required"
+        }
+      },
+      {
+        "id": "c2ltcGxlLnNo",
+        "command": "simple",
+        "label": "Simple",
+        "description": "",
+        "relative_path": "simple.sh",
+        "format": "shell",
+        "content": "#!/bin/sh\necho ok\n",
+        "revision": "b4d644d4279594903f1a9911956432d9473041f2984fc6014c14d7402c7d126c",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "dmFyaWFkaWMucHk",
+        "command": "variadic",
+        "label": "Variadic",
+        "description": "",
+        "relative_path": "variadic.py",
+        "format": "python",
+        "content": "async def main(ctx, path, *args, title='x', **kwargs):\n    return path\n",
+        "revision": "e9d4508b2af3383b50aaa0401fa5a57ce9d2ad324333e2a8ec65b5bad319c2ff",
+        "arguments": [
+          {
+            "name": "path",
+            "kind": "positional",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "title",
+            "kind": "keyword",
+            "required": false,
+            "default": "x"
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      }
+    ],
+    "status": {
+      "workspace_problem": "",
+      "input_store_problem": "",
+      "cwd": "<root>/Documents/GuildBotics",
+      "workspace": "<root>/workspace",
+      "config_dir": "<root>/workspace/.guildbotics/config",
+      "project_file": "<root>/workspace/.guildbotics/config/team/project.yml",
+      "project_file_exists": true,
+      "storage_dir": "<root>/workspace",
+      "machine_state_dir": "<root>/.guildbotics/data",
+      "workspace_state_dir": "<root>/workspace/.guildbotics/state",
+      "workspace_local_dir": "<root>/workspace/.guildbotics/local"
+    },
+    "index": [
+      {
+        "kind": "event",
+        "type": "session.pointer",
+        "timestamp": "2026-11-03T00:00:00+00:00",
+        "trace_id": "success",
+        "span_id": null,
+        "parent_id": null,
+        "call_id": null,
+        "span": "",
+        "source": "manual",
+        "person_id": "aiko",
+        "command": "look",
+        "workflow": "",
+        "attributes": {
+          "run.entry": "command",
+          "test": "success",
+          "session.path": "sessions/success.jsonl"
+        },
+        "payload": {
+          "path": "sessions/success.jsonl"
+        }
+      },
+      {
+        "kind": "event",
+        "type": "command.started",
+        "trace_id": "success",
+        "timestamp": "2026-11-03T00:00:00+00:00",
+        "person_id": "aiko",
+        "source": "manual",
+        "command": "look",
+        "attributes": {
+          "run.entry": "command",
+          "test": "success"
+        },
+        "payload": {
+          "command": "look",
+          "person": "aiko"
+        }
+      },
+      {
+        "kind": "event",
+        "type": "command.finished",
+        "trace_id": "success",
+        "timestamp": "2026-11-03T00:00:02+00:00",
+        "person_id": "aiko",
+        "source": "manual",
+        "command": "look",
+        "attributes": {
+          "run.entry": "command",
+          "test": "success"
+        },
+        "payload": {
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 0,
+          "span_count": 0
+        }
+      },
+      {
+        "kind": "event",
+        "type": "session.pointer",
+        "timestamp": "2026-11-03T00:00:10+00:00",
+        "trace_id": "failure",
+        "span_id": null,
+        "parent_id": null,
+        "call_id": null,
+        "span": "",
+        "source": "manual",
+        "person_id": "aiko",
+        "command": "look",
+        "workflow": "",
+        "attributes": {
+          "run.entry": "command",
+          "test": "failure",
+          "session.path": "sessions/failure.jsonl"
+        },
+        "payload": {
+          "path": "sessions/failure.jsonl"
+        }
+      },
+      {
+        "kind": "event",
+        "type": "command.started",
+        "trace_id": "failure",
+        "timestamp": "2026-11-03T00:00:10+00:00",
+        "person_id": "aiko",
+        "source": "manual",
+        "command": "look",
+        "attributes": {
+          "run.entry": "command",
+          "test": "failure"
+        },
+        "payload": {
+          "command": "look",
+          "person": "aiko"
+        }
+      },
+      {
+        "kind": "event",
+        "type": "command.failed",
+        "trace_id": "failure",
+        "timestamp": "2026-11-03T00:00:12+00:00",
+        "person_id": "aiko",
+        "source": "manual",
+        "command": "look",
+        "attributes": {
+          "run.entry": "command",
+          "test": "failure"
+        },
+        "payload": {
+          "error_type": "CommandError",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 1,
+          "span_count": 0
+        }
+      },
+      {
+        "kind": "event",
+        "type": "session.pointer",
+        "timestamp": "2026-11-03T00:00:20+00:00",
+        "trace_id": "running",
+        "span_id": null,
+        "parent_id": null,
+        "call_id": null,
+        "span": "",
+        "source": "manual",
+        "person_id": "aiko",
+        "command": "look",
+        "workflow": "",
+        "attributes": {
+          "run.entry": "command",
+          "test": "running",
+          "session.path": "sessions/running.jsonl"
+        },
+        "payload": {
+          "path": "sessions/running.jsonl"
+        }
+      },
+      {
+        "kind": "event",
+        "type": "command.started",
+        "trace_id": "running",
+        "timestamp": "2026-11-03T00:00:20+00:00",
+        "person_id": "aiko",
+        "source": "manual",
+        "command": "look",
+        "attributes": {
+          "run.entry": "command",
+          "test": "running"
+        },
+        "payload": {
+          "command": "look",
+          "person": "aiko"
+        }
+      }
+    ],
+    "sessions": {
+      "running.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:20+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:21+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n",
+      "failure.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:10+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:11+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n{\"kind\": \"event\", \"type\": \"command.failed\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:12+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"error_type\": \"CommandError\", \"event_count\": 2, \"log_count\": 0, \"error_count\": 1, \"span_count\": 0}}\n",
+      "success.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:00+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:01+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n{\"kind\": \"event\", \"type\": \"command.finished\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:02+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"event_count\": 2, \"log_count\": 0, \"error_count\": 0, \"span_count\": 0}}\n"
+    },
+    "traces": {
+      "traces": [
+        {
+          "trace_id": "running",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:20+00:00",
+          "updated_at": "2026-11-03T00:00:20+00:00",
+          "status": "running",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 0,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "running",
+            "session.path": "sessions/running.jsonl"
+          }
+        },
+        {
+          "trace_id": "failure",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:10+00:00",
+          "updated_at": "2026-11-03T00:00:12+00:00",
+          "status": "failed",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 1,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "failure",
+            "session.path": "sessions/failure.jsonl"
+          }
+        },
+        {
+          "trace_id": "success",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:00+00:00",
+          "updated_at": "2026-11-03T00:00:02+00:00",
+          "status": "success",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 0,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "success",
+            "session.path": "sessions/success.jsonl"
+          }
+        }
+      ]
+    },
+    "trace_details": [
+      {
+        "trace_id": "success",
+        "summary": {
+          "trace_id": "success",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:00+00:00",
+          "updated_at": "2026-11-03T00:00:02+00:00",
+          "status": "success",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 0,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "success",
+            "session.path": "sessions/success.jsonl"
+          }
+        },
+        "records": [
+          {
+            "kind": "event",
+            "timestamp": "2026-11-03T00:00:00+00:00",
+            "trace_id": "success",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.started",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "success"
+            },
+            "payload": {
+              "command": "look",
+              "person": "aiko"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.eventTypes.command_started",
+              "label_fallback": "command.started",
+              "message_key": "",
+              "message": "look",
+              "message_params": {},
+              "tone": "success",
+              "effort": ""
+            }
+          },
+          {
+            "kind": "io",
+            "timestamp": "2026-11-03T00:00:01+00:00",
+            "trace_id": "success",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.output",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "success"
+            },
+            "payload": {
+              "output": "result 日本語\n"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.ioTypes.command_output",
+              "label_fallback": "command.output",
+              "message_key": "",
+              "message": "result 日本語\n",
+              "message_params": {},
+              "tone": "info",
+              "effort": ""
+            }
+          },
+          {
+            "kind": "event",
+            "timestamp": "2026-11-03T00:00:02+00:00",
+            "trace_id": "success",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.finished",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "success"
+            },
+            "payload": {
+              "event_count": 2,
+              "log_count": 0,
+              "error_count": 0,
+              "span_count": 0
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.eventTypes.command_finished",
+              "label_fallback": "command.finished",
+              "message_key": "",
+              "message": "look",
+              "message_params": {},
+              "tone": "success",
+              "effort": ""
+            }
+          }
+        ],
+        "transcript_available": true
+      },
+      {
+        "trace_id": "failure",
+        "summary": {
+          "trace_id": "failure",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:10+00:00",
+          "updated_at": "2026-11-03T00:00:12+00:00",
+          "status": "failed",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 1,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "failure",
+            "session.path": "sessions/failure.jsonl"
+          }
+        },
+        "records": [
+          {
+            "kind": "event",
+            "timestamp": "2026-11-03T00:00:10+00:00",
+            "trace_id": "failure",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.started",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "failure"
+            },
+            "payload": {
+              "command": "look",
+              "person": "aiko"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.eventTypes.command_started",
+              "label_fallback": "command.started",
+              "message_key": "",
+              "message": "look",
+              "message_params": {},
+              "tone": "success",
+              "effort": ""
+            }
+          },
+          {
+            "kind": "io",
+            "timestamp": "2026-11-03T00:00:11+00:00",
+            "trace_id": "failure",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.output",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "failure"
+            },
+            "payload": {
+              "output": "result 日本語\n"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.ioTypes.command_output",
+              "label_fallback": "command.output",
+              "message_key": "",
+              "message": "result 日本語\n",
+              "message_params": {},
+              "tone": "info",
+              "effort": ""
+            }
+          },
+          {
+            "kind": "event",
+            "timestamp": "2026-11-03T00:00:12+00:00",
+            "trace_id": "failure",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.failed",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "failure"
+            },
+            "payload": {
+              "error_type": "CommandError",
+              "event_count": 2,
+              "log_count": 0,
+              "error_count": 1,
+              "span_count": 0
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.eventTypes.command_failed",
+              "label_fallback": "command.failed",
+              "message_key": "",
+              "message": "CommandError",
+              "message_params": {},
+              "tone": "danger",
+              "effort": ""
+            }
+          }
+        ],
+        "transcript_available": true
+      },
+      {
+        "trace_id": "running",
+        "summary": {
+          "trace_id": "running",
+          "source": "manual",
+          "person_id": "aiko",
+          "command": "look",
+          "workflow": "",
+          "title": "look",
+          "started_at": "2026-11-03T00:00:20+00:00",
+          "updated_at": "2026-11-03T00:00:20+00:00",
+          "status": "running",
+          "event_count": 2,
+          "log_count": 0,
+          "error_count": 0,
+          "span_count": 0,
+          "attributes": {
+            "run.entry": "command",
+            "test": "running",
+            "session.path": "sessions/running.jsonl"
+          }
+        },
+        "records": [
+          {
+            "kind": "event",
+            "timestamp": "2026-11-03T00:00:20+00:00",
+            "trace_id": "running",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.started",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "running"
+            },
+            "payload": {
+              "command": "look",
+              "person": "aiko"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.eventTypes.command_started",
+              "label_fallback": "command.started",
+              "message_key": "",
+              "message": "look",
+              "message_params": {},
+              "tone": "success",
+              "effort": ""
+            }
+          },
+          {
+            "kind": "io",
+            "timestamp": "2026-11-03T00:00:21+00:00",
+            "trace_id": "running",
+            "span_id": null,
+            "parent_id": null,
+            "call_id": null,
+            "span": "",
+            "source": "manual",
+            "person_id": "aiko",
+            "command": "look",
+            "workflow": "",
+            "type": "command.output",
+            "level": "",
+            "message": "",
+            "attributes": {
+              "run.entry": "command",
+              "test": "running"
+            },
+            "payload": {
+              "output": "result 日本語\n"
+            },
+            "presentation": {
+              "label_key": "diagnostics.executions.ioTypes.command_output",
+              "label_fallback": "command.output",
+              "message_key": "",
+              "message": "result 日本語\n",
+              "message_params": {},
+              "tone": "info",
+              "effort": ""
+            }
+          }
+        ],
+        "transcript_available": true
+      },
+      {
+        "trace_id": "missing",
+        "summary": null,
+        "records": [],
+        "transcript_available": false
+      }
+    ]
+  }
+}

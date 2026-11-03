@@ -151,6 +151,177 @@ async fn body(response: reqwest::Response) -> (StatusCode, reqwest::header::Head
     )
 }
 
+/// Screen responses must agree with the Python services on the same persisted data.
+#[tokio::test]
+async fn command_and_diagnostics_screens_match_the_python_golden() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../records/golden/screens.json")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = root.join("workspace");
+    for (section, base) in [
+        ("config", workspace.join(".guildbotics/config")),
+        ("identity", root.join("identity")),
+    ] {
+        for (name, text) in fixture[section].as_object().unwrap() {
+            let path = base.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text.as_str().unwrap()).unwrap();
+        }
+    }
+    let run = workspace.join(".guildbotics/local/run");
+    std::fs::create_dir_all(run.join("sessions")).unwrap();
+    let expected = &fixture["expected"];
+    std::fs::write(
+        run.join("diagnostics.jsonl"),
+        expected["index"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| format!("{v}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    for (name, text) in expected["sessions"].as_object().unwrap() {
+        std::fs::write(run.join("sessions").join(name), text.as_str().unwrap()).unwrap();
+    }
+    let port = free_port();
+    let mut command = server_command(&root, port);
+    command
+        .env("HOME", &root)
+        .env("GUILDBOTICS_HOME", root.join(".guildbotics"))
+        .env("GUILDBOTICS_IDENTITY_ROOT", root.join("identity"))
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let mut server = Server::spawn(command, &root, port);
+    server.home = root.join(".guildbotics");
+    let normalize = |value: Value| -> Value {
+        serde_json::from_str(
+            &serde_json::to_string(&value)
+                .unwrap()
+                .replace(root.to_str().unwrap(), "<root>"),
+        )
+        .unwrap()
+    };
+    let mut urls = vec![
+        ("/api/config/status".to_owned(), expected["status"].clone()),
+        ("/api/team".to_owned(), expected["team"].clone()),
+        ("/api/commands/files".to_owned(), expected["files"].clone()),
+        (
+            "/api/diagnostics/traces".to_owned(),
+            expected["traces"].clone(),
+        ),
+    ];
+    for detail in expected["details"].as_array().unwrap() {
+        urls.push((
+            format!("/api/commands/files/{}", detail["id"].as_str().unwrap()),
+            detail.clone(),
+        ));
+    }
+    for detail in expected["trace_details"].as_array().unwrap() {
+        urls.push((
+            format!(
+                "/api/diagnostics/traces/{}",
+                detail["trace_id"].as_str().unwrap()
+            ),
+            detail.clone(),
+        ));
+    }
+    for (url, expected) in urls {
+        let (status, _, actual) = body(
+            server
+                .http
+                .get(server.url(&url))
+                .bearer_auth(server.owner_token())
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{url}: {actual}");
+        assert_eq!(normalize(actual), expected, "{url}");
+        assert_eq!(
+            server
+                .http
+                .get(server.url(&url))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for filter in ["limit=0", "limit=1001", "limit=invalid"] {
+        assert_eq!(
+            server
+                .http
+                .get(server.url(&format!("/api/diagnostics/traces?{filter}")))
+                .bearer_auth(server.owner_token())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    for filter in [
+        "source=scheduled",
+        "person_id=other",
+        "q=not-present",
+        "attr_key=test&attr_value=missing",
+    ] {
+        let (_, _, actual) = body(
+            server
+                .http
+                .get(server.url(&format!("/api/diagnostics/traces?{filter}")))
+                .bearer_auth(server.owner_token())
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(actual, json!({"traces":[]}));
+    }
+    let detail = expected["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["command"] == "look")
+        .unwrap();
+    let request = json!({"command":"look","person":"aiko","expected_command_file_id":detail["id"],"expected_command_file_revision":detail["revision"]});
+    let mut changed = request.clone();
+    changed["expected_command_file_revision"] = "stale".into();
+    let (status, refusal) = server.run(changed, "en").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refusal["code"], "command_file_changed");
+    changed = request.clone();
+    changed["command"] = "simple".into();
+    let (status, refusal) = server.run(changed, "en").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refusal["code"], "command_file_shadowed");
+    changed = request.clone();
+    changed
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_command_file_revision");
+    assert_eq!(
+        server.run(changed, "en").await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // The selected command is accepted; lack of a snapshot refuses execution
+    // inside a trace, without needing a real microVM for this test.
+    let (status, reply) = server.run(request.clone(), "en").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+    assert!(reply["context"]["trace_id"].is_string(), "{reply}");
+    let member_command = workspace.join(".guildbotics/config/team/members/aiko/commands/look.md");
+    std::fs::create_dir_all(member_command.parent().unwrap()).unwrap();
+    std::fs::write(member_command, "Member command\n").unwrap();
+    let (status, refusal) = server.run(request, "en").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refusal["code"], "command_file_shadowed");
+    assert_eq!(refusal["context"]["shadow_source"], "member");
+    server.stop();
+}
+
 #[tokio::test]
 async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     let dir = tempfile::tempdir().unwrap();
@@ -805,11 +976,11 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_error",
         ),
-        // What is not served yet is refused rather than run without it.
+        // The selected file must exist before a guarded run can start.
         (
             json!({"command": "look", "expected_command_file_id": "x", "expected_command_file_revision": "y"}),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "validation_error",
+            StatusCode::NOT_FOUND,
+            "command_file_not_found",
         ),
         (
             json!({"command": "look", "expected_workspace": dir.path().join("other")}),

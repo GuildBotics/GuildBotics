@@ -6,6 +6,7 @@ mod api;
 mod auth;
 mod commands;
 mod i18n;
+mod screens;
 mod server;
 
 pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, Server};

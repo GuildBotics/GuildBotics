@@ -59,8 +59,8 @@ const FINISHED_BOUNDARIES: &[&str] = &[
 /// The diagnostics records of one workspace.
 #[derive(Clone)]
 pub struct Diagnostics {
-    index: PathBuf,
-    sessions: PathBuf,
+    pub(crate) index: PathBuf,
+    pub(crate) sessions: PathBuf,
 }
 
 /// Every writer of this process appends one record at a time, whichever
@@ -227,7 +227,7 @@ fn text(record: &Map<String, Value>, key: &str) -> String {
 
 /// The transcript's file name of a trace: its id where that is a plain name,
 /// else the id's SHA-256.
-fn safe_id(id: &str) -> String {
+pub(crate) fn safe_id(id: &str) -> String {
     let mut cleaned = String::new();
     let mut replaced = false;
     for c in id.chars() {
@@ -264,7 +264,7 @@ fn append(path: &Path, records: &[&Map<String, Value>]) -> std::io::Result<()> {
 }
 
 /// The records of a JSONL file, skipping lines that are not JSON objects.
-fn read_records(path: &Path) -> std::io::Result<Vec<Map<String, Value>>> {
+pub(crate) fn read_records(path: &Path) -> std::io::Result<Vec<Map<String, Value>>> {
     let text = match std::fs::read(path) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
