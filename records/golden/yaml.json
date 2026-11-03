@@ -983,5 +983,570 @@
  {
   "source": "1:02:03.4",
   "expected": 3723.4
+ },
+ {
+  "source": "1.5: a\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.5: a\n",
+  "expected": {
+   "v": {
+    "1.5": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.5: a}\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "? 1.5\n: a\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "1.0: a\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0: a\n",
+  "expected": {
+   "v": {
+    "1.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0: a}\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "? 1.0\n: a\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "-0.0: a\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  -0.0: a\n",
+  "expected": {
+   "v": {
+    "-0.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{-0.0: a}\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "? -0.0\n: a\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "0.000001: a\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "v:\n  0.000001: a\n",
+  "expected": {
+   "v": {
+    "1e-06": "a"
+   }
+  }
+ },
+ {
+  "source": "{0.000001: a}\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "? 0.000001\n: a\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "0.0000001: a\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "v:\n  0.0000001: a\n",
+  "expected": {
+   "v": {
+    "1e-07": "a"
+   }
+  }
+ },
+ {
+  "source": "{0.0000001: a}\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "? 0.0000001\n: a\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "1.0e+15: a\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+15: a\n",
+  "expected": {
+   "v": {
+    "1000000000000000.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+15: a}\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+15\n: a\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "1.0e+16: a\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+16: a\n",
+  "expected": {
+   "v": {
+    "1e+16": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+16: a}\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+16\n: a\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "1.0e+20: a\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+20: a\n",
+  "expected": {
+   "v": {
+    "1e+20": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+20: a}\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+20\n: a\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "1.0e-5: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e-5: a\n",
+  "expected": {
+   "v": {
+    "1e-05": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e-5: a}\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "? 1.0e-5\n: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "1:30.5: a\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "v:\n  1:30.5: a\n",
+  "expected": {
+   "v": {
+    "90.5": "a"
+   }
+  }
+ },
+ {
+  "source": "{1:30.5: a}\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "? 1:30.5\n: a\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "010: a\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "v:\n  010: a\n",
+  "expected": {
+   "v": {
+    "8": "a"
+   }
+  }
+ },
+ {
+  "source": "{010: a}\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "? 010\n: a\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "0x10: a\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "v:\n  0x10: a\n",
+  "expected": {
+   "v": {
+    "16": "a"
+   }
+  }
+ },
+ {
+  "source": "{0x10: a}\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "? 0x10\n: a\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "yes: a\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "v:\n  yes: a\n",
+  "expected": {
+   "v": {
+    "true": "a"
+   }
+  }
+ },
+ {
+  "source": "{yes: a}\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "? yes\n: a\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "false: a\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "v:\n  false: a\n",
+  "expected": {
+   "v": {
+    "false": "a"
+   }
+  }
+ },
+ {
+  "source": "{false: a}\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "? false\n: a\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "08: a\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "v:\n  08: a\n",
+  "expected": {
+   "v": {
+    "08": "a"
+   }
+  }
+ },
+ {
+  "source": "{08: a}\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "? 08\n: a\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "0o10: a\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "v:\n  0o10: a\n",
+  "expected": {
+   "v": {
+    "0o10": "a"
+   }
+  }
+ },
+ {
+  "source": "{0o10: a}\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "? 0o10\n: a\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "- &a 1.5\n- *a\n- {*a : value}\n",
+  "expected": [
+   1.5,
+   1.5,
+   {
+    "1.5": "value"
+   }
+  ]
+ },
+ {
+  "source": "base: &base {1.5: a}\ncopy: {<<: *base, 2.5: b}\n",
+  "expected": {
+   "base": {
+    "1.5": "a"
+   },
+   "copy": {
+    "1.5": "a",
+    "2.5": "b"
+   }
+  }
+ },
+ {
+  "source": "1.5: a\n1.5: b\n",
+  "expected": {
+   "1.5": "b"
+  }
+ },
+ {
+  "source": "\"1.5\": quoted\n1.5: plain\n",
+  "expected": {
+   "1.5": "plain"
+  }
+ },
+ {
+  "source": "667962307169479.2: a\n",
+  "expected": {
+   "667962307169479.2": "a"
+  }
+ },
+ {
+  "source": "v: 667962307169479.2\n",
+  "expected": {
+   "v": 667962307169479.2
+  }
+ },
+ {
+  "source": "-202439168538452.12: a\n",
+  "expected": {
+   "-202439168538452.12": "a"
+  }
+ },
+ {
+  "source": "v: -202439168538452.12\n",
+  "expected": {
+   "v": -202439168538452.12
+  }
+ },
+ {
+  "source": "0.00001: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "v: 0.00001\n",
+  "expected": {
+   "v": 1e-05
+  }
+ },
+ {
+  "source": "-0.00001: a\n",
+  "expected": {
+   "-1e-05": "a"
+  }
+ },
+ {
+  "source": "v: -0.00001\n",
+  "expected": {
+   "v": -1e-05
+  }
+ },
+ {
+  "source": "0.000012345: a\n",
+  "expected": {
+   "1.2345e-05": "a"
+  }
+ },
+ {
+  "source": "v: 0.000012345\n",
+  "expected": {
+   "v": 1.2345e-05
+  }
+ },
+ {
+  "source": "-0.0000999999: a\n",
+  "expected": {
+   "-9.99999e-05": "a"
+  }
+ },
+ {
+  "source": "v: -0.0000999999\n",
+  "expected": {
+   "v": -9.99999e-05
+  }
+ },
+ {
+  "source": "0.0001: a\n",
+  "expected": {
+   "0.0001": "a"
+  }
+ },
+ {
+  "source": "v: 0.0001\n",
+  "expected": {
+   "v": 0.0001
+  }
+ },
+ {
+  "source": "1.0e+17: a\n",
+  "expected": {
+   "1e+17": "a"
+  }
+ },
+ {
+  "source": "v: 1.0e+17\n",
+  "expected": {
+   "v": 1e+17
+  }
+ },
+ {
+  "source": ".5: a\n",
+  "expected": {
+   "0.5": "a"
+  }
+ },
+ {
+  "source": "v: .5\n",
+  "expected": {
+   "v": 0.5
+  }
+ },
+ {
+  "source": "667962307169479.2: a\n\"667962307169479.3\": b\n",
+  "expected": {
+   "667962307169479.2": "a",
+   "667962307169479.3": "b"
+  }
  }
 ]

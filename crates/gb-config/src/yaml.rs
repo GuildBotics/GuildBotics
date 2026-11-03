@@ -75,7 +75,29 @@ fn resolved(text: &str) -> Result<String, ()> {
         };
         // Configuration travels as JSON; non-finite numbers have no JSON value.
         let number = serde_json::Number::from_f64(number).ok_or(())?;
-        return Ok(format!("!!float {number}"));
+        // Untagged text works as both a float value and a JSON mapping key.
+        // Python repr uses signed, zero-padded exponents for JSON float keys.
+        let text = number.to_string();
+        let (sign, unsigned) = text
+            .strip_prefix('-')
+            .map_or(("", text.as_str()), |s| ("-", s));
+        let text = if let Some(fraction) = unsigned.strip_prefix("0.0000") {
+            // JSON prints 10^-5 in fixed notation; Python repr uses scientific.
+            let digits = fraction.trim_end_matches('0');
+            let (first, rest) = digits.split_at(1);
+            let dot = if rest.is_empty() { "" } else { "." };
+            format!("{sign}{first}{dot}{rest}e-5")
+        } else {
+            text
+        };
+        return Ok(if let Some((mantissa, exponent)) = text.split_once('e') {
+            format!(
+                "{mantissa}e{:+03}",
+                exponent.parse::<i32>().map_err(|_| ())?
+            )
+        } else {
+            text
+        });
     }
     serde_json::to_string(text).map_err(|_| ())
 }
@@ -111,6 +133,21 @@ pub fn value(text: &str) -> Result<Value, ()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unsupported_json_scalars() {
+        // Null keys remain unsupported; non-finite numbers are never JSON values.
+        for source in [
+            "~: a",
+            "null: a",
+            "v: .inf",
+            "v: .nan",
+            "v: 1.5e+400",
+            ".inf: a",
+        ] {
+            assert!(super::value(source).is_err(), "{source}");
+        }
+    }
+
     #[test]
     fn pyyaml_golden() {
         let fixture: serde_json::Value =

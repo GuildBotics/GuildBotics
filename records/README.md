@@ -53,7 +53,11 @@ cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p g
   `08`・`0o10` は文字列、`010` は 8、`1:30` は 90、`yes`・`ON` は真です。
   Rust は YAML の構造をイベントとして読み、型解決前の plain scalar を正規化してから
   serde-saphyr へ渡します。引用・ブロック文字列、UTF-8、アンカー・alias・merge・重複キーも
-  同じ fixture で確認します。JSON で表せない非有限数は引き続き断ります。
+  同じ fixture で確認します。期待値は PyYAML の読み取り結果を JSON 往復した値で、
+  数値・bool のキーも JSON の文字列キーとして比較します。float のキーは Python と同じ
+  指数表記に正規化します。JSON で表せない非有限数と null のキーは引き続き断ります。
+  明示タグ付きの数値キーと、Python が同一視する異種キー（`1`・`true`・`1.0`）の衝突は
+  この plain scalar 解決の対象外です。
 
 - `screens.json`: コマンド画面と診断画面が読む API の応答。入力は小さな config と identity、
   答えは Python の CommandFileService、AppRuntime、diagnostics の読み書きから作ります。
