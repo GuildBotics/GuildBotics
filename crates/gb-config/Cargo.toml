@@ -9,6 +9,8 @@ repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
+gb-base = { path = "../gb-base" }
+sha1 = "0.11"
 anyhow = "1"
 gb-wire = { path = "../gb-wire" }
 serde-saphyr = "2.0.0"
@@ -22,5 +24,4 @@ unicode-normalization = "0.1"
 unicode-case-mapping = "1"
 
 [dev-dependencies]
-gb-base = { path = "../gb-base" }
 tempfile = "3.27.0"

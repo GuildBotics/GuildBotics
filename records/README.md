@@ -1,5 +1,11 @@
 # Host のファイルの golden fixture
 
+`config_repository.json` は config の directory revision の入力と Python が生成した答えです。
+`uv run --no-sync python -m tests.guildbotics.test_config_repository_golden` で再生成し、
+同名の pytest と `cargo nextest run --locked -p gb-config --test repository_golden` で比較します。
+path 部品順、`.`・余分な区切り、内外の file/directory symlink と切れたリンクを含みます。
+directory の path 集合とファイル内容の revision を別々に検証し、実ファイルの config 外参照は拒否します。
+
 Python 版と Rust 版の host が、同じファイルを同じ形で読み書きし、同じ答えを出すことを確かめる例です。
 `golden/` の値は Python 版の実装から作り、次のテストで両方の言語に通します。
 

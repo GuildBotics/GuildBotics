@@ -1,0 +1,231 @@
+[
+  {
+    "name": "component_order",
+    "files": {
+      "intelligences/members.yml": "a",
+      "intelligences/members-a.yml": "b",
+      "intelligences/members/x.yml": "c",
+      "intelligences/members.x/a": "d",
+      "intelligences/名/a": "日本語",
+      "intelligences/.hidden": "hidden"
+    },
+    "dirs": [
+      "intelligences",
+      "missing",
+      ".",
+      "./intelligences",
+      "intelligences/"
+    ],
+    "expected": {
+      "intelligences": {
+        "revisions": {
+          "intelligences/": "ab331479dd66099f2d2f958d4498673e263a80d5",
+          "intelligences/.hidden": "aea3c67bdd26acada1eb28d8afd35c7675ea61b9",
+          "intelligences/members/x.yml": "3410062ba67c5ed59b854387a8bc0ec012479368",
+          "intelligences/members-a.yml": "63d8dbd40c23542e740659a7168a0ce3138ea748",
+          "intelligences/members.x/a": "c59d9b6344f1af00e504ba698129f07a34bbed8d",
+          "intelligences/members.yml": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "intelligences/名/a": "1bead7a0133af046435d267030237bbe0bc304d3"
+        }
+      },
+      "missing": {
+        "revisions": {
+          "missing/": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        }
+      },
+      ".": {
+        "revisions": {
+          "./": "ab331479dd66099f2d2f958d4498673e263a80d5",
+          "intelligences/.hidden": "aea3c67bdd26acada1eb28d8afd35c7675ea61b9",
+          "intelligences/members/x.yml": "3410062ba67c5ed59b854387a8bc0ec012479368",
+          "intelligences/members-a.yml": "63d8dbd40c23542e740659a7168a0ce3138ea748",
+          "intelligences/members.x/a": "c59d9b6344f1af00e504ba698129f07a34bbed8d",
+          "intelligences/members.yml": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "intelligences/名/a": "1bead7a0133af046435d267030237bbe0bc304d3"
+        }
+      },
+      "./intelligences": {
+        "revisions": {
+          "./intelligences/": "ab331479dd66099f2d2f958d4498673e263a80d5",
+          "intelligences/.hidden": "aea3c67bdd26acada1eb28d8afd35c7675ea61b9",
+          "intelligences/members/x.yml": "3410062ba67c5ed59b854387a8bc0ec012479368",
+          "intelligences/members-a.yml": "63d8dbd40c23542e740659a7168a0ce3138ea748",
+          "intelligences/members.x/a": "c59d9b6344f1af00e504ba698129f07a34bbed8d",
+          "intelligences/members.yml": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "intelligences/名/a": "1bead7a0133af046435d267030237bbe0bc304d3"
+        }
+      },
+      "intelligences/": {
+        "revisions": {
+          "intelligences//": "ab331479dd66099f2d2f958d4498673e263a80d5",
+          "intelligences/.hidden": "aea3c67bdd26acada1eb28d8afd35c7675ea61b9",
+          "intelligences/members/x.yml": "3410062ba67c5ed59b854387a8bc0ec012479368",
+          "intelligences/members-a.yml": "63d8dbd40c23542e740659a7168a0ce3138ea748",
+          "intelligences/members.x/a": "c59d9b6344f1af00e504ba698129f07a34bbed8d",
+          "intelligences/members.yml": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "intelligences/名/a": "1bead7a0133af046435d267030237bbe0bc304d3"
+        }
+      }
+    }
+  },
+  {
+    "name": "inside_directory",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "tree/nested"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "revisions": {
+          "tree/": "4d891b2f2531653eed640b8fc2b1aadaca13b41d",
+          "tree/a": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/nested/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      },
+      "tree/link": {
+        "revisions": {
+          "tree/link/": "a38162960e115755b2ea642714b95d6260dafc29",
+          "tree/link/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      }
+    }
+  },
+  {
+    "name": "outside_directory",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "<outside>"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "revisions": {
+          "tree/": "4d891b2f2531653eed640b8fc2b1aadaca13b41d",
+          "tree/a": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/nested/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      },
+      "tree/link": {
+        "error": "invalid_path"
+      }
+    }
+  },
+  {
+    "name": "inside_file",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "tree/a"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "revisions": {
+          "tree/": "995cc5c6f512866c915935c81f28e7cd4af1324d",
+          "tree/a": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/link": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/nested/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      },
+      "tree/link": {
+        "revisions": {
+          "tree/link/": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        }
+      }
+    }
+  },
+  {
+    "name": "outside_file",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "<outside>/file"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "error": "invalid_path"
+      },
+      "tree/link": {
+        "error": "invalid_path"
+      }
+    }
+  },
+  {
+    "name": "missing_inside",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "missing"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "revisions": {
+          "tree/": "4d891b2f2531653eed640b8fc2b1aadaca13b41d",
+          "tree/a": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/nested/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      },
+      "tree/link": {
+        "revisions": {
+          "tree/link/": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        }
+      }
+    }
+  },
+  {
+    "name": "missing_outside",
+    "files": {
+      "tree/a": "a",
+      "tree/nested/b": "b"
+    },
+    "links": {
+      "tree/link": "<outside>/missing"
+    },
+    "dirs": [
+      "tree",
+      "tree/link"
+    ],
+    "expected": {
+      "tree": {
+        "revisions": {
+          "tree/": "4d891b2f2531653eed640b8fc2b1aadaca13b41d",
+          "tree/a": "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+          "tree/nested/b": "63d8dbd40c23542e740659a7168a0ce3138ea748"
+        }
+      },
+      "tree/link": {
+        "error": "invalid_path"
+      }
+    }
+  }
+]

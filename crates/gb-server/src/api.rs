@@ -145,26 +145,44 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
     }
 }
 
+// Register routes and expose the very same routing table to boundary tests.
+// New API endpoints belong here, including ones outside /config.
+macro_rules! routes {
+    ($builder:ident, $table:ident, $(($method:ident, $path:literal, $handler:path)),* $(,)?) => {
+        fn $builder() -> Router<Shared> {
+            Router::new()$(.route($path, $method($handler)))*
+        }
+        #[cfg(test)]
+        const $table: &[(&str, &str)] = &[$((stringify!($method), $path)),*];
+    };
+}
+routes!(
+    owner_routes,
+    OWNER_ROUTES,
+    (get, "/health", health),
+    (post, "/session/links", entry_link),
+    (get, "/session", session),
+    (post, "/commands/run", crate::commands::run),
+    (get, "/config/status", crate::screens::config_status),
+    (get, "/team", crate::screens::team),
+    (get, "/commands/files", crate::screens::files),
+    (get, "/commands/files/{id}", crate::screens::file),
+    (get, "/diagnostics/traces", crate::screens::traces),
+    (get, "/diagnostics/traces/{id}", crate::screens::trace),
+);
+routes!(
+    public_routes,
+    PUBLIC_ROUTES,
+    // A client asks before trusting the port enough to send its token.
+    (post, "/local-api/proof", proof),
+    // The entry code is the credential; a browser holds nothing else yet.
+    (post, "/session", start_session),
+);
+
 pub fn router(api: Shared) -> Router {
-    let owners = Router::new()
-        .route("/health", get(health))
-        .route("/session/links", post(entry_link))
-        .route("/session", get(session))
-        .route("/commands/run", post(crate::commands::run))
-        .route("/config/status", get(crate::screens::config_status))
-        .route("/team", get(crate::screens::team))
-        .route("/commands/files", get(crate::screens::files))
-        .route("/commands/files/{id}", get(crate::screens::file))
-        .route("/diagnostics/traces", get(crate::screens::traces))
-        .route("/diagnostics/traces/{id}", get(crate::screens::trace))
-        .route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
-    // Each says why it cannot be the owner's.
-    let anyone = Router::new()
-        // A client asks this before it trusts the port enough to send its
-        // token, and the answer reveals nothing a caller could reuse.
-        .route("/local-api/proof", post(proof))
-        // The entry code is the credential: a browser holds nothing else yet.
-        .route("/session", post(start_session));
+    let owners =
+        owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
+    let anyone = public_routes();
     Router::new()
         .nest("/api", owners.merge(anyone))
         .merge(crate::ui::router(crate::ui::directory()))
@@ -353,6 +371,44 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_mutating_route_is_classified_by_what_it_writes() {
+        use std::collections::BTreeSet;
+        // No shared-config mutation has been ported yet. As each arrives,
+        // name it here and exercise its CAS boundary beside this test.
+        let config: &[(&str, &str)] = &[];
+        let elsewhere = [
+            (("post", "/session/links"), "an entry code held in memory"),
+            (("post", "/session"), "machine-local authentication records"),
+            (
+                ("post", "/local-api/proof"),
+                "computes a proof without writing",
+            ),
+            (
+                ("post", "/commands/run"),
+                "starts a run, no edited config snapshot",
+            ),
+        ];
+        let actual: BTreeSet<_> = OWNER_ROUTES
+            .iter()
+            .chain(PUBLIC_ROUTES)
+            .copied()
+            .filter(|(method, _)| matches!(*method, "post" | "put" | "patch" | "delete"))
+            .collect();
+        let declared: BTreeSet<_> = config
+            .iter()
+            .copied()
+            .chain(elsewhere.iter().map(|(route, reason)| {
+                assert!(!reason.is_empty());
+                *route
+            }))
+            .collect();
+        assert_eq!(
+            actual, declared,
+            "classify every mutating endpoint, regardless of URL prefix"
+        );
+    }
 
     #[test]
     fn next_is_a_path_of_this_server() {

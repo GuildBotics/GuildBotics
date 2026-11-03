@@ -6,3 +6,4 @@
 pub mod files;
 pub mod home;
 pub mod host_path;
+pub mod shared_writes;
