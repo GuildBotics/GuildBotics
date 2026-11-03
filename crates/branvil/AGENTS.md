@@ -94,7 +94,7 @@ commands are in the repository's AGENTS.md, "開発時の基本コマンド（CI
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
-(cd web && npm ci && npm run lint && npm run typecheck && npm run test)
+npm ci --prefix ../.. && (cd web && npm run lint && npm run typecheck && npm run test)
 ```
 
 - The tests run with cargo-nextest, each in a process of its own.

@@ -12,8 +12,8 @@ GuildBotics の画面（React + TypeScript）です。Vite でビルドした `d
 サーバーが配る画面は、チェックアウトの `desktop/dist` です。画面のソースを変えたら、ブラウザで見る前にビルドし直します（`scripts/hub-server.sh update` も同じビルドを行います）。
 
 ```bash
-cd desktop
 npm ci
+cd desktop
 npx vite build
 ```
 
@@ -68,8 +68,8 @@ GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
 ### frontend unit / component（Vitest + React Testing Library）
 
 ```bash
-cd desktop
 npm ci
+cd desktop
 npm run test          # 一括実行
 npm run test:watch    # ウォッチ
 npm run quality       # format:check + lint + typecheck + duplicates + test（E2E は含まない）

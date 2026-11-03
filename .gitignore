@@ -183,5 +183,8 @@ memo/
 .guildbotics/
 guildbotics/_version.py
 
+# npm workspaces install the shared dependency tree here.
+node_modules/
+
 # Claude Code per-developer local settings (machine-specific; not for the team)
 .claude/settings.local.json

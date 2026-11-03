@@ -76,7 +76,7 @@ case "$action" in
         loaded || fail "The service is not installed. Run: $0 install"
         before=$(interpreter)
         (cd "$repo" && uv sync --locked --extra test --extra dev)
-        (cd "$repo/desktop" && npm ci && npx vite build)
+        (cd "$repo" && npm ci && npm run build --workspace desktop)
         install_assets
         stop_server
         if [ "$(interpreter)" != "$before" ]; then

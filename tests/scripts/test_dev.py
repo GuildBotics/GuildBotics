@@ -33,7 +33,6 @@ members = ["crates/*"]
 debug = "line-tables-only"
 """
 RUSTC = "rustc 1.96.0 (test)\nrelease: 1.96.0"
-WEBS = ("desktop", "crates/branvil/web")
 
 HELPER = """\
 import json, os, shlex, shutil, signal, sys, time
@@ -80,7 +79,7 @@ if tool == "rustc":
 elif tool == "npm":
     record()
     if args[-1] == "ci":
-        marker = Path(option("--prefix"), "node_modules/.package-lock.json")
+        marker = Path("node_modules/.package-lock.json")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("installed", encoding="utf-8")
 elif tool in ("cargo", "other-cargo"):
@@ -171,11 +170,9 @@ class Launcher:
         crate = self.repo / "crates/guildbotics"
         crate.mkdir(parents=True)
         (crate / "Cargo.toml").write_text('[package]\nname = "guildbotics"\n', "utf-8")
-        for web in WEBS:
-            lock = self.repo / web / "package-lock.json"
-            lock.parent.mkdir(parents=True, exist_ok=True)
-            lock.write_text("{}", encoding="utf-8")
-            os.utime(lock, (1000, 1000))
+        lock = self.repo / "package-lock.json"
+        lock.write_text("{}", encoding="utf-8")
+        os.utime(lock, (1000, 1000))
         self.script = self.repo / "scripts/dev.sh"
         self.target = self.repo / "target"
         self.home = root / "home"
@@ -393,10 +390,10 @@ def test_a_failed_build_ends_the_launcher_with_its_status(launcher: Launcher) ->
         ("changed-lock", True),
     ],
 )
-def test_dependency_installation_tracks_each_lockfile(
+def test_dependency_installation_tracks_the_workspace_lockfile(
     launcher: Launcher, state: str, installs: bool
 ) -> None:
-    modules = launcher.repo / "desktop/node_modules"
+    modules = launcher.repo / "node_modules"
     if state != "missing-directory":
         modules.mkdir()
     if state in ("current", "changed-lock"):
@@ -404,18 +401,16 @@ def test_dependency_installation_tracks_each_lockfile(
         marker.write_text("installed", encoding="utf-8")
         os.utime(marker, (2000, 2000))
     if state == "changed-lock":
-        lock = launcher.repo / "desktop/package-lock.json"
+        lock = launcher.repo / "package-lock.json"
         lock.write_text('{"updated": true}', encoding="utf-8")
         os.utime(lock, (3000, 3000))
 
     launcher.finish(launcher.start("--no-open"))
 
     assert [call["args"] for call in launcher.events("npm")] == (
-        [["--prefix", "desktop", "ci"]] if installs else []
+        [["ci"]] if installs else []
     ) + [
-        ["--prefix", "desktop", "run", "build"],
-        ["--prefix", "crates/branvil/web", "ci"],
-        ["--prefix", "crates/branvil/web", "run", "build"],
+        ["run", "build", "--workspaces"],
     ]
 
 

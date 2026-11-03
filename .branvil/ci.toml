@@ -46,14 +46,14 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
-paths = ["desktop/**"]
+paths = ["desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
-  "cd desktop && npm_config_cache=/work/.ci/npm npm ci",
+  "npm_config_cache=/work/.ci/npm npm ci",
   "cd desktop && npm_config_cache=/work/.ci/npm npm run quality",
 ]
 timeout_secs = 1800
-cache = { paths = [".ci/npm"], key_files = ["desktop/package-lock.json"] }
+cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
 
 [[jobs]]
 name = "rust-fmt"
@@ -143,16 +143,16 @@ cache = { paths = [".ci/npm"], key_files = ["jscpd.rust.json"] }
 
 [[jobs]]
 name = "branvil-web"
-paths = ["crates/branvil/web/**", "crates/branvil/tests/fixtures/**"]
+paths = ["crates/branvil/web/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", "desktop/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
-  "cd crates/branvil/web && npm_config_cache=/work/.ci/npm npm ci",
+  "npm_config_cache=/work/.ci/npm npm ci",
   "cd crates/branvil/web && npm run lint",
   "cd crates/branvil/web && npm run typecheck",
   "cd crates/branvil/web && npm run test",
 ]
 timeout_secs = 1200
-cache = { paths = [".ci/npm"], key_files = ["crates/branvil/web/package-lock.json"] }
+cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
 artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/timing.json"] }]
 
 # The `branvil` provider against this commit's Branvil crate

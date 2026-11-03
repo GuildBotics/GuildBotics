@@ -29,6 +29,8 @@ export default defineConfig({
     },
   },
   test: {
+    // Bound memory and CPU use in the development VM and shared CI image.
+    maxWorkers: 2,
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
     // Reset implementations and unused one-shot responses before every test.
