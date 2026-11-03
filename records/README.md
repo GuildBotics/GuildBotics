@@ -4,7 +4,7 @@ Python 版と Rust 版の host が、同じファイルを同じ形で読み書�
 `golden/` の値は Python 版の実装から作り、次のテストで両方の言語に通します。
 
 ```bash
-uv run --no-sync python -m pytest tests/guildbotics/test_records_golden.py tests/guildbotics/test_commands_golden.py tests/guildbotics/test_environment_golden.py
+uv run --no-sync python -m pytest tests/guildbotics/test_records_golden.py tests/guildbotics/test_commands_golden.py tests/guildbotics/test_environment_golden.py tests/guildbotics/test_yaml_golden.py
 cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p gb-environment
 ```
 
@@ -46,7 +46,14 @@ cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p g
   - `macos`: `defaults read -g AppleLanguages` の出力ごとのタグ。
   - `posix`: gettext の環境変数ごとのタグ。
   - `resources`: 宣言（`intelligences/agent_environment.yml`）ごとの memory・vCPU（宣言が断られれば
-    `null`）。Rust は `resources` だけを読み、YAML 1.1 の 60 進数は数として読まずに断ります。
+    `null`）。Rust は `resources` だけを読みます。
+
+- `yaml.json`: PyYAML の plain scalar の型解決（int・float・null・bool）。入力の `source` だけを
+  書き、`uv run --no-sync python -m tests.guildbotics.test_yaml_golden` で `expected` を生成します。
+  `08`・`0o10` は文字列、`010` は 8、`1:30` は 90、`yes`・`ON` は真です。
+  Rust は YAML の構造をイベントとして読み、型解決前の plain scalar を正規化してから
+  serde-saphyr へ渡します。引用・ブロック文字列、UTF-8、アンカー・alias・merge・重複キーも
+  同じ fixture で確認します。JSON で表せない非有限数は引き続き断ります。
 
 - `screens.json`: コマンド画面と診断画面が読む API の応答。入力は小さな config と identity、
   答えは Python の CommandFileService、AppRuntime、diagnostics の読み書きから作ります。

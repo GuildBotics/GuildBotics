@@ -486,6 +486,54 @@
    "id": "refused_elsewhere",
    "declaration": "resources:\n  cpus: 4\n",
    "expected": null
+  },
+  {
+   "id": "pyyaml_08",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 08\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_0o10",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 0o10\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_0:30",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 0:30\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_1:30",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 1:30\n",
+   "expected": {
+    "memory_mib": 90,
+    "cpus": 2
+   }
+  },
+  {
+   "id": "pyyaml_1.0e3",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 1.0e3\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_1.0e+3",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: 1.0e+3\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_ON",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: ON\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_off",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: off\n",
+   "expected": null
+  },
+  {
+   "id": "pyyaml_nUlL",
+   "declaration": "dns:\n  nameservers: [1.1.1.1]\nresources:\n  memory_mib: nUlL\n",
+   "expected": null
   }
  ]
 }

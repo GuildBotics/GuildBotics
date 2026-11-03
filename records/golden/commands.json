@@ -583,6 +583,245 @@
     "access": {},
     "team": null
    }
+  },
+  {
+   "id": "pyyaml_plain_scalars",
+   "config": {
+    "team/project.yml": "name: Golden\nlanguage: ja-JP\n",
+    "team/members/aiko/member.yml": "is_active: ON\nprofile:\n  roles: {}\n",
+    "team/members/owner/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/kenji/member.yml": "is_active: off\n",
+    "team/members/ghost/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "team/members/aaron/member.yml": "is_active: false\n",
+    "team/members/abe/member.yml": "is_active: true\nprofile:\n  roles: {}\n",
+    "commands/hello.md": "---\nread_only: true\n---\nHello\n",
+    "commands/hello.ja.md": "こんにちは\n",
+    "team/members/aiko/commands/hello.py": "def main(context):\n    return 'aiko'\n",
+    "team/members/aiko/commands/only_aiko.sh": "echo aiko\n",
+    "commands/functions/get_os_ui_language.py": "def main(context):\n    return {}\n",
+    "commands/x.metadata.yml": "description: not a command\n",
+    "commands/dup.md": "---\ndescription: one\ndescription: two\nread_only: true\n---\nbody\n",
+    "commands/empty_fields.md": "---\nread_only:\ninspects:\n---\nbody\n",
+    "commands/twice.yml": "read_only: false\nread_only: true\ninspects: [config, diagnostics, config]\ncommands: []\n",
+    "commands/bad.md": "---\nread_only: maybe\n---\n",
+    "team/members/lax/member.yml": "is_active: false\nis_active: \"yes\"\n",
+    "commands/cr.md": "---\rread_only: true\r---\rbody\r",
+    "commands/y.yml": "read_only: y\ncommands: []\n",
+    "commands/capitalized.md": "---\nread_only: True\n---\n",
+    "commands/scalar_yes.md": "---\nread_only: yes\n---\n",
+    "commands/scalar_Yes.md": "---\nread_only: Yes\n---\n",
+    "commands/scalar_ON.md": "---\nread_only: ON\n---\n",
+    "commands/scalar_off.md": "---\nread_only: off\n---\n",
+    "commands/scalar_NO.md": "---\nread_only: NO\n---\n",
+    "commands/scalar_tRuE.md": "---\nread_only: tRuE\n---\n",
+    "commands/scalar_08.md": "---\nread_only: 08\n---\n",
+    "commands/scalar_010.md": "---\nread_only: 010\n---\n",
+    "commands/scalar_0o10.md": "---\nread_only: 0o10\n---\n",
+    "commands/scalar_1:30.md": "---\nread_only: 1:30\n---\n",
+    "commands/scalar_null.md": "---\nread_only: null\n---\n"
+   },
+   "identity": {
+    "team/members/aiko/identity.yml": "person_id: aiko\nname: 08\nperson_type: agent\n",
+    "team/members/owner/identity.yml": "person_id: owner\nname: 0o10\nperson_type: human\n",
+    "team/members/kenji/identity.yml": "person_id: kenji\nname: Kenji\nperson_type: agent\n",
+    "team/members/aaron/identity.yml": "person_id: aaron\nname: Aaron\nperson_type: agent\n",
+    "team/members/abe/identity.yml": "person_id: abe\nname: Abe\nperson_type: human\n",
+    "team/members/lax/identity.yml": "person_id: lax\nname: Lax\nperson_type: agent\n"
+   },
+   "resolve": [
+    [
+     "hello",
+     "ja",
+     null
+    ],
+    [
+     "hello",
+     "en",
+     null
+    ],
+    [
+     "hello",
+     "ja",
+     "aiko"
+    ],
+    [
+     "hello.py",
+     "ja",
+     "aiko"
+    ],
+    [
+     "hello.md",
+     "ja",
+     null
+    ],
+    [
+     "only_aiko",
+     "en",
+     "aiko"
+    ],
+    [
+     "only_aiko",
+     "en",
+     null
+    ],
+    [
+     "functions/get_os_ui_language",
+     "ja",
+     null
+    ],
+    [
+     "functions/talk_as",
+     "ja",
+     null
+    ],
+    [
+     "functions/talk_as",
+     "fr",
+     null
+    ],
+    [
+     "x.metadata",
+     "en",
+     null
+    ],
+    [
+     "missing",
+     "en",
+     null
+    ],
+    [
+     "hello",
+     "ja",
+     "../x"
+    ]
+   ],
+   "expected": {
+    "resolved": {
+     "hello@ja@None": "config/commands/hello.ja.md",
+     "hello@en@None": "config/commands/hello.md",
+     "hello@ja@aiko": "config/commands/hello.ja.md",
+     "hello.py@ja@aiko": "config/team/members/aiko/commands/hello.py",
+     "hello.md@ja@None": "config/commands/hello.ja.md",
+     "only_aiko@en@aiko": "config/team/members/aiko/commands/only_aiko.sh",
+     "only_aiko@en@None": null,
+     "functions/get_os_ui_language@ja@None": "config/commands/functions/get_os_ui_language.py",
+     "functions/talk_as@ja@None": "templates/commands/functions/talk_as.ja.md",
+     "functions/talk_as@fr@None": "templates/commands/functions/talk_as.en.md",
+     "x.metadata@en@None": null,
+     "missing@en@None": null,
+     "hello@ja@../x": "invalid person"
+    },
+    "access": {
+     "commands/bad.md": null,
+     "commands/capitalized.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/cr.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/dup.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/empty_fields.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/functions/get_os_ui_language.py": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/hello.ja.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/hello.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/scalar_010.md": null,
+     "commands/scalar_08.md": null,
+     "commands/scalar_0o10.md": null,
+     "commands/scalar_1:30.md": null,
+     "commands/scalar_NO.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/scalar_ON.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/scalar_Yes.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/scalar_null.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/scalar_off.md": {
+      "read_only": false,
+      "inspects": []
+     },
+     "commands/scalar_tRuE.md": null,
+     "commands/scalar_yes.md": {
+      "read_only": true,
+      "inspects": []
+     },
+     "commands/twice.yml": {
+      "read_only": true,
+      "inspects": [
+       "config",
+       "diagnostics"
+      ]
+     },
+     "commands/y.yml": null
+    },
+    "team": {
+     "language": "ja",
+     "default_person_id": "aiko",
+     "members": [
+      {
+       "person_id": "aaron",
+       "name": "Aaron",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "abe",
+       "name": "Abe",
+       "person_type": "human",
+       "is_active": true
+      },
+      {
+       "person_id": "aiko",
+       "name": "08",
+       "person_type": "agent",
+       "is_active": true
+      },
+      {
+       "person_id": "kenji",
+       "name": "Kenji",
+       "person_type": "agent",
+       "is_active": false
+      },
+      {
+       "person_id": "lax",
+       "name": "Lax",
+       "person_type": "agent",
+       "is_active": true
+      },
+      {
+       "person_id": "owner",
+       "name": "0o10",
+       "person_type": "human",
+       "is_active": true
+      }
+     ]
+    }
+   }
   }
  ],
  "python_sources": [
