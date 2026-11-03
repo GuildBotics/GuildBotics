@@ -1,0 +1,1552 @@
+[
+ {
+  "source": "",
+  "expected": null
+ },
+ {
+  "source": "# comment",
+  "expected": null
+ },
+ {
+  "source": "08",
+  "expected": "08"
+ },
+ {
+  "source": "09",
+  "expected": "09"
+ },
+ {
+  "source": "0o10",
+  "expected": "0o10"
+ },
+ {
+  "source": "0O10",
+  "expected": "0O10"
+ },
+ {
+  "source": "010",
+  "expected": 8
+ },
+ {
+  "source": "-010",
+  "expected": -8
+ },
+ {
+  "source": "+010",
+  "expected": 8
+ },
+ {
+  "source": "00",
+  "expected": 0
+ },
+ {
+  "source": "0",
+  "expected": 0
+ },
+ {
+  "source": "0b10",
+  "expected": 2
+ },
+ {
+  "source": "0x10",
+  "expected": 16
+ },
+ {
+  "source": "0X10",
+  "expected": "0X10"
+ },
+ {
+  "source": "1:30",
+  "expected": 90
+ },
+ {
+  "source": "-1:02:03",
+  "expected": -3723
+ },
+ {
+  "source": "1:60",
+  "expected": "1:60"
+ },
+ {
+  "source": "0:30",
+  "expected": "0:30"
+ },
+ {
+  "source": "1_0:30",
+  "expected": 630
+ },
+ {
+  "source": "1_000",
+  "expected": 1000
+ },
+ {
+  "source": "1e3",
+  "expected": "1e3"
+ },
+ {
+  "source": "1e+3",
+  "expected": "1e+3"
+ },
+ {
+  "source": "1.0e3",
+  "expected": "1.0e3"
+ },
+ {
+  "source": "1.0e+3",
+  "expected": 1000.0
+ },
+ {
+  "source": ".5",
+  "expected": 0.5
+ },
+ {
+  "source": "-.5",
+  "expected": "-.5"
+ },
+ {
+  "source": "+.5",
+  "expected": "+.5"
+ },
+ {
+  "source": "1.",
+  "expected": 1.0
+ },
+ {
+  "source": "1:30.5",
+  "expected": 90.5
+ },
+ {
+  "source": "0:30.5",
+  "expected": 30.5
+ },
+ {
+  "source": "-1:30.5",
+  "expected": -90.5
+ },
+ {
+  "source": "True",
+  "expected": true
+ },
+ {
+  "source": "TRUE",
+  "expected": true
+ },
+ {
+  "source": "tRuE",
+  "expected": "tRuE"
+ },
+ {
+  "source": "true",
+  "expected": true
+ },
+ {
+  "source": "yes",
+  "expected": true
+ },
+ {
+  "source": "Yes",
+  "expected": true
+ },
+ {
+  "source": "YES",
+  "expected": true
+ },
+ {
+  "source": "no",
+  "expected": false
+ },
+ {
+  "source": "off",
+  "expected": false
+ },
+ {
+  "source": "On",
+  "expected": true
+ },
+ {
+  "source": "ON",
+  "expected": true
+ },
+ {
+  "source": "y",
+  "expected": "y"
+ },
+ {
+  "source": "n",
+  "expected": "n"
+ },
+ {
+  "source": "~",
+  "expected": null
+ },
+ {
+  "source": "null",
+  "expected": null
+ },
+ {
+  "source": "Null",
+  "expected": null
+ },
+ {
+  "source": "NULL",
+  "expected": null
+ },
+ {
+  "source": "nUlL",
+  "expected": "nUlL"
+ },
+ {
+  "source": "\"08\"",
+  "expected": "08"
+ },
+ {
+  "source": "'on'",
+  "expected": "on"
+ },
+ {
+  "source": "!!str 010",
+  "expected": "010"
+ },
+ {
+  "source": "!!str yes",
+  "expected": "yes"
+ },
+ {
+  "source": "!!int 010",
+  "expected": 8
+ },
+ {
+  "source": "!!float 1.0",
+  "expected": 1.0
+ },
+ {
+  "source": "name: 日本語\nvalue: 08\n",
+  "expected": {
+   "name": "日本語",
+   "value": "08"
+  }
+ },
+ {
+  "source": "v: &v 1:30\nalias: *v\n",
+  "expected": {
+   "v": 90,
+   "alias": 90
+  }
+ },
+ {
+  "source": "base: &base {v: 08}\nnext: {<<: *base, v: 0o10}\n",
+  "expected": {
+   "base": {
+    "v": "08"
+   },
+   "next": {
+    "v": "0o10"
+   }
+  }
+ },
+ {
+  "source": "v: 08\nv: 010\n",
+  "expected": {
+   "v": 8
+  }
+ },
+ {
+  "source": "v: |\n  yes\n  010\n",
+  "expected": {
+   "v": "yes\n010\n"
+  }
+ },
+ {
+  "source": "v: >\n  yes\n  010\n",
+  "expected": {
+   "v": "yes 010\n"
+  }
+ },
+ {
+  "source": "v: a\n  b\nnext: 010\n",
+  "expected": {
+   "v": "a b",
+   "next": 8
+  }
+ },
+ {
+  "source": "v:\nnext: 08\n",
+  "expected": {
+   "v": null,
+   "next": "08"
+  }
+ },
+ {
+  "source": "[08, 010, 0o10, 1:30, yes, \"no\"]",
+  "expected": [
+   "08",
+   8,
+   "0o10",
+   90,
+   true,
+   "no"
+  ]
+ },
+ {
+  "source": "v: \"日本語\" # yes\nnext: 08\n",
+  "expected": {
+   "v": "日本語",
+   "next": "08"
+  }
+ },
+ {
+  "source": "yeS",
+  "expected": "yeS"
+ },
+ {
+  "source": "yEs",
+  "expected": "yEs"
+ },
+ {
+  "source": "yES",
+  "expected": "yES"
+ },
+ {
+  "source": "YeS",
+  "expected": "YeS"
+ },
+ {
+  "source": "YEs",
+  "expected": "YEs"
+ },
+ {
+  "source": "nO",
+  "expected": "nO"
+ },
+ {
+  "source": "No",
+  "expected": false
+ },
+ {
+  "source": "NO",
+  "expected": false
+ },
+ {
+  "source": "truE",
+  "expected": "truE"
+ },
+ {
+  "source": "trUe",
+  "expected": "trUe"
+ },
+ {
+  "source": "trUE",
+  "expected": "trUE"
+ },
+ {
+  "source": "tRue",
+  "expected": "tRue"
+ },
+ {
+  "source": "tRUe",
+  "expected": "tRUe"
+ },
+ {
+  "source": "tRUE",
+  "expected": "tRUE"
+ },
+ {
+  "source": "TruE",
+  "expected": "TruE"
+ },
+ {
+  "source": "TrUe",
+  "expected": "TrUe"
+ },
+ {
+  "source": "TrUE",
+  "expected": "TrUE"
+ },
+ {
+  "source": "TRue",
+  "expected": "TRue"
+ },
+ {
+  "source": "TRuE",
+  "expected": "TRuE"
+ },
+ {
+  "source": "TRUe",
+  "expected": "TRUe"
+ },
+ {
+  "source": "false",
+  "expected": false
+ },
+ {
+  "source": "falsE",
+  "expected": "falsE"
+ },
+ {
+  "source": "falSe",
+  "expected": "falSe"
+ },
+ {
+  "source": "falSE",
+  "expected": "falSE"
+ },
+ {
+  "source": "faLse",
+  "expected": "faLse"
+ },
+ {
+  "source": "faLsE",
+  "expected": "faLsE"
+ },
+ {
+  "source": "faLSe",
+  "expected": "faLSe"
+ },
+ {
+  "source": "faLSE",
+  "expected": "faLSE"
+ },
+ {
+  "source": "fAlse",
+  "expected": "fAlse"
+ },
+ {
+  "source": "fAlsE",
+  "expected": "fAlsE"
+ },
+ {
+  "source": "fAlSe",
+  "expected": "fAlSe"
+ },
+ {
+  "source": "fAlSE",
+  "expected": "fAlSE"
+ },
+ {
+  "source": "fALse",
+  "expected": "fALse"
+ },
+ {
+  "source": "fALsE",
+  "expected": "fALsE"
+ },
+ {
+  "source": "fALSe",
+  "expected": "fALSe"
+ },
+ {
+  "source": "fALSE",
+  "expected": "fALSE"
+ },
+ {
+  "source": "False",
+  "expected": false
+ },
+ {
+  "source": "FalsE",
+  "expected": "FalsE"
+ },
+ {
+  "source": "FalSe",
+  "expected": "FalSe"
+ },
+ {
+  "source": "FalSE",
+  "expected": "FalSE"
+ },
+ {
+  "source": "FaLse",
+  "expected": "FaLse"
+ },
+ {
+  "source": "FaLsE",
+  "expected": "FaLsE"
+ },
+ {
+  "source": "FaLSe",
+  "expected": "FaLSe"
+ },
+ {
+  "source": "FaLSE",
+  "expected": "FaLSE"
+ },
+ {
+  "source": "FAlse",
+  "expected": "FAlse"
+ },
+ {
+  "source": "FAlsE",
+  "expected": "FAlsE"
+ },
+ {
+  "source": "FAlSe",
+  "expected": "FAlSe"
+ },
+ {
+  "source": "FAlSE",
+  "expected": "FAlSE"
+ },
+ {
+  "source": "FALse",
+  "expected": "FALse"
+ },
+ {
+  "source": "FALsE",
+  "expected": "FALsE"
+ },
+ {
+  "source": "FALSe",
+  "expected": "FALSe"
+ },
+ {
+  "source": "FALSE",
+  "expected": false
+ },
+ {
+  "source": "on",
+  "expected": true
+ },
+ {
+  "source": "oN",
+  "expected": "oN"
+ },
+ {
+  "source": "ofF",
+  "expected": "ofF"
+ },
+ {
+  "source": "oFf",
+  "expected": "oFf"
+ },
+ {
+  "source": "oFF",
+  "expected": "oFF"
+ },
+ {
+  "source": "Off",
+  "expected": false
+ },
+ {
+  "source": "OfF",
+  "expected": "OfF"
+ },
+ {
+  "source": "OFf",
+  "expected": "OFf"
+ },
+ {
+  "source": "OFF",
+  "expected": false
+ },
+ {
+  "source": "nulL",
+  "expected": "nulL"
+ },
+ {
+  "source": "nuLl",
+  "expected": "nuLl"
+ },
+ {
+  "source": "nuLL",
+  "expected": "nuLL"
+ },
+ {
+  "source": "nUll",
+  "expected": "nUll"
+ },
+ {
+  "source": "nULl",
+  "expected": "nULl"
+ },
+ {
+  "source": "nULL",
+  "expected": "nULL"
+ },
+ {
+  "source": "NulL",
+  "expected": "NulL"
+ },
+ {
+  "source": "NuLl",
+  "expected": "NuLl"
+ },
+ {
+  "source": "NuLL",
+  "expected": "NuLL"
+ },
+ {
+  "source": "NUll",
+  "expected": "NUll"
+ },
+ {
+  "source": "NUlL",
+  "expected": "NUlL"
+ },
+ {
+  "source": "NULl",
+  "expected": "NULl"
+ },
+ {
+  "source": "+00",
+  "expected": 0
+ },
+ {
+  "source": "-00",
+  "expected": 0
+ },
+ {
+  "source": "+08",
+  "expected": "+08"
+ },
+ {
+  "source": "-08",
+  "expected": "-08"
+ },
+ {
+  "source": "0_7",
+  "expected": 7
+ },
+ {
+  "source": "+0_7",
+  "expected": 7
+ },
+ {
+  "source": "-0_7",
+  "expected": -7
+ },
+ {
+  "source": "0_8",
+  "expected": "0_8"
+ },
+ {
+  "source": "+0_8",
+  "expected": "+0_8"
+ },
+ {
+  "source": "-0_8",
+  "expected": "-0_8"
+ },
+ {
+  "source": "0b_10",
+  "expected": 2
+ },
+ {
+  "source": "+0b_10",
+  "expected": 2
+ },
+ {
+  "source": "-0b_10",
+  "expected": -2
+ },
+ {
+  "source": "0B10",
+  "expected": "0B10"
+ },
+ {
+  "source": "+0B10",
+  "expected": "+0B10"
+ },
+ {
+  "source": "-0B10",
+  "expected": "-0B10"
+ },
+ {
+  "source": "0x_10",
+  "expected": 16
+ },
+ {
+  "source": "+0x_10",
+  "expected": 16
+ },
+ {
+  "source": "-0x_10",
+  "expected": -16
+ },
+ {
+  "source": "+0X10",
+  "expected": "+0X10"
+ },
+ {
+  "source": "-0X10",
+  "expected": "-0X10"
+ },
+ {
+  "source": "+0o10",
+  "expected": "+0o10"
+ },
+ {
+  "source": "-0o10",
+  "expected": "-0o10"
+ },
+ {
+  "source": "1_",
+  "expected": 1
+ },
+ {
+  "source": "+1_",
+  "expected": 1
+ },
+ {
+  "source": "-1_",
+  "expected": -1
+ },
+ {
+  "source": "1__2",
+  "expected": 12
+ },
+ {
+  "source": "+1__2",
+  "expected": 12
+ },
+ {
+  "source": "-1__2",
+  "expected": -12
+ },
+ {
+  "source": "01:30",
+  "expected": "01:30"
+ },
+ {
+  "source": "+01:30",
+  "expected": "+01:30"
+ },
+ {
+  "source": "-01:30",
+  "expected": "-01:30"
+ },
+ {
+  "source": "1:00",
+  "expected": 60
+ },
+ {
+  "source": "+1:00",
+  "expected": 60
+ },
+ {
+  "source": "-1:00",
+  "expected": -60
+ },
+ {
+  "source": "1:59",
+  "expected": 119
+ },
+ {
+  "source": "+1:59",
+  "expected": 119
+ },
+ {
+  "source": "-1:59",
+  "expected": -119
+ },
+ {
+  "source": "+1:60",
+  "expected": "+1:60"
+ },
+ {
+  "source": "-1:60",
+  "expected": "-1:60"
+ },
+ {
+  "source": "1:2:03",
+  "expected": 3723
+ },
+ {
+  "source": "+1:2:03",
+  "expected": 3723
+ },
+ {
+  "source": "-1:2:03",
+  "expected": -3723
+ },
+ {
+  "source": "1:2:60",
+  "expected": "1:2:60"
+ },
+ {
+  "source": "+1:2:60",
+  "expected": "+1:2:60"
+ },
+ {
+  "source": "-1:2:60",
+  "expected": "-1:2:60"
+ },
+ {
+  "source": "+0:30",
+  "expected": "+0:30"
+ },
+ {
+  "source": "-0:30",
+  "expected": "-0:30"
+ },
+ {
+  "source": "1:30.",
+  "expected": 90.0
+ },
+ {
+  "source": "+1:30.",
+  "expected": 90.0
+ },
+ {
+  "source": "-1:30.",
+  "expected": -90.0
+ },
+ {
+  "source": "+0:30.5",
+  "expected": 30.5
+ },
+ {
+  "source": "-0:30.5",
+  "expected": -30.5
+ },
+ {
+  "source": "01:30.5",
+  "expected": 90.5
+ },
+ {
+  "source": "+01:30.5",
+  "expected": 90.5
+ },
+ {
+  "source": "-01:30.5",
+  "expected": -90.5
+ },
+ {
+  "source": "1:60.5",
+  "expected": "1:60.5"
+ },
+ {
+  "source": "+1:60.5",
+  "expected": "+1:60.5"
+ },
+ {
+  "source": "-1:60.5",
+  "expected": "-1:60.5"
+ },
+ {
+  "source": "1_0:30.5",
+  "expected": 630.5
+ },
+ {
+  "source": "+1_0:30.5",
+  "expected": 630.5
+ },
+ {
+  "source": "-1_0:30.5",
+  "expected": -630.5
+ },
+ {
+  "source": "+1.0e3",
+  "expected": "+1.0e3"
+ },
+ {
+  "source": "-1.0e3",
+  "expected": "-1.0e3"
+ },
+ {
+  "source": "+1.0e+3",
+  "expected": 1000.0
+ },
+ {
+  "source": "-1.0e+3",
+  "expected": -1000.0
+ },
+ {
+  "source": "1.e-3",
+  "expected": 0.001
+ },
+ {
+  "source": "+1.e-3",
+  "expected": 0.001
+ },
+ {
+  "source": "-1.e-3",
+  "expected": -0.001
+ },
+ {
+  "source": ".5e+3",
+  "expected": 500.0
+ },
+ {
+  "source": "+.5e+3",
+  "expected": "+.5e+3"
+ },
+ {
+  "source": "-.5e+3",
+  "expected": "-.5e+3"
+ },
+ {
+  "source": "+1e+3",
+  "expected": "+1e+3"
+ },
+ {
+  "source": "-1e+3",
+  "expected": "-1e+3"
+ },
+ {
+  "source": "1.0E-3",
+  "expected": 0.001
+ },
+ {
+  "source": "+1.0E-3",
+  "expected": 0.001
+ },
+ {
+  "source": "-1.0E-3",
+  "expected": -0.001
+ },
+ {
+  "source": "1_0.2_5",
+  "expected": 10.25
+ },
+ {
+  "source": "+1_0.2_5",
+  "expected": 10.25
+ },
+ {
+  "source": "-1_0.2_5",
+  "expected": -10.25
+ },
+ {
+  "source": "1e309",
+  "expected": "1e309"
+ },
+ {
+  "source": "+1e309",
+  "expected": "+1e309"
+ },
+ {
+  "source": "-1e309",
+  "expected": "-1e309"
+ },
+ {
+  "source": "v: &v yes\nnext: *v\n",
+  "expected": {
+   "v": true,
+   "next": true
+  }
+ },
+ {
+  "source": "日本語: 010\n値: 08\n",
+  "expected": {
+   "日本語": 8,
+   "値": "08"
+  }
+ },
+ {
+  "source": "v: 日本語\n  08\nnext: yes\n",
+  "expected": {
+   "v": "日本語 08",
+   "next": true
+  }
+ },
+ {
+  "source": "v: 08\r\nnext: yes\r\n",
+  "expected": {
+   "v": "08",
+   "next": true
+  }
+ },
+ {
+  "source": "{v: null, next: no}",
+  "expected": {
+   "v": null,
+   "next": false
+  }
+ },
+ {
+  "source": "v: >-\n  yes\nnext: off\n",
+  "expected": {
+   "v": "yes",
+   "next": false
+  }
+ },
+ {
+  "source": "0019",
+  "expected": "0019"
+ },
+ {
+  "source": "0e1",
+  "expected": "0e1"
+ },
+ {
+  "source": "012345678",
+  "expected": "012345678"
+ },
+ {
+  "source": "0_10",
+  "expected": 8
+ },
+ {
+  "source": "-0_10",
+  "expected": -8
+ },
+ {
+  "source": "1:02:03.4",
+  "expected": 3723.4
+ },
+ {
+  "source": "1.5: a\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.5: a\n",
+  "expected": {
+   "v": {
+    "1.5": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.5: a}\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "? 1.5\n: a\n",
+  "expected": {
+   "1.5": "a"
+  }
+ },
+ {
+  "source": "1.0: a\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0: a\n",
+  "expected": {
+   "v": {
+    "1.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0: a}\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "? 1.0\n: a\n",
+  "expected": {
+   "1.0": "a"
+  }
+ },
+ {
+  "source": "-0.0: a\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  -0.0: a\n",
+  "expected": {
+   "v": {
+    "-0.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{-0.0: a}\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "? -0.0\n: a\n",
+  "expected": {
+   "-0.0": "a"
+  }
+ },
+ {
+  "source": "0.000001: a\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "v:\n  0.000001: a\n",
+  "expected": {
+   "v": {
+    "1e-06": "a"
+   }
+  }
+ },
+ {
+  "source": "{0.000001: a}\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "? 0.000001\n: a\n",
+  "expected": {
+   "1e-06": "a"
+  }
+ },
+ {
+  "source": "0.0000001: a\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "v:\n  0.0000001: a\n",
+  "expected": {
+   "v": {
+    "1e-07": "a"
+   }
+  }
+ },
+ {
+  "source": "{0.0000001: a}\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "? 0.0000001\n: a\n",
+  "expected": {
+   "1e-07": "a"
+  }
+ },
+ {
+  "source": "1.0e+15: a\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+15: a\n",
+  "expected": {
+   "v": {
+    "1000000000000000.0": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+15: a}\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+15\n: a\n",
+  "expected": {
+   "1000000000000000.0": "a"
+  }
+ },
+ {
+  "source": "1.0e+16: a\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+16: a\n",
+  "expected": {
+   "v": {
+    "1e+16": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+16: a}\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+16\n: a\n",
+  "expected": {
+   "1e+16": "a"
+  }
+ },
+ {
+  "source": "1.0e+20: a\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e+20: a\n",
+  "expected": {
+   "v": {
+    "1e+20": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e+20: a}\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "? 1.0e+20\n: a\n",
+  "expected": {
+   "1e+20": "a"
+  }
+ },
+ {
+  "source": "1.0e-5: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "v:\n  1.0e-5: a\n",
+  "expected": {
+   "v": {
+    "1e-05": "a"
+   }
+  }
+ },
+ {
+  "source": "{1.0e-5: a}\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "? 1.0e-5\n: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "1:30.5: a\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "v:\n  1:30.5: a\n",
+  "expected": {
+   "v": {
+    "90.5": "a"
+   }
+  }
+ },
+ {
+  "source": "{1:30.5: a}\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "? 1:30.5\n: a\n",
+  "expected": {
+   "90.5": "a"
+  }
+ },
+ {
+  "source": "010: a\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "v:\n  010: a\n",
+  "expected": {
+   "v": {
+    "8": "a"
+   }
+  }
+ },
+ {
+  "source": "{010: a}\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "? 010\n: a\n",
+  "expected": {
+   "8": "a"
+  }
+ },
+ {
+  "source": "0x10: a\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "v:\n  0x10: a\n",
+  "expected": {
+   "v": {
+    "16": "a"
+   }
+  }
+ },
+ {
+  "source": "{0x10: a}\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "? 0x10\n: a\n",
+  "expected": {
+   "16": "a"
+  }
+ },
+ {
+  "source": "yes: a\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "v:\n  yes: a\n",
+  "expected": {
+   "v": {
+    "true": "a"
+   }
+  }
+ },
+ {
+  "source": "{yes: a}\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "? yes\n: a\n",
+  "expected": {
+   "true": "a"
+  }
+ },
+ {
+  "source": "false: a\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "v:\n  false: a\n",
+  "expected": {
+   "v": {
+    "false": "a"
+   }
+  }
+ },
+ {
+  "source": "{false: a}\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "? false\n: a\n",
+  "expected": {
+   "false": "a"
+  }
+ },
+ {
+  "source": "08: a\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "v:\n  08: a\n",
+  "expected": {
+   "v": {
+    "08": "a"
+   }
+  }
+ },
+ {
+  "source": "{08: a}\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "? 08\n: a\n",
+  "expected": {
+   "08": "a"
+  }
+ },
+ {
+  "source": "0o10: a\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "v:\n  0o10: a\n",
+  "expected": {
+   "v": {
+    "0o10": "a"
+   }
+  }
+ },
+ {
+  "source": "{0o10: a}\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "? 0o10\n: a\n",
+  "expected": {
+   "0o10": "a"
+  }
+ },
+ {
+  "source": "- &a 1.5\n- *a\n- {*a : value}\n",
+  "expected": [
+   1.5,
+   1.5,
+   {
+    "1.5": "value"
+   }
+  ]
+ },
+ {
+  "source": "base: &base {1.5: a}\ncopy: {<<: *base, 2.5: b}\n",
+  "expected": {
+   "base": {
+    "1.5": "a"
+   },
+   "copy": {
+    "1.5": "a",
+    "2.5": "b"
+   }
+  }
+ },
+ {
+  "source": "1.5: a\n1.5: b\n",
+  "expected": {
+   "1.5": "b"
+  }
+ },
+ {
+  "source": "\"1.5\": quoted\n1.5: plain\n",
+  "expected": {
+   "1.5": "plain"
+  }
+ },
+ {
+  "source": "667962307169479.2: a\n",
+  "expected": {
+   "667962307169479.2": "a"
+  }
+ },
+ {
+  "source": "v: 667962307169479.2\n",
+  "expected": {
+   "v": 667962307169479.2
+  }
+ },
+ {
+  "source": "-202439168538452.12: a\n",
+  "expected": {
+   "-202439168538452.12": "a"
+  }
+ },
+ {
+  "source": "v: -202439168538452.12\n",
+  "expected": {
+   "v": -202439168538452.12
+  }
+ },
+ {
+  "source": "0.00001: a\n",
+  "expected": {
+   "1e-05": "a"
+  }
+ },
+ {
+  "source": "v: 0.00001\n",
+  "expected": {
+   "v": 1e-05
+  }
+ },
+ {
+  "source": "-0.00001: a\n",
+  "expected": {
+   "-1e-05": "a"
+  }
+ },
+ {
+  "source": "v: -0.00001\n",
+  "expected": {
+   "v": -1e-05
+  }
+ },
+ {
+  "source": "0.000012345: a\n",
+  "expected": {
+   "1.2345e-05": "a"
+  }
+ },
+ {
+  "source": "v: 0.000012345\n",
+  "expected": {
+   "v": 1.2345e-05
+  }
+ },
+ {
+  "source": "-0.0000999999: a\n",
+  "expected": {
+   "-9.99999e-05": "a"
+  }
+ },
+ {
+  "source": "v: -0.0000999999\n",
+  "expected": {
+   "v": -9.99999e-05
+  }
+ },
+ {
+  "source": "0.0001: a\n",
+  "expected": {
+   "0.0001": "a"
+  }
+ },
+ {
+  "source": "v: 0.0001\n",
+  "expected": {
+   "v": 0.0001
+  }
+ },
+ {
+  "source": "1.0e+17: a\n",
+  "expected": {
+   "1e+17": "a"
+  }
+ },
+ {
+  "source": "v: 1.0e+17\n",
+  "expected": {
+   "v": 1e+17
+  }
+ },
+ {
+  "source": ".5: a\n",
+  "expected": {
+   "0.5": "a"
+  }
+ },
+ {
+  "source": "v: .5\n",
+  "expected": {
+   "v": 0.5
+  }
+ },
+ {
+  "source": "667962307169479.2: a\n\"667962307169479.3\": b\n",
+  "expected": {
+   "667962307169479.2": "a",
+   "667962307169479.3": "b"
+  }
+ }
+]

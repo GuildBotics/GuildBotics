@@ -8,10 +8,6 @@ use std::path::Path;
 use gb_config::agent_environment::{PATH, Resources, resources};
 use serde_json::{Value, json};
 
-/// Spellings YAML 1.2 reads as words where PyYAML (YAML 1.1) reads numbers:
-/// refused here rather than read otherwise.
-const REFUSED_HERE: &[&str] = &["sexagesimal"];
-
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../records/golden/environment.json");
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
@@ -30,10 +26,7 @@ fn a_declaration_boots_as_the_python_version_reads_it() {
             .ok()
             .map(|r| json!({"memory_mib": r.memory_mib, "cpus": r.cpus}));
         let read = read.unwrap_or(Value::Null);
-        if REFUSED_HERE.contains(&id) {
-            assert_eq!(read, Value::Null, "{id}");
-            assert_ne!(case["expected"], Value::Null, "{id}");
-        } else if id == "refused_elsewhere" {
+        if id == "refused_elsewhere" {
             // Python refuses it for its missing resolvers, which a command's
             // microVM does not read.
             assert_eq!(read, json!({"memory_mib": 4096, "cpus": 4}), "{id}");
