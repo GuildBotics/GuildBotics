@@ -441,6 +441,14 @@ npm ci && (cd crates/branvil/web && npm run lint && npm run typecheck && npm run
 
 テストは cargo-nextest でテストごとにプロセスを分けて動かす（開発用ベースイメージには入っている。手元では `cargo install --locked cargo-nextest`）。
 
+CI の `rust-clippy` / `rust-test` のキャッシュキーは `rust-toolchain.toml`、
+`branvil-integration` は `uv.lock` と `rust-toolchain.toml` を使う（#121）。
+`Cargo.lock` が変わっても PR とゲートで直近の registry と `target` を復元できるようにし、
+Cargo は `--locked` で依存を確定する。復元後の `find crates -exec touch -c {} +` は保ち、
+ワークスペースの crate は再ビルドする。現在のランナーは保護ブランチの保存から24時間を過ぎると
+キャッシュを更新し、ツールチェーン更新で世代が変わる。#120 で直近世代の復元とゲートの保存の
+引き継ぎを導入したら、キーを lockfile 基準に戻す。
+
 HTTP と CLI の外側から確かめる黒箱テスト（通常の `test` ジョブにも含まれる）:
 
 ```bash
@@ -517,7 +525,8 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、これらに加えて
 `npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
 `guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
 ジョブの環境には CI メタデータしか無いため、uv/npm/Cargo のキャッシュは
-`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置き、`uv.lock`・`package-lock.json`・`Cargo.lock` などをキーに保存する。
+`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置く。キーはジョブごとに
+[`.branvil/ci.toml`](.branvil/ci.toml) で指定する。Rust のジョブのキーとその理由は上記の Cargo workspace の節を参照。
 `.venv`・`node_modules` はキャッシュしない。Rust の `target` は Cargo を build するジョブがキャッシュし、
 復元した `target` より新しくなるよう `crates` に touch してから build する（workspace の crate だけを build し直す）。
 Rust の重複コードは desktop と同じ jscpd で検出する（`jscpd.rust.json`）。

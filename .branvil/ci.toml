@@ -18,6 +18,13 @@
 # Incremental data would save little of that rebuild and fill the cache
 # (CARGO_INCREMENTAL=0; measured in crates/branvil/docs/performance.md,
 # "Branvil's own pipeline").
+# Use the toolchain, rather than Cargo.lock, for the Rust cache keys for now:
+# workspace crate additions change the lockfile before the protected branch
+# can save that key, leaving PR heads and gates without dependencies to restore.
+# Cargo still resolves the locked dependencies and rebuilds touched crates.
+# The current runner refreshes protected-branch caches after 24 hours; changing
+# the toolchain starts a new generation. Ticket #120 will restore lockfile keys
+# when the runner can restore from a recent generation and retain gate caches.
 
 [[jobs]]
 name = "test"
@@ -99,7 +106,7 @@ commands = [
   "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
 ]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
 [[jobs]]
 name = "rust-test"
@@ -130,7 +137,7 @@ commands = [
   "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace",
 ]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
 # Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
 [[jobs]]
@@ -183,4 +190,4 @@ UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 uv sync --extra test --extra dev
 CARGO_INCREMENTAL=0 scripts/branvil-integration.sh
 ''']
 timeout_secs = 1800
-cache = { paths = [".ci/uv", ".ci/cargo-home/registry", "target"], key_files = ["uv.lock", "Cargo.lock"] }
+cache = { paths = [".ci/uv", ".ci/cargo-home/registry", "target"], key_files = ["uv.lock", "rust-toolchain.toml"] }
