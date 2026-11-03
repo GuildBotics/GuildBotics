@@ -1,5 +1,5 @@
 //! Enumerate production trace roots, rather than sampling their callers.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use syn::visit::{self, Visit};
 
@@ -74,9 +74,23 @@ fn every_root_declares_its_terminal_event_and_uses_the_cancellation_safe_boundar
             discovered.insert((file.to_owned(), function));
         }
     }
-    let declared = BTreeSet::from([("crates/gb-server/src/commands.rs".into(), "start".into())]);
-    assert_eq!(discovered, declared, "declare how each new root ends");
-    assert!(gb_observability::TRACE_COMPLETED_EVENT_TYPES.contains(&"command.finished"));
+    let declared = BTreeMap::from([(
+        (
+            "crates/gb-server/src/commands.rs".to_owned(),
+            "start".to_owned(),
+        ),
+        "command.finished",
+    )]);
+    assert_eq!(
+        discovered,
+        declared.keys().cloned().collect(),
+        "declare how each new root ends"
+    );
+    for event in declared.values() {
+        assert!(gb_observability::TRACE_COMPLETED_EVENT_TYPES.contains(event));
+        // All current roots use run_command; it records this success event.
+        assert_eq!(*event, "command.finished");
+    }
 }
 
 #[test]

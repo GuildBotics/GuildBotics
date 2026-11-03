@@ -44,11 +44,7 @@ const INDEX_EVENT_TYPES: &[&str] = &[
     "credential.failed",
     "credential.verified",
     "target.recorded",
-    "review_limit.started",
-    "review_limit.finished",
-    "review_limit.failed",
-    "review_limit.deferred",
-    "system.finished",
+    "session.pointer",
 ];
 
 /// The events that end an execution, which carry its final counts.
