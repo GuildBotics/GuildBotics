@@ -189,15 +189,23 @@ pub fn workspace_identity_path(workspace: &Path) -> PathBuf {
 
 /// The workspace's identity, created on first use.
 pub fn ensure_workspace_identity(workspace: &Path) -> anyhow::Result<WorkspaceIdentity> {
-    ensure(
-        &workspace_identity_path(workspace),
-        || files::shared_write_lock(workspace),
-        || WorkspaceIdentity {
+    let path = workspace_identity_path(workspace);
+    let writes = gb_base::shared_writes::SharedWrites::new(
+        gb_base::home::identity_root()?,
+        Some(workspace.to_path_buf()),
+    );
+    writes.at(&path, |writer| {
+        if let Some(existing) = read(&path)? {
+            return Ok(existing);
+        }
+        let record = WorkspaceIdentity {
             schema_version: SHARED_RECORD_SCHEMA_VERSION,
             workspace_id: new_uuid7(),
             created_at: now(),
-        },
-    )
+        };
+        writer.write_json(&path, &record)?;
+        Ok(record)
+    })
 }
 
 /// This machine's identity (`data` is `<machine root>/data`), created on first

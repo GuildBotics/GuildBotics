@@ -61,13 +61,6 @@ impl FileLock {
     }
 }
 
-/// The lock every writer of a workspace's shared files (`config`, `state`)
-/// takes for the span in which it decides and writes.
-pub fn shared_write_lock(workspace: &Path) -> std::io::Result<FileLock> {
-    let path = workspace.join(".guildbotics/local/run/shared-write.lock");
-    FileLock::hold(&path, SHARED_WRITE_TIMEOUT)
-}
-
 /// Replaces `path` with `data` so that a reader never sees part of it.
 pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().expect("a file has a parent");
