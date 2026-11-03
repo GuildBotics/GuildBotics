@@ -48,11 +48,14 @@ fn write_population(root: &Path) -> anyhow::Result<Value> {
             events.push(serde_json::from_slice::<Value>(&std::fs::read(path)?)?);
         }
         let runs = RunStore::open(root);
-        runs.start(w, seed("run-1"), &redactor())?;
+        let mut incoming=seed("run-1");
+        incoming.attributes.insert("target.empty".into(),String::new());
+        incoming.work_identity=Some(attributes(&[("key", &format!("synthetic-secret{}","x".repeat(501)))]));
+        runs.start(w, incoming, &redactor())?;
         runs.append(w, seed("run-1"), &json!({"kind":"evidence","evidence_type":"issue_comment",
             "payload":{"text":"synthetic-secret","messages":["local"]}}), "<now>", &redactor())?;
         let run = runs.finish(w, "run-1", RunFinish { state: RunState::Failed, summary: "synthetic-secret",
-            attributes: attributes(&[("target.title","later"),("target.url","ticket/1")]), now:"<now>" }, &redactor())?.unwrap();
+            attributes: attributes(&[("target.title","later"),("target.url","ticket/1"),("target.empty","filled")]), now:"<now>" }, &redactor())?.unwrap();
         let sessions = InteractiveSessions::open(root);
         for (command, status, attrs) in [
             ("member ticket read", "success", attributes(&[("target.title","synthetic-secret"),("local.path","local")])),
@@ -360,6 +363,24 @@ fn system_summaries_hide_the_latest_and_mark_abandoned_processes_interrupted() {
     assert_eq!(list["traces"][0]["trace_id"], "system:old");
     assert_eq!(list["traces"][0]["status"], "interrupted");
     assert_eq!(list["traces"][0]["command"], "Global / system");
+    for (query, count) in [
+        ("interrupted", 0),
+        ("status", 0),
+        ("system.started", 1),
+        ("Global", 1),
+        ("old", 1),
+    ] {
+        assert_eq!(
+            diagnostics
+                .traces(None, None, Some(query), None, None, 1000)
+                .unwrap()["traces"]
+                .as_array()
+                .unwrap()
+                .len(),
+            count,
+            "{query}"
+        );
+    }
     assert_eq!(
         diagnostics.trace_detail("system:latest").unwrap()["summary"]["status"],
         "running"
@@ -446,4 +467,105 @@ fn recorded_durations_keep_the_same_float_when_served_as_json() {
         let served: Value = serde_json::from_str(&record.to_string()).unwrap();
         assert_eq!(served["duration_ms"].as_f64().unwrap(), expected);
     }
+}
+
+#[test]
+fn completed_records_match_python_for_every_completion_and_work_kind() {
+    use gb_observability::runs::{RunCompletion, RunResult};
+    let root = tempfile::tempdir().unwrap();
+    SharedWrites::new(root.path().to_owned(), None)
+        .transaction(|w| {
+            let runs = RunStore::open(root.path());
+            for expected in fixture()["completions"].as_array().unwrap() {
+                let id = expected["run_id"].as_str().unwrap();
+                let mut incoming = seed(id);
+                incoming.work_kind = if id.starts_with("member-work") {
+                    "member-work"
+                } else {
+                    "ticket"
+                }
+                .into();
+                incoming.source = String::new();
+                incoming.attributes.clear();
+                runs.start(w, incoming.clone(), &redactor())?;
+                for kind in ["issue_comment", "checks_awaited"] {
+                    runs.append(
+                        w,
+                        incoming.clone(),
+                        &json!({"kind":"evidence","evidence_type":kind,"payload":{}}),
+                        "<now>",
+                        &redactor(),
+                    )?;
+                }
+                let result: RunResult = serde_json::from_value(expected["result"].clone())?;
+                let actual = runs.record_completion(
+                    w,
+                    id,
+                    RunCompletion {
+                        result,
+                        member_id: "p1",
+                        summary: "completed",
+                        now: "<now>",
+                    },
+                    &redactor(),
+                )?;
+                assert_eq!(serde_json::to_value(actual)?, *expected);
+                assert_eq!(
+                    runs.summaries_by_subject()?[&("ticket/1".into(), "p1".into())],
+                    "completed"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn corrupted_interactive_entry_does_not_reset_other_conversations() {
+    let root = tempfile::tempdir().unwrap();
+    let now = Utc::now();
+    SharedWrites::new(root.path().to_owned(), None)
+        .transaction(|w| {
+            let sessions = InteractiveSessions::open(root.path());
+            let a = sessions.start_or_touch(w, "p1", "codex", "", now, Duration::minutes(30))?;
+            let path = root
+                .path()
+                .join(".guildbotics/local/run/interactive_trace_state.json");
+            let mut state: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            state["sessions"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("thread_key");
+            state["sessions"]["broken"] = json!({"trace_id":"broken"});
+            w.write_json(&path, &state)?;
+            let b = sessions.start_or_touch(w, "p1", "codex", "", now, Duration::minutes(30))?;
+            assert_eq!(a.trace_id, b.trace_id);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn evidence_creating_a_run_applies_the_same_attribute_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    SharedWrites::new(root.path().to_owned(), None)
+        .transaction(|w| {
+            let mut incoming = seed("new");
+            incoming.attributes.insert("empty".into(), String::new());
+            let record = RunStore::open(root.path()).append(
+                w,
+                incoming,
+                &json!({"kind":"evidence","evidence_type":"issue_comment"}),
+                "<now>",
+                &redactor(),
+            )?;
+            assert_eq!(record.attributes, attributes(&[("target.title", "***")]));
+            Ok(())
+        })
+        .unwrap();
 }

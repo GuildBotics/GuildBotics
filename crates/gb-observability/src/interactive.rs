@@ -19,6 +19,7 @@ pub struct InteractiveSession {
     pub person_id: String,
     pub workspace: String,
     pub host: String,
+    #[serde(default)]
     pub thread_key: String,
     pub started_at: String,
     pub last_seen_at: String,
@@ -58,7 +59,15 @@ impl InteractiveSessions {
         let mut sessions: BTreeMap<String, InteractiveSession> =
             gb_base::files::read_if_present(&path)?
                 .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                .and_then(|v| serde_json::from_value(v["sessions"].clone()).ok())
+                .and_then(|v| v["sessions"].as_object().cloned())
+                .map(|entries| {
+                    entries
+                        .into_iter()
+                        .filter_map(|(k, v)| {
+                            serde_json::from_value(v).ok().map(|session| (k, session))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
         sessions.retain(|_, s| DateTime::parse_from_rfc3339(&s.expires_at).is_ok_and(|t| t >= now));
         let workspace = self.root.to_string_lossy().to_string();

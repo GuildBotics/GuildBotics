@@ -137,16 +137,15 @@ impl RunStore {
     pub fn start(
         &self,
         writer: &mut Writer<'_>,
-        incoming: RunRecord,
+        mut incoming: RunRecord,
         redactor: &Redactor,
     ) -> anyhow::Result<RunRecord> {
         writer.check(&self.path(&incoming.run_id)?)?;
         let current = self.read(&incoming.run_id)?;
         let Some(mut record) = current else {
-            return self.save(
-                writer,
-                serde_json::from_value(redactor.redact(serde_json::to_value(incoming)?))?,
-            );
+            let attributes = std::mem::take(&mut incoming.attributes);
+            first_seen(&mut incoming.attributes, attributes, redactor);
+            return self.save(writer, incoming);
         };
         if record.finished_at.is_some() && !record.left_work_undone() {
             return self.save(writer, record);
@@ -167,12 +166,14 @@ impl RunStore {
     pub fn append(
         &self,
         writer: &mut Writer<'_>,
-        seed: RunRecord,
+        mut seed: RunRecord,
         item: &Value,
         now: &str,
         redactor: &Redactor,
     ) -> anyhow::Result<RunRecord> {
         writer.check(&self.path(&seed.run_id)?)?;
+        let attributes = std::mem::take(&mut seed.attributes);
+        first_seen(&mut seed.attributes, attributes, redactor);
         let mut record = self.read(&seed.run_id)?.unwrap_or(seed);
         for key in ["work_kind", "member_id", "device_id"] {
             if let Some(value) = item[key].as_str().filter(|s| !s.is_empty()) {
@@ -240,6 +241,9 @@ impl RunStore {
             Completion::Done | Completion::AwaitingChecks => RunState::Succeeded,
             Completion::Asking | Completion::Blocked => RunState::Failed,
         };
+        if record.work_kind == "member-work" {
+            record.work_kind = completion.result.subject_type.clone();
+        }
         record.result = Some(completion.result);
         record.member_id = completion.member_id.into();
         record.safe_summary = redactor.text(completion.summary);
@@ -267,13 +271,7 @@ impl RunStore {
         end: DateTime<Utc>,
     ) -> anyhow::Result<Vec<RunRecord>> {
         let mut matched = Vec::new();
-        for dir in children(&self.root)? {
-            let Ok(bytes) = std::fs::read(dir.join("result.json")) else {
-                continue;
-            };
-            let Ok(record) = serde_json::from_slice::<RunRecord>(&bytes) else {
-                continue;
-            };
+        for record in self.readable_records()? {
             let value = serde_json::to_value(&record)?;
             if timestamp(&value, "started_at").is_some_and(|t| t <= end)
                 && timestamp(&value, "finished_at").is_none_or(|t| t >= start)
@@ -284,9 +282,23 @@ impl RunStore {
         Ok(matched)
     }
 
+    fn readable_records(&self) -> anyhow::Result<Vec<RunRecord>> {
+        let mut records = Vec::new();
+        for dir in children(&self.root)? {
+            let Ok(bytes) = std::fs::read(dir.join("result.json")) else {
+                continue;
+            };
+            let Ok(record) = serde_json::from_slice::<RunRecord>(&bytes) else {
+                continue;
+            };
+            records.push(record);
+        }
+        Ok(records)
+    }
+
     pub fn summaries_by_subject(&self) -> anyhow::Result<BTreeMap<(String, String), String>> {
         let mut latest: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
-        for record in self.records_between(DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC)? {
+        for record in self.readable_records()? {
             let (Some(finished), Some(result)) = (record.finished_at, record.result) else {
                 continue;
             };

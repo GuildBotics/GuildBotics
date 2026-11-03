@@ -78,35 +78,23 @@ impl Diagnostics {
             {
                 continue;
             }
-            if let Some(q) = query.filter(|s| !s.is_empty()) {
-                let mut searchable = ["trace_id", "source", "person_id", "command", "workflow"]
-                    .iter()
-                    .map(|k| text(&summary, k).to_owned())
-                    .collect::<Vec<_>>();
-                searchable.push(summary["attributes"].to_string());
-                for r in &records {
-                    match text(r, "kind") {
-                        "event" => searchable.push(text(r, "type").into()),
-                        "log" => searchable.push(text(r, "message").into()),
-                        "memory" => {
-                            searchable.push(format!("{} {}", text(r, "type"), r["payload"]))
-                        }
-                        _ => {}
-                    }
-                }
-                if !searchable
-                    .join(" ")
-                    .to_lowercase()
-                    .contains(&q.to_lowercase())
-                {
-                    continue;
-                }
+            if !matches_query(&summary, &records, query) {
+                continue;
             }
             summaries.push(summary);
         }
         if source.is_none() && person.is_none() && attr_key.is_none() {
             summaries.extend(system_summaries(&indexed, false).into_iter().filter(|s| {
-                query.is_none_or(|q| s.to_string().to_lowercase().contains(&q.to_lowercase()))
+                let id = text(s, "trace_id").strip_prefix("system:").unwrap_or("");
+                let records: Vec<_> = indexed
+                    .iter()
+                    .filter(|r| {
+                        r["attributes"]["system_session_id"] == id
+                            && matches!(text(r, "type"), "system.started" | "system.finished")
+                    })
+                    .cloned()
+                    .collect();
+                matches_query(s, &records, query)
             }));
         }
         summaries.sort_by_key(|s| std::cmp::Reverse(stamp(&json!({"timestamp":s["started_at"]}))));
@@ -274,6 +262,29 @@ fn summary(
     );
     result["title"] = title.into();
     result
+}
+
+fn matches_query(summary: &Value, records: &[Value], query: Option<&str>) -> bool {
+    let Some(q) = query.filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let mut searchable = ["trace_id", "source", "person_id", "command", "workflow"]
+        .iter()
+        .map(|k| text(summary, k).to_owned())
+        .collect::<Vec<_>>();
+    searchable.push(summary["attributes"].to_string());
+    for r in records {
+        match text(r, "kind") {
+            "event" => searchable.push(text(r, "type").into()),
+            "log" => searchable.push(text(r, "message").into()),
+            "memory" => searchable.push(format!("{} {}", text(r, "type"), r["payload"])),
+            _ => {}
+        }
+    }
+    searchable
+        .join(" ")
+        .to_lowercase()
+        .contains(&q.to_lowercase())
 }
 
 fn system_summaries(indexed: &[Value], include_latest: bool) -> Vec<Value> {

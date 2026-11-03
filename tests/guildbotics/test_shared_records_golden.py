@@ -48,7 +48,8 @@ def capture(workspace):
         execution_mode="autonomous",
         member_id="p1",
         source="routine",
-        attributes={"target.title": "synthetic-secret"},
+        attributes={"target.title": "synthetic-secret", "target.empty": ""},
+        work_identity={"key": "synthetic-secret" + "x" * 501},
     )
     runs.append(
         "run-1",
@@ -62,7 +63,11 @@ def capture(workspace):
         "run-1",
         status="failed",
         safe_summary="synthetic-secret",
-        attributes={"target.title": "later", "target.url": "ticket/1"},
+        attributes={
+            "target.title": "later",
+            "target.url": "ticket/1",
+            "target.empty": "filled",
+        },
     )
     [run] = runs.records()
     result = run.model_dump()
@@ -70,6 +75,36 @@ def capture(workspace):
         result[key] = "<now>"
     for item in result["provider_evidence"]:
         item["recorded_at"] = "<now>"
+
+    completions = []
+    for kind in ("member-work", "ticket"):
+        for status in ("done", "asking", "blocked", "awaiting_checks"):
+            run_id = f"{kind}-{status}"
+            runs.start_record(
+                run_id, work_kind=kind, execution_mode="autonomous", member_id="p1"
+            )
+            runs.append(
+                run_id,
+                {"kind": "evidence", "evidence_type": "issue_comment", "payload": {}},
+            )
+            runs.append(
+                run_id,
+                {"kind": "evidence", "evidence_type": "checks_awaited", "payload": {}},
+            )
+            runs.complete_run(
+                run_id,
+                status,
+                "completed",
+                subject_type="ticket",
+                subject_id="ticket/1",
+                person_id="p1",
+            )
+            written = runs._read_record(run_id).model_dump()
+            for key in ("started_at", "finished_at"):
+                written[key] = "<now>"
+            for item in written["provider_evidence"]:
+                item["recorded_at"] = "<now>"
+            completions.append(written)
 
     sessions = InteractiveSessionStore(state / "sessions")
     session = InteractiveTraceSession(
@@ -99,6 +134,7 @@ def capture(workspace):
     return {
         "events": records,
         "run": result,
+        "completions": completions,
         "session": shared,
         "presentations": presentations(),
         "streams": streams(),
