@@ -32,6 +32,15 @@ def os_ui_language() -> Language | None:
         tag = _windows_ui_language_tag()
     else:
         tag = _posix_ui_language_tag()
+    return ui_language(tag)
+
+
+def ui_language(tag: str | None) -> Language | None:
+    """The language the operating system's ``tag`` for it names.
+
+    Returns:
+        The language, or ``None`` when ``tag`` is empty or names no language.
+    """
     if not tag:
         return None
     try:

@@ -47,8 +47,17 @@ _ALLOWED = {
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
     "gb-config": {"gb-base", "gb-wire"},
-    "gb-server": {"gb-base", "gb-workspace", "gb-observability", "loopback-auth"},
-    "guildbotics": {"gb-server", "branvil", "loopback-auth"},
+    "gb-environment": {"gb-base", "gb-config", "gb-wire"},
+    "gb-server": {
+        "gb-base",
+        "gb-config",
+        "gb-environment",
+        "gb-workspace",
+        "gb-observability",
+        "gb-wire",
+        "loopback-auth",
+    },
+    "guildbotics": {"gb-server", "gb-environment", "branvil", "loopback-auth"},
 }
 
 
@@ -67,3 +76,34 @@ def test_each_crate_uses_only_the_crates_below_it() -> None:
         }
 
         assert used <= allowed, name
+
+
+def test_only_the_environment_drives_the_microvm_runtime() -> None:
+    """One crate speaks to the runtime, as one module does in the Python
+    version (the ``one-sandbox-runtime`` contract)."""
+    users = set()
+    for path in (ROOT / "crates").glob("*/Cargo.toml"):
+        manifest = _load(path.relative_to(ROOT).as_posix())
+        for scope in [manifest, *manifest.get("target", {}).values()]:
+            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+                if "microsandbox" in scope.get(table, {}):
+                    users.add(path.parent.name)
+
+    assert users == {"gb-environment"}
+
+
+def test_the_runtime_is_the_python_sdks() -> None:
+    """The crate drives the ``msb`` the Python SDK places and marks with its
+    version, which the crate checks against its own."""
+    [python] = [
+        dependency.split("==")[1]
+        for dependency in _load("pyproject.toml")["project"]["dependencies"]
+        if dependency.startswith("microsandbox==")
+    ]
+    crates = _load("crates/gb-environment/Cargo.toml")["dependencies"]
+    runtime = (ROOT / "crates/gb-environment/src/runtime.rs").read_text("utf-8")
+    [checked] = re.findall(r'RUNTIME_VERSION: &str = "([^"]+)"', runtime)
+
+    assert crates["microsandbox"]["version"] == f"={python}"
+    assert crates["microsandbox-utils"] == f"={python}"
+    assert checked == python

@@ -37,7 +37,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ServerCommand {
-    /// Run the server in the foreground until SIGINT or SIGTERM: GuildBotics
+    /// Run the server in the foreground until SIGINT or SIGTERM (a first
+    /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
+    /// cancels them): GuildBotics
     /// on GUILDBOTICS_SERVER_PORT (default 8765) with its records under
     /// GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once
     /// `guildbotics branvil init` has set it up, as `guildbotics branvil serve`
@@ -86,18 +88,12 @@ fn start() -> anyhow::Result<u8> {
 /// either one ends, which stops the other. The machine's lock comes first and
 /// goes last: whoever stops the server waits for Branvil too.
 async fn serve() -> anyhow::Result<u8> {
-    let (interrupt, terminate) = branvil::stop_signals()?;
-    let signal = async move {
-        tokio::select! {
-            () = interrupt => {},
-            () = terminate => {},
-        }
-    };
+    let (signal, cancel) = server_stops()?;
     let branvil_set_up = branvil::initialized()?;
     let server = gb_server::Server::start().await?;
     if !branvil_set_up {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
-        let (_held, served) = server.serve(signal).await;
+        let (_held, served) = server.serve(signal, cancel).await;
         served?;
         return Ok(0);
     }
@@ -129,7 +125,7 @@ async fn serve() -> anyhow::Result<u8> {
             () = branvil_ended.notified() => {},
         }
     };
-    let (_held, served) = server.serve(stop).await;
+    let (_held, served) = server.serve(stop, cancel).await;
     // On a signal Branvil has had it too, and stops as that signal asks.
     if served.is_err() {
         guildbotics_failed.notify_one();
@@ -137,4 +133,61 @@ async fn serve() -> anyhow::Result<u8> {
     let code = branvil.await??;
     served?;
     code
+}
+
+/// How far a stop has gone: none yet, one that waits for the work running,
+/// or one that cancels it.
+#[derive(Clone, Copy, PartialEq)]
+enum Stop {
+    None,
+    Waiting,
+    Cancelling,
+}
+
+/// When GuildBotics' port stops, and when it cancels the work it runs: the
+/// first SIGINT stops it once that work ends, and SIGTERM, which a service
+/// manager sends, or a second SIGINT cancels the work.
+fn server_stops() -> std::io::Result<(
+    impl Future<Output = ()> + Send + 'static,
+    impl Future<Output = ()> + Send + 'static,
+)> {
+    let (told, stops) = tokio::sync::watch::channel(Stop::None);
+    #[cfg(unix)]
+    let (mut interrupt, mut terminate) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt())?,
+            signal(SignalKind::terminate())?,
+        )
+    };
+    #[cfg(windows)]
+    let mut interrupt = tokio::signal::windows::ctrl_c()?;
+    tokio::spawn(async move {
+        loop {
+            #[cfg(unix)]
+            let cancel = tokio::select! {
+                _ = interrupt.recv() => *told.borrow() != Stop::None,
+                _ = terminate.recv() => true,
+            };
+            #[cfg(windows)]
+            let cancel = {
+                interrupt.recv().await;
+                *told.borrow() != Stop::None
+            };
+            told.send_replace(if cancel {
+                Stop::Cancelling
+            } else {
+                Stop::Waiting
+            });
+        }
+    });
+    let reached = |stop: Stop| {
+        let mut stops = stops.clone();
+        async move {
+            let _ = stops
+                .wait_for(|now| *now == stop || *now == Stop::Cancelling)
+                .await;
+        }
+    };
+    Ok((reached(Stop::Waiting), reached(Stop::Cancelling)))
 }

@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod commands;
 mod i18n;
 mod server;
 

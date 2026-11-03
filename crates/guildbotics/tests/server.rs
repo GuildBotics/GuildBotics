@@ -705,3 +705,343 @@ fn a_refused_server_never_starts_branvil() {
     assert!(!data.join("hooks/pre-receive").exists());
     first.stop();
 }
+
+/// A workspace under `dir` whose team is one member, `yuki`, with commands
+/// of its own: `look` (read-only) and `write` (not).
+fn workspace_with_a_member(dir: &Path) -> PathBuf {
+    let workspace = host_name(&dir.join("workspace"));
+    let files = [
+        (
+            workspace.join(".guildbotics/config/team/project.yml"),
+            "name: Run\nlanguage: ja-JP\n",
+        ),
+        (
+            workspace.join(".guildbotics/config/team/members/yuki/member.yml"),
+            "is_active: true\nprofile:\n  roles: {}\n",
+        ),
+        (
+            dir.join("home/identity/.guildbotics/config/team/members/yuki/identity.yml"),
+            "person_id: yuki\nname: Yuki Nakamura\nperson_type: agent\n",
+        ),
+        (
+            workspace.join(".guildbotics/config/commands/look.md"),
+            "---\nread_only: true\n---\nLook\n",
+        ),
+        (
+            workspace.join(".guildbotics/config/commands/write.md"),
+            "Write\n",
+        ),
+    ];
+    for (path, text) in files {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    workspace
+}
+
+impl Server {
+    /// Asks the server to run a command, in the language `language`.
+    async fn run(&self, request: Value, language: &str) -> (StatusCode, Value) {
+        let response = self
+            .http
+            .post(self.url("/api/commands/run"))
+            .bearer_auth(self.owner_token())
+            .header("x-guildbotics-language", language)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        let (status, _, body) = body(response).await;
+        (status, body)
+    }
+}
+
+/// The records of the trace `trace_id`: their types, and the last one.
+fn trace_records(workspace: &Path, trace_id: &str) -> (Vec<String>, Value) {
+    let text = std::fs::read_to_string(
+        workspace.join(format!(".guildbotics/local/run/sessions/{trace_id}.jsonl")),
+    )
+    .unwrap();
+    let records: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let types = records
+        .iter()
+        .map(|r| r["type"].as_str().unwrap().to_owned())
+        .collect();
+    (types, records.last().unwrap().clone())
+}
+
+#[tokio::test]
+async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let unselected = Server::start(dir.path());
+    let (status, refused) = unselected
+        .run(
+            json!({"command": "look", "expected_workspace": dir.path()}),
+            "en",
+        )
+        .await;
+    assert_eq!(
+        (status, refused["code"].as_str()),
+        (StatusCode::CONFLICT, Some("command_workspace_changed"))
+    );
+    let (status, refused) = unselected.run(json!({"command": "look"}), "en").await;
+    assert_eq!(
+        (status, refused["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("config_not_found"))
+    );
+    unselected.stop();
+
+    let workspace = workspace_with_a_member(dir.path());
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, dir.path(), port);
+    for (request, status, code) in [
+        (
+            json!({"command": ""}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+        ),
+        // What is not served yet is refused rather than run without it.
+        (
+            json!({"command": "look", "expected_command_file_id": "x", "expected_command_file_revision": "y"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+        ),
+        (
+            json!({"command": "look", "expected_workspace": dir.path().join("other")}),
+            StatusCode::CONFLICT,
+            "command_workspace_changed",
+        ),
+        (
+            json!({"command": "look", "cwd": "relative"}),
+            StatusCode::BAD_REQUEST,
+            "command_cwd_not_absolute",
+        ),
+        (
+            json!({"command": "look", "cwd": "/a/../b"}),
+            StatusCode::BAD_REQUEST,
+            "command_error",
+        ),
+        (
+            json!({"command": "look", "person": "nobody"}),
+            StatusCode::BAD_REQUEST,
+            "person_not_found",
+        ),
+        (
+            json!({"command": "missing"}),
+            StatusCode::BAD_REQUEST,
+            "command_error",
+        ),
+    ] {
+        let (answered, refused) = server.run(request.clone(), "en").await;
+        assert_eq!(
+            (answered, refused["code"].as_str()),
+            (status, Some(code)),
+            "{request}"
+        );
+    }
+    let (_, refused) = server
+        .run(json!({"command": "look", "person": "nobody"}), "ja")
+        .await;
+    assert_eq!(
+        refused["message"],
+        "メンバー 'nobody' が見つかりません。指定できるのは: yuki (Yuki Nakamura)"
+    );
+    let (_, refused) = server.run(json!({"command": "missing"}), "en").await;
+    assert_eq!(refused["message"], "Unable to locate command 'missing'.");
+    // A command that never started leaves no trace.
+    assert!(!workspace.join(".guildbotics/local/run").exists());
+    let project = workspace.join(".guildbotics/config/team/project.yml");
+    std::fs::remove_file(&project).unwrap();
+    let (status, refused) = server.run(json!({"command": "look"}), "en").await;
+    assert_eq!(
+        (status, &refused["code"], &refused["context"]["path"]),
+        (
+            StatusCode::BAD_REQUEST,
+            &json!("config_not_found"),
+            &json!(project)
+        )
+    );
+    server.stop();
+}
+
+#[tokio::test]
+async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = workspace_with_a_member(dir.path());
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, dir.path(), port);
+
+    // As the device's status refuses: the runtime, the declaration, then
+    // the snapshot.
+    let msb = dir.path().join("home/data/msb");
+    let declaration = workspace.join(".guildbotics/config/intelligences/agent_environment.yml");
+    let refusals = [
+        "microsandbox ランタイム（msb と libkrunfw）がインストールされていません。",
+        "The microVM runtime under",
+        "The resources in",
+        "この端末にはエージェント実行環境がありません。",
+    ];
+    for (step, refusal) in refusals.iter().enumerate() {
+        match step {
+            // What a later step refuses is wrong from the start.
+            0 => {
+                std::fs::create_dir_all(declaration.parent().unwrap()).unwrap();
+                std::fs::write(&declaration, "resources:\n  cpus: 0\n").unwrap();
+            }
+            1 => {
+                for file in gb_environment::placed_files(&msb) {
+                    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                    std::fs::write(file, "").unwrap();
+                }
+                std::fs::write(msb.join("version"), "0.6.16\n").unwrap();
+            }
+            2 => std::fs::write(msb.join("version"), "0.6.17\n").unwrap(),
+            3 => std::fs::remove_file(&declaration).unwrap(),
+            _ => {}
+        }
+        let (status, failed) = server
+            .run(json!({"command": "look", "cwd": "~/somewhere"}), "ja")
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
+        assert_eq!(failed["code"], "command_error");
+        assert!(
+            failed["message"].as_str().unwrap().starts_with(refusal),
+            "{failed}"
+        );
+        let trace_id = failed["context"]["trace_id"].as_str().unwrap();
+        let (types, last) = trace_records(&workspace, trace_id);
+        assert_eq!(types, ["command.started", "command.failed"]);
+        assert_eq!(
+            (&last["source"], &last["person_id"], &last["command"]),
+            (&json!("manual"), &json!("yuki"), &json!("look"))
+        );
+        assert_eq!(last["attributes"], json!({"run.entry": "command"}));
+        assert_eq!(last["payload"]["error_type"], "CommandError");
+    }
+
+    // A command that may write needs what is not served yet.
+    let (status, failed) = server.run(json!({"command": "write"}), "en").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
+    assert_eq!(
+        failed["message"],
+        "'write' is not declared read-only, and only read-only commands run here so far."
+    );
+    let trace_id = failed["context"]["trace_id"].as_str().unwrap();
+    assert_eq!(
+        trace_records(&workspace, trace_id).0,
+        ["command.started", "command.failed"]
+    );
+    server.stop();
+}
+
+/// Boots a real microVM from a ready workspace's snapshot, with the
+/// device's runtime: only with the owner's approval, watched by them, one at
+/// a time (`--ignored`, `GUILDBOTICS_E2E_ENVIRONMENT_FROM=<ready workspace>`).
+#[tokio::test]
+#[ignore = "boots a real microVM: GUILDBOTICS_E2E_ENVIRONMENT_FROM and the owner's approval"]
+async fn a_read_only_command_runs_in_a_microvm_of_its_own() {
+    let source = PathBuf::from(
+        std::env::var("GUILDBOTICS_E2E_ENVIRONMENT_FROM")
+            .expect("GUILDBOTICS_E2E_ENVIRONMENT_FROM names a ready workspace"),
+    );
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    // The runtime opens unix sockets under its home, and macOS caps their
+    // paths at 103 bytes: keep the machine root short.
+    let root = home.join(".gbb");
+    std::fs::create_dir_all(&root).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("")
+        .tempdir_in(&root)
+        .unwrap();
+    let workspace = workspace_with_a_member(dir.path());
+    let snapshots = ".guildbotics/local/agent_environment/snapshots";
+    std::fs::create_dir_all(workspace.join(snapshots).parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(source.join(snapshots), workspace.join(snapshots)).unwrap();
+    std::fs::create_dir_all(dir.path().join("home/data")).unwrap();
+    std::os::unix::fs::symlink(
+        home.join(".guildbotics/data/msb"),
+        dir.path().join("home/data/msb"),
+    )
+    .unwrap();
+    let port = free_port();
+    let mut command = server_command(dir.path(), port);
+    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, dir.path(), port);
+
+    let (status, ran) = server
+        .run(
+            json!({"command": "functions/get_os_ui_language", "message": "こんにちは"}),
+            "en",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{ran}");
+    // The command's result as its text output spells it, told the host's
+    // language.
+    let language = gb_environment::language::ui_language().await.unwrap();
+    let output: Vec<&str> = ran["output"].as_str().unwrap().lines().collect();
+    assert_eq!(output[0], "input: こんにちは", "{ran}");
+    assert_eq!(
+        output[1],
+        format!("language_code: {}", language.split('_').next().unwrap()),
+        "{ran}"
+    );
+    let (types, _) = trace_records(&workspace, ran["trace_id"].as_str().unwrap());
+    assert_eq!(types, ["command.started", "command.finished"]);
+
+    // SIGTERM, as a service manager sends it, cancels the command running,
+    // whose trace says so, and the server ends as it was asked to.
+    let running = {
+        let (http, url, token) = (
+            server.http.clone(),
+            server.url("/api/commands/run"),
+            server.owner_token(),
+        );
+        tokio::spawn(async move {
+            let response = http
+                .post(url)
+                .bearer_auth(token)
+                .json(&json!({"command": "functions/get_os_ui_language"}))
+                .send()
+                .await
+                .unwrap();
+            body(response).await
+        })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let terminated = Command::new("kill")
+        .args(["-TERM", &server.child.id().to_string()])
+        .output()
+        .unwrap();
+    assert!(terminated.status.success());
+    let (status, _, cancelled) = running.await.unwrap();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{cancelled}");
+    assert_eq!(cancelled["code"], "command_cancelled");
+    let (types, last) = trace_records(
+        &workspace,
+        cancelled["context"]["trace_id"].as_str().unwrap(),
+    );
+    assert_eq!(types, ["command.started", "command.failed"]);
+    assert_eq!(last["payload"]["code"], "cancelled");
+    let output = server.child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{:?}", output.status);
+}
+
+#[test]
+fn sigterm_with_nothing_running_ends_the_server_as_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    let terminated = Command::new("kill")
+        .args(["-TERM", &server.child.id().to_string()])
+        .output()
+        .unwrap();
+    assert!(terminated.status.success());
+    let output = server.child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{:?}", output.status);
+}

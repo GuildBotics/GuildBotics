@@ -4,7 +4,12 @@
 use std::path::Path;
 
 /// The schemas the host reads and writes; what they refer to comes with them.
-const ROOTS: &[&str] = &["CommandFacts", "CommandRequest", "CommandReply"];
+const ROOTS: &[&str] = &[
+    "CommandFacts",
+    "CommandRequest",
+    "CommandReply",
+    "CliAgentExecutionResult",
+];
 
 fn main() {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wire/schema");

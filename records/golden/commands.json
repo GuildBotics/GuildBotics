@@ -107,7 +107,7 @@
     "inspects": []
    },
    "templates/commands/functions/get_os_ui_language.py": {
-    "read_only": false,
+    "read_only": true,
     "inspects": []
    },
    "templates/commands/functions/handle_chat_event.en.md": {
@@ -199,7 +199,9 @@
     }
    },
    "templates/commands/examples/reports/tools/fetch_ai_news.py": {},
-   "templates/commands/functions/get_os_ui_language.py": {},
+   "templates/commands/functions/get_os_ui_language.py": {
+    "read_only": true
+   },
    "templates/commands/repository/issue_inspect.py": {
     "description": {
      "en": "Inspect a ticket, its comments, its lane, its related tickets, its attachments, and the pull requests that refer to it.",

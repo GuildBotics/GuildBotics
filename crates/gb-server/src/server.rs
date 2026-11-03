@@ -105,6 +105,8 @@ impl Server {
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
             workspace,
+            work: tokio_util::task::TaskTracker::new(),
+            cancelled: tokio_util::sync::CancellationToken::new(),
         });
         Ok(Server {
             lock,
@@ -113,15 +115,25 @@ impl Server {
         })
     }
 
-    /// Serves until `stop`, and hands back the machine's lock with how
-    /// serving ended.
+    /// Serves until `stop`, then waits for the work it started, and hands
+    /// back the machine's lock with how serving ended. `cancel` cancels that
+    /// work instead of waiting for it.
     pub async fn serve(
         self,
         stop: impl Future<Output = ()> + Send + 'static,
+        cancel: impl Future<Output = ()> + Send + 'static,
     ) -> (Held, anyhow::Result<()>) {
+        let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
+        let cancelling = tokio::spawn(async move {
+            cancel.await;
+            cancelled.cancel();
+        });
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(stop)
             .await;
+        work.close();
+        work.wait().await;
+        cancelling.abort();
         (Held(self.lock), served.map_err(Into::into))
     }
 }
