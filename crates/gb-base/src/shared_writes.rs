@@ -163,7 +163,7 @@ pub struct Writer<'a> {
     unlocked: Option<&'a SharedWrites>,
 }
 impl Writer<'_> {
-    fn check(&self, path: &Path) -> anyhow::Result<()> {
+    pub fn check(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(writes) = self.unlocked {
             anyhow::ensure!(
                 shared_relative_path(path, Some(&writes.identity))?.is_none()
@@ -197,6 +197,11 @@ impl Writer<'_> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+    /// Remove a dedicated configuration directory without following child links.
+    pub fn remove_tree(&mut self, path: &Path) -> anyhow::Result<()> {
+        self.check(path)?;
+        Ok(fs::remove_dir_all(path)?)
     }
     pub fn append_text(&mut self, path: &Path, text: &str) -> anyhow::Result<()> {
         self.check(path)?;

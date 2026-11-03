@@ -34,6 +34,12 @@ pub struct ConfigSnapshot {
     pub blob_id: String,
     pub content: String,
 }
+impl ConfigSnapshot {
+    pub fn value(&self) -> anyhow::Result<serde_json::Value> {
+        crate::yaml::value(&self.content)
+            .map_err(|_| anyhow::anyhow!("invalid config YAML: {}", self.relative_path))
+    }
+}
 pub struct ConfigWriteReceipt<T> {
     pub result: T,
     pub revisions: Revisions,
@@ -47,6 +53,24 @@ pub struct ConfigView {
     config: PathBuf,
 }
 impl ConfigRepository {
+    pub fn workspace_secrets<'a>(
+        &'a self,
+        device: crate::secrets::DeviceKey<'a>,
+    ) -> anyhow::Result<crate::secrets::SecretStore<'a>> {
+        crate::secrets::SecretStore::new(&self.writes, crate::secrets::Scope::Workspace, device)
+    }
+    pub fn identity_secrets<'a>(
+        &'a self,
+        device: crate::secrets::DeviceKey<'a>,
+    ) -> anyhow::Result<crate::secrets::SecretStore<'a>> {
+        crate::secrets::SecretStore::new(&self.writes, crate::secrets::Scope::Identity, device)
+    }
+    /// The identity repository shares the same outer lock as this workspace.
+    pub fn identity_view(&self) -> ConfigView {
+        ConfigView {
+            config: self.writes.identity.join(".guildbotics/config"),
+        }
+    }
     pub fn new(writes: SharedWrites) -> anyhow::Result<Self> {
         let workspace = writes
             .workspace
@@ -73,13 +97,37 @@ impl ConfigRepository {
         apply: impl FnOnce(&ConfigView, &mut Writer<'_>) -> anyhow::Result<T>,
         report: impl FnOnce(&ConfigView) -> anyhow::Result<Revisions>,
     ) -> anyhow::Result<ConfigWriteReceipt<T>> {
+        let paths: Vec<_> = expected.keys().map(String::as_str).collect();
+        self.write_checked(expected, &[], &paths, apply, report)
+    }
+    /// Compare both roots in one transaction. An omitted required path must
+    /// not exist. Names must be disjoint because receipts use relative paths.
+    pub fn write_checked<T>(
+        &self,
+        expected: &Revisions,
+        identity_paths: &[&str],
+        workspace_paths: &[&str],
+        apply: impl FnOnce(&ConfigView, &mut Writer<'_>) -> anyhow::Result<T>,
+        report: impl FnOnce(&ConfigView) -> anyhow::Result<Revisions>,
+    ) -> anyhow::Result<ConfigWriteReceipt<T>> {
+        anyhow::ensure!(
+            !identity_paths.iter().any(|p| workspace_paths.contains(p)),
+            "revision paths overlap across roots"
+        );
         self.writes.transaction(|writer| {
-            let paths: Vec<_> = expected.keys().map(String::as_str).collect();
-            let current = self.view.revisions(&paths)?;
-            for (path, revision) in expected {
-                if current.get(path) != Some(revision) {
+            let mut current = self.identity_view().revisions(identity_paths)?;
+            current.extend(self.view.revisions(workspace_paths)?);
+            for path in identity_paths.iter().chain(workspace_paths) {
+                if current.get(*path).map(String::as_str)
+                    != Some(expected.get(*path).map(String::as_str).unwrap_or(""))
+                {
+                    let root = if identity_paths.contains(path) {
+                        "identity/config"
+                    } else {
+                        "config"
+                    };
                     return Err(StaleConfigWriteError {
-                        relative_path: format!("config/{}", path.trim_end_matches('/')),
+                        relative_path: format!("{root}/{}", path.trim_end_matches('/')),
                         revisions: current,
                     }
                     .into());

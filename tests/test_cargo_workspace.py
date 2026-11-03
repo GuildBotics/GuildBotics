@@ -47,6 +47,7 @@ _ALLOWED = {
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
     "gb-config": {"gb-base", "gb-wire"},
+    "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},
     "gb-server": {
         "gb-base",
