@@ -382,6 +382,142 @@
           "type": "checks_awaited"
         }
       ]
+    },
+    {
+      "schema_version": 4,
+      "run_id": "routine-done",
+      "work_kind": "routine",
+      "work_identity": null,
+      "execution_mode": "autonomous",
+      "member_id": "p1",
+      "device_id": "device-1",
+      "source": "",
+      "attributes": {},
+      "started_at": "<now>",
+      "finished_at": "<now>",
+      "status": "succeeded",
+      "safe_summary": "completed",
+      "result": {
+        "subject_type": "ticket",
+        "subject_id": "ticket/1",
+        "subject_url": "",
+        "status": "done",
+        "waiting_for": []
+      },
+      "provider_evidence": [
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "issue_comment"
+        },
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "checks_awaited"
+        }
+      ]
+    },
+    {
+      "schema_version": 4,
+      "run_id": "routine-asking",
+      "work_kind": "routine",
+      "work_identity": null,
+      "execution_mode": "autonomous",
+      "member_id": "p1",
+      "device_id": "device-1",
+      "source": "",
+      "attributes": {},
+      "started_at": "<now>",
+      "finished_at": "<now>",
+      "status": "failed",
+      "safe_summary": "completed",
+      "result": {
+        "subject_type": "ticket",
+        "subject_id": "ticket/1",
+        "subject_url": "",
+        "status": "asking",
+        "waiting_for": []
+      },
+      "provider_evidence": [
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "issue_comment"
+        },
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "checks_awaited"
+        }
+      ]
+    },
+    {
+      "schema_version": 4,
+      "run_id": "routine-blocked",
+      "work_kind": "routine",
+      "work_identity": null,
+      "execution_mode": "autonomous",
+      "member_id": "p1",
+      "device_id": "device-1",
+      "source": "",
+      "attributes": {},
+      "started_at": "<now>",
+      "finished_at": "<now>",
+      "status": "failed",
+      "safe_summary": "completed",
+      "result": {
+        "subject_type": "ticket",
+        "subject_id": "ticket/1",
+        "subject_url": "",
+        "status": "blocked",
+        "waiting_for": []
+      },
+      "provider_evidence": [
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "issue_comment"
+        },
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "checks_awaited"
+        }
+      ]
+    },
+    {
+      "schema_version": 4,
+      "run_id": "routine-awaiting_checks",
+      "work_kind": "routine",
+      "work_identity": null,
+      "execution_mode": "autonomous",
+      "member_id": "p1",
+      "device_id": "device-1",
+      "source": "",
+      "attributes": {},
+      "started_at": "<now>",
+      "finished_at": "<now>",
+      "status": "succeeded",
+      "safe_summary": "completed",
+      "result": {
+        "subject_type": "ticket",
+        "subject_id": "ticket/1",
+        "subject_url": "",
+        "status": "awaiting_checks",
+        "waiting_for": []
+      },
+      "provider_evidence": [
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "issue_comment"
+        },
+        {
+          "payload": {},
+          "recorded_at": "<now>",
+          "type": "checks_awaited"
+        }
+      ]
     }
   ],
   "session": {

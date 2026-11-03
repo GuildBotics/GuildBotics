@@ -77,7 +77,8 @@ def capture(workspace):
         item["recorded_at"] = "<now>"
 
     completions = []
-    for kind in ("member-work", "ticket"):
+    # Distinct input and subject kinds expose an unconditional overwrite.
+    for kind in ("member-work", "ticket", "routine"):
         for status in ("done", "asking", "blocked", "awaiting_checks"):
             run_id = f"{kind}-{status}"
             runs.start_record(

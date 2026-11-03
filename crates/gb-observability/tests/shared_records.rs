@@ -479,12 +479,7 @@ fn completed_records_match_python_for_every_completion_and_work_kind() {
             for expected in fixture()["completions"].as_array().unwrap() {
                 let id = expected["run_id"].as_str().unwrap();
                 let mut incoming = seed(id);
-                incoming.work_kind = if id.starts_with("member-work") {
-                    "member-work"
-                } else {
-                    "ticket"
-                }
-                .into();
+                incoming.work_kind = id.rsplit_once('-').unwrap().0.into();
                 incoming.source = String::new();
                 incoming.attributes.clear();
                 runs.start(w, incoming.clone(), &redactor())?;
