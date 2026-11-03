@@ -121,11 +121,12 @@ fn display(v: &Value) -> String {
 fn summary(id: &str, records: &[Value]) -> Value {
     let mut result = json!({"trace_id":id,"source":"","person_id":"","command":"","workflow":"","title":"",
         "started_at":"","updated_at":"","status":"info","event_count":0,"log_count":0,"error_count":0,"span_count":0,"attributes":{}});
-    let mut status = "info";
+    let mut status = crate::TraceStatus::default();
     let mut spans = BTreeSet::new();
     let mut sorted: Vec<_> = records.iter().collect();
     sorted.sort_by_key(|r| stamp(r));
     for r in &sorted {
+        status.add(r);
         let timestamp = text(r, "timestamp");
         if !timestamp.is_empty() {
             if result["started_at"] == "" {
@@ -138,15 +139,6 @@ fn summary(id: &str, records: &[Value]) -> Value {
                 result[key] = r[key].clone();
             }
         }
-        if let Some(attrs) = r["attributes"].as_object() {
-            for (k, v) in attrs {
-                result["attributes"]
-                    .as_object_mut()
-                    .unwrap()
-                    .entry(k)
-                    .or_insert(v.clone());
-            }
-        }
         if !text(r, "span_id").is_empty() {
             spans.insert(text(r, "span_id"));
         }
@@ -157,13 +149,6 @@ fn summary(id: &str, records: &[Value]) -> Value {
                 increment(&mut result, "event_count");
                 if error {
                     increment(&mut result, "error_count");
-                    status = "failed";
-                } else if status != "failed" && status != "success" {
-                    if event == "command.finished" || event == "member.command.finished" {
-                        status = "success";
-                    } else if event.ends_with(".started") || event.ends_with(".finished") {
-                        status = "running";
-                    }
                 }
                 if event.ends_with(".finished") || error {
                     for key in ["event_count", "log_count", "error_count", "span_count"] {
@@ -177,41 +162,41 @@ fn summary(id: &str, records: &[Value]) -> Value {
                 increment(&mut result, "log_count");
                 if ["ERROR", "CRITICAL"].contains(&text(r, "level").to_uppercase().as_str()) {
                     increment(&mut result, "error_count");
-                    status = "failed";
                 }
             }
             _ => {}
         }
     }
-    result["status"] = status.into();
+    result["status"] = status.resolve().into();
     result["span_count"] = result["span_count"]
         .as_u64()
         .unwrap_or(0)
         .max(spans.len() as u64)
         .into();
-    let title = result["attributes"]["target.title"]
-        .as_str()
-        .or_else(|| result["attributes"]["memory.title"].as_str())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            sorted
-                .iter()
-                .find_map(|r| r["payload"]["title"].as_str().filter(|s| !s.is_empty()))
-        })
-        .or_else(|| {
-            ["workflow", "command"]
-                .iter()
-                .find_map(|k| result[*k].as_str().filter(|s| !s.is_empty()))
-        })
-        .or_else(|| {
-            sorted.iter().find_map(|r| {
-                ["type", "event", "message"]
-                    .iter()
-                    .find_map(|k| r[*k].as_str().filter(|s| !s.is_empty()))
-            })
-        })
-        .unwrap_or(id)
-        .to_owned();
+    let ordered: Vec<_> = sorted.into_iter().cloned().collect();
+    result["attributes"] = crate::first_seen_attributes(&ordered).into();
+    let title = crate::resolve_trace_title(
+        &ordered,
+        result["attributes"].as_object().unwrap(),
+        text(&result, "command"),
+        text(&result, "workflow"),
+        id,
+        String::new,
+        |provider| {
+            format!(
+                "{} thread",
+                provider
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| if i == 0 {
+                        c.to_uppercase().collect::<String>()
+                    } else {
+                        c.to_lowercase().collect()
+                    })
+                    .collect::<String>()
+            )
+        },
+    );
     result["title"] = title.into();
     result
 }

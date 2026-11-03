@@ -16,5 +16,6 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["full"] }

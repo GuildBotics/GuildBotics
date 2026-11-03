@@ -1,0 +1,1282 @@
+[
+  {
+    "record": {
+      "kind": "event",
+      "type": "chat_dispatch.abandoned",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "chat_dispatch.retry_scheduled",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "command.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "credential.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "credential.verified",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "diagnostics.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "member.command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "member.command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "member.command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "provider.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "review_limit.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "review_limit.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "review_limit.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "review_limit.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "scheduler.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "scheduler.running",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "scheduler.worker.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "session.pointer",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "span.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "span.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "system.custom",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "system.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "system.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "target.recorded",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "unknown.event",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "verify.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "workflow.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "workflow.completion_missing",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "event",
+      "type": "workflow.rate_limited",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": true
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "chat_dispatch.abandoned",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "chat_dispatch.retry_scheduled",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "command.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "credential.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "credential.verified",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "diagnostics.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "member.command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "member.command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "member.command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "provider.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "review_limit.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "review_limit.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "review_limit.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "review_limit.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "scheduler.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "scheduler.running",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "scheduler.worker.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "session.pointer",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "span.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "span.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "system.custom",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "system.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "system.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "target.recorded",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "unknown.event",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "verify.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "workflow.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "workflow.completion_missing",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "log",
+      "type": "workflow.rate_limited",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "chat_dispatch.abandoned",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "chat_dispatch.retry_scheduled",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "command.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "credential.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "credential.verified",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "diagnostics.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "member.command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "member.command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "member.command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "provider.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "review_limit.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "review_limit.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "review_limit.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "review_limit.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "scheduler.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "scheduler.running",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "scheduler.worker.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "session.pointer",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "span.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "span.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "system.custom",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "system.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "system.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "target.recorded",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "unknown.event",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "verify.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "workflow.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "workflow.completion_missing",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "io",
+      "type": "workflow.rate_limited",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "chat_dispatch.abandoned",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "chat_dispatch.retry_scheduled",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "command.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "credential.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "credential.verified",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "diagnostics.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "member.command.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "member.command.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "member.command.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "provider.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "review_limit.deferred",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "review_limit.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "review_limit.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "review_limit.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "scheduler.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "scheduler.running",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "scheduler.worker.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "session.pointer",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "span.failed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "span.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "system.custom",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "system.finished",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "system.started",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "target.recorded",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "unknown.event",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "verify.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "workflow.completed",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "workflow.completion_missing",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  },
+  {
+    "record": {
+      "kind": "memory",
+      "type": "workflow.rate_limited",
+      "trace_id": "routing",
+      "timestamp": "2026-11-03T00:00:00+00:00",
+      "payload": {}
+    },
+    "indexed": false
+  }
+]

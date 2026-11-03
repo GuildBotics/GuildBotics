@@ -44,6 +44,7 @@ const INDEX_EVENT_TYPES: &[&str] = &[
     "credential.failed",
     "credential.verified",
     "target.recorded",
+    "session.pointer",
 ];
 
 /// The events that end an execution, which carry its final counts.
@@ -80,7 +81,7 @@ impl Diagnostics {
     /// Records `record`, a record of the trace it names. A record that cannot
     /// be written is logged rather than failing what it records, as in the
     /// Python version.
-    pub(crate) fn record(&self, record: Map<String, Value>) {
+    pub fn record(&self, record: Map<String, Value>) {
         let _writing = WRITING
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -111,7 +112,10 @@ impl Diagnostics {
             record.insert("payload".into(), payload.into());
         }
         append(&transcript, &[&record])?;
-        if INDEX_EVENT_TYPES.contains(&text(&record, "type").as_str()) {
+        if text(&record, "kind") == "event"
+            && (INDEX_EVENT_TYPES.contains(&text(&record, "type").as_str())
+                || text(&record, "type").starts_with("system."))
+        {
             indexed.push(record);
         }
         self.index(&indexed)

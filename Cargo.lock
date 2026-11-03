@@ -2035,6 +2035,7 @@ dependencies = [
  "chrono",
  "serde_json",
  "sha2 0.11.1",
+ "syn 2.0.119",
  "tempfile",
  "tokio",
  "tracing",
