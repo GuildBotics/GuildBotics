@@ -16,7 +16,7 @@ use sha2::Digest;
 /// The size at which the index is rewritten with its newest records only.
 const INDEX_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// How many records a rewritten index keeps.
-const INDEX_RETAINED: usize = 5000;
+pub(crate) const INDEX_RETAINED: usize = 5000;
 const MAX_SESSION_ID_LENGTH: usize = 180;
 
 /// The events the index holds besides the pointers: the boundaries of
@@ -68,6 +68,9 @@ pub struct Diagnostics {
 /// workspace or `Diagnostics` it writes through: deciding whether a
 /// transcript exists and counting it at an end share the span of the write.
 static WRITING: Mutex<()> = Mutex::new(());
+static SYSTEMS: std::sync::LazyLock<
+    Mutex<std::collections::BTreeMap<PathBuf, Map<String, Value>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::BTreeMap::new()));
 
 impl Diagnostics {
     pub fn open(workspace: &Path) -> Diagnostics {
@@ -92,33 +95,117 @@ impl Diagnostics {
 
     fn route(&self, mut record: Map<String, Value>) -> std::io::Result<()> {
         let trace_id = text(&record, "trace_id");
+        if trace_id.is_empty() {
+            if let Some(session) = SYSTEMS
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&self.sessions)
+            {
+                let name = session["attributes"]["system_session_id"].as_str().unwrap();
+                let path = self.sessions.join(format!("{name}.jsonl"));
+                final_counts(&mut record, &path)?;
+                append(&path, &[&record])?;
+            }
+            return if belongs_in_index(&record) {
+                self.index(&[record])
+            } else {
+                Ok(())
+            };
+        }
         let name = format!("{}.jsonl", safe_id(&trace_id));
         let transcript = self.sessions.join(&name);
         let mut indexed = Vec::new();
         if !transcript.exists() {
             indexed.push(pointer(&record, &format!("sessions/{name}")));
         }
-        if FINISHED_BOUNDARIES.contains(&text(&record, "type").as_str()) {
-            let mut counts = Counts::default();
-            for existing in read_records(&transcript)? {
-                counts.add(&existing);
-            }
-            counts.add(&record);
-            let mut payload = match record.remove("payload") {
-                Some(Value::Object(payload)) => payload,
-                _ => Map::new(),
-            };
-            payload.extend(counts.payload());
-            record.insert("payload".into(), payload.into());
-        }
+        final_counts(&mut record, &transcript)?;
         append(&transcript, &[&record])?;
-        if text(&record, "kind") == "event"
-            && (INDEX_EVENT_TYPES.contains(&text(&record, "type").as_str())
-                || text(&record, "type").starts_with("system."))
-        {
+        if belongs_in_index(&record) {
             indexed.push(record);
         }
         self.index(&indexed)
+    }
+
+    /// One process-wide system transcript per workspace, shared by instances.
+    pub fn start_system_session(&self, service_run_id: &str) -> std::io::Result<()> {
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
+        let mut systems = SYSTEMS.lock().unwrap_or_else(|p| p.into_inner());
+        if systems.contains_key(&self.sessions) {
+            return Ok(());
+        }
+        let now = chrono::Utc::now();
+        let id = format!(
+            "system-{}-{}",
+            now.format("%Y%m%dT%H%M%S%.6fZ"),
+            uuid::Uuid::new_v4().simple()
+        );
+        let Value::Object(record) = json!({
+            "kind":"event", "type":"system.started", "timestamp":now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            "trace_id":null,"span_id":null,"parent_id":null,"call_id":null,"span":"",
+            "source":"system","person_id":"","command":"","workflow":"",
+            "attributes":{"system_session_id":id,"service_run_id":service_run_id,"session.path":format!("sessions/{id}.jsonl")},
+            "payload":{"path":format!("sessions/{id}.jsonl")}
+        }) else {
+            unreachable!()
+        };
+        append(&self.sessions.join(format!("{id}.jsonl")), &[&record])?;
+        self.index(std::slice::from_ref(&record))?;
+        systems.insert(self.sessions.clone(), record);
+        Ok(())
+    }
+
+    pub fn finish_system_session(&self) -> std::io::Result<()> {
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(mut record) = SYSTEMS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.sessions)
+        else {
+            return Ok(());
+        };
+        record.insert("type".into(), "system.finished".into());
+        record.insert(
+            "timestamp".into(),
+            chrono::Utc::now()
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+                .into(),
+        );
+        let id = record["attributes"]["system_session_id"].as_str().unwrap();
+        let path = self.sessions.join(format!("{id}.jsonl"));
+        final_counts(&mut record, &path)?;
+        append(&path, &[&record])?;
+        self.index(&[record])
+    }
+
+    /// Prune only transcripts; never the active system session or the index.
+    pub fn prune_transcripts(
+        &self,
+        now: std::time::SystemTime,
+        retention: std::time::Duration,
+    ) -> std::io::Result<Vec<PathBuf>> {
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
+        let active = SYSTEMS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&self.sessions)
+            .and_then(|r| r["attributes"]["system_session_id"].as_str())
+            .map(|id| self.sessions.join(format!("{id}.jsonl")));
+        let mut deleted = Vec::new();
+        for path in crate::activity::children(&self.sessions)? {
+            if active.as_ref() == Some(&path) || path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            if std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .is_some_and(|age| age > retention)
+                && std::fs::remove_file(&path).is_ok()
+            {
+                deleted.push(path);
+            }
+        }
+        Ok(deleted)
     }
 
     /// Appends to the index, rewriting it with its newest records once it has
@@ -142,6 +229,29 @@ impl Diagnostics {
         }
         std::fs::write(&self.index, text)
     }
+}
+
+fn belongs_in_index(record: &Map<String, Value>) -> bool {
+    text(record, "kind") == "event"
+        && (INDEX_EVENT_TYPES.contains(&text(record, "type").as_str())
+            || text(record, "type").starts_with("system."))
+}
+
+fn final_counts(record: &mut Map<String, Value>, transcript: &Path) -> std::io::Result<()> {
+    if FINISHED_BOUNDARIES.contains(&text(record, "type").as_str()) {
+        let mut counts = Counts::default();
+        for existing in read_records(transcript)? {
+            counts.add(&existing);
+        }
+        counts.add(record);
+        let mut payload = match record.remove("payload") {
+            Some(Value::Object(p)) => p,
+            _ => Map::new(),
+        };
+        payload.extend(counts.payload());
+        record.insert("payload".into(), payload.into());
+    }
+    Ok(())
 }
 
 /// The index's record that a trace's transcript exists and where.

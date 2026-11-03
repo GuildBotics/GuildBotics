@@ -19,11 +19,23 @@ fn stamp(value: &Value) -> (i64, String) {
 }
 
 impl Diagnostics {
+    fn completion_summaries(&self) -> BTreeMap<(String, String), String> {
+        let workspace = self
+            .index
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent());
+        workspace
+            .and_then(|w| crate::runs::RunStore::open(w).summaries_by_subject().ok())
+            .unwrap_or_default()
+    }
     fn indexed(&self) -> std::io::Result<Vec<Value>> {
-        Ok(read_records(&self.index)?
-            .into_iter()
-            .map(Value::Object)
-            .collect())
+        let mut records = read_records(&self.index)?;
+        let start = records
+            .len()
+            .saturating_sub(crate::diagnostics::INDEX_RETAINED);
+        Ok(records.drain(start..).map(Value::Object).collect())
     }
 
     /// Execution summaries use the index, never transcript I/O as searchable text.
@@ -37,15 +49,23 @@ impl Diagnostics {
         limit: usize,
     ) -> std::io::Result<Value> {
         let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        for record in self.indexed()? {
-            let id = text(&record, "trace_id").to_owned();
+        let indexed = self.indexed()?;
+        for record in &indexed {
+            let id = text(record, "trace_id").to_owned();
             if !id.is_empty() {
-                groups.entry(id).or_default().push(record);
+                groups.entry(id).or_default().push(record.clone());
             }
         }
         let mut summaries = Vec::new();
+        let completions = std::cell::OnceCell::new();
         for (id, records) in groups {
-            let summary = summary(&id, &records);
+            let summary = summary(&id, &records, |attrs, person| {
+                completed_title(
+                    completions.get_or_init(|| self.completion_summaries()),
+                    attrs,
+                    person,
+                )
+            });
             if source.is_some_and(|s| !s.is_empty() && text(&summary, "source") != s)
                 || person.is_some_and(|s| !s.is_empty() && text(&summary, "person_id") != s)
             {
@@ -58,31 +78,24 @@ impl Diagnostics {
             {
                 continue;
             }
-            if let Some(q) = query.filter(|s| !s.is_empty()) {
-                let mut searchable = ["trace_id", "source", "person_id", "command", "workflow"]
-                    .iter()
-                    .map(|k| text(&summary, k).to_owned())
-                    .collect::<Vec<_>>();
-                searchable.push(summary["attributes"].to_string());
-                for r in &records {
-                    match text(r, "kind") {
-                        "event" => searchable.push(text(r, "type").into()),
-                        "log" => searchable.push(text(r, "message").into()),
-                        "memory" => {
-                            searchable.push(format!("{} {}", text(r, "type"), r["payload"]))
-                        }
-                        _ => {}
-                    }
-                }
-                if !searchable
-                    .join(" ")
-                    .to_lowercase()
-                    .contains(&q.to_lowercase())
-                {
-                    continue;
-                }
+            if !matches_query(&summary, &records, query) {
+                continue;
             }
             summaries.push(summary);
+        }
+        if source.is_none() && person.is_none() && attr_key.is_none() {
+            summaries.extend(system_summaries(&indexed, false).into_iter().filter(|s| {
+                let id = text(s, "trace_id").strip_prefix("system:").unwrap_or("");
+                let records: Vec<_> = indexed
+                    .iter()
+                    .filter(|r| {
+                        r["attributes"]["system_session_id"] == id
+                            && matches!(text(r, "type"), "system.started" | "system.finished")
+                    })
+                    .cloned()
+                    .collect();
+                matches_query(s, &records, query)
+            }));
         }
         summaries.sort_by_key(|s| std::cmp::Reverse(stamp(&json!({"timestamp":s["started_at"]}))));
         summaries.truncate(limit);
@@ -90,20 +103,57 @@ impl Diagnostics {
     }
 
     pub fn trace_detail(&self, id: &str) -> std::io::Result<Value> {
-        let indexed: Vec<_> = self
-            .indexed()?
-            .into_iter()
-            .filter(|r| text(r, "trace_id") == id)
-            .collect();
-        let path = self.sessions.join(format!("{}.jsonl", safe_id(id)));
+        let path = self.sessions.join(format!(
+            "{}.jsonl",
+            safe_id(id.strip_prefix("system:").unwrap_or(id))
+        ));
+        let summary = if id.starts_with("system:") {
+            system_summaries(&self.indexed()?, true)
+                .into_iter()
+                .find(|s| s["trace_id"] == id)
+                .unwrap_or(Value::Null)
+        } else {
+            let indexed: Vec<_> = self
+                .indexed()?
+                .into_iter()
+                .filter(|r| text(r, "trace_id") == id)
+                .collect();
+            if indexed.is_empty() {
+                Value::Null
+            } else {
+                summary(id, &indexed, |attrs, person| {
+                    completed_title(&self.completion_summaries(), attrs, person)
+                })
+            }
+        };
         let mut records: Vec<Value> = read_records(&path)?
             .into_iter()
             .map(Value::Object)
             .collect();
         records.sort_by_key(stamp);
+        let mut records = crate::streams::collapse(records);
+        if let Some(workspace) = self.index.ancestors().nth(4) {
+            let mut audit = Vec::new();
+            for path in crate::activity::children(
+                &workspace.join(".guildbotics/state/documents/memory_events"),
+            )? {
+                if path.extension().is_some_and(|e| e == "jsonl") {
+                    audit.extend(
+                        read_records(&path)?
+                            .into_iter()
+                            .map(Value::Object)
+                            .filter(|r| text(r, "trace_id") == id),
+                    );
+                }
+            }
+            audit.reverse();
+            audit.sort_by_key(|r| std::cmp::Reverse(stamp(r)));
+            audit.truncate(1000);
+            records.extend(audit);
+        }
+        records.sort_by_key(stamp);
         Ok(
-            json!({"trace_id":id, "summary":if indexed.is_empty() {Value::Null} else {summary(id,&indexed)},
-            "records":records.iter().map(record).collect::<Vec<_>>(), "transcript_available":path.is_file()}),
+            json!({"trace_id":id,"summary":summary,"records":records.iter().map(record).collect::<Vec<_>>(),"transcript_available":path.is_file()}),
         )
     }
 }
@@ -118,9 +168,17 @@ fn display(v: &Value) -> String {
     }
 }
 
-fn summary(id: &str, records: &[Value]) -> Value {
+fn summary(
+    id: &str,
+    records: &[Value],
+    completion: impl FnOnce(&Map<String, Value>, &str) -> String,
+) -> Value {
     let mut result = json!({"trace_id":id,"source":"","person_id":"","command":"","workflow":"","title":"",
         "started_at":"","updated_at":"","status":"info","event_count":0,"log_count":0,"error_count":0,"span_count":0,"attributes":{}});
+    if id.starts_with("system:") {
+        result["source"] = "system".into();
+        result["command"] = "Global / system".into();
+    }
     let mut status = crate::TraceStatus::default();
     let mut spans = BTreeSet::new();
     let mut sorted: Vec<_> = records.iter().collect();
@@ -181,7 +239,12 @@ fn summary(id: &str, records: &[Value]) -> Value {
         text(&result, "command"),
         text(&result, "workflow"),
         id,
-        String::new,
+        || {
+            completion(
+                result["attributes"].as_object().unwrap(),
+                text(&result, "person_id"),
+            )
+        },
         |provider| {
             format!(
                 "{} thread",
@@ -199,6 +262,86 @@ fn summary(id: &str, records: &[Value]) -> Value {
     );
     result["title"] = title.into();
     result
+}
+
+fn matches_query(summary: &Value, records: &[Value], query: Option<&str>) -> bool {
+    let Some(q) = query.filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let mut searchable = ["trace_id", "source", "person_id", "command", "workflow"]
+        .iter()
+        .map(|k| text(summary, k).to_owned())
+        .collect::<Vec<_>>();
+    searchable.push(summary["attributes"].to_string());
+    for r in records {
+        match text(r, "kind") {
+            "event" => searchable.push(text(r, "type").into()),
+            "log" => searchable.push(text(r, "message").into()),
+            "memory" => searchable.push(format!("{} {}", text(r, "type"), r["payload"])),
+            _ => {}
+        }
+    }
+    searchable
+        .join(" ")
+        .to_lowercase()
+        .contains(&q.to_lowercase())
+}
+
+fn system_summaries(indexed: &[Value], include_latest: bool) -> Vec<Value> {
+    let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut order = Vec::new();
+    for r in indexed {
+        if !matches!(text(r, "type"), "system.started" | "system.finished") {
+            continue;
+        }
+        let Some(id) = r["attributes"]["system_session_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if !groups.contains_key(id) {
+            order.push(id.to_string());
+        }
+        groups.entry(id.into()).or_default().push(r.clone());
+    }
+    let latest = order.last();
+    groups
+        .into_iter()
+        .filter_map(|(id, records)| {
+            if Some(&id) == latest && !include_latest {
+                return None;
+            }
+            let mut s = summary(&format!("system:{id}"), &records, |_, _| String::new());
+            if Some(&id) != latest && !records.iter().any(|r| r["type"] == "system.finished") {
+                s["status"] = "interrupted".into();
+            }
+            Some(s)
+        })
+        .collect()
+}
+
+fn completed_title(
+    summaries: &BTreeMap<(String, String), String>,
+    attrs: &Map<String, Value>,
+    person: &str,
+) -> String {
+    let attr = |key| attrs.get(key).and_then(Value::as_str).unwrap_or("");
+    let provider = attr("chat.provider").trim();
+    let subject = if provider.is_empty() {
+        attr("target.url").to_string()
+    } else {
+        format!(
+            "{provider}:{}:{}:{}",
+            attr("chat.channel"),
+            attr("chat.thread"),
+            attr("event_id")
+        )
+    };
+    summaries
+        .get(&(subject, person.into()))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn increment(result: &mut Value, key: &str) {
@@ -233,45 +376,9 @@ fn record(raw: &Value) -> Value {
                 .unwrap_or(json!({})),
         );
     }
-    result.insert("presentation".into(), presentation(raw));
+    result.insert(
+        "presentation".into(),
+        crate::presentations::presentation(raw),
+    );
     result.into()
-}
-
-fn presentation(raw: &Value) -> Value {
-    let event = text(raw, "type");
-    let payload = &raw["payload"];
-    let mut p = json!({"label_key":"","label_fallback":event,"message_key":"","message":"","message_params":{},"tone":"neutral","effort":""});
-    if text(raw, "kind") == "io" {
-        p["label_key"] =
-            format!("diagnostics.executions.ioTypes.{}", event.replace('.', "_")).into();
-        p["tone"] = "info".into();
-        p["message"] = ["message", "prompt", "stdout", "output"]
-            .iter()
-            .find_map(|k| payload[*k].as_str().filter(|s| !s.is_empty()))
-            .unwrap_or(event)
-            .into();
-        if !text(raw, "message").is_empty() {
-            p["message"] = raw["message"].clone();
-        }
-    } else if event.starts_with("command.") {
-        let phase = event.rsplit('.').next().unwrap_or("");
-        p["label_key"] = format!("diagnostics.executions.eventTypes.command_{phase}").into();
-        p["tone"] = if phase == "failed" {
-            "danger"
-        } else {
-            "success"
-        }
-        .into();
-        let failure = ["message", "error", "error_type", "code"]
-            .iter()
-            .find_map(|k| payload[*k].as_str().filter(|s| !s.is_empty()));
-        p["message"] = if phase == "failed" { failure } else { None }
-            .or_else(|| raw["command"].as_str().filter(|s| !s.is_empty()))
-            .or_else(|| payload["command"].as_str().filter(|s| !s.is_empty()))
-            .unwrap_or(event)
-            .into();
-    } else {
-        p["message"] = event.into();
-    }
-    p
 }

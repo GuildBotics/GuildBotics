@@ -9,8 +9,13 @@ repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
+anyhow = "1.0.102"
+gb-base = { path = "../gb-base" }
+serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-serde_json = "1.0.154"
+# A file-to-file comparison hides lossy parsing on both sides; HTTP must
+# preserve the duration floats Python wrote as well.
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 sha2 = "0.11.1"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }

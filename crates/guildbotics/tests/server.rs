@@ -1193,8 +1193,6 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
     );
     let (_, refused) = server.run(json!({"command": "missing"}), "en").await;
     assert_eq!(refused["message"], "Unable to locate command 'missing'.");
-    // A command that never started leaves no trace.
-    assert!(!workspace.join(".guildbotics/local/run").exists());
     let project = workspace.join(".guildbotics/config/team/project.yml");
     std::fs::remove_file(&project).unwrap();
     let (status, refused) = server.run(json!({"command": "look"}), "en").await;
@@ -1206,6 +1204,28 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
             &json!(project)
         )
     );
+    // Only the server's startup is recorded; refused commands leave no trace.
+    let run = workspace.join(".guildbotics/local/run");
+    let index = std::fs::read_to_string(run.join("diagnostics.jsonl")).unwrap();
+    let records: Vec<Value> = index
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 1, "{records:?}");
+    let started = &records[0];
+    assert_eq!(started["type"], "system.started");
+    assert_eq!(started["source"], "system");
+    assert!(started["trace_id"].is_null());
+    let transcripts: Vec<_> = std::fs::read_dir(run.join("sessions"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(transcripts.len(), 1, "{transcripts:?}");
+    assert_eq!(
+        transcripts[0],
+        run.join(started["payload"]["path"].as_str().unwrap())
+    );
+    assert_eq!(std::fs::read_to_string(&transcripts[0]).unwrap(), index);
     server.stop();
 }
 

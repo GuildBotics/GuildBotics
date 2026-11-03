@@ -108,6 +108,16 @@ impl Server {
             work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
         });
+        if let Some(workspace) = &api.workspace {
+            let diagnostics = gb_observability::Diagnostics::open(workspace);
+            let instance = api.instance_id.clone();
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || diagnostics.start_system_session(&instance))
+                    .await?
+            {
+                tracing::warn!("cannot start system transcript: {e}");
+            }
+        }
         Ok(Server {
             lock,
             listener,
@@ -128,12 +138,23 @@ impl Server {
             cancel.await;
             cancelled.cancel();
         });
+        let diagnostics = self
+            .api
+            .workspace
+            .as_ref()
+            .map(|w| gb_observability::Diagnostics::open(w));
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(stop)
             .await;
         work.close();
         work.wait().await;
         cancelling.abort();
+        if let Some(diagnostics) = diagnostics {
+            match tokio::task::spawn_blocking(move || diagnostics.finish_system_session()).await {
+                Ok(Ok(())) => (),
+                result => tracing::warn!("cannot finish system transcript: {result:?}"),
+            }
+        }
         (Held(self.lock), served.map_err(Into::into))
     }
 }
