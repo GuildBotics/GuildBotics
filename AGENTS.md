@@ -441,6 +441,14 @@ npm ci && (cd crates/branvil/web && npm run lint && npm run typecheck && npm run
 
 テストは cargo-nextest でテストごとにプロセスを分けて動かす（開発用ベースイメージには入っている。手元では `cargo install --locked cargo-nextest`）。
 
+CI の `rust-clippy` / `rust-test` のキャッシュキーは `rust-toolchain.toml`、
+`branvil-integration` は `uv.lock` と `rust-toolchain.toml` を使う（#121）。
+`Cargo.lock` が変わっても PR とゲートで直近の registry と `target` を復元できるようにし、
+Cargo は `--locked` で依存を確定する。復元後の `find crates -exec touch -c {} +` は保ち、
+ワークスペースの crate は再ビルドする。現在のランナーは保護ブランチの保存から24時間を過ぎると
+キャッシュを更新し、ツールチェーン更新で世代が変わる。#120 で直近世代の復元とゲートの保存の
+引き継ぎを導入したら、キーを lockfile 基準に戻す。
+
 HTTP と CLI の外側から確かめる黒箱テスト（通常の `test` ジョブにも含まれる）:
 
 ```bash
