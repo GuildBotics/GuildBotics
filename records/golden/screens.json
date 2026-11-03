@@ -13,7 +13,19 @@
     "commands/ignored.metadata.yml": "name: hidden\n",
     "commands/ask.md": "Workspace file shadowed by localized template\n",
     "commands/nested.dir/basic.sh": "#!/bin/sh\necho basic\n",
-    "commands/variadic.py": "async def main(ctx, path, *args, title='x', **kwargs):\n    return path\n"
+    "commands/variadic.py": "async def main(ctx, path, *args, title='x', **kwargs):\n    return path\n",
+    "commands/greet.md": "---\ncommands:\n  - command: functions/identify_item item_type=x\n---\n{{ identify_item }} {caller}\n",
+    "commands/team/daily.md": "---\ncommands:\n  - script: echo hi\n---\n{{ daily__1 }}\n",
+    "commands/quoted.md": "---\ncommands: ['\"sub/my_tool\" a']\n---\n{{ my_tool }}\n",
+    "commands/outputs.yaml": "commands:\n  - {command: 'ignored a', path: sub/override.py, name: ''}\n  - {path: sub/.hidden}\n  - {name: false, script: echo hi}\n  - {name: result, script: echo hi}\n  - 'sub/escaped\\ tool a'\n  - {name: 12, script: echo hi}\ndescription: '{{ override }} {{ result }} {{ outputs__3 }} ${12} {{ caller }}'\n",
+    "commands/invalid.md": "---\ncommands: 42\n---\n{caller}\n",
+    "commands/team/extension.sh.md": "---\ncommands: {script: echo hi}\nname: 0\n---\n{{ extension__1 }}\n",
+    "commands/empty.md": "---\ncommands: ''\n---\n{caller}\n",
+    "commands/null.md": "---\ncommands: null\nargs: null\nname: false\n---\n{{ null__1 }}\n",
+    "commands/daily__report.md": "Report\n",
+    "commands/v2api.md": "API\n",
+    "commands/o'neil-check.md": "Check\n",
+    "commands/ßeta-ǳUNG-ΟΣ.md": "Unicode\n"
   },
   "identity": {
     ".guildbotics/config/team/members/aiko/identity.yml": "person_id: aiko\nname: Aiko\nperson_type: agent\n"
@@ -36,6 +48,38 @@
           "description": "Inspect a file.",
           "relative_path": "code.py",
           "format": "python"
+        },
+        {
+          "id": "ZGFpbHlfX3JlcG9ydC5tZA",
+          "command": "daily__report",
+          "label": "Daily  Report",
+          "description": "",
+          "relative_path": "daily__report.md",
+          "format": "markdown"
+        },
+        {
+          "id": "ZW1wdHkubWQ",
+          "command": "empty",
+          "label": "Empty",
+          "description": "",
+          "relative_path": "empty.md",
+          "format": "markdown"
+        },
+        {
+          "id": "Z3JlZXQubWQ",
+          "command": "greet",
+          "label": "Greet",
+          "description": "",
+          "relative_path": "greet.md",
+          "format": "markdown"
+        },
+        {
+          "id": "aW52YWxpZC5tZA",
+          "command": "invalid",
+          "label": "Invalid",
+          "description": "",
+          "relative_path": "invalid.md",
+          "format": "markdown"
         },
         {
           "id": "bG9vay5qYS5tZA",
@@ -62,6 +106,38 @@
           "format": "yaml"
         },
         {
+          "id": "bnVsbC5tZA",
+          "command": "null",
+          "label": "Null",
+          "description": "",
+          "relative_path": "null.md",
+          "format": "markdown"
+        },
+        {
+          "id": "byduZWlsLWNoZWNrLm1k",
+          "command": "o'neil-check",
+          "label": "O'Neil Check",
+          "description": "",
+          "relative_path": "o'neil-check.md",
+          "format": "markdown"
+        },
+        {
+          "id": "b3V0cHV0cy55YW1s",
+          "command": "outputs",
+          "label": "Outputs",
+          "description": "{{ override }} {{ result }} {{ outputs__3 }} ${12} {{ caller }}",
+          "relative_path": "outputs.yaml",
+          "format": "yaml"
+        },
+        {
+          "id": "cXVvdGVkLm1k",
+          "command": "quoted",
+          "label": "Quoted",
+          "description": "",
+          "relative_path": "quoted.md",
+          "format": "markdown"
+        },
+        {
           "id": "c2ltcGxlLnNo",
           "command": "simple",
           "label": "Simple",
@@ -70,12 +146,36 @@
           "format": "shell"
         },
         {
+          "id": "dGVhbS9kYWlseS5tZA",
+          "command": "team/daily",
+          "label": "Daily",
+          "description": "",
+          "relative_path": "team/daily.md",
+          "format": "markdown"
+        },
+        {
+          "id": "djJhcGkubWQ",
+          "command": "v2api",
+          "label": "V2Api",
+          "description": "",
+          "relative_path": "v2api.md",
+          "format": "markdown"
+        },
+        {
           "id": "dmFyaWFkaWMucHk",
           "command": "variadic",
           "label": "Variadic",
           "description": "",
           "relative_path": "variadic.py",
           "format": "python"
+        },
+        {
+          "id": "w59ldGEtx7NVTkctzp_Ooy5tZA",
+          "command": "ßeta-ǳUNG-ΟΣ",
+          "label": "Sseta ǲung Ος",
+          "description": "",
+          "relative_path": "ßeta-ǳUNG-ΟΣ.md",
+          "format": "markdown"
         }
       ]
     },
@@ -158,6 +258,77 @@
         "inputs": {
           "defined_args": "auto",
           "extra_args": "optional",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "ZGFpbHlfX3JlcG9ydC5tZA",
+        "command": "daily__report",
+        "label": "Daily  Report",
+        "description": "",
+        "relative_path": "daily__report.md",
+        "format": "markdown",
+        "content": "Report\n",
+        "revision": "6405fea79692e869ac9f845cbeba4a68074868c45e35700c6fa9982958e71b4f",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "ZW1wdHkubWQ",
+        "command": "empty",
+        "label": "Empty",
+        "description": "",
+        "relative_path": "empty.md",
+        "format": "markdown",
+        "content": "---\ncommands: ''\n---\n{caller}\n",
+        "revision": "157bb8cda77dbcba81d6b9c64bd5366bd4201a45d6d2cbab9e8fc47ffaaaadf9",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "Z3JlZXQubWQ",
+        "command": "greet",
+        "label": "Greet",
+        "description": "",
+        "relative_path": "greet.md",
+        "format": "markdown",
+        "content": "---\ncommands:\n  - command: functions/identify_item item_type=x\n---\n{{ identify_item }} {caller}\n",
+        "revision": "5bcff8235640365b37cd7cc0cab848c9f6adf1d80051e9bf445cbbe7c3e94f33",
+        "arguments": [
+          {
+            "name": "caller",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "aW52YWxpZC5tZA",
+        "command": "invalid",
+        "label": "Invalid",
+        "description": "",
+        "relative_path": "invalid.md",
+        "format": "markdown",
+        "content": "---\ncommands: 42\n---\n{caller}\n",
+        "revision": "fc94a7d3eab4ef97b992e08d7d0512f71d0d7f7b61c64a0995d9234aced96415",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
           "message": "optional"
         }
       },
@@ -248,6 +419,84 @@
         }
       },
       {
+        "id": "bnVsbC5tZA",
+        "command": "null",
+        "label": "Null",
+        "description": "",
+        "relative_path": "null.md",
+        "format": "markdown",
+        "content": "---\ncommands: null\nargs: null\nname: false\n---\n{{ null__1 }}\n",
+        "revision": "393a29cba3ed347bf5a1be92cad7ec9f75673dae23ed4af9bb4f82388f8b02c3",
+        "arguments": [
+          {
+            "name": "null__1",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "byduZWlsLWNoZWNrLm1k",
+        "command": "o'neil-check",
+        "label": "O'Neil Check",
+        "description": "",
+        "relative_path": "o'neil-check.md",
+        "format": "markdown",
+        "content": "Check\n",
+        "revision": "3cc42f24cf1c6b725381f2dbc293a7a6588a32cf8af318351ba682680261daaa",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "b3V0cHV0cy55YW1s",
+        "command": "outputs",
+        "label": "Outputs",
+        "description": "{{ override }} {{ result }} {{ outputs__3 }} ${12} {{ caller }}",
+        "relative_path": "outputs.yaml",
+        "format": "yaml",
+        "content": "commands:\n  - {command: 'ignored a', path: sub/override.py, name: ''}\n  - {path: sub/.hidden}\n  - {name: false, script: echo hi}\n  - {name: result, script: echo hi}\n  - 'sub/escaped\\ tool a'\n  - {name: 12, script: echo hi}\ndescription: '{{ override }} {{ result }} {{ outputs__3 }} ${12} {{ caller }}'\n",
+        "revision": "a9aae018d7ce2736c76744e7962c6b5b10c4f955c5f9f82b48efaba8fcf99736",
+        "arguments": [
+          {
+            "name": "caller",
+            "kind": "keyword",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "cXVvdGVkLm1k",
+        "command": "quoted",
+        "label": "Quoted",
+        "description": "",
+        "relative_path": "quoted.md",
+        "format": "markdown",
+        "content": "---\ncommands: ['\"sub/my_tool\" a']\n---\n{{ my_tool }}\n",
+        "revision": "4e77a8ff429479df445c6f2a099c74dcbe27f0370db336c8207509885e4fe640",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
         "id": "c2ltcGxlLnNo",
         "command": "simple",
         "label": "Simple",
@@ -256,6 +505,38 @@
         "format": "shell",
         "content": "#!/bin/sh\necho ok\n",
         "revision": "b4d644d4279594903f1a9911956432d9473041f2984fc6014c14d7402c7d126c",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "dGVhbS9kYWlseS5tZA",
+        "command": "team/daily",
+        "label": "Daily",
+        "description": "",
+        "relative_path": "team/daily.md",
+        "format": "markdown",
+        "content": "---\ncommands:\n  - script: echo hi\n---\n{{ daily__1 }}\n",
+        "revision": "96ea8bf55b71abfa76488f5f9e8d7c7a55d4b75a7468fa77a20d10a2bb452dd5",
+        "arguments": [],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "djJhcGkubWQ",
+        "command": "v2api",
+        "label": "V2Api",
+        "description": "",
+        "relative_path": "v2api.md",
+        "format": "markdown",
+        "content": "API\n",
+        "revision": "0d52eec843b47c0bc57afab16fe31620c88ab09ef228e35433a9954de6c61151",
         "arguments": [],
         "inputs": {
           "defined_args": "auto",
@@ -286,6 +567,22 @@
             "default": "x"
           }
         ],
+        "inputs": {
+          "defined_args": "auto",
+          "extra_args": "hidden",
+          "message": "optional"
+        }
+      },
+      {
+        "id": "w59ldGEtx7NVTkctzp_Ooy5tZA",
+        "command": "ßeta-ǳUNG-ΟΣ",
+        "label": "Sseta ǲung Ος",
+        "description": "",
+        "relative_path": "ßeta-ǳUNG-ΟΣ.md",
+        "format": "markdown",
+        "content": "Unicode\n",
+        "revision": "70d66fda10513f8ea20a8996fe325170f90e6795f4cea9f3b023108f9423c10b",
+        "arguments": [],
         "inputs": {
           "defined_args": "auto",
           "extra_args": "hidden",
@@ -465,9 +762,9 @@
       }
     ],
     "sessions": {
-      "running.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:20+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:21+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n",
       "failure.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:10+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:11+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n{\"kind\": \"event\", \"type\": \"command.failed\", \"trace_id\": \"failure\", \"timestamp\": \"2026-11-03T00:00:12+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"failure\"}, \"payload\": {\"error_type\": \"CommandError\", \"event_count\": 2, \"log_count\": 0, \"error_count\": 1, \"span_count\": 0}}\n",
-      "success.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:00+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:01+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n{\"kind\": \"event\", \"type\": \"command.finished\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:02+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"event_count\": 2, \"log_count\": 0, \"error_count\": 0, \"span_count\": 0}}\n"
+      "success.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:00+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:01+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n{\"kind\": \"event\", \"type\": \"command.finished\", \"trace_id\": \"success\", \"timestamp\": \"2026-11-03T00:00:02+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"success\"}, \"payload\": {\"event_count\": 2, \"log_count\": 0, \"error_count\": 0, \"span_count\": 0}}\n",
+      "running.jsonl": "{\"kind\": \"event\", \"type\": \"command.started\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:20+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"command\": \"look\", \"person\": \"aiko\"}}\n{\"kind\": \"io\", \"type\": \"command.output\", \"trace_id\": \"running\", \"timestamp\": \"2026-11-03T00:00:21+00:00\", \"person_id\": \"aiko\", \"source\": \"manual\", \"command\": \"look\", \"attributes\": {\"run.entry\": \"command\", \"test\": \"running\"}, \"payload\": {\"output\": \"result 日本語\\n\"}}\n"
     },
     "traces": {
       "traces": [

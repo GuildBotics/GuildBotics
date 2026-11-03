@@ -80,23 +80,10 @@ impl CommandRoots {
             .strip_prefix(self.config.join("commands"))?
             .to_string_lossy()
             .replace('\\', "/");
-        let fallback = name
-            .rsplit('/')
-            .next()
-            .unwrap_or(name)
-            .replace(['_', '-'], " ")
-            .split_whitespace()
-            .map(|s| {
-                let mut c = s.chars();
-                c.next()
-                    .map(|f| f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase())
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
+        let fallback = default_label(name);
         let label = metadata
             .get("name")
-            .filter(|v| !v.is_null() && **v != "")
+            .filter(|v| truthy(v))
             .map(python_text)
             .unwrap_or(fallback);
         let format = match path.extension().and_then(|s| s.to_str()).unwrap_or("") {
@@ -234,7 +221,7 @@ fn arguments(metadata: &Value, command: &str) -> Option<Value> {
     let mut result = Vec::new();
     let mut declared = BTreeSet::new();
     let valid = Regex::new(r"^(?:[A-Za-z_]\w*|\d+)$").unwrap();
-    if let Some(raw) = metadata.get("args") {
+    if let Some(raw) = metadata.get("args").filter(|v| !v.is_null()) {
         for (name, definition) in raw.as_object()? {
             if !valid.is_match(name) {
                 return None;
@@ -291,25 +278,13 @@ fn arguments(metadata: &Value, command: &str) -> Option<Value> {
         found.remove(reserved);
     }
     // Named subcommand outputs are runtime values, not caller arguments.
-    if let Some(entries) = metadata.get("commands") {
+    if let Some(entries) = metadata.get("commands").filter(|v| !v.is_null()) {
         let entries = entries
             .as_array()
             .cloned()
             .unwrap_or_else(|| vec![entries.clone()]);
         for (i, entry) in entries.iter().enumerate() {
-            let output = entry
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    entry
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .or_else(|| entry.as_str().and_then(|s| s.split_whitespace().next()))
-                        .and_then(|s| Path::new(s).file_stem()?.to_str().map(str::to_owned))
-                })
-                .unwrap_or_else(|| format!("{command}__{}", i + 1));
-            found.remove(&output);
+            found.remove(&output_name(entry, command, i + 1)?);
         }
     }
     let mut positional: Vec<_> = found
@@ -328,4 +303,168 @@ fn arguments(metadata: &Value, command: &str) -> Option<Value> {
         }
     }
     Some(result.into())
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+fn default_label(name: &str) -> String {
+    let source = name
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .replace(['_', '-'], " ");
+    // Whole-string lowercasing preserves context-sensitive final sigma.
+    let lowercase = source.to_lowercase();
+    let mut lower = lowercase.chars();
+    let cased = Regex::new(r"^\p{Cased}$").unwrap();
+    let mut previous_cased = false;
+    let mut result = String::new();
+    for ch in source.chars() {
+        let lowered: String = lower.by_ref().take(ch.to_lowercase().count()).collect();
+        let title = unicode_case_mapping::to_titlecase(ch);
+        if previous_cased {
+            result.push_str(&lowered);
+        } else if title == [0; 3] {
+            result.push(ch);
+        } else {
+            result.extend(
+                title
+                    .into_iter()
+                    .filter(|n| *n != 0)
+                    .filter_map(char::from_u32),
+            );
+        }
+        previous_cased = cased.is_match(&ch.to_string());
+    }
+    result
+}
+
+// Python shlex.split(comments=False, posix=True). Validate every word, even
+// though naming needs only the first; invalid entries invalidate arguments.
+fn command_words(source: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        match (quote, ch) {
+            (Some(q), c) if q == c => quote = None,
+            (None, '\'' | '"') => {
+                quote = Some(ch);
+                started = true;
+            }
+            (Some('\''), _) => word.push(ch),
+            (_, '\\') => {
+                let next = chars.next()?;
+                if quote == Some('"') && next != '"' && next != '\\' {
+                    word.push('\\');
+                }
+                word.push(next);
+                started = true;
+            }
+            (None, ' ' | '\t' | '\r' | '\n') => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            _ => {
+                word.push(ch);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    (!words.is_empty()).then_some(words)
+}
+
+fn output_name(entry: &Value, command: &str, index: usize) -> Option<String> {
+    let mut normalized = match entry {
+        Value::String(s) => {
+            serde_json::Map::from_iter([("path".into(), command_words(s)?.remove(0).into())])
+        }
+        Value::Object(o) => {
+            let mut normalized = if let Some(s) = o.get("command") {
+                serde_json::Map::from_iter([(
+                    "path".into(),
+                    command_words(&python_text(s))?.remove(0).into(),
+                )])
+            } else {
+                serde_json::Map::new()
+            };
+            normalized.extend(o.clone());
+            normalized
+        }
+        _ => return None,
+    };
+    if let Some(name) = normalized.remove("name").filter(truthy) {
+        return Some(python_text(&name));
+    }
+    if let Some(path) = normalized.remove("path").filter(truthy) {
+        return Some(
+            Path::new(&python_text(&path))
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    // Match command_source_name even when a logical name ends in an extension.
+    let path = Path::new(command);
+    let suffix = path
+        .extension()
+        .map(|s| format!(".{}", s.to_string_lossy().to_lowercase()));
+    let anchor = if suffix
+        .as_deref()
+        .is_some_and(|s| crate::commands::EXTENSIONS.contains(&s))
+    {
+        path.file_stem()
+    } else {
+        path.file_name()
+    }
+    .unwrap_or_default()
+    .to_string_lossy();
+    let anchor = anchor.as_ref();
+    let anchor = anchor.strip_suffix(".en").unwrap_or(anchor);
+    Some(format!("{anchor}__{index}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subcommand_words_follow_python_shlex() {
+        for (source, expected) in [
+            (r#""sub/my_tool" a"#, vec!["sub/my_tool", "a"]),
+            (r"sub/escaped\ tool a", vec!["sub/escaped tool", "a"]),
+            ("#tool a", vec!["#tool", "a"]),
+            (r#""a\$b" ''"#, vec![r"a\$b", ""]),
+            ("a\\\nb", vec!["a\nb"]),
+        ] {
+            assert_eq!(
+                command_words(source),
+                Some(expected.into_iter().map(str::to_owned).collect()),
+                "{source:?}"
+            );
+        }
+        for source in ["", "  ", "tool 'unfinished", "tool\\"] {
+            assert_eq!(command_words(source), None, "{source:?}");
+        }
+    }
 }

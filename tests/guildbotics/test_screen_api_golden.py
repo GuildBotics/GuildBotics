@@ -13,8 +13,8 @@ from unittest.mock import patch
 from guildbotics.app_api.command_files import CommandFileService
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.traces import list_traces, trace_detail
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 GOLDEN = Path(__file__).resolve().parents[2] / "records/golden/screens.json"
 CONFIG = {
@@ -32,6 +32,18 @@ CONFIG = {
     "commands/ask.md": "Workspace file shadowed by localized template\n",
     "commands/nested.dir/basic.sh": "#!/bin/sh\necho basic\n",
     "commands/variadic.py": "async def main(ctx, path, *args, title='x', **kwargs):\n    return path\n",
+    "commands/greet.md": "---\ncommands:\n  - command: functions/identify_item item_type=x\n---\n{{ identify_item }} {caller}\n",
+    "commands/team/daily.md": "---\ncommands:\n  - script: echo hi\n---\n{{ daily__1 }}\n",
+    "commands/quoted.md": "---\ncommands: ['\"sub/my_tool\" a']\n---\n{{ my_tool }}\n",
+    "commands/outputs.yaml": "commands:\n  - {command: 'ignored a', path: sub/override.py, name: ''}\n  - {path: sub/.hidden}\n  - {name: false, script: echo hi}\n  - {name: result, script: echo hi}\n  - 'sub/escaped\\ tool a'\n  - {name: 12, script: echo hi}\ndescription: '{{ override }} {{ result }} {{ outputs__3 }} ${12} {{ caller }}'\n",
+    "commands/invalid.md": "---\ncommands: 42\n---\n{caller}\n",
+    "commands/team/extension.sh.md": "---\ncommands: {script: echo hi}\nname: 0\n---\n{{ extension__1 }}\n",
+    "commands/empty.md": "---\ncommands: ''\n---\n{caller}\n",
+    "commands/null.md": "---\ncommands: null\nargs: null\nname: false\n---\n{{ null__1 }}\n",
+    "commands/daily__report.md": "Report\n",
+    "commands/v2api.md": "API\n",
+    "commands/o'neil-check.md": "Check\n",
+    "commands/ßeta-ǳUNG-ΟΣ.md": "Unicode\n",
 }
 
 

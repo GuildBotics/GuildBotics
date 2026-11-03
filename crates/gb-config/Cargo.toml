@@ -19,6 +19,7 @@ regex = "1"
 tracing = "0.1"
 unicode-ident = "1"
 unicode-normalization = "0.1"
+unicode-case-mapping = "1"
 
 [dev-dependencies]
 gb-base = { path = "../gb-base" }
