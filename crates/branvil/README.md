@@ -599,7 +599,10 @@ image is rebuilt, loading the new archive is all it takes (the script
 does so itself); the pipeline stays as it is. The Rust jobs fetch crates
 from crates.io and `branvil-web` fetches packages from `registry.npmjs.org`, so the
 repository's CI tab must allow its jobs the network. `rust-clippy` and `rust-test` cache
-Cargo's registry and `target`, keyed by `Cargo.lock`; `branvil-web` caches npm's
+Cargo's registry and `target`, keyed by `rust-toolchain.toml` so lockfile changes
+can reuse dependencies on PR heads and gates. The pipeline comments explain
+this temporary choice and the return to lockfile keys in ticket #120.
+`branvil-web` caches npm's
 downloads, keyed by the repository root's `package-lock.json`.
 
 ## Upstream (GitHub)
