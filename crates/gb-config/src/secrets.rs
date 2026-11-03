@@ -7,7 +7,7 @@
 //! `guildbotics.secrets.v1\0<store_id>`, binding it to local/secrets.json.
 //! The device key is Python credential_vault's base64 32-byte key, under
 //! GuildBotics / agent-environment-credentials and the same device-wide lock.
-//! Updates replace ciphertext, namespace, then names under the shared lock.
+//! Updates persist namespace before ciphertext, then names under the shared lock.
 //! Interrupted multi-file writes that disagree stop rather than lose values.
 //! Moving legacy keychain values is a separate, explicit migration operation.
 use aes_gcm::{
@@ -39,11 +39,37 @@ pub trait Keychain: Send + Sync {
 }
 
 pub struct SystemKeychain;
+fn keychain_target(windows: bool) -> Option<String> {
+    // Python's WindowsCredentialManager._target (windows_credentials.py).
+    windows.then(|| format!("{SERVICE}/utf8/{ACCOUNT}"))
+}
+fn keychain_entry() -> keyring::Result<keyring::Entry> {
+    match keychain_target(cfg!(target_os = "windows")) {
+        Some(target) => keyring::Entry::new_with_target(&target, SERVICE, ACCOUNT),
+        None => keyring::Entry::new(SERVICE, ACCOUNT),
+    }
+}
+fn read_entry(entry: &keyring::Entry, windows: bool) -> keyring::Result<String> {
+    if windows {
+        // get_password decodes UTF-16 on Windows; Python stores raw UTF-8.
+        String::from_utf8(entry.get_secret()?)
+            .map_err(|e| keyring::Error::BadEncoding(e.into_bytes()))
+    } else {
+        entry.get_password()
+    }
+}
+#[cfg(any(not(target_os = "macos"), test))]
+fn write_entry(entry: &keyring::Entry, value: &str, windows: bool) -> keyring::Result<()> {
+    if windows {
+        entry.set_secret(value.as_bytes())
+    } else {
+        entry.set_password(value)
+    }
+}
 impl Keychain for SystemKeychain {
     fn read(&self) -> anyhow::Result<Option<String>> {
-        let entry = keyring::Entry::new(SERVICE, ACCOUNT)
-            .map_err(|_| anyhow::anyhow!("OS keychain unavailable"))?;
-        match entry.get_password() {
+        let entry = keychain_entry().map_err(|_| anyhow::anyhow!("OS keychain unavailable"))?;
+        match read_entry(&entry, cfg!(target_os = "windows")) {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => bail!("OS keychain locked or unavailable"),
@@ -62,8 +88,8 @@ impl Keychain for SystemKeychain {
         #[cfg(not(target_os = "macos"))]
         {
             ensure!(self.read()?.is_none(), "device key already exists");
-            keyring::Entry::new(SERVICE, ACCOUNT)
-                .and_then(|entry| entry.set_password(encoded_key))
+            keychain_entry()
+                .and_then(|entry| write_entry(&entry, encoded_key, cfg!(target_os = "windows")))
                 .map_err(|_| anyhow::anyhow!("OS keychain could not create device key"))?;
         }
         Ok(())
@@ -302,24 +328,173 @@ impl<'a> SecretStore<'a> {
                 )
                 .map_err(|_| anyhow::anyhow!("secret encryption failed"))?;
             // Only ciphertext ever reaches an atomic writer or temporary file.
-            writer.write_json(
-                &self.root.join("local/secrets.enc.json"),
-                &Sealed {
-                    version: 1,
-                    nonce: B64.encode(nonce),
-                    ciphertext: B64.encode(ciphertext),
-                },
-            )?;
-            writer.write_json(
-                &self.root.join("local/secrets.json"),
-                &json!({"schema_version": 1, "store_id": id}),
-            )?;
-            // JSON is a YAML subset and quotes all key names unambiguously.
-            writer.write_json(
-                &self.root.join("config/secrets.yml"),
-                &json!({"keys": values.keys().collect::<Vec<_>>()}),
-            )?;
-            Ok(())
+            let sealed = serde_json::to_value(Sealed {
+                version: 1,
+                nonce: B64.encode(nonce),
+                ciphertext: B64.encode(ciphertext),
+            })?;
+            persist_records(&self.root, &id, &sealed, &values, |path, value| {
+                writer.write_json(path, value)
+            })
         })
+    }
+}
+
+fn persist_records(
+    root: &Path,
+    id: &str,
+    sealed: &Value,
+    values: &BTreeMap<String, String>,
+    mut write: impl FnMut(&Path, &Value) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    // Retain an existing immutable namespace, and never land ciphertext whose
+    // authentication context has not been recorded yet.
+    if read_store_id(&root.join("local"))?.is_none() {
+        write(
+            &root.join("local/secrets.json"),
+            &json!({"schema_version": 1, "store_id": id}),
+        )?;
+    }
+    write(&root.join("local/secrets.enc.json"), sealed)?;
+    // JSON is a YAML subset and quotes all key names unambiguously.
+    write(
+        &root.join("config/secrets.yml"),
+        &json!({"keys": values.keys().collect::<Vec<_>>()}),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gb_base::files::atomic_write;
+    use std::{any::Any, sync::Mutex};
+
+    struct FixedKey;
+    impl Keychain for FixedKey {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            Ok(Some(B64.encode([19; 32])))
+        }
+        fn create(&self, _: &str) -> anyhow::Result<()> {
+            panic!("must reuse key")
+        }
+    }
+
+    #[test]
+    fn every_interrupted_initial_and_subsequent_write_keeps_decryptable_namespace() {
+        for subsequent in [false, true] {
+            for stop_after in 1..=if subsequent { 2 } else { 3 } {
+                let dir = tempfile::tempdir().unwrap();
+                let writes = SharedWrites::new(dir.path().join("identity"), None);
+                let store = SecretStore::new(
+                    &writes,
+                    Scope::Identity,
+                    DeviceKey {
+                        machine_root: dir.path().into(),
+                        keychain: &FixedKey,
+                    },
+                )
+                .unwrap();
+                let old = BTreeMap::from([("OLD".to_owned(), "synthetic-old".to_owned())]);
+                let mut updated = old.clone();
+                updated.insert("NEW".into(), "synthetic-new".into());
+                // Capture a real encrypted update, then replay its writes with
+                // termination immediately after each persisted record.
+                store.set_many(&old).unwrap();
+                let id = read_store_id(&store.root.join("local")).unwrap().unwrap();
+                let old_cipher = std::fs::read(store.root.join("local/secrets.enc.json")).unwrap();
+                store.set_many(&updated).unwrap();
+                let sealed: Value = serde_json::from_slice(
+                    &std::fs::read(store.root.join("local/secrets.enc.json")).unwrap(),
+                )
+                .unwrap();
+                std::fs::remove_dir_all(&store.root).unwrap();
+                if subsequent {
+                    atomic_write(
+                        &store.root.join("local/secrets.json"),
+                        serde_json::to_vec(
+                            &json!({"store_id": id, "schema_version": 1, "retained": true}),
+                        )
+                        .unwrap()
+                        .as_slice(),
+                    )
+                    .unwrap();
+                    atomic_write(&store.root.join("local/secrets.enc.json"), &old_cipher).unwrap();
+                    atomic_write(&store.root.join("config/secrets.yml"), b"keys: [OLD]\n").unwrap();
+                }
+                let mut count = 0;
+                let result = persist_records(&store.root, &id, &sealed, &updated, |path, value| {
+                    atomic_write(path, &serde_json::to_vec(value)?)?;
+                    count += 1;
+                    anyhow::ensure!(count != stop_after, "synthetic interruption");
+                    Ok(())
+                });
+                assert!(result.is_err());
+                assert_eq!(
+                    read_store_id(&store.root.join("local")).unwrap().as_deref(),
+                    Some(id.as_str())
+                );
+                if !subsequent && stop_after == 1 {
+                    assert!(store.values().unwrap().is_empty());
+                    store.set("RETRY", "synthetic-retry").unwrap();
+                } else {
+                    let complete = stop_after == if subsequent { 2 } else { 3 };
+                    assert_eq!(store.values().is_ok(), complete);
+                    // Restoring names alone must suffice: the ciphertext's AAD
+                    // namespace must never be lost, for either update.
+                    atomic_write(
+                        &store.root.join("config/secrets.yml"),
+                        b"keys: [NEW, OLD]\n",
+                    )
+                    .unwrap();
+                    assert_eq!(store.values().unwrap(), updated);
+                }
+                if subsequent {
+                    let metadata: Value = serde_json::from_slice(
+                        &std::fs::read(store.root.join("local/secrets.json")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(metadata["retained"], true);
+                }
+            }
+        }
+    }
+
+    struct RawOnly(Mutex<Vec<u8>>);
+    impl keyring::credential::CredentialApi for RawOnly {
+        fn set_password(&self, _: &str) -> keyring::Result<()> {
+            panic!("Windows password API uses UTF-16")
+        }
+        fn get_password(&self) -> keyring::Result<String> {
+            panic!("Windows password API uses UTF-16")
+        }
+        fn set_secret(&self, bytes: &[u8]) -> keyring::Result<()> {
+            *self.0.lock().unwrap() = bytes.to_vec();
+            Ok(())
+        }
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn delete_credential(&self) -> keyring::Result<()> {
+            panic!("never delete")
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+    #[test]
+    fn windows_uses_python_target_and_raw_utf8_in_both_directions() {
+        assert_eq!(
+            keychain_target(true).as_deref(),
+            Some("GuildBotics/utf8/agent-environment-credentials")
+        );
+        assert!(keychain_target(false).is_none());
+        let entry = keyring::Entry::new_with_credential(Box::new(RawOnly(Mutex::new(
+            B64.encode([19; 32]).into_bytes(),
+        ))));
+        assert_eq!(read_entry(&entry, true).unwrap(), B64.encode([19; 32]));
+        write_entry(&entry, "synthetic-名", true).unwrap();
+        assert_eq!(entry.get_secret().unwrap(), "synthetic-名".as_bytes());
+        entry.set_secret(&[0xff]).unwrap();
+        assert!(read_entry(&entry, true).is_err());
     }
 }
