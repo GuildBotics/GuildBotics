@@ -96,7 +96,7 @@ def test_preflight_stops_without_deleting(tmp_path, fake_keyring, failure):
     before = dict(fake_keyring.passwords)
     with pytest.raises(SecretStoreError) as error:
         run(identity, workspace, fake_keyring)
-    assert "synthetic-" not in str(error.value)
+    assert all(value not in str(error.value) for value in before.values() if value)
     assert fake_keyring.passwords == before
 
 
@@ -160,8 +160,8 @@ def test_python_migration_matches_golden(tmp_path, fake_keyring, monkeypatch):
     assert result_records(identity, workspace) == json.loads(GOLDEN.read_bytes())
 
 
-def test_unsupported_inventory_stops(monkeypatch):
-    monkeypatch.setattr(migration.sys, "platform", "linux")
+def test_unsupported_inventory_stops(fake_platform):
+    fake_platform(migration, "linux")
     with pytest.raises(SecretStoreError, match="macOS"):
         migration.macos_inventory()
 
@@ -198,7 +198,7 @@ def test_verification_and_backend_failures_are_not_success(
         monkeypatch.setattr(fake_keyring, "delete_password", added_during_cleanup)
     with pytest.raises(SecretStoreError) as error:
         run(identity, workspace, fake_keyring)
-    assert "synthetic-" not in str(error.value)
+    assert all(value not in str(error.value) for value in before.values() if value)
     if failure != "residual":
         assert fake_keyring.passwords == before
 
@@ -240,3 +240,64 @@ if __name__ == "__main__":
             )
     finally:
         next(backend_fixture, None)
+
+
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        ("unknown", "unmapped"),
+        ("omitted", "unmapped"),
+        ("missing", "source_missing"),
+        ("conflict", "conflict"),
+        ("locked", "backend"),
+    ],
+)
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_cli_explains_safe_reason_and_stage(
+    tmp_path, fake_keyring, monkeypatch, capsys, failure, reason, language
+):
+    from guildbotics.utils.i18n_tool import set_language, t
+
+    set_language(language)
+    identity, workspace = prepare(tmp_path, fake_keyring)
+    if failure == "unknown":
+        fake_keyring.set_password(
+            "GuildBotics/orphan", "OPENAI_API_KEY", "synthetic-private-orphan"
+        )
+    elif failure == "missing":
+        del fake_keyring.passwords[("GuildBotics/synthetic-workspace", "API_KEY")]
+    elif failure == "conflict":
+        run(identity, workspace, fake_keyring)
+        fake_keyring.set_password(
+            "GuildBotics/synthetic-workspace", "API_KEY", "synthetic-private-conflict"
+        )
+    elif failure == "locked":
+
+        def locked(*args):
+            raise RuntimeError("synthetic-private-backend-detail")
+
+        monkeypatch.setattr(fake_keyring, "get_password", locked)
+    monkeypatch.setattr(migration, "_key", lambda **kw: KEY)
+    monkeypatch.setattr(
+        migration, "macos_inventory", lambda: list(fake_keyring.passwords)
+    )
+    args = ["migration", "--identity", str(identity), "--writers-stopped"]
+    if failure != "omitted":
+        args += ["--workspace", str(workspace)]
+    monkeypatch.setattr(migration.sys, "argv", args)
+    before = dict(fake_keyring.passwords)
+    with pytest.raises(SystemExit) as error:
+        migration.main()
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert not output.out
+    assert "preflight" in output.err
+    assert t(f"cli.secret_migration.reasons.{reason}") in output.err
+    assert all(value not in output.err for value in before.values() if value)
+    assert "synthetic-private-backend-detail" not in output.err
+    if failure == "unknown":
+        assert '"service": "GuildBotics/orphan"' in output.err
+        assert '"account": "OPENAI_API_KEY"' in output.err
+    if failure == "omitted":
+        assert '"service": "GuildBotics/synthetic-workspace"' in output.err
+    assert fake_keyring.passwords == before

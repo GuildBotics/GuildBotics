@@ -35,6 +35,31 @@ Entry = tuple[str, str]
 _ITEM_NOT_FOUND = -25300
 
 
+class MigrationError(SecretStoreError):
+    """A trusted reason code and non-secret inventory attributes only."""
+
+    def __init__(
+        self, reason: str, *, entries: Iterable[Entry] = (), stage: str = "preflight"
+    ):
+        self.reason = reason
+        self.entries = sorted(entries)
+        self.stage = stage
+        super().__init__(reason)
+
+    def __str__(self) -> str:
+        reason = t(f"cli.secret_migration.reasons.{self.reason}")
+        detail = t("cli.secret_migration.failed", stage=self.stage, reason=reason)
+        if self.entries:
+            detail += "\n" + json.dumps(
+                [
+                    {"service": service, "account": account}
+                    for service, account in self.entries
+                ],
+                ensure_ascii=False,
+            )
+        return detail
+
+
 def git_token_key(origin: str) -> str:
     """Name an owner's per-origin token in the identity SecretStore.
 
@@ -47,7 +72,7 @@ def git_token_key(origin: str) -> str:
 def macos_inventory() -> list[Entry]:
     """Enumerate generic-password attributes, never requesting password data."""
     if sys.platform != "darwin":
-        raise SecretStoreError("Migration inventory currently requires macOS")
+        raise MigrationError("platform")
     security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
     core = ctypes.CDLL(
         "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
@@ -99,10 +124,10 @@ def macos_inventory() -> list[Entry]:
         if status == _ITEM_NOT_FOUND:
             return []
         if status != 0:
-            raise SecretStoreError("Keychain inventory unavailable")
+            raise MigrationError("inventory")
         data = core.CFPropertyListCreateData(None, result, 200, 0, None)
         if not data:
-            raise SecretStoreError("Keychain inventory cannot be decoded")
+            raise MigrationError("inventory")
         try:
             items = plistlib.loads(
                 ctypes.string_at(
@@ -133,7 +158,7 @@ def _namespace(root: Path) -> str | None:
         return None
     store_id = record.get("store_id")
     if not isinstance(store_id, str) or not store_id:
-        raise ValueError("Invalid namespace")
+        raise MigrationError("namespace")
     return store_id
 
 
@@ -143,7 +168,7 @@ def _open(root: Path, store_id: str, key: bytes) -> dict[str, str] | None:
     except FileNotFoundError:
         return None
     if set(sealed) != {"version", "nonce", "ciphertext"} or sealed["version"] != 1:
-        raise ValueError("Invalid envelope")
+        raise MigrationError("encrypted_file")
     plain = AESGCM(key).decrypt(
         base64.b64decode(sealed["nonce"], validate=True),
         base64.b64decode(sealed["ciphertext"], validate=True),
@@ -153,7 +178,7 @@ def _open(root: Path, store_id: str, key: bytes) -> dict[str, str] | None:
     if not isinstance(values, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in values.items()
     ):
-        raise ValueError("Invalid payload")
+        raise MigrationError("encrypted_file")
     for name in values:
         require_secret_key(name)
     return values
@@ -185,13 +210,13 @@ def migrate(
                 stack.enter_context(shared_write_lock(root))
             entries = inventory()
             if len(entries) != len(set(entries)) or DEVICE_ENTRY not in entries:
-                raise ValueError("Ambiguous inventory or missing device key")
+                raise MigrationError("inventory_key")
             encoded = keychain.get_password(*DEVICE_ENTRY)
             if (
                 encoded is None
                 or base64.b64decode(encoded, validate=True) != device_key
             ):
-                raise ValueError("Device key changed")
+                raise MigrationError("device_key")
             sources: dict[Entry, str] = {}
             plans = []
             known = {DEVICE_ENTRY}
@@ -202,10 +227,10 @@ def migrate(
                 if store_id is None and (
                     names or (root / ".guildbotics/local/secrets.enc.json").exists()
                 ):
-                    raise ValueError("Missing namespace")
+                    raise MigrationError("namespace")
                 store_id = store_id or uuid.uuid4().hex
                 if store_id in namespaces:
-                    raise ValueError("Duplicate namespace")
+                    raise MigrationError("duplicate_namespace")
                 namespaces.add(store_id)
                 values = _open(root, store_id, device_key) or {}
                 recoverable = (
@@ -218,20 +243,20 @@ def migrate(
                     else set()
                 )
                 if set(values) - set(names) - recoverable:
-                    raise ValueError("Index and ciphertext disagree")
+                    raise MigrationError("index_mismatch")
                 for name in names:
                     require_secret_key(name)
                     entry = (f"GuildBotics/{store_id}", name)
                     if entry in known:
-                        raise ValueError("Duplicate source namespace")
+                        raise MigrationError("duplicate_namespace")
                     known.add(entry)
                     value = keychain.get_password(*entry)
                     if value is None:
                         if name not in values:
-                            raise ValueError("Indexed source unavailable")
+                            raise MigrationError("source_missing")
                     else:
                         if name in values and values[name] != value:
-                            raise ValueError("Source and destination conflict")
+                            raise MigrationError("conflict")
                         values[name] = sources[entry] = value
                 if root == roots[0]:
                     for entry in entries:
@@ -241,11 +266,11 @@ def migrate(
                         value = keychain.get_password(*entry)
                         name = git_token_key(entry[1])
                         if value is None or (name in values and values[name] != value):
-                            raise ValueError("Git token unavailable or conflicts")
+                            raise MigrationError("git_token")
                         values[name] = sources[entry] = value
                 plans.append((root, store_id, values))
             if set(entries) - known:
-                raise ValueError("Unmapped GuildBotics entries; supply all roots")
+                raise MigrationError("unmapped", entries=set(entries) - known)
             stage = "destination_write_and_verification"
             for root, store_id, values in plans:
                 local = root / ".guildbotics/local"
@@ -280,22 +305,24 @@ def migrate(
                 if _open(root, store_id, device_key) != values or read_secret_index(
                     root / ".guildbotics/config"
                 ) != sorted(values):
-                    raise ValueError("Destination verification failed")
+                    raise MigrationError("verification")
             stage = "source_cleanup"
             for entry, value in sources.items():
                 if keychain.get_password(*entry) != value:
-                    raise ValueError("Source changed; keep writers stopped")
+                    raise MigrationError("source_changed")
                 keychain.delete_password(*entry)
                 if keychain.get_password(*entry) is not None:
-                    raise ValueError("Source deletion failed")
+                    raise MigrationError("deletion")
             stage = "remaining_items_audit"
-            if inventory() != [DEVICE_ENTRY]:
-                raise ValueError("GuildBotics entries remain")
+            remaining = inventory()
+            if remaining != [DEVICE_ENTRY]:
+                raise MigrationError("remaining", entries=remaining)
             return {"stores": len(plans), "removed": len(sources), "remaining": 1}
+    except MigrationError as exc:
+        exc.stage = stage
+        raise
     except Exception:
-        raise SecretStoreError(
-            f"Secret migration stopped ({stage}); sources or verified ciphertext retained. Keep writers stopped."
-        ) from None
+        raise MigrationError("backend", stage=stage) from None
 
 
 def main() -> None:
@@ -323,7 +350,7 @@ def main() -> None:
     try:
         key = _key(create=False)
         if key is None:
-            raise SecretStoreError("Device key missing")
+            raise MigrationError("key_missing")
         result = migrate(
             args.identity,
             args.workspace,
@@ -331,8 +358,10 @@ def main() -> None:
             inventory=macos_inventory,
             device_key=key,
         )
+    except MigrationError as exc:
+        parser.exit(1, str(exc) + "\n")
     except Exception:
-        parser.exit(1, t("cli.secret_migration.failed") + "\n")
+        parser.exit(1, str(MigrationError("backend", stage="device_key")) + "\n")
     print(json.dumps(result))
 
 
