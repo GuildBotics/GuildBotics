@@ -4,8 +4,10 @@
 
 mod api;
 mod auth;
+pub mod client;
 mod commands;
 mod i18n;
 mod server;
+mod ui;
 
 pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, Server};

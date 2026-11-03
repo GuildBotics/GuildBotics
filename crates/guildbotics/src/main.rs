@@ -27,6 +27,14 @@ enum Command {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Open the GuildBotics screens in the browser. The browser enters with a
+    /// single-use link that expires after 60 seconds
+    Open {
+        /// Print the link instead of opening it, to paste into a browser on
+        /// another machine
+        #[arg(long)]
+        print: bool,
+    },
     /// Branvil's commands (code hosting: `guildbotics branvil --help`)
     #[command(disable_help_flag = true)]
     Branvil {
@@ -56,6 +64,7 @@ fn main() -> ExitCode {
         Command::Branvil { args } => {
             branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
         }
+        Command::Open { print } => open(print),
         Command::Server {
             command: ServerCommand::Start,
         } => match start() {
@@ -66,6 +75,49 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+/// Opens the screens with an entry link, or prints it when asked to or when
+/// no browser opens it.
+fn open(print: bool) -> ExitCode {
+    let link = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())
+        .and_then(|runtime| runtime.block_on(gb_server::client::entry_link()));
+    match link {
+        Ok(url) => {
+            if print || !browse(&url) {
+                println!("{url}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(sentence) => {
+            eprintln!("Error: {sentence}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Whether the system's browser took `url`, which is one argument of its
+/// handler: no shell is involved.
+fn browse(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn start() -> anyhow::Result<u8> {
@@ -88,16 +140,18 @@ fn start() -> anyhow::Result<u8> {
 /// either one ends, which stops the other. The machine's lock comes first and
 /// goes last: whoever stops the server waits for Branvil too.
 async fn serve() -> anyhow::Result<u8> {
+    // Both told of every signal from here on: one that comes while the
+    // server starts stops Branvil too.
     let (signal, cancel) = server_stops()?;
-    let branvil_set_up = branvil::initialized()?;
+    let branvil_stops = branvil::stop_signals()?;
+    let branvil_stops = branvil::initialized()?.then_some(branvil_stops);
     let server = gb_server::Server::start().await?;
-    if !branvil_set_up {
+    let Some((branvil_interrupt, branvil_terminate)) = branvil_stops else {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
         let (_held, served) = server.serve(signal, cancel).await;
         served?;
         return Ok(0);
-    }
-    let (branvil_interrupt, branvil_terminate) = branvil::stop_signals()?;
+    };
     let guildbotics_failed = Arc::new(Notify::new());
     let branvil_ended = Arc::new(Notify::new());
     let interrupt = {

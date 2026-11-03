@@ -1433,6 +1433,12 @@ async fn sessions_need_csrf_and_hosts_are_checked() {
     assert_eq!(resp.status(), 200);
     let cookie = resp.headers()["set-cookie"].to_str().unwrap().to_string();
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+    // Named by the port, so another service on the machine keeps its own.
+    let port = s.url.rsplit_once(':').unwrap().1;
+    assert!(
+        cookie.starts_with(&format!("branvil_session_{port}=")),
+        "{cookie}"
+    );
     let cookie = cookie.split(';').next().unwrap().to_string();
     let body: Value = resp.json().await.unwrap();
     let csrf = body["csrf"].as_str().unwrap();

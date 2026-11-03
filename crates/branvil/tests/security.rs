@@ -355,10 +355,14 @@ async fn an_old_tab_can_refresh_csrf_after_another_entry_replaces_the_cookie() {
 async fn a_new_owner_token_ends_every_session() {
     let mut w = World::new().await;
     let (cookie, _) = w.server.session(&w.owner).await;
+    // As a browser sends it to the port the restarted service now has: the
+    // cookie is named by the port.
     let me = |s: &Server, cookie: &str| {
+        let (_, value) = cookie.split_once('=').unwrap();
+        let port = s.url.rsplit_once(':').unwrap().1;
         s.http
             .get(format!("{}/api/v1/me", s.url))
-            .header("cookie", cookie)
+            .header("cookie", format!("branvil_session_{port}={value}"))
             .send()
     };
     // A restart keeps a valid file, its token, and the sessions.
