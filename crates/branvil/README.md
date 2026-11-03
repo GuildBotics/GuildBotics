@@ -587,8 +587,9 @@ artifacts, retry and cancel, states, limits, and the trust model:
 
 The GuildBotics repository's [`.branvil/ci.toml`](../../.branvil/ci.toml) runs
 the checks of "Development": `rust-fmt`, `rust-clippy`, and `rust-test` for
-the Cargo workspace, `rust-duplicates` (jscpd), `branvil-web` (`npm ci`, then
-`npm run lint`, `npm run typecheck`, and `npm run test` in `web`), and
+the Cargo workspace, `rust-duplicates` (jscpd), `branvil-web` (`npm ci` at the
+repository root, then `npm run lint`, `npm run typecheck`, and `npm run test`
+in `crates/branvil/web`), and
 `branvil-integration` (see "Checking with GuildBotics"). Their image is
 GuildBotics' development image
 (`guildbotics/agent-environment:dev`, built by
@@ -599,7 +600,7 @@ does so itself); the pipeline stays as it is. The Rust jobs fetch crates
 from crates.io and `branvil-web` fetches packages from `registry.npmjs.org`, so the
 repository's CI tab must allow its jobs the network. `rust-clippy` and `rust-test` cache
 Cargo's registry and `target`, keyed by `Cargo.lock`; `branvil-web` caches npm's
-downloads, keyed by `web/package-lock.json`.
+downloads, keyed by the repository root's `package-lock.json`.
 
 ## Upstream (GitHub)
 
@@ -756,8 +757,8 @@ its own (`cargo install --locked cargo-nextest`).
 To run the GUI checks (lint, types, and the Vitest tests):
 
 ```sh
+npm ci --prefix ../..
 cd web
-npm ci
 npm run lint
 npm run typecheck
 npm run test
