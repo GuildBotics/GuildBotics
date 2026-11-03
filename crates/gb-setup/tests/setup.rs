@@ -469,3 +469,228 @@ fn model_keys_use_workspace_store() {
             .exists()
     );
 }
+
+#[test]
+fn every_cas_operation_returns_typed_current_revisions_before_writing() {
+    use gb_config::repository::StaleConfigWriteError;
+    fn stale(error: anyhow::Error, path: &str, count: usize) {
+        let error = error
+            .downcast_ref::<StaleConfigWriteError>()
+            .expect("typed conflict");
+        assert!(
+            error.relative_path.ends_with(path),
+            "{}",
+            error.relative_path
+        );
+        assert_eq!(error.revisions.len(), count);
+        assert!(error.revisions.values().any(|s| !s.is_empty()));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repository(dir.path());
+    let setup = Setup {
+        repository: &repo,
+        providers: &Models,
+    };
+    let project: ProjectInput = serde_json::from_value(json!({"language":"ja"})).unwrap();
+    setup.save_project(&project, &Revisions::new()).unwrap();
+    let project_path = "team/project.yml";
+    stale(
+        setup
+            .save_project(&project, &Revisions::new())
+            .err()
+            .unwrap(),
+        project_path,
+        3,
+    );
+    stale(
+        setup
+            .set_default_person("", &Revisions::new())
+            .err()
+            .unwrap(),
+        project_path,
+        1,
+    );
+    let brains = BTreeMap::from([(
+        "default".into(),
+        Brain::Model {
+            model: "default".into(),
+        },
+    )]);
+    setup.save_brains(&brains, &Revisions::new()).unwrap();
+    stale(
+        setup.save_brains(&brains, &Revisions::new()).err().unwrap(),
+        "brain_mapping.yml",
+        1,
+    );
+    let saved = setup
+        .save_member("a", &input("a"), &Revisions::new(), device(dir.path()))
+        .unwrap();
+    stale(
+        setup
+            .save_member("a", &input("a"), &Revisions::new(), device(dir.path()))
+            .err()
+            .unwrap(),
+        "identity.yml",
+        2,
+    );
+    // An identity match must not hide a stale workspace file, and vice versa.
+    let mut expected = saved.revisions.clone();
+    expected.remove("team/members/a/member.yml");
+    stale(
+        setup
+            .save_member("a", &input("a"), &expected, device(dir.path()))
+            .err()
+            .unwrap(),
+        "member.yml",
+        2,
+    );
+    stale(
+        setup.remove_member("a", &Revisions::new()).err().unwrap(),
+        "member.yml",
+        2,
+    );
+    stale(
+        setup
+            .delete_identity("a", &Revisions::new(), device(dir.path()))
+            .err()
+            .unwrap(),
+        "identity.yml",
+        1,
+    );
+    assert!(setup.read_member("a").unwrap().participation.is_active);
+}
+
+#[test]
+fn deletes_entire_member_and_identity_directories_and_rejects_absent_members() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repository(dir.path());
+    let setup = Setup {
+        repository: &repo,
+        providers: &Models,
+    };
+    let saved = setup
+        .save_member("a", &input("a"), &Revisions::new(), device(dir.path()))
+        .unwrap();
+    let identity_dir = repo.identity_view().path("team/members/a").unwrap();
+    let member_dir = dir
+        .path()
+        .join("workspace/.guildbotics/config/team/members/a");
+    fs::create_dir_all(member_dir.join("intelligences")).unwrap();
+    fs::write(member_dir.join("intelligences/brain_mapping.yml"), "old").unwrap();
+    fs::create_dir_all(member_dir.join("commands")).unwrap();
+    fs::write(member_dir.join("commands/old.sh"), "old").unwrap();
+    fs::write(identity_dir.join("avatar.png"), "synthetic").unwrap();
+    setup.remove_member("a", &saved.revisions).unwrap();
+    assert!(!member_dir.exists());
+    assert!(identity_dir.exists());
+    setup
+        .delete_identity("a", &saved.revisions, device(dir.path()))
+        .unwrap();
+    assert!(!identity_dir.exists());
+    assert!(setup.remove_member("missing", &Revisions::new()).is_err());
+}
+
+#[test]
+fn ambiguous_identity_can_be_removed_without_reading_or_deleting_shared_secrets() {
+    struct Unavailable;
+    impl Keychain for Unavailable {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            panic!("ambiguous secrets must not be read")
+        }
+        fn create(&self, _: &str) -> anyhow::Result<()> {
+            panic!("ambiguous secrets must not be written")
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repository(dir.path());
+    let setup = Setup {
+        repository: &repo,
+        providers: &Models,
+    };
+    setup
+        .save_member(
+            "foo-bar",
+            &input("foo-bar"),
+            &Revisions::new(),
+            device(dir.path()),
+        )
+        .unwrap();
+    let ip = "team/members/foo_bar/identity.yml";
+    let identity = repo.identity_view().path(ip).unwrap();
+    fs::create_dir_all(identity.parent().unwrap()).unwrap();
+    fs::write(
+        &identity,
+        serde_json::to_vec(&input("foo_bar").identity).unwrap(),
+    )
+    .unwrap();
+    let expected = repo.identity_view().revisions(&[ip]).unwrap();
+    let cipher = dir
+        .path()
+        .join("identity/.guildbotics/local/secrets.enc.json");
+    let before = fs::read(&cipher).unwrap();
+    setup
+        .delete_identity(
+            "foo_bar",
+            &expected,
+            DeviceKey {
+                machine_root: dir.path().into(),
+                keychain: &Unavailable,
+            },
+        )
+        .unwrap();
+    assert!(!identity.parent().unwrap().exists());
+    assert_eq!(before, fs::read(cipher).unwrap());
+    assert!(
+        repo.identity_secrets(device(dir.path()))
+            .unwrap()
+            .get("FOO_BAR_TOKEN")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn recursive_removal_does_not_follow_child_links_and_namespace_errors_are_not_collisions() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repository(dir.path());
+    let setup = Setup {
+        repository: &repo,
+        providers: &Models,
+    };
+    let saved = setup
+        .save_member(
+            "foo-bar",
+            &input("foo-bar"),
+            &Revisions::new(),
+            device(dir.path()),
+        )
+        .unwrap();
+    let peer = repo.identity_view().path("team/members/foo_bar").unwrap();
+    // ENOTDIR must propagate, rather than authorize access to shared keys.
+    fs::write(&peer, "not a directory").unwrap();
+    assert!(
+        setup
+            .delete_identity("foo-bar", &saved.revisions, device(dir.path()))
+            .is_err()
+    );
+    fs::remove_file(&peer).unwrap();
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "unrelated").unwrap();
+    let member = dir
+        .path()
+        .join("workspace/.guildbotics/config/team/members/foo-bar");
+    symlink(&outside, member.join("linked")).unwrap();
+    setup.remove_member("foo-bar", &saved.revisions).unwrap();
+    assert!(outside.join("keep").is_file());
+    assert!(!member.exists());
+    assert!(
+        repo.identity_secrets(device(dir.path()))
+            .unwrap()
+            .get("FOO_BAR_TOKEN")
+            .unwrap()
+            .is_some()
+    );
+}

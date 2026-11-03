@@ -74,21 +74,28 @@ fn prefix(id: &str) -> String {
     format!("{}_", id.replace('-', "_").to_uppercase())
 }
 
-fn unique_prefix(view: &ConfigView, id: &str) -> anyhow::Result<String> {
+fn unique_prefix(view: &ConfigView, id: &str) -> anyhow::Result<Option<String>> {
     let members = view.path("team/members")?;
-    if members.exists() {
-        for entry in fs::read_dir(members)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name != id
-                && prefix(&name) == prefix(id)
-                && entry.path().join("identity.yml").is_file()
-            {
-                anyhow::bail!("member secret namespace is shared");
-            }
+    let entries = match fs::read_dir(members) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(prefix(id))),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == id || prefix(&name) != prefix(id) {
+            continue;
+        }
+        let path = view.path(&format!("team/members/{name}/identity.yml"))?;
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => return Ok(None),
+            Ok(_) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
         }
     }
-    Ok(prefix(id))
+    Ok(Some(prefix(id)))
 }
 
 impl Setup<'_> {
@@ -219,19 +226,20 @@ impl Setup<'_> {
             );
         }
         let store = self.repository.identity_secrets(device)?;
-        self.repository.write(
-            &Revisions::new(),
+        self.repository.write_checked(
+            expected,
+            &[&ip],
+            &[&mp],
             |view, writer| {
                 let identities = self.repository.identity_view();
-                check_revisions(&identities, expected, &[&ip])?;
-                check_revisions(view, expected, &[&mp])?;
                 if let Some(old) = identities.read_config(&ip)? {
                     ensure!(
                         old.value()?["person_id"] == id,
                         "stored person_id cannot change"
                     );
                 }
-                let prefix = unique_prefix(&identities, id)?;
+                let prefix =
+                    unique_prefix(&identities, id)?.context("member secret namespace is shared")?;
                 let project = read(view, "team/project.yml")?;
                 if !human
                     && view.read_config(&mp)?.is_none()
@@ -298,13 +306,19 @@ impl Setup<'_> {
         expected: &Revisions,
     ) -> anyhow::Result<ConfigWriteReceipt<()>> {
         let mp = member_path(id, "member")?;
-        self.repository.write(
-            &Revisions::new(),
+        self.repository.write_checked(
+            expected,
+            &[],
+            &[&mp, "team/project.yml"],
             |view, writer| {
-                check_revisions(view, expected, &[&mp, "team/project.yml"])?;
+                ensure!(view.read_config(&mp)?.is_some(), "member not found");
                 let mut project = read(view, "team/project.yml")?;
                 let project_path = view.path("team/project.yml")?;
-                writer.delete(&view.path(&mp)?)?;
+                writer.remove_tree(
+                    view.path(&mp)?
+                        .parent()
+                        .context("member directory missing")?,
+                )?;
                 if project["default_person_id"] == id {
                     project.as_object_mut().unwrap().remove("default_person_id");
                     writer.write_json(&project_path, &project)?;
@@ -323,25 +337,30 @@ impl Setup<'_> {
     ) -> anyhow::Result<()> {
         let ip = member_path(id, "identity")?;
         let store = self.repository.identity_secrets(device)?;
-        self.repository.write(
-            &Revisions::new(),
+        self.repository.write_checked(
+            expected,
+            &[&ip],
+            &[],
             |_, writer| {
                 let identities = self.repository.identity_view();
-                check_revisions(&identities, expected, &[&ip])?;
                 ensure!(identities.read_config(&ip)?.is_some(), "identity not found");
-                let prefix = unique_prefix(&identities, id)?;
+                let directory = identities.path(&format!("team/members/{id}"))?;
+                writer.check(&directory)?;
+                let owned_prefix = unique_prefix(&identities, id)?;
                 // A longer member prefix may nest under this one; only delete
                 // provider-declared keys rather than every key starting with it.
                 let identity: Identity = serde_json::from_value(read(&identities, &ip)?)?;
                 ensure!(identity.person_id == id, "stored person_id cannot change");
-                let keys: Vec<_> = self
-                    .providers
-                    .member_secret_names()
-                    .iter()
-                    .map(|key| format!("{prefix}{key}"))
-                    .collect();
-                store.delete_many_with(writer, &keys)?;
-                writer.delete(&identities.path(&ip)?)
+                if let Some(prefix) = owned_prefix {
+                    let keys: Vec<_> = self
+                        .providers
+                        .member_secret_names()
+                        .iter()
+                        .map(|key| format!("{prefix}{key}"))
+                        .collect();
+                    store.delete_many_with(writer, &keys)?;
+                }
+                writer.remove_tree(&directory)
             },
             |_| Ok(Revisions::new()),
         )?;

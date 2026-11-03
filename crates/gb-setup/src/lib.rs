@@ -89,20 +89,6 @@ pub(crate) fn member_path(id: &str, file: &str) -> anyhow::Result<String> {
     ensure!(valid_person_id(id), "invalid person_id");
     Ok(format!("team/members/{id}/{file}.yml"))
 }
-pub(crate) fn check_revisions(
-    view: &ConfigView,
-    expected: &Revisions,
-    paths: &[&str],
-) -> anyhow::Result<()> {
-    let current = view.revisions(paths)?;
-    for (path, revision) in current {
-        ensure!(
-            expected.get(&path).map(String::as_str).unwrap_or("") == revision,
-            "config changed since read: {path}"
-        );
-    }
-    Ok(())
-}
 
 impl Setup<'_> {
     /// Workspace-level model API keys use environment names resolved by the
@@ -160,10 +146,11 @@ impl Setup<'_> {
             "intelligences/model_mapping.yml",
             "intelligences/cli_agent_mapping.yml",
         ];
-        self.repository.write(
+        self.repository.write_checked(
             expected,
+            &[],
+            &paths,
             |view, writer| {
-                check_revisions(view, expected, &paths)?;
                 let mut project = read(view, paths[0])?;
                 project["language"] = json!(input.language);
                 for (key, value) in [
@@ -223,12 +210,11 @@ impl Setup<'_> {
             ensure!(!slot.trim().is_empty(), "brain selection is required");
         }
         let path = "intelligences/brain_mapping.yml";
-        self.repository.write(
+        self.repository.write_checked(
             expected,
-            |view, writer| {
-                check_revisions(view, expected, &[path])?;
-                writer.write_json(&view.path(path)?, mapping)
-            },
+            &[],
+            &[path],
+            |view, writer| writer.write_json(&view.path(path)?, mapping),
             |view| view.revisions(&[path]),
         )
     }
@@ -238,10 +224,11 @@ impl Setup<'_> {
         id: &str,
         expected: &Revisions,
     ) -> anyhow::Result<ConfigWriteReceipt<()>> {
-        self.repository.write(
+        self.repository.write_checked(
             expected,
+            &[],
+            &["team/project.yml"],
             |view, writer| {
-                check_revisions(view, expected, &["team/project.yml"])?;
                 if !id.is_empty() {
                     let member = read(view, &member_path(id, "member")?)?;
                     let identity = read(

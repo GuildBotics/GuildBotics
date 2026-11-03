@@ -198,6 +198,11 @@ impl Writer<'_> {
             Err(e) => Err(e.into()),
         }
     }
+    /// Remove a dedicated configuration directory without following child links.
+    pub fn remove_tree(&mut self, path: &Path) -> anyhow::Result<()> {
+        self.check(path)?;
+        Ok(fs::remove_dir_all(path)?)
+    }
     pub fn append_text(&mut self, path: &Path, text: &str) -> anyhow::Result<()> {
         self.check(path)?;
         fs::create_dir_all(
