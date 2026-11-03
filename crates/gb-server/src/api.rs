@@ -56,7 +56,7 @@ pub(crate) struct ApiError {
     code: &'static str,
     pub(crate) language: &'static str,
     sentence: Sentence,
-    context: Value,
+    context: Box<Value>,
 }
 
 /// A sentence of `app_api.errors` (the code's own by default), or one a
@@ -77,7 +77,7 @@ impl ApiError {
             code,
             language: i18n::language(asked),
             sentence: Sentence::Key(code, vec![]),
-            context: json!({}),
+            context: Box::new(json!({})),
         }
     }
 
@@ -98,7 +98,7 @@ impl ApiError {
     }
 
     pub(crate) fn context(mut self, context: Value) -> ApiError {
-        self.context = context;
+        self.context = Box::new(context);
         self
     }
 }
@@ -151,6 +151,12 @@ pub fn router(api: Shared) -> Router {
         .route("/session/links", post(entry_link))
         .route("/session", get(session))
         .route("/commands/run", post(crate::commands::run))
+        .route("/config/status", get(crate::screens::config_status))
+        .route("/team", get(crate::screens::team))
+        .route("/commands/files", get(crate::screens::files))
+        .route("/commands/files/{id}", get(crate::screens::file))
+        .route("/diagnostics/traces", get(crate::screens::traces))
+        .route("/diagnostics/traces/{id}", get(crate::screens::trace))
         .route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     // Each says why it cannot be the owner's.
     let anyone = Router::new()

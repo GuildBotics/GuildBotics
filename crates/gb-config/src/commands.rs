@@ -141,7 +141,7 @@ fn locale_variants(base: &str, language: &str) -> Vec<String> {
 }
 
 /// A command file: one of [`EXTENSIONS`], and not a reserved `.metadata` file.
-fn is_command_file(path: &Path) -> bool {
+pub(crate) fn is_command_file(path: &Path) -> bool {
     let extension = path
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
@@ -225,7 +225,7 @@ fn mapping(value: Value) -> python_literal::Declaration {
 }
 
 /// A Markdown file's YAML frontmatter: from a first line `---` to the next.
-fn frontmatter(text: &str) -> Option<&str> {
+pub(crate) fn frontmatter(text: &str) -> Option<&str> {
     let mut lines = text.split_inclusive('\n');
     if lines.next()?.trim_end_matches(['\r', '\n']) != "---" {
         return None;

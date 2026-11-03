@@ -7,6 +7,7 @@ mod auth;
 pub mod client;
 mod commands;
 mod i18n;
+mod screens;
 mod server;
 mod ui;
 

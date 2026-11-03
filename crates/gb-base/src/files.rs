@@ -89,7 +89,8 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// A shared record as every writer writes it: keys sorted, indented by two,
 /// ending in a newline, so unchanged content stays byte for byte the same.
 pub fn dump_shared_json(record: &impl serde::Serialize) -> String {
-    let value = serde_json::to_value(record).expect("a record is JSON");
+    let mut value = serde_json::to_value(record).expect("a record is JSON");
+    value.sort_all_objects();
     let mut text = serde_json::to_string_pretty(&value).expect("JSON serializes");
     text.push('\n');
     text

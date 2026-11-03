@@ -5,9 +5,8 @@
 //!
 //! The command is resolved once, for the member it runs as, before anything
 //! is recorded: a command that cannot be resolved never ran and leaves no
-//! trace. What the screens add on top -- the check that the file shown is
-//! the file run, the files handed over -- is not served yet, and a request
-//! that asks for it is refused rather than run without it.
+//! trace. Screen requests additionally compare the selected shared file's
+//! identity and revision with this member's runtime target before starting.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +41,8 @@ pub(crate) struct RunRequest {
     cwd: Option<PathBuf>,
     /// The workspace the caller means, which must still be the selected one.
     expected_workspace: Option<PathBuf>,
+    expected_command_file_id: Option<String>,
+    expected_command_file_revision: Option<String>,
 }
 
 /// How a run that started did not succeed, as its trace records it.
@@ -79,6 +80,11 @@ async fn start(
 ) -> Result<Response, Response> {
     let error = |status, code| ApiError::new(status, code, headers);
     if request.command.is_empty() {
+        return Err(error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error").into_response());
+    }
+    if request.expected_command_file_id.is_some()
+        != request.expected_command_file_revision.is_some()
+    {
         return Err(error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error").into_response());
     }
     // The run is accepted for the workspace it was asked for before anything
@@ -145,9 +151,53 @@ async fn start(
         config,
         templates: host.package.join("templates"),
     };
-    let resolved = roots
-        .resolve(&request.command, &team.language, Some(&person.person_id))
-        .and_then(|path| Ok((command_access(&path)?, path)));
+    let resolved = roots.resolve(&request.command, &team.language, Some(&person.person_id));
+    if let (Some(id), Some(expected)) = (
+        &request.expected_command_file_id,
+        &request.expected_command_file_revision,
+    ) {
+        let selected = roots.selected_file(id, &team.language).ok_or_else(|| {
+            error(StatusCode::NOT_FOUND, "command_file_not_found")
+                .key(
+                    "command_file_not_found.unknown",
+                    vec![("file_id", id.clone())],
+                )
+                .into_response()
+        })?;
+        let current = gb_config::command_files::revision(
+            &std::fs::read(&selected).map_err(|e| internal(&e.to_string(), "OSError"))?,
+        );
+        if &current != expected {
+            return Err(error(StatusCode::CONFLICT, "command_file_changed")
+                .key("command_not_runtime_target", vec![])
+                .context(json!({"current_revision":current}))
+                .into_response());
+        }
+        if resolved
+            .as_ref()
+            .ok()
+            .is_none_or(|p| p.canonicalize().ok() != selected.canonicalize().ok())
+        {
+            let shadow = resolved
+                .as_ref()
+                .ok()
+                .map(|p| {
+                    if p.starts_with(&roots.templates) {
+                        "template"
+                    } else if p.starts_with(roots.config.join("commands")) {
+                        "workspace"
+                    } else {
+                        "member"
+                    }
+                })
+                .unwrap_or("workspace");
+            return Err(error(StatusCode::CONFLICT, "command_file_shadowed")
+                .key("command_not_runtime_target", vec![])
+                .context(json!({"shadow_source":shadow}))
+                .into_response());
+        }
+    }
+    let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
     let (access, path) = resolved.map_err(|problem| {
         error(StatusCode::BAD_REQUEST, "command_error")
             .reason(problem.to_string())
@@ -191,6 +241,7 @@ async fn start(
             let reply = gb_environment::run(&host, &workspace, command)
                 .await
                 .map_err(|failure| failed(failure, language))?;
+            trace.command_output(&name, &person_id, &reply.text_output);
             match reply.failure {
                 None => Ok(reply.text_output),
                 Some(failure) => Err(failed_in_environment(failure)),
