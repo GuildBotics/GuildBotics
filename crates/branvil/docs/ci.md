@@ -574,7 +574,9 @@ in … ms` (with the bytes saved). `peak memory of msb run and its VM: … MiB` 
 the largest resident memory of `msb run` and every process under it (the VM
 among them), read with `ps` every second while the job runs; the VM's grows
 with the guest memory the job touches and does not shrink, so the last samples
-hold the peak. A host without `ps` gives no such line.
+hold the peak. The line is emitted only when a positive sample was collected.
+A host without `ps`, or a short-lived process that exits before `ps` sees it,
+gives no such line; an absent measurement is not reported as zero MiB.
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` and `job ended: success (reused)`, with the cache key
