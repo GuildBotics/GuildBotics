@@ -1,0 +1,2907 @@
+{
+  "events": [
+    {
+      "attributes": {
+        "new_field": "***"
+      },
+      "command": "",
+      "device_id": "",
+      "event_id": "ticket.comment",
+      "kind": "ticket.comment",
+      "links": [],
+      "local_trace_id": "",
+      "member_id": "p1",
+      "occurred_at": "2026-11-01T00:30:00+14:00",
+      "payload": {
+        "nested": [
+          "*** in error",
+          "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+        ]
+      },
+      "run_id": "",
+      "safe_summary": "ticket.comment",
+      "schema_version": 4,
+      "source": "",
+      "subject": "",
+      "workflow": "",
+      "workspace_id": ""
+    },
+    {
+      "attributes": {
+        "new_field": "***"
+      },
+      "command": "",
+      "device_id": "",
+      "event_id": "command.failed",
+      "kind": "command.failed",
+      "links": [],
+      "local_trace_id": "",
+      "member_id": "p1",
+      "occurred_at": "2026-11-01T00:30:00+14:00",
+      "payload": {
+        "nested": [
+          "*** in error",
+          "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+        ]
+      },
+      "run_id": "",
+      "safe_summary": "command.failed",
+      "schema_version": 4,
+      "source": "",
+      "subject": "",
+      "workflow": "",
+      "workspace_id": ""
+    },
+    {
+      "attributes": {
+        "new_field": "***"
+      },
+      "command": "",
+      "device_id": "",
+      "event_id": "diagnostics.completed",
+      "kind": "diagnostics.completed",
+      "links": [],
+      "local_trace_id": "",
+      "member_id": "p1",
+      "occurred_at": "2026-11-01T00:30:00+14:00",
+      "payload": {
+        "nested": [
+          "*** in error",
+          "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+        ]
+      },
+      "run_id": "",
+      "safe_summary": "diagnostics.completed",
+      "schema_version": 4,
+      "source": "",
+      "subject": "",
+      "workflow": "",
+      "workspace_id": ""
+    }
+  ],
+  "run": {
+    "schema_version": 4,
+    "run_id": "run-1",
+    "work_kind": "ticket",
+    "work_identity": null,
+    "execution_mode": "autonomous",
+    "member_id": "p1",
+    "device_id": "device-1",
+    "source": "routine",
+    "attributes": {
+      "target.title": "***",
+      "target.url": "ticket/1"
+    },
+    "started_at": "<now>",
+    "finished_at": "<now>",
+    "status": "failed",
+    "safe_summary": "***",
+    "result": null,
+    "provider_evidence": [
+      {
+        "payload": {
+          "text": "***"
+        },
+        "recorded_at": "<now>",
+        "type": "issue_comment"
+      }
+    ]
+  },
+  "session": {
+    "attributes": {
+      "target.title": "***",
+      "target.url": "ticket/1"
+    },
+    "command": "member ticket read",
+    "last_seen_at": "2026-11-03T10:00:00+00:00",
+    "person_id": "p1",
+    "schema_version": 4,
+    "source": "interactive",
+    "started_at": "2026-11-03T10:00:00+00:00",
+    "status": "failed",
+    "trace_id": "trace-1"
+  },
+  "presentations": [
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_environment.network_egress_candidate",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.network_egress_candidate",
+        "label_fallback": "agent_environment.network_egress_candidate",
+        "message_key": "",
+        "message": "example.test:443",
+        "message_params": {},
+        "tone": "info",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.approval",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.approval",
+        "label_fallback": "agent_runtime.approval",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.assistant",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.assistant",
+        "label_fallback": "agent_runtime.assistant",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.command",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.command",
+        "label_fallback": "agent_runtime.command",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.failed",
+        "label_fallback": "agent_runtime.failed",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.file_change",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.file_change",
+        "label_fallback": "agent_runtime.file_change",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.process",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.process",
+        "label_fallback": "agent_runtime.process",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.tool",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.tool",
+        "label_fallback": "agent_runtime.tool",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.turn",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.turn",
+        "label_fallback": "agent_runtime.turn",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "agent_runtime.usage",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.agentRuntime.usage",
+        "label_fallback": "agent_runtime.usage",
+        "message_key": "diagnostics.executions.eventNames.completed",
+        "message": "completed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "chat.receive_state_reset",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.chat_receive_state_reset",
+        "label_fallback": "chat.receive_state_reset",
+        "message_key": "diagnostics.executions.messages.chat_receive_state_reset",
+        "message": "chat.receive_state_reset",
+        "message_params": {
+          "members": 0,
+          "channels": 0
+        },
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "chat_dispatch.abandoned",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.chat_dispatch_abandoned",
+        "label_fallback": "chat_dispatch.abandoned",
+        "message_key": "",
+        "message": "chat_dispatch.abandoned",
+        "message_params": {
+          "run": "run",
+          "attempt": 0,
+          "max_attempts": 4,
+          "retry_at": ""
+        },
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "chat_dispatch.retry_scheduled",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.chat_dispatch_retry_scheduled",
+        "label_fallback": "chat_dispatch.retry_scheduled",
+        "message_key": "diagnostics.executions.messages.chat_dispatch_retry_scheduled",
+        "message": "chat_dispatch.retry_scheduled",
+        "message_params": {
+          "run": "run",
+          "attempt": 0,
+          "max_attempts": 4,
+          "retry_at": ""
+        },
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "command.deferred",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_deferred",
+        "label_fallback": "command.deferred",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "info",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "command.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_failed",
+        "label_fallback": "command.failed",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "command.finished",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_finished",
+        "label_fallback": "command.finished",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "command.started",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_started",
+        "label_fallback": "command.started",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "credential.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.credential_failed",
+        "label_fallback": "credential.failed",
+        "message_key": "diagnostics.executions.messages.credential_failed",
+        "message": "authentication",
+        "message_params": {
+          "provider": "codex",
+          "code": "authentication"
+        },
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "credential.verified",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.credential_verified",
+        "label_fallback": "credential.verified",
+        "message_key": "diagnostics.executions.messages.credential_verified",
+        "message": "codex",
+        "message_params": {
+          "provider": "codex"
+        },
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "decision.evaluated",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.decision_evaluated",
+        "label_fallback": "decision.evaluated",
+        "message_key": "",
+        "message": "model",
+        "message_params": {},
+        "tone": "info",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "diagnostics.completed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.diagnostics_completed",
+        "label_fallback": "diagnostics.completed",
+        "message_key": "diagnostics.executions.messages.diagnostics_completed",
+        "message": "diagnostics.completed",
+        "message_params": {
+          "count": 1,
+          "ok": true
+        },
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "events.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.event_listener",
+        "label_fallback": "events.failed",
+        "message_key": "diagnostics.executions.messages.events_failed",
+        "message": "events.failed",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "events.running",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.event_listener",
+        "label_fallback": "events.running",
+        "message_key": "diagnostics.executions.messages.events_running",
+        "message": "events.running",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "events.starting",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.event_listener",
+        "label_fallback": "events.starting",
+        "message_key": "diagnostics.executions.messages.events_starting",
+        "message": "events.starting",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "events.stopped",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.event_listener",
+        "label_fallback": "events.stopped",
+        "message_key": "diagnostics.executions.messages.events_stopped",
+        "message": "events.stopped",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "events.stopping",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.event_listener",
+        "label_fallback": "events.stopping",
+        "message_key": "diagnostics.executions.messages.events_stopping",
+        "message": "events.stopping",
+        "message_params": {},
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "future.event",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.unknown",
+        "label_fallback": "future.event",
+        "message_key": "",
+        "message": "future.event",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "future.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.unknown",
+        "label_fallback": "future.failed",
+        "message_key": "",
+        "message": "future.failed",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "member.command.deferred",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_deferred",
+        "label_fallback": "command.deferred",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "info",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "member.command.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_failed",
+        "label_fallback": "command.failed",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "member.command.finished",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_finished",
+        "label_fallback": "command.finished",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "member.command.started",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.command_started",
+        "label_fallback": "command.started",
+        "message_key": "",
+        "message": "command",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "pull_request.item",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.pull_request_item",
+        "label_fallback": "pull_request.item",
+        "message_key": "",
+        "message": "#1 · Title",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "repository.push",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.repository_push",
+        "label_fallback": "repository.push",
+        "message_key": "",
+        "message": "main",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler",
+        "label_fallback": "scheduler.failed",
+        "message_key": "diagnostics.executions.messages.scheduler_failed",
+        "message": "scheduler.failed",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.running",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler",
+        "label_fallback": "scheduler.running",
+        "message_key": "diagnostics.executions.messages.scheduler_running",
+        "message": "scheduler.running",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.starting",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler",
+        "label_fallback": "scheduler.starting",
+        "message_key": "diagnostics.executions.messages.scheduler_starting",
+        "message": "scheduler.starting",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.stopped",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler",
+        "label_fallback": "scheduler.stopped",
+        "message_key": "diagnostics.executions.messages.scheduler_stopped",
+        "message": "scheduler.stopped",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.stopping",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler",
+        "label_fallback": "scheduler.stopping",
+        "message_key": "diagnostics.executions.messages.scheduler_stopping",
+        "message": "scheduler.stopping",
+        "message_params": {},
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "scheduler.worker.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.scheduler_worker_failed",
+        "label_fallback": "scheduler.worker.failed",
+        "message_key": "diagnostics.executions.messages.scheduler_worker_failed",
+        "message": "scheduler.worker.failed",
+        "message_params": {
+          "source": "",
+          "count": 0,
+          "limit": 0
+        },
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "session.pointer",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.session_pointer",
+        "label_fallback": "session.pointer",
+        "message_key": "",
+        "message": "sessions/trace.jsonl",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "span.failed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.spanEvents.failed",
+        "label_fallback": "span.failed",
+        "message_key": "",
+        "message": "model · 1.2s",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "span.finished",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.spanEvents.finished",
+        "label_fallback": "span.finished",
+        "message_key": "",
+        "message": "model · 1.2s",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "system.finished",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.system_finished",
+        "label_fallback": "system.finished",
+        "message_key": "",
+        "message": "service",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "system.started",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.system_started",
+        "label_fallback": "system.started",
+        "message_key": "",
+        "message": "service",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "target.recorded",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.target_recorded",
+        "label_fallback": "target.recorded",
+        "message_key": "",
+        "message": "#1 · Title",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "target.scope_refused",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.target_scope_refused",
+        "label_fallback": "target.scope_refused",
+        "message_key": "",
+        "message": "target.scope_refused",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "ticket.comment",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.ticket_comment",
+        "label_fallback": "ticket.comment",
+        "message_key": "",
+        "message": "#1 · Title",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "ticket.item",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.ticket_item",
+        "label_fallback": "ticket.item",
+        "message_key": "",
+        "message": "#1 · Title",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "verify.completed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.verify_completed",
+        "label_fallback": "verify.completed",
+        "message_key": "diagnostics.executions.messages.verify_completed",
+        "message": "verify.completed",
+        "message_params": {
+          "count": 1,
+          "ok": true
+        },
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "workflow.completed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.workflow_completed",
+        "label_fallback": "workflow.completed",
+        "message_key": "diagnostics.executions.messages.workflow_completed",
+        "message": "command",
+        "message_params": {
+          "run": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_at": "later"
+        },
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "workflow.completion_missing",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.workflow_completion_missing",
+        "label_fallback": "workflow.completion_missing",
+        "message_key": "",
+        "message": "command",
+        "message_params": {
+          "run": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_at": "later"
+        },
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.workflow_rate_limited",
+        "label_fallback": "workflow.rate_limited",
+        "message_key": "diagnostics.executions.messages.workflow_rate_limited_with_hint",
+        "message": "command",
+        "message_params": {
+          "run": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_at": "later"
+        },
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "event",
+        "type": "workspace.changed",
+        "command": "command",
+        "payload": {
+          "name": "completed",
+          "model": "model",
+          "duration_ms": 1234,
+          "run_id": "run",
+          "attempt": 2,
+          "max_attempts": 4,
+          "retry_after_text": "later",
+          "provider": "cli_agent",
+          "cli_agent": "codex",
+          "checks": [
+            true
+          ],
+          "ok": true,
+          "path": "sessions/trace.jsonl",
+          "candidates": [
+            {
+              "destination": "example.test",
+              "port": 443
+            }
+          ],
+          "title": "Title",
+          "ref": "refs/heads/main"
+        },
+        "attributes": {
+          "target.label": "#1",
+          "service_run_id": "service"
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.eventTypes.workspace_changed",
+        "label_fallback": "workspace.changed",
+        "message_key": "",
+        "message": "workspace.changed",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "log",
+        "level": "INFO",
+        "message": "logged"
+      },
+      "expected": {
+        "label_key": "",
+        "label_fallback": "INFO",
+        "message_key": "",
+        "message": "logged",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "log",
+        "level": "WARNING",
+        "message": "logged"
+      },
+      "expected": {
+        "label_key": "",
+        "label_fallback": "WARNING",
+        "message_key": "",
+        "message": "logged",
+        "message_params": {},
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "log",
+        "level": "ERROR",
+        "message": "logged"
+      },
+      "expected": {
+        "label_key": "",
+        "label_fallback": "ERROR",
+        "message_key": "",
+        "message": "logged",
+        "message_params": {},
+        "tone": "danger",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "memory",
+        "type": "memory.record",
+        "message": "memory"
+      },
+      "expected": {
+        "label_key": "diagnostics.memory.actions.record",
+        "label_fallback": "record",
+        "message_key": "",
+        "message": "memory",
+        "message_params": {},
+        "tone": "success",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "memory",
+        "type": "memory.recall",
+        "message": "memory"
+      },
+      "expected": {
+        "label_key": "diagnostics.memory.actions.recall",
+        "label_fallback": "recall",
+        "message_key": "",
+        "message": "memory",
+        "message_params": {},
+        "tone": "info",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "memory",
+        "type": "memory.archive",
+        "message": "memory"
+      },
+      "expected": {
+        "label_key": "diagnostics.memory.actions.archive",
+        "label_fallback": "archive",
+        "message_key": "",
+        "message": "memory",
+        "message_params": {},
+        "tone": "warning",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "memory",
+        "type": "memory.touch",
+        "message": "memory"
+      },
+      "expected": {
+        "label_key": "diagnostics.memory.actions.touch",
+        "label_fallback": "touch",
+        "message_key": "",
+        "message": "memory",
+        "message_params": {},
+        "tone": "neutral",
+        "effort": ""
+      }
+    },
+    {
+      "raw": {
+        "kind": "io",
+        "type": "command.output",
+        "payload": {
+          "output": "result",
+          "effort": {
+            "resolved": "high"
+          }
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.ioTypes.command_output",
+        "label_fallback": "command.output",
+        "message_key": "",
+        "message": "result",
+        "message_params": {},
+        "tone": "info",
+        "effort": "high"
+      }
+    },
+    {
+      "raw": {
+        "kind": "io",
+        "type": "cli_agent.request",
+        "payload": {
+          "output": "result",
+          "effort": {
+            "resolved": "high"
+          }
+        }
+      },
+      "expected": {
+        "label_key": "diagnostics.executions.ioTypes.cli_agent_request",
+        "label_fallback": "cli_agent.request",
+        "message_key": "",
+        "message": "result",
+        "message_params": {},
+        "tone": "info",
+        "effort": "high"
+      }
+    },
+    {
+      "raw": {
+        "kind": "io",
+        "type": "future.io",
+        "payload": {
+          "output": "result",
+          "effort": {
+            "resolved": "high"
+          }
+        }
+      },
+      "expected": {
+        "label_key": "",
+        "label_fallback": "future.io",
+        "message_key": "",
+        "message": "result",
+        "message_params": {},
+        "tone": "info",
+        "effort": "high"
+      }
+    }
+  ],
+  "streams": [
+    {
+      "raw": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "0",
+          "payload": {
+            "name": "started",
+            "message": "0"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "1",
+          "payload": {
+            "name": "delta",
+            "message": "1"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "2",
+          "payload": {
+            "name": "delta",
+            "message": "2"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "3",
+          "payload": {
+            "name": "completed",
+            "message": "3"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "3",
+          "payload": {
+            "name": "completed",
+            "message": "3"
+          }
+        }
+      ]
+    },
+    {
+      "raw": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "0",
+          "payload": {
+            "name": "started",
+            "message": "0"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "1",
+          "payload": {
+            "name": "delta",
+            "message": "1"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "2",
+          "payload": {
+            "name": "delta",
+            "message": "2"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "2",
+          "payload": {
+            "name": "partial",
+            "message": "12",
+            "partial": true
+          }
+        }
+      ]
+    },
+    {
+      "raw": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "0",
+          "payload": {
+            "name": "thinking",
+            "message": "0"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "1",
+          "payload": {
+            "name": "thinking",
+            "message": "1"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "2",
+          "payload": {
+            "name": "completed",
+            "message": "2"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "1",
+          "payload": {
+            "name": "thinking",
+            "message": "01"
+          }
+        },
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "2",
+          "payload": {
+            "name": "completed",
+            "message": "2"
+          }
+        }
+      ]
+    },
+    {
+      "raw": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "0",
+          "payload": {
+            "name": "started",
+            "message": "0"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "kind": "event",
+          "type": "agent_runtime.assistant",
+          "span_id": "span",
+          "timestamp": "0",
+          "payload": {
+            "name": "started",
+            "message": "0"
+          }
+        }
+      ]
+    }
+  ]
+}

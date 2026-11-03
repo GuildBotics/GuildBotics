@@ -15,10 +15,25 @@
 //! caller; the diagnostics reader uses English titles until a language is
 //! supplied by the screen layer. Python remains the running Python host's
 //! implementation during the Rust host migration.
+//!
+//! `activity`, `runs`, and `interactive` own shared records under `state/`.
+//! Their read-modify-write operations borrow `gb_base::shared_writes::Writer`
+//! from a held workspace transaction. The host supplies identities, clocks,
+//! and a `redaction::Redactor` snapshot of indexed environment secrets; the
+//! stores never discover a workspace again or open the keychain. Member
+//! completion authorization and workflow decisions belong to the host's
+//! capabilities, above this persistence layer. Diagnostics transcripts remain
+//! device-local, including process-wide system sessions and retention.
 
+pub mod activity;
 mod diagnostics;
+pub mod interactive;
+mod presentations;
 mod reader;
+pub mod redaction;
+pub mod runs;
 mod status;
+mod streams;
 mod title;
 mod trace;
 
