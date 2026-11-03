@@ -33,7 +33,7 @@ CLOSE_COMMENT = "更新可能な依存が無くなったため、この issue �
 # Display label and lockfile for each ecosystem, in the order they are reported.
 ECOSYSTEMS = (
     ("pip", "Python", "uv.lock"),
-    ("npm", "desktop", "desktop/package-lock.json"),
+    ("npm", "frontend", "package-lock.json"),
 )
 
 # A tree line names the package first; the annotations that follow it (`latest`,
@@ -77,19 +77,21 @@ def parse_uv_tree(text: str) -> list[Outdated]:
 
 
 def parse_npm_outdated(payload: str) -> list[Outdated]:
-    """Parse `npm outdated --json` output, skipping entries with no installed version.
+    """Parse `npm outdated --workspaces --json` output, skipping entries with no installed version.
 
     An entry without ``current`` means the package is not installed, which makes
     the comparison meaningless; the workflow runs `npm ci` first so that the
     installed versions are real.
     """
     entries = json.loads(payload) if payload.strip() else {}
-    found = []
-    for name, info in sorted(entries.items()):
-        current, latest = info.get("current"), info.get("latest")
-        if current and latest and current != latest:
-            found.append(Outdated("npm", name, current, latest))
-    return found
+    found = set()
+    for name, value in entries.items():
+        # npm emits an array when multiple workspaces declare the package.
+        for info in value if isinstance(value, list) else [value]:
+            current, latest = info.get("current"), info.get("latest")
+            if current and latest and current != latest:
+                found.add(Outdated("npm", name, current, latest))
+    return sorted(found)
 
 
 def render_body(items: Sequence[Outdated], generated_at: datetime) -> str:
@@ -133,7 +135,7 @@ def render_body(items: Sequence[Outdated], generated_at: datetime) -> str:
         "<details><summary>検出方法と既知の制限</summary>",
         "",
         "- Python: `uv tree --outdated --depth 1` — 直接依存のみ。推移的依存は対象外",
-        "- desktop: `npm outdated --json` — `npm ci` 後に実行",
+        "- frontend: `npm outdated --workspaces --json` — `npm ci` 後に実行",
         "",
         "</details>",
         "",
@@ -180,7 +182,7 @@ def collect(repo_root: Path) -> list[Outdated]:
         *parse_uv_tree(_run(["uv", "tree", "--outdated", "--depth", "1"], repo_root)),
         # npm outdated exits non-zero precisely when it finds outdated packages.
         *parse_npm_outdated(
-            _run(["npm", "outdated", "--json"], repo_root / "desktop", check=False)
+            _run(["npm", "outdated", "--workspaces", "--json"], repo_root, check=False)
         ),
     ]
 

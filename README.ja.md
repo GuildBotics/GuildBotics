@@ -81,7 +81,7 @@ GuildBotics にインストーラーはありません。サーバーは Hub に
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
 uv sync --locked --extra test --extra dev
-(cd desktop && npm ci && npx vite build)
+npm ci && npm run build --workspace desktop
 ```
 
 macOS では、続けてサーバーをユーザーのサービス（LaunchAgent）として登録します。
@@ -626,7 +626,7 @@ scripts/hub-server.sh uninstall   # サーバーを止め、LaunchAgent を外�
 scripts/hub-server.sh update
 ```
 
-依存を入れ直し（`uv sync`、`desktop` で `npm ci`）、画面をビルドし（`desktop` で `npx vite build`）、CLI とスキルを配置し直してから、実行中の作業の完了を待ってサーバーを起動し直します。自分で始めた `guildbotics run` は先に止めてください。
+依存を入れ直し（`uv sync`、ルートで `npm ci`）、画面をビルドし（`npm run build --workspace desktop`）、CLI とスキルを配置し直してから、実行中の作業の完了を待ってサーバーを起動し直します。自分で始めた `guildbotics run` は先に止めてください。
 
 更新で Python の実行ファイルが変わると、新しい実行ファイルが読む前に、キーチェーンが GuildBotics の項目ごとに許可を聞き直します。ウィンドウのないサービスからは答えられないので、`update` はサーバーを止め、ターミナルで一度 `guildbotics server start` を実行し、確認に「常に許可」で答えて Ctrl-C で止めてから `scripts/hub-server.sh restart` を実行するよう案内します。
 

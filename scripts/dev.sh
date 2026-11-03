@@ -72,12 +72,10 @@ for command in cargo npm git; do
   fi
 done
 
-for web in desktop crates/branvil/web; do
-  if [[ ! -f "$web/node_modules/.package-lock.json" || "$web/package-lock.json" -nt "$web/node_modules/.package-lock.json" ]]; then
-    npm --prefix "$web" ci
-  fi
-  npm --prefix "$web" run build
-done
+if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules/.package-lock.json ]]; then
+  npm ci
+fi
+npm run build --workspaces
 # Through the development image's cargo, which cleans a target directory built
 # under other build conditions first (in the image, `cargo` is that wrapper).
 REAL_CARGO="${REAL_CARGO:-$(type -P cargo)}" docker/agent-environment/cargo-wrapper.sh \

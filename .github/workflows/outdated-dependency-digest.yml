@@ -35,9 +35,8 @@ jobs:
           node-version: "24"
 
       # npm outdated reports the installed version, so the tree has to exist.
-      - name: Install desktop dependencies
+      - name: Install frontend dependencies
         run: npm ci
-        working-directory: desktop
 
       - name: Reconcile tracking issue with outdated dependencies
         env:

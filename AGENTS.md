@@ -277,7 +277,7 @@ help / docstring が正であり、member コマンドの一行説明は
   起動し直す（`ExitTimeOut` は `KILL_AFTER_SECONDS` と同じ 90 秒）。restart / update / uninstall
   は `guildbotics server stop` で作業の完了を待って止め、install はサーバーが動いている間は断る。
   出力は `~/Library/Logs/guildbotics.log` に追記する。`update` は依存の入れ直し
-  （`uv sync --locked`、`desktop` で `npm ci`）、画面の build（`npx vite build`）、CLI とスキルの導入を
+  （`uv sync --locked`、ルートで `npm ci`）、画面の build（`npm run build --workspace desktop`）、CLI とスキルの導入を
   やり直してからサーバーを起動し直す。Python の実行ファイルが変わったときは、キーチェーンの確認に
   答えるため、手で一度 `guildbotics server start` するよう案内して止まる
 - `scripts/install_cli_assets.py` は、チェックアウトの CLI を呼ぶ `~/.guildbotics/bin/guildbotics`
@@ -436,7 +436,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
 npx --yes jscpd@5.0.14 --config jscpd.rust.json
-(cd crates/branvil/web && npm ci && npm run lint && npm run typecheck && npm run test)
+npm ci && (cd crates/branvil/web && npm run lint && npm run typecheck && npm run test)
 ```
 
 テストは cargo-nextest でテストごとにプロセスを分けて動かす（開発用ベースイメージには入っている。手元では `cargo install --locked cargo-nextest`）。
@@ -513,11 +513,11 @@ GUILDBOTICS_BLACKBOX_GOLDEN=$HOME/Documents/GuildBotics/blackbox-golden/<日付>
 golden を記録し直したら、トークンの形の値が入っていないことを確かめる。
 
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、これらに加えて
-`markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
+`markdown-links`（下記の lychee）と `desktop-quality`（ルートで `npm ci` →
 `npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
 `guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
 ジョブの環境には CI メタデータしか無いため、uv/npm/Cargo のキャッシュは
-`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置き、`uv.lock`・`desktop/package-lock.json`・`Cargo.lock` などをキーに保存する。
+`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置き、`uv.lock`・`package-lock.json`・`Cargo.lock` などをキーに保存する。
 `.venv`・`node_modules` はキャッシュしない。Rust の `target` は Cargo を build するジョブがキャッシュし、
 復元した `target` より新しくなるよう `crates` に touch してから build する（workspace の crate だけを build し直す）。
 Rust の重複コードは desktop と同じ jscpd で検出する（`jscpd.rust.json`）。
@@ -622,9 +622,14 @@ uv sync --extra dev
 
 desktop frontend (`desktop/`) の品質確認:
 
+画面の依存はルートの npm workspaces（`desktop` と `crates/branvil/web`）と
+`package-lock.json` で管理する。`npm ci` はルートで行い、共通依存の範囲をそろえる。
+Playwright の lock の版は開発イメージの `PLAYWRIGHT_VERSION` と一致させる
+（`tests/test_npm_workspace.py` が検査する）。
+
 ```bash
-cd desktop
 npm ci
+cd desktop
 npm run format:check
 npm run lint
 npm run typecheck
@@ -642,8 +647,8 @@ npm run quality
 Playwright E2E（実ブラウザ + 実 Local API backend。`npm run quality` / 通常 push CI には含めない）:
 
 ```bash
-cd desktop
 npm ci
+cd desktop
 npm run e2e:install   # 初回のみ: chromium を取得
 npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
 ```
@@ -654,7 +659,7 @@ npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
 
 開発用の起動（Rust のサーバー）:
 
-- `scripts/dev.sh` は、2 つの画面（`desktop` と `crates/branvil/web`。`node_modules` が lock より古ければ `npm ci`）と `guildbotics` の debug ビルド（開発用ベースイメージの `cargo` のラッパー `docker/agent-environment/cargo-wrapper.sh` を通す）を作り、本番と別のデータで `guildbotics server start` を動かして、`guildbotics open` と `guildbotics branvil open` で 2 つの画面を開く。データディレクトリ（`--data-dir`、既定 `~/.gbb/dev`）の `home/` が `GUILDBOTICS_HOME`（identity も `home/identity`。呼び出し側の `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` は渡さない）、`branvil/` が `BRANVIL_DATA_DIR` で、Branvil は初回だけ `--listen 127.0.0.1:7879` で初期化する。GuildBotics のポートは `GUILDBOTICS_SERVER_PORT`（既定 8866）、ワークスペースは `GUILDBOTICS_WORKSPACE_ROOT` で選び、サーバーはそのワークスペースに実行を記録する。Rust のサーバーはまだ runtime を置かないので、Python 版が置いたこの端末の runtime（`~/.guildbotics/data/msb`）を `home/data/msb` にリンクする（コマンドの microVM はワークスペースの snapshot から起動する）。準備が済むとスクリプトはサーバーそのものになる（`exec`）ので、Ctrl-C と TERM はサーバーに直接届き、`guildbotics server start` と同じく 1 回目の Ctrl-C は実行中のコマンドの終わりを待ち、2 回目と TERM はそれを取り消す。画面は裏の補助が、サーバーが stdout とログ（データディレクトリの `server.log`。最後の起動の分）で GuildBotics と Branvil の待ち受けを告げてから開く。チェックアウトの `desktop/dist` を作り直すので、Hub のサーバーが動くチェックアウトでは動かさない（worktree で動かす）。サーバーのページ（`/`・`/index.html`・`/-/enter`・`/-/authorize`・`/assets`）は、Python 版と同じくチェックアウトの `desktop/dist` を配る
+- `scripts/dev.sh` は、2 つの画面（`desktop` と `crates/branvil/web`。ルートの `node_modules` が共通 lock より古ければルートで `npm ci`）と `guildbotics` の debug ビルド（開発用ベースイメージの `cargo` のラッパー `docker/agent-environment/cargo-wrapper.sh` を通す）を作り、本番と別のデータで `guildbotics server start` を動かして、`guildbotics open` と `guildbotics branvil open` で 2 つの画面を開く。データディレクトリ（`--data-dir`、既定 `~/.gbb/dev`）の `home/` が `GUILDBOTICS_HOME`（identity も `home/identity`。呼び出し側の `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` は渡さない）、`branvil/` が `BRANVIL_DATA_DIR` で、Branvil は初回だけ `--listen 127.0.0.1:7879` で初期化する。GuildBotics のポートは `GUILDBOTICS_SERVER_PORT`（既定 8866）、ワークスペースは `GUILDBOTICS_WORKSPACE_ROOT` で選び、サーバーはそのワークスペースに実行を記録する。Rust のサーバーはまだ runtime を置かないので、Python 版が置いたこの端末の runtime（`~/.guildbotics/data/msb`）を `home/data/msb` にリンクする（コマンドの microVM はワークスペースの snapshot から起動する）。準備が済むとスクリプトはサーバーそのものになる（`exec`）ので、Ctrl-C と TERM はサーバーに直接届き、`guildbotics server start` と同じく 1 回目の Ctrl-C は実行中のコマンドの終わりを待ち、2 回目と TERM はそれを取り消す。画面は裏の補助が、サーバーが stdout とログ（データディレクトリの `server.log`。最後の起動の分）で GuildBotics と Branvil の待ち受けを告げてから開く。チェックアウトの `desktop/dist` を作り直すので、Hub のサーバーが動くチェックアウトでは動かさない（worktree で動かす）。サーバーのページ（`/`・`/index.html`・`/-/enter`・`/-/authorize`・`/assets`）は、Python 版と同じくチェックアウトの `desktop/dist` を配る
 - 変更したら `tests/scripts/test_dev.py` を実行する
 
 Hub のサーバーのスクリプト変更時の確認:
@@ -675,7 +680,7 @@ Hub のサーバーのスクリプト変更時の確認:
 desktop TypeScript 開発時の品質確認:
 
 - Node.js は CI と合わせて 24 系を前提にする
-- frontend の依存更新は `desktop/package-lock.json` も更新する
+- frontend の依存更新は `package-lock.json` も更新する
 - TypeScript / React コードを変更したら、原則として `npm run format:check`、`npm run lint`、`npm run typecheck`、`npm run duplicates`、関連する `npm run test` を実行してから完了報告する
 - 整形が必要な場合は `desktop` で `npm run format` を実行し、Prettier の結果を正とする
 - React コンポーネントの挙動変更時は React Testing Library によるコンポーネントテストを追加・更新する

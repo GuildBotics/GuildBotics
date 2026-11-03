@@ -19,7 +19,7 @@ Code and Copilot run on in `NODE_VERSION` and `NODE_SHA256` in
 `guildbotics/environment/snapshot.py`; the snapshot installs that Node.js over
 the base image's. Its own libraries are locked in `uv.lock` (exported to
 `guildbotics/environment/requirements.txt` for the snapshot) and
-`desktop/package-lock.json`, and the code
+`package-lock.json`, and the code
 host reports the vulnerable ones as dependency alerts. This workflow updates
 the pins and the locks; it does not establish that the new releases work on a
 real device.
@@ -205,7 +205,7 @@ version to exactly its target:
 | `manifest_path` | Raise it with |
 | --- | --- |
 | `uv.lock`, `guildbotics/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
-| `desktop/package-lock.json` | In `desktop`: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target>`, which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
+| `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
@@ -270,8 +270,12 @@ uv run --no-sync python -m pytest tests/guildbotics/environment/test_snapshot.py
 
 When `uv.lock` changed, also run `uv run --no-sync lint-imports` and the whole
 suite, `uv run --no-sync python -m pytest tests/ -n auto -m 'not real_device'`:
-a library is used throughout the code. When `desktop/package-lock.json`
-changed, run `npm ci` and `npm run quality` in `desktop`.
+a library is used throughout the code. When `package-lock.json`
+changed, run `npm ci` at the root, `npm run quality --workspace desktop`,
+and lint, typecheck and test in `crates/branvil/web`. Keep shared dependency
+ranges aligned. Keep the locked `@playwright/test` version aligned with
+`PLAYWRIGHT_VERSION` in `docker/agent-environment/Dockerfile`; the VM uses
+that image's Chromium and cannot download a different version.
 
 Do not enable real-device opt-ins. The marker expression excludes every
 real-device test. Add non-device regression tests for any adapter behavior

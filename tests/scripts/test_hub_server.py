@@ -220,7 +220,7 @@ def test_update_rebuilds_everything_then_restarts(service):
         "dev",
     ] in service.calls
     assert ["npm", "ci"] in service.calls
-    assert ["npx", "vite", "build"] in service.calls
+    assert ["npm", "run", "build", "--workspace", "desktop"] in service.calls
     assert names.index("uv") < names.index("npm") < names.index("guildbotics")
     assert service.calls[-1] == [
         "launchctl",

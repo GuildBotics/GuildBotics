@@ -88,6 +88,7 @@ def test_collect_reads_each_tool_from_its_stdout(
     found = digest.collect(Path("/repo"))
 
     assert [command[0] for command in commands] == ["uv", "npm"]
+    assert commands[-1] == ["npm", "outdated", "--workspaces", "--json"]
     assert [item.item_id for item in found] == [
         "pip:websockets",
         "pip:ruff",
@@ -120,11 +121,11 @@ def test_render_body_groups_packages_under_their_ecosystem() -> None:
 
     body = digest.render_body(items, GENERATED_AT)
 
-    assert "**更新可能 2 件** — Python 1 / desktop 1" in body
+    assert "**更新可能 2 件** — Python 1 / frontend 1" in body
     assert "### Python (`uv.lock`)" in body
-    assert "### desktop (`desktop/package-lock.json`)" in body
+    assert "### frontend (`package-lock.json`)" in body
     assert "| `websockets` | `16.1.1` | `17.0.1` |" in body
-    assert body.index("### Python") < body.index("### desktop")
+    assert body.index("### Python") < body.index("### frontend")
 
 
 def test_render_body_omits_sections_for_ecosystems_that_are_up_to_date() -> None:
@@ -132,8 +133,8 @@ def test_render_body_omits_sections_for_ecosystems_that_are_up_to_date() -> None
 
     body = digest.render_body(items, GENERATED_AT)
 
-    assert "**更新可能 1 件** — Python 0 / desktop 1" in body
-    assert "### desktop (`desktop/package-lock.json`)" in body
+    assert "**更新可能 1 件** — Python 0 / frontend 1" in body
+    assert "### frontend (`package-lock.json`)" in body
     assert "### Python" not in body
 
 
@@ -167,3 +168,18 @@ def test_render_new_outdated_comment_lists_only_the_newly_behind_packages() -> N
     assert comment.startswith("新たに更新可能となった依存が 1 件あります。")
     assert "`npm` / `typescript` — `5.9.3` → `7.0.2`" in comment
     assert "websockets" not in comment
+
+
+def test_workspace_outdated_arrays_are_deduplicated() -> None:
+    info = {"current": "1.62.1", "latest": "1.63.0"}
+    payload = json.dumps(
+        {
+            "@playwright/test": [
+                {**info, "dependent": "desktop"},
+                {**info, "dependent": "branvil-web"},
+            ]
+        }
+    )
+    assert digest.parse_npm_outdated(payload) == [
+        digest.Outdated("npm", "@playwright/test", "1.62.1", "1.63.0")
+    ]

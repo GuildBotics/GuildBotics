@@ -42,7 +42,7 @@ ARG PYTHON_VERSION=3.15
 ARG RUST_VERSION=1.96.0
 ARG NEXTEST_VERSION=0.9.148
 ARG LYCHEE_VERSION=0.24.2
-# Keep in step with `@playwright/test` in desktop/package-lock.json; a newer
+# Keep in step with `@playwright/test` in package-lock.json; a newer
 # lock file makes `npm run e2e:install` fetch the matching browser at run time.
 ARG PLAYWRIGHT_VERSION=1.62.1
 

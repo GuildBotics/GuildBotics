@@ -81,7 +81,7 @@ GuildBotics has no installer: the server runs from a checkout of this repository
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
 uv sync --locked --extra test --extra dev
-(cd desktop && npm ci && npx vite build)
+npm ci && npm run build --workspace desktop
 ```
 
 On macOS, then register the server as a service of your user (a LaunchAgent):
@@ -626,7 +626,7 @@ scripts/hub-server.sh uninstall   # stop the server and remove the LaunchAgent
 scripts/hub-server.sh update
 ```
 
-It installs the dependencies again (`uv sync`, and `npm ci` in `desktop`), builds the screens (`npx vite build` in `desktop`), installs the CLI and the skill again, and restarts the server after its in-flight work finishes. Stop any `guildbotics run` you started yourself first.
+It installs the dependencies again (`uv sync`, and `npm ci` at the repository root), builds the screens (`npm run build --workspace desktop`), installs the CLI and the skill again, and restarts the server after its in-flight work finishes. Stop any `guildbotics run` you started yourself first.
 
 When the update changed the Python interpreter, the keychain asks again, once for each GuildBotics item, before the new interpreter may read it. The service has no window to answer that, so `update` stops the server and asks you to run `guildbotics server start` once in a terminal, answer each prompt with "Always Allow", stop it with Ctrl-C, and then run `scripts/hub-server.sh restart`.
 

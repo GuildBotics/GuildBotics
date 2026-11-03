@@ -43,7 +43,7 @@ Real GitHub/Slack accounts and workspaces, OS keychain writes, AI CLI tool authe
 
 ### 1. Prepare
 
-Confirm prerequisites once: `uv sync --extra test --extra dev` has been run at the repo root and `npm ci` in `desktop/` (run them if missing). Do not read the README yet — which one is the target is not known until the app is running.
+Confirm prerequisites once: `uv sync --extra test --extra dev` has been run at the repo root and `npm ci` at the repository root (run them if missing). Do not read the README yet — which one is the target is not known until the app is running.
 
 ### 2. Start the GUI stack (unseeded)
 
