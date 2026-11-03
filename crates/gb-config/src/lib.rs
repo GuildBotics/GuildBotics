@@ -8,5 +8,6 @@ pub mod command_files;
 pub mod commands;
 mod python_literal;
 pub mod repository;
+pub mod secrets;
 pub mod team;
 mod yaml;
