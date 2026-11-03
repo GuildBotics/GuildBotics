@@ -798,13 +798,7 @@ impl Executor for Microsandbox {
             );
             let _ = log.send(note.into_bytes()).await;
         }
-        if peak_kib > 0 {
-            let note = format!(
-                "[branvil] peak memory of msb run and its VM: {} MiB\n",
-                peak_kib.div_ceil(1024)
-            );
-            let _ = log.send(note.into_bytes()).await;
-        }
+        log_peak_memory(&log, peak_kib).await;
         let removing = Instant::now();
         // By label and from the list: one that never came to be is not an
         // error.
@@ -841,6 +835,18 @@ impl Executor for Microsandbox {
                 .is_some_and(crate::ci::files::valid_attempt_id)
         })
         .await;
+    }
+}
+
+/// Reports memory only when a positive sample was collected. A short-lived
+/// process can exit before `ps` sees it; zero is not a measured peak.
+async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) {
+    if peak_kib > 0 {
+        let note = format!(
+            "[branvil] peak memory of msb run and its VM: {} MiB\n",
+            peak_kib.div_ceil(1024)
+        );
+        let _ = log.send(note.into_bytes()).await;
     }
 }
 
@@ -897,6 +903,26 @@ fn tail(bytes: &[u8], n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn memory_logging_requires_a_positive_sample() {
+        // Supply the collected peak directly: neither `ps` nor the lifetime
+        // of a real process decides which branch this test exercises.
+        for (peak_kib, expected) in [(0, None), (1, Some(1)), (1024, Some(1)), (1025, Some(2))] {
+            let (log, mut logs) = mpsc::channel(2);
+            log_peak_memory(&log, peak_kib).await;
+            drop(log);
+            assert_eq!(
+                logs.recv().await,
+                expected.map(|mib| format!(
+                    "[branvil] peak memory of msb run and its VM: {mib} MiB\n"
+                )
+                .into_bytes()),
+                "peak {peak_kib} KiB"
+            );
+            assert_eq!(logs.recv().await, None);
+        }
+    }
 
     #[test]
     fn the_memory_of_a_job_is_its_process_tree() {
@@ -1052,8 +1078,8 @@ esac
         assert!(!running.is_finished(), "the job still runs");
         std::fs::write(state.join("done"), "").unwrap();
         assert_eq!(running.await.unwrap(), Outcome::Exited(0));
-        // The log times the commands and the removal, and gives the peak
-        // memory of `msb run` and what it started.
+        // Timing is always logged. Memory is tested separately with supplied
+        // samples: this short-lived fake may exit before `ps` sees it.
         let mut text = String::new();
         while let Ok(bytes) = logs.try_recv() {
             text.push_str(&String::from_utf8_lossy(&bytes));
@@ -1061,7 +1087,6 @@ esac
         for line in [
             "[branvil] sandbox started in ",
             "[branvil] commands ran for ",
-            "[branvil] peak memory of msb run and its VM: ",
             "[branvil] sandbox removed in ",
         ] {
             assert!(text.contains(line), "{line} in {text}");
