@@ -35,6 +35,13 @@ fn hold(root: &Path, timeout: Duration) -> anyhow::Result<FileLock> {
 
 /// Resolve links in existing ancestors, even when the leaf is not created yet.
 pub fn resolved(path: &Path) -> io::Result<PathBuf> {
+    resolve_links(path, 0)
+}
+
+fn resolve_links(path: &Path, links: usize) -> io::Result<PathBuf> {
+    if links > 40 {
+        return Err(io::Error::other("too many symbolic links"));
+    }
     let mut resolved = PathBuf::new();
     for part in std::path::absolute(path)?.components() {
         match part {
@@ -44,8 +51,30 @@ pub fn resolved(path: &Path) -> io::Result<PathBuf> {
             std::path::Component::CurDir => (),
             part => {
                 resolved.push(part);
-                match fs::canonicalize(&resolved) {
-                    Ok(real) => resolved = real,
+                match fs::symlink_metadata(&resolved) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        // Preserve filesystem errors (e.g. a target `file/..`).
+                        // Only dangling targets need the non-strict resolver.
+                        match fs::canonicalize(&resolved) {
+                            Ok(real) => {
+                                resolved = real;
+                                continue;
+                            }
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                            Err(e) => return Err(e),
+                        }
+                        let target = fs::read_link(&resolved)?;
+                        let target = if target.is_absolute() {
+                            target
+                        } else {
+                            resolved
+                                .parent()
+                                .ok_or_else(|| io::Error::other("link has no parent"))?
+                                .join(target)
+                        };
+                        resolved = resolve_links(&target, links + 1)?;
+                    }
+                    Ok(_) => (),
                     Err(e) if e.kind() == io::ErrorKind::NotFound => (),
                     Err(e) => return Err(e),
                 }

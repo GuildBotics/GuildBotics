@@ -222,6 +222,22 @@ fn another_process_observes_the_same_lock() {
 fn existing_symlink_ancestors_decide_the_lock_scope() {
     let dir = tempfile::tempdir().unwrap();
     let writes = writes(dir.path());
+    let missing = dir.path().join("missing");
+    std::os::unix::fs::symlink(&missing, dir.path().join("broken")).unwrap();
+    assert_eq!(
+        resolved(&dir.path().join("broken/child")).unwrap(),
+        missing.join("child")
+    );
+    std::os::unix::fs::symlink("cycle", dir.path().join("cycle")).unwrap();
+    assert!(resolved(&dir.path().join("cycle")).is_err());
+    fs::write(dir.path().join("regular"), "file").unwrap();
+    for (link, target) in [("bad-parent", "regular/.."), ("bad-directory", "regular/")] {
+        std::os::unix::fs::symlink(target, dir.path().join(link)).unwrap();
+        assert_eq!(
+            resolved(&dir.path().join(link)).unwrap_err().kind(),
+            std::io::ErrorKind::NotADirectory
+        );
+    }
     let workspace = writes.workspace.as_ref().unwrap();
     fs::create_dir_all(workspace.join(".guildbotics/config")).unwrap();
     std::os::unix::fs::symlink(

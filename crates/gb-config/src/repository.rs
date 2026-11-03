@@ -141,19 +141,24 @@ impl ConfigView {
             };
             for entry in entries {
                 let entry = entry?;
-                let child = format!(
-                    "{}/{}",
-                    name.trim_end_matches('/'),
-                    entry
-                        .file_name()
-                        .into_string()
-                        .map_err(|_| anyhow::anyhow!("non UTF-8 config path"))?
-                );
+                let child = Path::new(name)
+                    .join(entry.file_name())
+                    .components()
+                    .filter(|part| *part != Component::CurDir)
+                    .map(|part| {
+                        part.as_os_str()
+                            .to_str()
+                            .ok_or_else(|| anyhow::anyhow!("non UTF-8 config path"))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join("/");
                 // Python's rglob does not recurse into symlink directories.
                 let kind = entry.file_type()?;
                 if kind.is_dir() {
                     walk(view, &child, paths)?;
-                } else if view.path(&child)?.is_file() {
+                } else if entry.path().is_file() {
+                    // Membership follows file links; content reads below still
+                    // enforce containment. Directory links are never traversed.
                     paths.push(child);
                 }
             }
@@ -161,7 +166,8 @@ impl ConfigView {
         }
         let mut paths = vec![];
         walk(self, dir, &mut paths)?;
-        paths.sort();
+        // pathlib compares components, not the slash-joined spelling.
+        paths.sort_by(|a, b| a.split('/').cmp(b.split('/')));
         Ok(paths)
     }
     pub fn revisions(&self, paths: &[&str]) -> anyhow::Result<Revisions> {
@@ -187,7 +193,7 @@ impl ConfigView {
     }
     pub fn tree_revisions(&self, dir: &str) -> anyhow::Result<Revisions> {
         let mut paths = self.tree_paths(dir)?;
-        paths.push(format!("{}/", dir.trim_end_matches('/')));
+        paths.push(format!("{dir}/"));
         self.revisions(&paths.iter().map(String::as_str).collect::<Vec<_>>())
     }
 }
