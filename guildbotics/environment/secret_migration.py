@@ -47,7 +47,28 @@ class MigrationError(SecretStoreError):
         super().__init__(reason)
 
     def __str__(self) -> str:
-        reason = t(f"cli.secret_migration.reasons.{self.reason}")
+        reason = {
+            "platform": t("cli.secret_migration.reasons.platform"),
+            "inventory": t("cli.secret_migration.reasons.inventory"),
+            "namespace": t("cli.secret_migration.reasons.namespace"),
+            "encrypted_file": t("cli.secret_migration.reasons.encrypted_file"),
+            "inventory_key": t("cli.secret_migration.reasons.inventory_key"),
+            "device_key": t("cli.secret_migration.reasons.device_key"),
+            "duplicate_namespace": t(
+                "cli.secret_migration.reasons.duplicate_namespace"
+            ),
+            "index_mismatch": t("cli.secret_migration.reasons.index_mismatch"),
+            "source_missing": t("cli.secret_migration.reasons.source_missing"),
+            "conflict": t("cli.secret_migration.reasons.conflict"),
+            "git_token": t("cli.secret_migration.reasons.git_token"),
+            "unmapped": t("cli.secret_migration.reasons.unmapped"),
+            "verification": t("cli.secret_migration.reasons.verification"),
+            "source_changed": t("cli.secret_migration.reasons.source_changed"),
+            "deletion": t("cli.secret_migration.reasons.deletion"),
+            "remaining": t("cli.secret_migration.reasons.remaining"),
+            "key_missing": t("cli.secret_migration.reasons.key_missing"),
+            "backend": t("cli.secret_migration.reasons.backend"),
+        }[self.reason]
         detail = t("cli.secret_migration.failed", stage=self.stage, reason=reason)
         if self.entries:
             detail += "\n" + json.dumps(

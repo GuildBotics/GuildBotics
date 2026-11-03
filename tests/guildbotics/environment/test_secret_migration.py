@@ -301,3 +301,32 @@ def test_cli_explains_safe_reason_and_stage(
     if failure == "omitted":
         assert '"service": "GuildBotics/synthetic-workspace"' in output.err
     assert fake_keyring.passwords == before
+
+
+def test_every_emitted_reason_follows_the_current_language():
+    import ast
+    import yaml
+    from guildbotics.utils.i18n_tool import set_language
+
+    source = Path(migration.__file__)
+    emitted = {
+        call.args[0].value
+        for call in ast.walk(ast.parse(source.read_text()))
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "MigrationError"
+        and isinstance(call.args[0], ast.Constant)
+    }
+    errors = {code: migration.MigrationError(code) for code in emitted}
+    for language in ["en", "ja", "en"]:
+        set_language(language)
+        catalog = yaml.safe_load(
+            (
+                source.parents[1]
+                / f"templates/locales/cli/secret_migration.{language}.yml"
+            ).read_text()
+        )[language]["reasons"]
+        assert set(catalog) == emitted
+        for code, error in errors.items():
+            assert catalog[code] in str(error)
+            assert "preflight" in str(error)
