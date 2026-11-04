@@ -35,7 +35,10 @@ impl Default for Resources {
 
 /// A declaration that cannot be read, which nothing boots from.
 #[derive(Debug, PartialEq)]
-pub struct DeclarationProblem(pub PathBuf);
+pub enum DeclarationProblem {
+    Resources(PathBuf),
+    Image(PathBuf),
+}
 
 /// The custom base image, whose actual local contents identify a snapshot.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -52,7 +55,7 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
     } else {
         templates.join(PATH)
     };
-    let problem = || DeclarationProblem(path.clone());
+    let problem = || DeclarationProblem::Image(path.clone());
     let text = std::fs::read_to_string(&path).map_err(|_| problem())?;
     let declaration = yaml::value(&text).map_err(|_| problem())?;
     let declaration = declaration.as_object().ok_or_else(problem)?;
@@ -84,11 +87,18 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
 
 impl std::fmt::Display for DeclarationProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "The agent environment declaration in {} is invalid.",
-            self.0.display()
-        )
+        match self {
+            Self::Resources(path) => write!(
+                f,
+                "The resources in {} must be positive integers: memory_mib and cpus.",
+                path.display()
+            ),
+            Self::Image(path) => write!(
+                f,
+                "The base image in {} must declare a reference and SHA256 digests by architecture.",
+                path.display()
+            ),
+        }
     }
 }
 
@@ -103,7 +113,7 @@ pub fn resources(config: &Path, templates: &Path) -> Result<Resources, Declarati
     } else {
         templates.join(PATH)
     };
-    let problem = || DeclarationProblem(path.clone());
+    let problem = || DeclarationProblem::Resources(path.clone());
     let text = std::fs::read_to_string(&path).map_err(|_| problem())?;
     let declaration = yaml::value(&text).map_err(|_| problem())?;
     let Value::Object(declaration) = declaration else {

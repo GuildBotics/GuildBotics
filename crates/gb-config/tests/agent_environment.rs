@@ -9,6 +9,74 @@ use gb_config::agent_environment::{PATH, Resources, resources};
 use serde_json::{Value, json};
 
 #[test]
+fn invalid_declarations_name_the_component_and_the_selected_file() {
+    use gb_config::agent_environment::image;
+    let config = tempfile::tempdir().unwrap();
+    let templates = tempfile::tempdir().unwrap();
+    let path = config.path().join(PATH);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let resource_error = format!(
+        "The resources in {} must be positive integers: memory_mib and cpus.",
+        path.display()
+    );
+    let image_error = format!(
+        "The base image in {} must declare a reference and SHA256 digests by architecture.",
+        path.display()
+    );
+    for declaration in [
+        "resources: {cpus: 0}",
+        "resources: {cpus: true}",
+        "resources: {cpus: 1.5}",
+        "resources: {cpus: '2'}",
+        "resources: {memory_mib: -1}",
+        "resources: {unknown: 1}",
+        "resources: []",
+        "[",
+        "[]",
+    ] {
+        std::fs::write(&path, declaration).unwrap();
+        assert_eq!(
+            resources(config.path(), templates.path())
+                .unwrap_err()
+                .to_string(),
+            resource_error,
+            "{declaration}"
+        );
+    }
+    for declaration in [
+        "image: {}",
+        "image: {reference: local/agent:1, digests: {}}",
+        "image: []",
+        "[",
+        "[]",
+    ] {
+        std::fs::write(&path, declaration).unwrap();
+        assert_eq!(
+            image(config.path(), templates.path())
+                .unwrap_err()
+                .to_string(),
+            image_error,
+            "{declaration}"
+        );
+    }
+    // An I/O failure uses the same component and the fallback file's path.
+    std::fs::remove_file(&path).unwrap();
+    let fallback = templates.path().join(PATH);
+    assert_eq!(
+        resources(config.path(), templates.path())
+            .unwrap_err()
+            .to_string(),
+        resource_error.replace(&path.display().to_string(), &fallback.display().to_string())
+    );
+    assert_eq!(
+        image(config.path(), templates.path())
+            .unwrap_err()
+            .to_string(),
+        image_error.replace(&path.display().to_string(), &fallback.display().to_string())
+    );
+}
+
+#[test]
 fn a_custom_image_has_a_reference_and_content_digests() {
     use gb_config::agent_environment::image;
     let config = tempfile::tempdir().unwrap();
