@@ -12,6 +12,7 @@ CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
 GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
 GUILDBOTICS_IDENTITY_ROOT = "GUILDBOTICS_IDENTITY_ROOT"
+RESOLVED_GUEST_ENV = "GUILDBOTICS_RESOLVED_GUEST"
 
 # Installed launchers may enter through a symlink/junction. Canonicalize the
 # trusted package once, before any mount inspection, and share that spelling.
@@ -280,9 +281,17 @@ def get_member_clone_path(person_id: str, workspace_root: Path | None = None) ->
     """Return the member working clone directory (this machine's own)."""
     from guildbotics.utils.person_id import validate_person_id
 
-    return get_workspace_local_path(
-        "clones", validate_person_id(person_id), workspace_root=workspace_root
-    )
+    person_id = validate_person_id(person_id)
+    resolved_path = os.environ.get(RESOLVED_GUEST_ENV)
+    if resolved_path is not None:
+        data = json.loads(Path(resolved_path).read_text(encoding="utf-8"))
+        if data["member"]["person_id"] != person_id or workspace_root is not None:
+            raise ValueError("A guest can only use its resolved member clone path.")
+        path = Path(data["clone_paths"][person_id])
+        if not path.is_absolute():
+            raise ValueError("The resolved member clone path must be absolute.")
+        return path
+    return get_workspace_local_path("clones", person_id, workspace_root=workspace_root)
 
 
 def get_workspace_work_path(

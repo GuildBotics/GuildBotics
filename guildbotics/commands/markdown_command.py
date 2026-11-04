@@ -32,7 +32,7 @@ class MarkdownCommand(CommandBase):
         spec_factory.populate_spec(spec, config, class_resolver)
 
     async def run(self) -> CommandOutcome | None:
-        config, inline = self._load_markdown_metadata()
+        config = self._load_markdown_metadata()
         if not config.get("body"):
             return None
 
@@ -46,11 +46,11 @@ class MarkdownCommand(CommandBase):
         try:
             output = await get_content(
                 self.context,
-                str(self.spec.path),
+                self.spec.name,
                 self.options.message,
                 params,
                 self.cwd,
-                config if inline else None,
+                config,
                 self.spec.class_resolver,
             )
         except Exception as exc:  # pragma: no cover - propagate as driver error
@@ -66,16 +66,16 @@ class MarkdownCommand(CommandBase):
         session_state = session_data.get("session_state", {})
         return {**params, **session_state}
 
-    def _load_markdown_metadata(self) -> tuple[dict[str, Any], bool]:
+    def _load_markdown_metadata(self) -> dict[str, Any]:
         prompt = self.spec.get_config_value(self.inline_key)
         if prompt is not None:
             config = self.spec.config.copy()
             config["body"] = str(prompt)
-            return config, True
+            return config
 
         if self.spec.path is None:
             raise CommandError(
                 f"Markdown command '{self.spec.name}' is missing a path or {self.inline_key}."
             )
         config = load_markdown_with_frontmatter(self.spec.path)
-        return config, False
+        return config

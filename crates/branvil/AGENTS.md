@@ -46,9 +46,9 @@ The responsibilities of each module are defined by "Modules" in
 hold across modules:
 
 - **Branvil knows nothing of GuildBotics.** The dependency goes one way,
-  GuildBotics → Branvil. The only behavior of Branvil that assumes GuildBotics
-  is where `branvil runner` looks for msb by default (`~/.guildbotics/data/msb`
-  in `src/runner/executor.rs`). GuildBotics is named only in documents; the
+  GuildBotics → Branvil. An embedding application may supply the default runtime
+  binary through `set_runtime_binary`; Branvil keeps its own independent runtime
+  state. GuildBotics is named only in documents; the
   check that runs GuildBotics' provider against a real service is outside the
   crate (`integration/branvil/`, `scripts/branvil-integration.sh` of the
   repository).

@@ -2,9 +2,18 @@
 
 `recipe.json` holds the base image, uv and Python versions, guest paths,
 Node.js version and archive digests, architecture names, and native PDF
-packages. The Python host reads these values while it remains on main;
-the Rust recipe will consume this data in #87 after the Python host is removed.
-The provider CLI pins remain in `intelligences/cli_agents.py`.
+packages. The Rust recipe in `gb-environment` consumes this data.
+The provider CLI pins remain in `intelligences/cli_agents.py`; regenerate
+their Rust-readable projection after changing them:
+
+```bash
+uv run --no-sync python scripts/generate-environment-catalog.py
+```
+
+`tests/scripts/test_environment_catalog.py` checks that the projection stays
+current. `records/golden/snapshot_recipe.json` records the frozen Python
+host's scripts and names with the current guest requirements as input; the
+Rust recipe tests compare each script and the resulting digest to it.
 
 The recipe keeps these choices separate from the host implementation:
 
@@ -25,15 +34,12 @@ the lock, then run `tests/test_environment_requirements.py`:
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
-  --no-hashes --prune microsandbox --prune wakepy \
+  --no-hashes \
   -o guildbotics/templates/environment/requirements.txt
 ```
 
-The exclusions apply while the Python host dependencies remain in the lock.
-#122 removes unused host dependencies and updates the export with them.
 The exported content is part of a build step, so a change changes the
 snapshot's name and causes a rebuild.
 
 For production updates before the Rust switch (#97), use the production
-checkout and its own update procedure. The recipe implementation and its
-validation on main will be updated in #87, #95, and #96.
+checkout and its own update procedure.

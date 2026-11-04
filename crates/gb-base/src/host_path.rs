@@ -79,7 +79,7 @@ pub fn directory(path: &Path, missing: bool) -> Result<PathBuf, PathProblem> {
     let mut checked = PathBuf::new();
     for component in path.components() {
         checked.push(component);
-        match open_directory(&checked) {
+        match inspect_directory(&checked) {
             Opened::Directory => {}
             Opened::Missing if missing => return Ok(path),
             Opened::Missing => return Err(PathProblem::Missing(path)),
@@ -88,6 +88,35 @@ pub fn directory(path: &Path, missing: bool) -> Result<PathBuf, PathProblem> {
         }
     }
     Ok(path)
+}
+
+/// Reach or create a directory through held no-follow parent capabilities.
+pub fn open_directory(path: &Path, create: bool) -> Result<cap_std::fs::Dir, PathProblem> {
+    use cap_fs_ext::DirExt;
+    let path = normalize(path)?;
+    let mut anchor = PathBuf::new();
+    let mut parts = Vec::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(_) | Component::RootDir => anchor.push(part),
+            Component::Normal(name) => parts.push(name),
+            _ => return Err(PathProblem::Invalid(path.clone())),
+        }
+    }
+    let failed = |error| PathProblem::Unavailable(path.clone(), error);
+    let mut directory =
+        cap_std::fs::Dir::open_ambient_dir(anchor, cap_std::ambient_authority()).map_err(failed)?;
+    for part in parts {
+        if create {
+            match directory.create_dir(part) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(failed(error)),
+            }
+        }
+        directory = directory.open_dir_nofollow(part).map_err(failed)?;
+    }
+    Ok(directory)
 }
 
 /// What one component turned out to be.
@@ -101,7 +130,7 @@ enum Opened {
 /// Looks at the component without following it, then opens it as a
 /// directory, so one its owner cannot read is refused as the Python version
 /// refuses it.
-fn open_directory(path: &Path) -> Opened {
+fn inspect_directory(path: &Path) -> Opened {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => return Opened::Link,
         Ok(meta) if !meta.is_dir() => {

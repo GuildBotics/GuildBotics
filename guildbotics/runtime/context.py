@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from guildbotics.entities.team import Person
+from guildbotics.entities.team import Person, Team
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
@@ -29,6 +29,10 @@ class Context:
         brain_factory: BrainFactory,
         person: Person | None = None,
         message: str = "",
+        *,
+        team: Team | None = None,
+        resolved_commands: dict[str, str] | None = None,
+        clone_paths: dict[str, str] | None = None,
     ):
         """
         Initialize the context with the team the workspace's configuration
@@ -43,7 +47,9 @@ class Context:
         self.integration_factory = integration_factory
         self.brain_factory = brain_factory
         self.logger = get_logger()
-        self.team = YamlTeamLoader().load()
+        self.team = team if team is not None else YamlTeamLoader().load()
+        self.resolved_commands = resolved_commands
+        self.clone_paths = dict(clone_paths or {})
         set_language(self.team.project.get_language_code())
         self.person = person or Person(
             person_id="default_person", name="Default Person"
@@ -71,7 +77,15 @@ class Context:
         Returns:
             Context: A new context instance for the specified person.
         """
-        return Context(self.integration_factory, self.brain_factory, person, self.pipe)
+        return Context(
+            self.integration_factory,
+            self.brain_factory,
+            person,
+            self.pipe,
+            team=self.team if self.resolved_commands is not None else None,
+            resolved_commands=self.resolved_commands,
+            clone_paths=self.clone_paths,
+        )
 
     def get_brain(
         self, name: str, config: dict | None, class_resolver: ClassResolver | None

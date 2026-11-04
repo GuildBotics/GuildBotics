@@ -39,6 +39,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub use cli::stop_signals;
 pub use invocation::Invocation;
+pub use runner::executor::set_runtime_binary;
 pub use upstream::askpass_main;
 
 #[derive(Parser)]

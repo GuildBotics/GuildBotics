@@ -41,6 +41,7 @@ REGENERATE_COMMAND = "uv run --no-sync python scripts/generate-wire-schema.py"
 # Some host methods return dictionaries after serializing these concrete types.
 # Keep the wire result, rather than the method's broad dict annotation.
 HOST_RESULTS = {
+    "acquire_inference": type(None),
     "begin_turn": wire.HostTurn,
     "end_turn": wire.EndTurnResult,
     "require_completion": type(None),
@@ -57,6 +58,8 @@ HOST_RESULTS = {
 }
 
 TYPES = (
+    wire.ResolvedGuest,
+    wire.ResolvedBrain,
     wire.CommandFacts,
     wire.CommandAccess,
     wire.CommandRequest,

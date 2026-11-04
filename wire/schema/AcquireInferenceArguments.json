@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "model_name": {
+      "title": "Model Name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "model_name"
+  ],
+  "title": "AcquireInferenceArguments",
+  "type": "object"
+}

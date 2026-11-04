@@ -5,6 +5,9 @@ use std::path::Path;
 
 /// The schemas the host reads and writes; what they refer to comes with them.
 const ROOTS: &[&str] = &[
+    "ResolvedGuest",
+    "Entry",
+    "HostTurn",
     "CommandFacts",
     "CommandRequest",
     "CommandReply",

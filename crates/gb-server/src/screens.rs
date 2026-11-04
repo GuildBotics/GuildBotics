@@ -40,10 +40,11 @@ fn answer(result: anyhow::Result<Value>) -> Response {
 }
 
 pub(crate) async fn config_status(State(api): State<Shared>) -> Response {
+    let input_store_problem = api.inputs.problem().await;
     let workspace = &api.workspace;
     let config = workspace.as_ref().map(|w| w.join(".guildbotics/config"));
     let project = config.as_ref().map(|c| c.join("team/project.yml"));
-    Json(json!({"workspace_problem":"","input_store_problem":"",
+    Json(json!({"workspace_problem":"","input_store_problem":input_store_problem,
         "cwd":std::env::var_os("HOME").map(std::path::PathBuf::from).map(|h| h.join("Documents/GuildBotics")),
         "workspace":workspace,"config_dir":config,"project_file":project,
         "project_file_exists":project.as_ref().is_some_and(|p| p.exists()),"storage_dir":workspace,

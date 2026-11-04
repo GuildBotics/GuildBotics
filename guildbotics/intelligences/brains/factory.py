@@ -53,9 +53,16 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
     mapping = load_person_slot_mapping(person_id, "intelligences/brain_mapping.yml")
     brain_mapping = {}
     for name, config in mapping.items():
+        kind = config["kind"]
+        class_path = {
+            "model": AGNO_BRAIN_CLASS,
+            "ai_cli": CLI_BRAIN_CLASS,
+            "jev": JEV_BRAIN_CLASS,
+        }[kind]
+        argument = "cli_agent" if kind == "ai_cli" else "model"
         brain_mapping[name] = BrainConfig(
-            class_path=config["class"],
-            args=config.get("args", {}),
+            class_path=class_path,
+            args={argument: config[argument]},
         )
     return brain_mapping
 

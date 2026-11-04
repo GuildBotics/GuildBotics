@@ -24,6 +24,7 @@ fn machine() -> Machine {
     let workspace = base.join("workspace");
     let identity_root = base.join("identity");
     for directory in [
+        base.join("home"),
         package.join("templates/commands/functions"),
         workspace.join(".guildbotics/config"),
         workspace.join(".guildbotics/local/run"),
@@ -67,8 +68,12 @@ fn named(path: &Path) -> PathBuf {
     gb_base::host_path::normalize(path).unwrap()
 }
 
+fn sorted(mut mounts: Vec<Mount>) -> Vec<Mount> {
+    mounts.sort_by(|a, b| a.guest.cmp(&b.guest));
+    mounts
+}
 fn spelled(path: &Path) -> String {
-    path.to_str().unwrap().to_owned()
+    gb_environment::guest_path(path).unwrap()
 }
 
 fn env<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -89,6 +94,12 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         Some("ja_JP".into()),
     )
     .unwrap();
+    assert!(
+        made.mounts
+            .windows(2)
+            .all(|pair| Path::new(&pair[0].guest).components().count()
+                <= Path::new(&pair[1].guest).components().count())
+    );
     let cwd = spelled(&named(&machine.workspace.join("somewhere")));
     let config = named(&machine.workspace.join(".guildbotics/config"));
     let members = named(
@@ -98,8 +109,8 @@ fn a_read_only_command_reads_and_works_on_its_own() {
             .join(".guildbotics/config/team/members"),
     );
     assert_eq!(
-        made.mounts,
-        vec![
+        sorted(made.mounts.clone()),
+        sorted(vec![
             Mount {
                 guest: cwd.clone(),
                 host: None,
@@ -120,7 +131,12 @@ fn a_read_only_command_reads_and_works_on_its_own() {
                 host: Some(members.clone()),
                 readonly: true
             },
-        ]
+            Mount {
+                guest: spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
+                host: Some(named(&machine.host.home.join("Documents/GuildBotics"))),
+                readonly: true
+            },
+        ])
     );
     assert_eq!(made.cwd, cwd);
     assert_eq!(made.request.cwd, cwd);
@@ -140,6 +156,10 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         facts.mounts,
         HashMap::from([
             (cwd.clone(), true),
+            (
+                spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
+                true
+            ),
             ("/opt/guildbotics/code/guildbotics".into(), false),
             (spelled(&config), false),
             (spelled(&members), false),
@@ -174,8 +194,6 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         env(&made.env, "GUILDBOTICS_IDENTITY_ROOT"),
         Some(spelled(&named(&machine.host.identity_root)).as_str())
     );
-    assert!(env(&made.env, "GUILDBOTICS_HOST_URL").is_some());
-    assert!(env(&made.env, "GUILDBOTICS_HOST_TOKEN").is_some());
 }
 
 #[test]
@@ -205,14 +223,39 @@ fn an_inspecting_command_is_told_where_to_look() {
     );
     // A workspace command is where it is on the host.
     assert_eq!(made.request.path, spelled(&named(&path)));
-    assert_eq!(
-        made.mounts
-            .iter()
-            .skip(2)
-            .map(|m| m.guest.clone())
-            .collect::<Vec<_>>(),
-        vec![spelled(&config), spelled(&members), spelled(&run)]
-    );
+    let expected = vec![
+        Mount {
+            guest: spelled(&named(&machine.workspace.join("somewhere"))),
+            host: None,
+            readonly: false,
+        },
+        Mount {
+            guest: "/opt/guildbotics/code/guildbotics".into(),
+            host: Some(named(&machine.host.package)),
+            readonly: true,
+        },
+        Mount {
+            guest: spelled(&config),
+            host: Some(config.clone()),
+            readonly: true,
+        },
+        Mount {
+            guest: spelled(&members),
+            host: Some(members.clone()),
+            readonly: true,
+        },
+        Mount {
+            guest: spelled(&run),
+            host: Some(run.clone()),
+            readonly: true,
+        },
+        Mount {
+            guest: spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
+            host: Some(named(&machine.host.home.join("Documents/GuildBotics"))),
+            readonly: true,
+        },
+    ];
+    assert_eq!(sorted(made.mounts.clone()), sorted(expected));
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert_eq!(
@@ -248,7 +291,7 @@ fn what_is_not_there_is_not_mounted() {
     .unwrap();
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
-    assert_eq!(made.mounts.len(), 4);
+    assert_eq!(made.mounts.len(), 5);
     assert_eq!(facts.inspected, HashMap::new());
 }
 
@@ -282,4 +325,111 @@ fn what_is_bound_over_the_working_directory_is_what_is_there() {
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert!(!facts.mounts[&spelled(&config)]);
+}
+
+#[test]
+fn copied_worktree_is_admitted_as_workable_in_command_facts() {
+    let machine = machine();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/get_os_ui_language.py");
+    let mut request = command(&machine, path, vec![]);
+    request.access.read_only = false;
+    std::fs::create_dir_all(&request.cwd).unwrap();
+    let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+    let copy = made.copy.as_ref().expect("ungranted cwd must use a copy");
+    let facts: CommandFacts =
+        serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
+    assert_eq!(facts.mounts.get(&copy.guest), Some(&true));
+    assert_eq!(copy.guest, made.cwd);
+    assert!(
+        !made.mounts.iter().any(|mount| mount.guest == made.cwd),
+        "the workable copy lives on the VM's own disk"
+    );
+}
+
+#[test]
+fn guest_paths_keep_posix_spelling_and_map_windows_drives() {
+    for (path, guest) in [
+        ("/Users/x/repo", "/Users/x/repo"),
+        ("/Users/x/./repo", "/Users/x/./repo"),
+        (r"C:\tmp\gb\repo", "/c/tmp/gb/repo"),
+        (r"d:\", "/d"),
+        ("C:/work", "/c/work"),
+        (r"D:\Work Area\資料", "/d/Work Area/資料"),
+    ] {
+        assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), guest);
+    }
+}
+
+#[test]
+fn relative_and_network_paths_have_no_guest_path() {
+    for path in [
+        "relative",
+        "",
+        "C:relative",
+        r"\work",
+        r"\\srv\share\x",
+        "//srv/share/x",
+        r"\\?\C:\work",
+        r"\\.\device",
+    ] {
+        assert!(
+            gb_environment::guest_path(Path::new(path)).is_err(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths() {
+    let machine = machine();
+    let package_command = machine
+        .host
+        .package
+        .join("templates/commands/functions/x.py");
+    for read_only in [true, false] {
+        let mut request = command(&machine, package_command.clone(), vec![]);
+        request.access.read_only = read_only;
+        std::fs::create_dir_all(&request.cwd).unwrap();
+        let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+        let source = gb_base::host_path::normalize(&request.cwd).unwrap();
+        let guest = gb_environment::guest_path(&source).unwrap();
+        assert_eq!(made.cwd, guest);
+        assert_eq!(made.request.cwd, guest);
+        assert_eq!(
+            made.request.path,
+            format!(
+                "{}/templates/commands/functions/x.py",
+                gb_environment::CODE_ROOT
+            )
+        );
+        assert_eq!(
+            env(&made.env, "HOME"),
+            Some(
+                gb_environment::guest_path(
+                    &gb_base::host_path::normalize(&machine.host.home).unwrap()
+                )
+                .unwrap()
+                .as_str()
+            )
+        );
+        if read_only {
+            assert!(
+                made.mounts
+                    .iter()
+                    .any(|m| m.guest == guest && m.host.is_none())
+            );
+        } else {
+            let copy = made.copy.unwrap();
+            assert_eq!(copy.host, source);
+            assert_eq!(copy.guest, guest);
+        }
+        #[cfg(windows)]
+        {
+            assert!(!made.cwd.contains('\\'));
+            assert!(!made.cwd.contains(':'));
+        }
+    }
 }

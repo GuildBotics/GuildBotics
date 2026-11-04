@@ -624,6 +624,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -871,6 +872,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-fs-ext"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56ff379b70af8e08307a8f65e7040c7301cb4a572538ade16b4984f0da77847f"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "cap-primitives"
 version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +988,16 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf",
 ]
 
 [[package]]
@@ -1854,7 +1877,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1980,6 +2003,8 @@ name = "gb-base"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cap-fs-ext",
+ "cap-std",
  "libc",
  "serde",
  "serde_json",
@@ -1997,7 +2022,7 @@ dependencies = [
  "gb-wire",
  "keyring",
  "regex",
- "security-framework 2.11.1",
+ "security-framework 3.7.0",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -2016,15 +2041,30 @@ dependencies = [
 name = "gb-environment"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-std",
+ "chrono-tz",
+ "flate2",
  "gb-base",
  "gb-config",
  "gb-wire",
+ "iana-time-zone",
+ "libc",
  "microsandbox",
  "microsandbox-utils",
+ "same-file",
+ "serde",
  "serde_json",
+ "sha2 0.11.1",
+ "tar",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "unicase",
+ "unicode-normalization",
+ "url",
  "uuid",
 ]
 
@@ -2051,26 +2091,39 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-std",
  "chrono",
+ "futures-util",
  "gb-base",
  "gb-config",
  "gb-environment",
  "gb-observability",
  "gb-wire",
  "gb-workspace",
+ "hyper",
+ "hyper-util",
  "libc",
  "loopback-auth",
  "mime_guess",
+ "rcgen",
+ "regex",
  "reqwest",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
+ "time",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tower",
  "tracing",
  "url",
+ "uuid",
+ "x509-parser",
 ]
 
 [[package]]
@@ -2204,11 +2257,15 @@ dependencies = [
  "anyhow",
  "branvil",
  "clap",
+ "flate2",
+ "gb-base",
  "gb-environment",
  "gb-server",
  "loopback-auth",
  "reqwest",
  "serde_json",
+ "sha2 0.11.1",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",
@@ -2731,7 +2788,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f"
 dependencies = [
  "io-lifetimes 3.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3744,6 +3801,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
+]
+
+[[package]]
 name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4226,6 +4300,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3673cba5b9a124916096a423b806a9f29620972c6c97b08db5f2053e9428b481"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -5442,6 +5534,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "siphasher"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6316,7 +6414,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7019,7 +7117,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.13.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
