@@ -37,6 +37,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e --workspace branvil-web
+      - name: Verify shared status text contrast
+        run: BRANVIL_E2E_VISUAL=1 npm exec --workspace branvil-web -- playwright test token-contrast-layout
       - uses: actions/upload-artifact@v7
         if: always()
         with:

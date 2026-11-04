@@ -23,7 +23,7 @@ export default async function setup() {
   };
   try {
     run("init", "--listen", base.host);
-    server = spawn(binary, ["serve", "--data-dir", data], { env, stdio: ["ignore", "pipe", "pipe"] });
+    server = spawn(binary, ["serve", "--data-dir", data], { env, stdio: ["ignore", "pipe", "inherit"] });
     await new Promise<void>((done, fail) => {
       const timer = setTimeout(() => fail(new Error("Branvil did not start")), 30_000);
       server!.once("error", (error) => { clearTimeout(timer); fail(error); });

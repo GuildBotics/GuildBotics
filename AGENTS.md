@@ -538,7 +538,8 @@ Rust の重複コードは desktop と同じ jscpd で検出する（`jscpd.rust
 GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テストと、
 macOS でしかコンパイルされないコード（`#[cfg(target_os = "macos")]`）の Cargo workspace 全体の
 clippy（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。clippy は Rust に関わる変更の
-ときだけ動く）と、下記の Desktop E2E。
+ときだけ動く）と、下記の Desktop E2E および
+[Branvil E2E](.github/workflows/branvil-e2e.yml)（PR・手動・定期、push には含めない）。
 Branvil の CI で実行できる検査は `.branvil/ci.toml` に置き、GitHub Actions へ足さない。
 
 `branvil-integration` は、本番の `branvil` provider をこのコミットの Branvil の crate の

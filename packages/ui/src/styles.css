@@ -68,7 +68,7 @@
   --color-warning: var(--literal-amber-700);
   --color-warning-bg: light-dark(var(--literal-amber-50), oklch(0.22 0.05 80));
   --color-warning-border: light-dark(var(--literal-amber-100), oklch(0.35 0.08 80));
-  --color-warning-text: light-dark(var(--literal-amber-700), var(--literal-amber-100));
+  --color-warning-text: light-dark(oklch(0.5 0.12 70), var(--literal-amber-100));
 
   --color-danger: var(--literal-red-600);
   --color-danger-bg: light-dark(var(--literal-red-50), oklch(0.2 0.06 25));
