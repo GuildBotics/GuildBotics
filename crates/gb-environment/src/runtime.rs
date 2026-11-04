@@ -1116,8 +1116,109 @@ where
     save().await
 }
 
-fn build_vm_name() -> String {
-    format!("guildbotics-build-{}", uuid::Uuid::new_v4().simple())
+fn build_vm_prefix(directory: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+    let digest: String = Sha256::digest(directory.as_os_str().as_encoded_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("guildbotics-build-{}-", &digest[..16]))
+}
+
+fn build_vm_name(prefix: &str) -> String {
+    format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+}
+
+async fn reclaim_build_objects<T, F, Fut>(
+    prefix: &str,
+    objects: impl IntoIterator<Item = (String, T)>,
+    mut remove: F,
+) -> Result<(), String>
+where
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    for (name, object) in objects {
+        if name.strip_prefix(prefix).is_some_and(|generation| {
+            let generation = generation.strip_suffix("-0").unwrap_or(generation);
+            generation.len() == 32
+                && generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        }) {
+            remove(object).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn reclaim_build_pages<T, List, Listed, Remove, Removed>(
+    prefix: &str,
+    mut list: List,
+    mut remove: Remove,
+) -> Result<(), String>
+where
+    List: FnMut(Option<String>) -> Listed,
+    Listed: Future<Output = Result<(Vec<(String, T)>, Option<String>), String>>,
+    Remove: FnMut(T) -> Removed,
+    Removed: Future<Output = Result<(), String>>,
+{
+    let mut cursor = None;
+    loop {
+        let (objects, next) = list(cursor).await?;
+        reclaim_build_objects(prefix, objects, &mut remove).await?;
+        cursor = next;
+        if cursor.is_none() {
+            return Ok(());
+        }
+    }
+}
+
+/// The caller holds the workspace build lock. Generations keep retired cleanup
+/// from addressing a replacement; the workspace prefix makes crashes reclaimable.
+async fn reclaim_build_vms(prefix: &str) -> Result<(), String> {
+    reclaim_build_pages(
+        prefix,
+        |cursor| async move {
+            let page = Sandbox::list_with(|list| match cursor {
+                Some(cursor) => list.cursor(cursor),
+                None => list,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            Ok((
+                page.sandboxes
+                    .into_iter()
+                    .map(|vm| (vm.name().to_owned(), vm))
+                    .collect(),
+                page.next_cursor,
+            ))
+        },
+        |vm: microsandbox::sandbox::SandboxHandle| async move {
+            match vm.destroy().await {
+                Ok(()) | Err(microsandbox::MicrosandboxError::SandboxNotFound(_)) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        },
+    )
+    .await?;
+    let volumes = microsandbox::Volume::list()
+        .await
+        .map_err(|e| e.to_string())?;
+    reclaim_build_objects(
+        prefix,
+        volumes
+            .into_iter()
+            .map(|disk| (disk.name().to_owned(), disk)),
+        |disk| async move {
+            match microsandbox::Volume::remove(disk.name()).await {
+                Ok(()) | Err(microsandbox::MicrosandboxError::VolumeNotFound(_)) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        },
+    )
+    .await
 }
 
 pub(crate) async fn build_lifecycle<T, Booting, Run, Ran, Close, Closed>(
@@ -1170,7 +1271,8 @@ pub async fn build_snapshot(
         _ = cancelled.cancelled() => return Err("Environment build cancelled".into()),
         result = backend(home) => result.map_err(|e| format!("{e:?}"))?,
     }
-    let vm_name = build_vm_name();
+    let prefix = build_vm_prefix(directory)?;
+    let vm_name = build_vm_name(&prefix);
     let builder = build_builder(
         Sandbox::builder(&vm_name),
         image,
@@ -1179,6 +1281,7 @@ pub async fn build_snapshot(
         nameservers,
     )?;
     let boot = async move {
+        reclaim_build_vms(&prefix).await?;
         let OwnedVm { sandbox, cleanup } =
             owned_boot(async move { builder.create().await.map(OwnedVm::new) })
                 .await
@@ -1278,18 +1381,95 @@ mod build_tests {
             ],
         }
     }
+    #[tokio::test]
+    async fn next_build_reclaims_its_crashed_generations_and_disks_across_all_pages() {
+        let first = tempfile::tempdir().unwrap();
+        let sibling = tempfile::tempdir().unwrap();
+        let prefix = build_vm_prefix(first.path()).unwrap();
+        assert_eq!(prefix, build_vm_prefix(&first.path().join(".")).unwrap());
+        let other_prefix = build_vm_prefix(sibling.path()).unwrap();
+        assert_ne!(prefix, other_prefix);
+        let old = build_vm_name(&prefix);
+        let sibling_vm = build_vm_name(&other_prefix);
+        let older = build_vm_name(&prefix);
+        let mut pages = std::collections::VecDeque::from([
+            (
+                None,
+                vec![
+                    (sibling_vm.clone(), sibling_vm.clone()),
+                    (format!("{prefix}unrelated"), "unrelated".into()),
+                ],
+                Some("next".into()),
+            ),
+            (
+                Some("next".into()),
+                vec![(old.clone(), old.clone())],
+                Some("last".into()),
+            ),
+            (
+                Some("last".into()),
+                vec![(older.clone(), older.clone())],
+                None,
+            ),
+        ]);
+        let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let records = removed.clone();
+        reclaim_build_pages(
+            &prefix,
+            move |cursor| {
+                let (expected, objects, next) = pages.pop_front().unwrap();
+                assert_eq!(cursor, expected);
+                async { Ok((objects, next)) }
+            },
+            move |name| {
+                records.lock().unwrap().push(name);
+                async { Ok(()) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*removed.lock().unwrap(), vec![old.clone(), older.clone()]);
+        let disks = [
+            format!("{old}-0"),
+            format!("{older}-0"),
+            format!("{sibling_vm}-0"),
+        ];
+        let records = removed.clone();
+        reclaim_build_objects(
+            &prefix,
+            disks.into_iter().map(|name| (name.clone(), name)),
+            move |name| {
+                records.lock().unwrap().push(name);
+                async { Ok(()) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *removed.lock().unwrap(),
+            vec![
+                old.clone(),
+                older.clone(),
+                format!("{old}-0"),
+                format!("{older}-0")
+            ]
+        );
+        let replacement = build_vm_name(&prefix);
+        assert_ne!(replacement, old);
+        assert!(!removed.lock().unwrap().contains(&replacement));
+    }
     #[test]
     fn every_build_uses_a_distinct_vm_identity() {
-        let first = build_vm_name();
-        let replacement = build_vm_name();
+        let first = build_vm_name("guildbotics-build-fixture-");
+        let replacement = build_vm_name("guildbotics-build-fixture-");
         assert_ne!(first, replacement);
         assert!(first.starts_with("guildbotics-build-"));
     }
     #[tokio::test]
     async fn cancelled_late_boot_and_cleanup_cannot_remove_a_replacement_vm() {
         for cancel_during_cleanup in [false, true] {
-            let first = build_vm_name();
-            let second = build_vm_name();
+            let first = build_vm_name("guildbotics-build-fixture-");
+            let second = build_vm_name("guildbotics-build-fixture-");
             let registry =
                 std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
             registry.lock().unwrap().insert(second.clone());

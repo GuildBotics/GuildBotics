@@ -160,7 +160,7 @@ async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
 }
 
 #[tokio::test]
-async fn cleanup_runs_under_build_lock_and_propagates_runtime_failure() {
+async fn pruning_runs_under_build_lock_and_preserves_ready_on_runtime_failure() {
     let root = tempfile::tempdir().unwrap();
     let directory = snapshots_dir(root.path());
     let old = directory.join(OTHER);
@@ -187,7 +187,9 @@ async fn cleanup_runs_under_build_lock_and_propagates_runtime_failure() {
         },
     )
     .await;
-    assert_eq!(result, Err("runtime metadata removal failed".into()));
+    assert_eq!(result.unwrap().state, State::Ready);
+    assert_eq!(status(root.path(), NAME).unwrap().state, State::Ready);
+    assert!(!directory.join(format!("{NAME}.failed")).exists());
     assert!(old.is_dir());
     assert!(directory.join(NAME).is_dir());
 }

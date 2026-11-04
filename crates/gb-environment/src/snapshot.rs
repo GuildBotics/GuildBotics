@@ -242,28 +242,16 @@ where
         {
             return Err("Build returned an invalid snapshot".into());
         }
-        for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let other = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if other != path && name.starts_with(PREFIX) {
-                let kind = entry.file_type().map_err(|e| e.to_string())?;
-                if kind.is_dir() {
-                    remove(other).await?;
-                } else if name.ends_with(FAILED_SUFFIX) {
-                    std::fs::remove_file(other).map_err(|e| e.to_string())?;
-                }
-            }
-        }
         Ok(Status {
             path,
             state: State::Ready,
         })
     };
+    let deadline = tokio::time::Instant::now() + timeout;
     let ended = tokio::select! {
         biased;
         _ = cancelled.cancelled() => End::Cancelled,
-        _ = tokio::time::sleep(timeout) => End::TimedOut,
+        _ = tokio::time::sleep_until(deadline) => End::TimedOut,
         result = work => End::Finished(result),
     };
     let reason = match ended {
@@ -272,7 +260,36 @@ where
             cancelled.cancel();
             timeout_detail
         }
-        End::Finished(Ok(status)) => return Ok(status),
+        End::Finished(Ok(status)) => {
+            // Readiness is committed before optional garbage collection starts.
+            let path = &status.path;
+            let prune = async {
+                for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let other = entry.path();
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if other != *path && name.starts_with(PREFIX) {
+                        let kind = entry.file_type().map_err(|e| e.to_string())?;
+                        if kind.is_dir() {
+                            remove(other).await?;
+                        } else if name.ends_with(FAILED_SUFFIX) {
+                            std::fs::remove_file(other).map_err(|e| e.to_string())?;
+                        }
+                    }
+                }
+
+                Ok::<(), String>(())
+            };
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => tracing::warn!("Snapshot pruning cancelled after a successful build"),
+                _ = tokio::time::sleep_until(deadline) => tracing::warn!("Snapshot pruning exceeded the build deadline"),
+                result = prune => if let Err(error) = result {
+                    tracing::warn!("Snapshot pruning failed after a successful build: {error}");
+                },
+            }
+            return Ok(status);
+        }
         End::Finished(Err(reason)) => reason,
     };
     gb_base::files::atomic_write(&marker, format!("{reason}\n").as_bytes())
@@ -428,32 +445,42 @@ mod tests {
     }
     #[tokio::test]
     async fn pruning_is_covered_by_the_build_deadline() {
-        let root = tempfile::tempdir().unwrap();
-        let name = "guildbotics-0123456789abcdef";
-        let old = snapshots_dir(root.path()).join("guildbotics-1111111111111111");
-        std::fs::create_dir_all(old).unwrap();
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            owned_build(
-                root.path(),
-                name,
-                "localized timeout".into(),
-                move |directory, _| async move {
-                    let path = directory.join(name);
-                    std::fs::create_dir(&path).unwrap();
-                    Ok(path)
-                },
-                |_| std::future::pending(),
-                std::time::Duration::from_millis(10),
-            ),
-        )
-        .await
-        .expect("pruning must finish within the build deadline");
-        assert_eq!(result, Err("localized timeout".into()));
-        assert_eq!(
-            status(root.path(), name).unwrap().state,
-            State::Failed("localized timeout".into())
-        );
+        for failed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let name = "guildbotics-0123456789abcdef";
+            let old = snapshots_dir(root.path()).join("guildbotics-1111111111111111");
+            std::fs::create_dir_all(old).unwrap();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                owned_build(
+                    root.path(),
+                    name,
+                    "localized timeout".into(),
+                    move |directory, _| async move {
+                        let path = directory.join(name);
+                        std::fs::create_dir(&path).unwrap();
+                        Ok(path)
+                    },
+                    move |_| async move {
+                        if failed {
+                            Err("cannot prune".into())
+                        } else {
+                            std::future::pending().await
+                        }
+                    },
+                    std::time::Duration::from_millis(10),
+                ),
+            )
+            .await
+            .expect("pruning must finish within the build deadline");
+            assert_eq!(result.unwrap().state, State::Ready);
+            assert_eq!(status(root.path(), name).unwrap().state, State::Ready);
+            assert!(
+                !snapshots_dir(root.path())
+                    .join(format!("{name}{FAILED_SUFFIX}"))
+                    .exists()
+            );
+        }
     }
     #[tokio::test]
     async fn a_timed_out_build_records_failure_releases_its_lock_and_keeps_old_snapshots() {

@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
 use gb_base::files::FileLock;
 use serde_json::json;
@@ -24,24 +24,32 @@ const NAME_CHARS: usize = 60;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Session ownership uses held directories so replacing an ancestor redirects no IO.
+#[derive(Clone)]
 pub struct InputFileStore {
     root_path: PathBuf,
     directory: PathBuf,
     name: String,
-    session: std::sync::OnceLock<Session>,
-    initializing: std::sync::Mutex<()>,
+    session: std::sync::Arc<std::sync::OnceLock<Session>>,
+    initializing: std::sync::Arc<std::sync::Mutex<()>>,
 }
 struct Session {
     directory: PathBuf,
     lock: Option<FileLock>,
-    root: Dir,
-    session: Dir,
-    name: String,
+    session: Option<Dir>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        drop(self.lock.take());
-        let _ = self.root.remove_dir_all(&self.name);
+        let lock = self.lock.take();
+        let session = self.session.take().expect("session owns its directory");
+        let cleanup = move || {
+            drop(lock);
+            let _ = session.remove_open_dir_all();
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(cleanup);
+        } else {
+            cleanup();
+        }
     }
 }
 fn try_lock(directory: &Dir, name: &str) -> std::io::Result<Option<FileLock>> {
@@ -117,8 +125,8 @@ impl InputFileStore {
             root_path: root.into(),
             directory: root.join(&name),
             name,
-            session: std::sync::OnceLock::new(),
-            initializing: std::sync::Mutex::new(()),
+            session: std::sync::Arc::default(),
+            initializing: std::sync::Arc::default(),
         }
     }
     fn ensure(&self) -> anyhow::Result<&Session> {
@@ -164,14 +172,28 @@ impl InputFileStore {
         let _ = self.session.set(Session {
             directory: root_path.join(&name),
             lock: Some(lock),
-            root,
-            session,
-            name,
+            session: Some(session),
         });
         Ok(self
             .session
             .get()
             .expect("input session initialized under lock"))
+    }
+
+    fn current_session(&self) -> anyhow::Result<&Session> {
+        let session = self.ensure()?;
+        let current = gb_base::host_path::open_directory(&session.directory, false)?;
+        let current = current.dir_metadata()?;
+        let held = session
+            .session
+            .as_ref()
+            .expect("session owns its directory")
+            .dir_metadata()?;
+        anyhow::ensure!(
+            current.dev() == held.dev() && current.ino() == held.ino(),
+            "Input session directory was replaced"
+        );
+        Ok(session)
     }
 
     pub fn directory(&self) -> &Path {
@@ -181,22 +203,31 @@ impl InputFileStore {
             .unwrap_or(&self.directory)
     }
 
+    /// Retry optional storage without making command startup depend on it.
+    pub async fn problem(&self) -> String {
+        let store = self.clone();
+        blocking(move || store.mount().map(|_| ()))
+            .await
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+    }
     /// Never accepts a caller's source directory or guest destination.
-    pub fn mount_if_available(&self) -> Option<gb_environment::Mount> {
+    pub async fn mount_if_available(&self) -> Option<gb_environment::Mount> {
         self.session.get()?;
-        match self.mount() {
+        let store = self.clone();
+        match blocking(move || store.mount()).await {
             Ok(mount) => Some(mount),
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!(
-                    "Input upload storage is unavailable; commands continue without its mount."
+                    "Input upload storage is unavailable; commands continue without its mount: {error}"
                 );
                 None
             }
         }
     }
-    pub fn mount(&self) -> anyhow::Result<gb_environment::Mount> {
-        self.ensure()?;
-        let directory = gb_base::host_path::directory(self.directory(), false)?;
+    fn mount(&self) -> anyhow::Result<gb_environment::Mount> {
+        let directory = self.current_session()?.directory.clone();
         Ok(gb_environment::Mount {
             guest: gb_environment::guest_path(&directory)
                 .map_err(|_| anyhow::anyhow!("Input directory has no guest path"))?,
@@ -206,8 +237,11 @@ impl InputFileStore {
     }
 
     fn pending(&self, filename: Option<&str>) -> anyhow::Result<(Pending, PathBuf)> {
-        let session = self.ensure()?;
-        gb_base::host_path::directory(self.directory(), false)?;
+        let session = self.current_session()?;
+        let session_directory = session
+            .session
+            .as_ref()
+            .expect("session owns its directory");
         let name = filename
             .unwrap_or("")
             .rsplit(['/', '\\'])
@@ -240,16 +274,56 @@ impl InputFileStore {
             use cap_std::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let file = session.session.open_with(&temporary, &options)?.into_std();
+        let file = session_directory
+            .open_with(&temporary, &options)?
+            .into_std();
         let destination = self.directory().join(format!("{random}-{name}"));
         Ok((
             Pending {
                 file: Some(file),
-                directory: session.session.try_clone()?,
+                directory: session_directory.try_clone()?,
                 temporary,
             },
             destination,
         ))
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    tokio::task::spawn_blocking(work).await?
+}
+
+/// A cancelled request releases its temporary file on the blocking pool too.
+struct Upload(Option<Pending>);
+impl Drop for Upload {
+    fn drop(&mut self) {
+        if let Some(pending) = self.0.take() {
+            tokio::task::spawn_blocking(move || drop(pending));
+        }
+    }
+}
+impl Upload {
+    async fn write(mut self, chunk: axum::body::Bytes) -> anyhow::Result<Self> {
+        let mut pending = self.0.take().expect("upload owns its pending file");
+        blocking(move || {
+            pending.write_all(&chunk)?;
+            Ok(Self(Some(pending)))
+        })
+        .await
+    }
+    async fn persist(mut self, destination: PathBuf) -> anyhow::Result<()> {
+        let pending = self.0.take().expect("upload owns its pending file");
+        blocking(move || Ok(pending.persist(&destination)?)).await
+    }
+    async fn discard(mut self) {
+        let pending = self.0.take();
+        let _ = blocking(move || {
+            drop(pending);
+            Ok(())
+        })
+        .await;
     }
 }
 
@@ -299,13 +373,17 @@ pub(crate) async fn upload(
         if field.name() != Some("file") {
             continue;
         }
-        let (mut pending, destination) = match api.inputs.pending(field.file_name()) {
-            Ok(upload) => upload,
-            Err(error) => {
-                tracing::error!("Cannot create command input file: {error}");
-                return failed();
-            }
-        };
+        let store = api.inputs.clone();
+        let filename = field.file_name().map(str::to_owned);
+        let (pending, destination) =
+            match blocking(move || store.pending(filename.as_deref())).await {
+                Ok(upload) => upload,
+                Err(error) => {
+                    tracing::error!("Cannot create command input file: {error}");
+                    return failed();
+                }
+            };
+        let mut pending = Upload(Some(pending));
         let mut field = field;
         let mut size = 0;
         loop {
@@ -313,6 +391,7 @@ pub(crate) async fn upload(
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => break,
                 Err(_) => {
+                    pending.discard().await;
                     return invalid(
                         "Could not read the uploaded file, or the request exceeded its size limit.",
                     );
@@ -320,17 +399,22 @@ pub(crate) async fn upload(
             };
             size += chunk.len();
             if size > MAX_BYTES {
+                pending.discard().await;
                 return invalid("File is too large (max 20 MB).");
             }
-            if let Err(error) = pending.write_all(&chunk) {
-                tracing::error!("Cannot write command input file: {error}");
-                return failed();
-            }
+            pending = match pending.write(chunk).await {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::error!("Cannot write command input file: {error}");
+                    return failed();
+                }
+            };
         }
         if size == 0 {
+            pending.discard().await;
             return invalid("File is empty.");
         }
-        if let Err(error) = pending.persist(&destination) {
+        if let Err(error) = pending.persist(destination.clone()).await {
             tracing::error!("Cannot save command input file: {error}");
             return failed();
         }
@@ -367,7 +451,7 @@ mod tests {
         std::fs::write(&root, b"blocked").unwrap();
         let store = InputFileStore::deferred(&root);
         assert!(store.pending(Some("first.txt")).is_err());
-        assert!(store.mount_if_available().is_none());
+        assert!(store.session.get().is_none());
         std::fs::remove_file(&root).unwrap();
         let (mut pending, path) = store.pending(Some("retry.txt")).unwrap();
         pending.write_all(b"retained").unwrap();
@@ -473,6 +557,50 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn directory_replacement_is_refused_and_cleanup_removes_only_the_owned_session() {
+        for replace_root in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let root = fixture.path().join("inputs");
+            let store = InputFileStore::new(&root).unwrap();
+            let session = store.directory().file_name().unwrap().to_owned();
+            let original = fixture.path().join("original");
+            let replaced = if replace_root {
+                &root
+            } else {
+                store.directory()
+            };
+            std::fs::rename(replaced, &original).unwrap();
+            let replacement = root.join(&session);
+            std::fs::create_dir_all(&replacement).unwrap();
+            let sentinel = replacement.join("keep.txt");
+            std::fs::write(&sentinel, b"unrelated replacement").unwrap();
+            assert!(store.pending(Some("file.txt")).is_err());
+            assert!(store.mount_if_available().await.is_none());
+            assert!(!store.problem().await.is_empty());
+            drop(store);
+            // Await the blocking cleanup rather than relying on scheduling.
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if !original
+                        .join(if replace_root {
+                            Path::new(&session)
+                        } else {
+                            Path::new("")
+                        })
+                        .exists()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"unrelated replacement");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn input_directories_and_files_have_owner_only_permissions() {
@@ -498,7 +626,7 @@ mod tests {
 
     fn api(root: &Path) -> Shared {
         std::sync::Arc::new(crate::api::Api {
-            inputs: InputFileStore::new(&root.join("command_inputs")).unwrap(),
+            inputs: InputFileStore::deferred(&root.join("command_inputs")),
             auth: crate::auth::ServerAuth::open(root, 8765).unwrap(),
             instance_id: "fixture".into(),
             data: root.into(),
@@ -542,6 +670,115 @@ mod tests {
                 .unwrap(),
         )
         .unwrap()
+    }
+
+    async fn get(api: Shared, path: &str) -> Response {
+        use tower::ServiceExt as _;
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        crate::api::router(api)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(path)
+                    .header("host", "127.0.0.1:8765")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn config_status_reports_input_store_problem_and_retries_after_repair() {
+        let root = tempfile::tempdir().unwrap();
+        let inputs = root.path().join("command_inputs");
+        std::fs::write(&inputs, b"blocked").unwrap();
+        let api = api(root.path());
+        assert!(
+            api.inputs.session.get().is_none(),
+            "optional uploads must not prevent startup"
+        );
+        let response = get(api.clone(), "/api/config/status").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let status = value(response).await;
+        assert!(!status["input_store_problem"].as_str().unwrap().is_empty());
+        assert!(api.inputs.mount_if_available().await.is_none());
+        std::fs::remove_file(&inputs).unwrap();
+        let response = get(api.clone(), "/api/config/status").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(value(response).await["input_store_problem"], "");
+        assert!(api.inputs.mount_if_available().await.unwrap().readonly);
+        let response = request(
+            api.clone(),
+            "file",
+            "retry.txt",
+            "text/plain",
+            b"repaired",
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let uploaded = value(response).await;
+        assert_eq!(
+            std::fs::read(uploaded["path"].as_str().unwrap()).unwrap(),
+            b"repaired"
+        );
+        let original = root.path().join("original-inputs");
+        std::fs::rename(&inputs, &original).unwrap();
+        std::fs::write(&inputs, b"replaced initialized storage").unwrap();
+        let status = value(get(api.clone(), "/api/config/status").await).await;
+        assert!(!status["input_store_problem"].as_str().unwrap().is_empty());
+        assert!(api.inputs.mount_if_available().await.is_none());
+        std::fs::remove_file(&inputs).unwrap();
+        std::fs::rename(&original, &inputs).unwrap();
+        assert_eq!(
+            value(get(api, "/api/config/status").await).await["input_store_problem"],
+            ""
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_initialization_lock_does_not_block_other_requests() {
+        for upload in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let inputs = root.path().join("command_inputs");
+            std::fs::create_dir(&inputs).unwrap();
+            let lock = FileLock::hold(&inputs.join(".cleanup.lock"), Duration::ZERO).unwrap();
+            let api = api(root.path());
+            let waiting_api = api.clone();
+            let mut waiting = tokio::spawn(async move {
+                if upload {
+                    request(
+                        waiting_api,
+                        "file",
+                        "file.txt",
+                        "text/plain",
+                        b"uploaded",
+                        true,
+                    )
+                    .await
+                } else {
+                    get(waiting_api, "/api/config/status").await
+                }
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), &mut waiting)
+                    .await
+                    .is_err(),
+                "initialization must wait for the lock without occupying Tokio"
+            );
+            let response =
+                tokio::time::timeout(Duration::from_millis(100), get(api, "/api/health"))
+                    .await
+                    .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            drop(lock);
+            let response = tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 
     #[tokio::test]

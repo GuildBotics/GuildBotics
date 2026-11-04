@@ -236,7 +236,7 @@ async fn start(
     // goes with it.
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
-    let inputs = api.inputs.mount_if_available();
+    let inputs = api.inputs.mount_if_available().await;
     let work = api.work.spawn(async move {
         let run = trace.run_command(&name, &person_id, async {
             let roots = gb_config::commands::CommandRoots {

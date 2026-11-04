@@ -392,7 +392,7 @@ fn network_with_resolvers(
                 return Err(Sentence::Key(
                     "intelligences.agent_environment.declaration.no_device_resolver",
                     vec![
-                        ("where", path.display().to_string()),
+                        ("where", gb_config::agent_environment::PATH.into()),
                         ("host", host.clone()),
                     ],
                 ));
@@ -991,13 +991,7 @@ mod frozen_tests {
                 Sentence::Key(
                     "intelligences.agent_environment.declaration.no_device_resolver",
                     vec![
-                        (
-                            "where",
-                            declaration
-                                .join(gb_config::agent_environment::PATH)
-                                .display()
-                                .to_string()
-                        ),
+                        ("where", gb_config::agent_environment::PATH.into()),
                         ("host", "host".into()),
                     ],
                 )
