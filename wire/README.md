@@ -16,11 +16,14 @@ Rust の型は `crates/gb-wire` が build のときに、この schema から `t
 必須にするため、schema の `required` に追加します。Python の既定値と、単独の
 variant の schema は変更しません。
 
-`<Call>Arguments` は `HostWindow` の受け取り側の引数・既定値から生成します。
+`<Call>Arguments` は共有の `guildbotics/intelligences/agent_runtime/wire.py` の
+`HOST_ARGUMENTS` に登録した型から生成します。既定値と未知の引数の拒否もここで定義します。
+`MemberCommandResult` と `Unpacked` も同じ wire モジュールが正本です。
+生成処理は Python の host を import しません。
 `<Call>Result` は生成スクリプトの `HOST_RESULTS` が指定する返却データの型です。
 例えば `BeginTurnResult` は `HostTurn`、`ResolveResult` は `ConversationRecord` と
 同じ形です。結果がない呼び出しの schema は `null` です。新しい呼び出しは
-`HOST_RESULTS` にも登録する必要があり、窓口一覧との不一致は生成時に失敗します。
+両方の表に登録する必要があり、表の不一致は生成時に失敗します。
 
 member CLI の JSON 出力は `ReadPage` と `Chat*Output`、ダウンロードの標準出力は
 `Unpacked` です。任意のコマンド結果や resource の項目など、Python が `Any` や

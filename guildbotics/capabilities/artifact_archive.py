@@ -18,8 +18,10 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
-from typing import IO, Any, TypedDict
+from typing import IO, Any
 from zipfile import BadZipFile, ZipFile
+
+from guildbotics.intelligences.agent_runtime.wire import Unpacked
 
 # Artifacts are written to the isolated workspace instead of the broker output,
 # so they can be larger than the shared stdout boundary while remaining bounded.
@@ -33,13 +35,6 @@ _UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
 
 class ArtifactError(ValueError):
     """A download that cannot be written safely; the message says why."""
-
-
-class Unpacked(TypedDict):
-    """Where a download was written, as its reader reports it."""
-
-    destination: str
-    files: list[str]
 
 
 def extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
@@ -34,8 +36,8 @@ def test_committed_schemas_match_python_types(generator):
 
 def test_host_calls_all_have_both_sides(generator):
     schemas = generator.build_schemas()
-    assert set(generator.HOST_RESULTS) == generator._CALLS
-    for call in generator._CALLS:
+    assert set(generator.HOST_RESULTS) == set(generator.wire.HOST_ARGUMENTS)
+    for call in generator.wire.HOST_ARGUMENTS:
         stem = "".join(part.capitalize() for part in call.split("_"))
         assert f"{stem}Arguments.json" in schemas
         assert f"{stem}Result.json" in schemas
@@ -186,7 +188,11 @@ def test_nested_tagged_unions_keep_other_defaults(generator):
 
 
 def test_new_host_call_without_schema_is_rejected(generator, monkeypatch):
-    monkeypatch.setattr(generator, "_CALLS", generator._CALLS | {"new_call"})
+    monkeypatch.setattr(
+        generator.wire,
+        "HOST_ARGUMENTS",
+        generator.wire.HOST_ARGUMENTS | {"new_call": BaseModel},
+    )
     with pytest.raises(ValueError, match="Host calls changed"):
         generator.build_schemas()
 
@@ -226,3 +232,27 @@ def test_check_rejects_schema_drift(generator, monkeypatch, tmp_path, damage):
     assert generator.main() == 0
     monkeypatch.setattr("sys.argv", ["generate-wire-schema.py", "--check"])
     assert generator.main() == 0
+
+
+def test_schema_generation_never_imports_python_host():
+    probe = r"""
+import importlib.abc
+import runpy
+import sys
+
+class NoHost(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[:2] in [
+            ["guildbotics", package] for package in (
+                "app_api", "cli", "drivers", "setup", "environment",
+                "capabilities", "integrations", "workspace", "observability",
+                "local_git",
+            )
+        ]:
+            raise AssertionError("Schema generator imported host: " + fullname)
+
+sys.meta_path.insert(0, NoHost())
+sys.argv = ["scripts/generate-wire-schema.py", "--check"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+    subprocess.run([sys.executable, "-c", probe], cwd=ROOT, check=True)

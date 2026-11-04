@@ -38,7 +38,7 @@ from starlette.responses import JSONResponse, Response
 
 from guildbotics.environment.command_guest import EnvironmentGuest
 from guildbotics.environment.loopback_server import LOOPBACK_HOST, LoopbackServer
-from guildbotics.environment.member_execution import MemberCommandResult, MemberWorkers
+from guildbotics.environment.member_execution import MemberWorkers
 from guildbotics.environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
@@ -47,6 +47,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.wire import (
     MEMBER_BROKER_TOKEN_ENV,
     HostCallError,
+    MemberCommandResult,
 )
 from guildbotics.runtime.member_invocation import MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease

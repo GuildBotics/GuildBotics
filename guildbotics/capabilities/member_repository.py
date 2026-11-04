@@ -22,7 +22,6 @@ from pydantic import TypeAdapter, ValidationError
 from guildbotics.capabilities.artifact_archive import (
     MAX_ARTIFACT_BYTES,
     MAX_ATTACHMENT_BYTES,
-    Unpacked,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
@@ -31,6 +30,7 @@ from guildbotics.entities import Service
 from guildbotics.entities.message import Message
 from guildbotics.integrations import pull_request_patrol
 from guildbotics.integrations.factory import configured_providers
+from guildbotics.intelligences.agent_runtime.wire import Unpacked
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (

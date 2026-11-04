@@ -9,20 +9,11 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from pydantic import BaseModel
-
+from guildbotics.intelligences.agent_runtime.wire import MemberCommandResult
 from guildbotics.utils.async_utils import finish_on_cancel
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 _MAX_OUTPUT_BYTES = STREAM_READ_LIMIT
-
-
-class MemberCommandResult(BaseModel):
-    """The exit code and streams of one member invocation."""
-
-    exit_code: int
-    stdout: str
-    stderr: str
 
 
 class MemberWorkers:

@@ -17,12 +17,15 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     ConversationKey,
+    ConversationRecord,
+    ResumePolicy,
 )
+from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import SpanContext
 
@@ -272,3 +275,127 @@ class ChangedFile(TypedDict):
 #: How GuildBotics introduces itself in every peer's ``initialize`` request.
 #: Some peers require ``version``: Grok rejects the request without it.
 CLIENT_INFO = {"name": "guildbotics", "title": "GuildBotics", "version": "1"}
+
+
+class MemberCommandResult(BaseModel):
+    """The exit code and streams of one member invocation."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+class Unpacked(TypedDict):
+    """Where a download was written, as its reader reports it."""
+
+    destination: str
+    files: list[str]
+
+
+class BeginTurnArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str
+
+    cwd: str
+
+    participant_labels: str = ""
+
+
+class EndTurnArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn_grant: str
+
+
+class RequireCompletionArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EvidenceArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class RecordCompletedArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int
+
+
+class RecordCompletionMissingArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int
+
+    max_attempts: int
+
+    error: str
+
+
+class ResolveArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: ConversationKey
+
+    policy: ResumePolicy
+
+    model: str = ""
+
+
+class SaveArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record: ConversationRecord
+
+
+class MarkUnhealthyArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record: ConversationRecord
+
+    reason: str
+
+
+class RecordArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entries: list[Entry]
+
+
+class MemberArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: list[str]
+
+    stdin: str = ""
+
+
+class AgnoArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: str
+
+    call: AgnoCall
+
+
+class JevArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call: JevCall
+
+
+HOST_ARGUMENTS = {
+    "begin_turn": BeginTurnArguments,
+    "end_turn": EndTurnArguments,
+    "require_completion": RequireCompletionArguments,
+    "evidence": EvidenceArguments,
+    "record_completed": RecordCompletedArguments,
+    "record_completion_missing": RecordCompletionMissingArguments,
+    "resolve": ResolveArguments,
+    "save": SaveArguments,
+    "mark_unhealthy": MarkUnhealthyArguments,
+    "record": RecordArguments,
+    "member": MemberArguments,
+    "agno": AgnoArguments,
+    "jev": JevArguments,
+}
