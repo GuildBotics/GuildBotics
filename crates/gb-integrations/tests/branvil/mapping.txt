@@ -1,0 +1,11 @@
+Frozen specification: origin/python-host (fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0)
+Old tests -> Rust coverage targets (recorded before implementation)
+contracts/test_ticket_service_contract.py -> branvil_contract: read/write, search conditions and pagination, creation assignment/relations/lane/interactive, scope guards, reaction ownership, labels, attachments, patrol/refresh/move/closed
+contracts/test_code_hosting_contract.py -> branvil_contract: resource dispatch, exact review head, reviews/threads/reactions, draft conversion, ticket links, freshness/current-head checks, git identity/remotes
+contracts/test_member_directory_contract.py -> branvil_contract: authenticated member lookup
+integration/branvil/test_smoke.py::test_tickets_and_their_relations -> branvil_public::ticket_relations
+integration/branvil/test_smoke.py::test_a_push_a_pull_request_and_its_merge -> branvil_public::push_pull_merge
+integration/branvil/test_smoke.py::test_checks_decide_readiness_of_the_current_head -> branvil_public::readiness
+integration/branvil/test_smoke.py remaining cases -> branvil_contract: initial state/interactive, mention discovery, newest-first pages, reused CI, landing gate
+Branvil provider tests test_branvil_{provider,tickets,ticket_selector,code_hosting,owner_git}.py -> branvil_contract (identity, selection, normalization, credentials, readiness)
+Implicit guarantees to preserve: one process-wide App/Store; authentication rechecked after revocation; owner/agent/runner role guards; operation cancellation shielding; per-repository locks; journal recovery before requests; events and CI triggers; cursor signing and collection binding; isolated Git environment.

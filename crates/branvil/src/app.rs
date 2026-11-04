@@ -15,6 +15,8 @@ use crate::store::{self, Rd, Store};
 
 pub struct App {
     pub config: Config,
+    /// In-process requests drain before repository operations close.
+    pub api_requests: Arc<tokio::sync::RwLock<bool>>,
     /// The permanent base URL (`http://127.0.0.1:7878`), never ending in `/`.
     pub base_url: String,
     pub layout: Layout,
@@ -147,6 +149,7 @@ impl App {
             config.file.clone(),
         );
         Arc::new_cyclic(|me| Self {
+            api_requests: Arc::new(tokio::sync::RwLock::new(true)),
             base_url,
             layout,
             store,
@@ -283,6 +286,7 @@ impl App {
     /// Starts no operation (`finish`) from now on: later ones wait until the
     /// process exits. Then waits until the running ones have ended.
     pub async fn close(&self) {
+        *self.api_requests.write().await = false;
         // Never released: the service is about to exit.
         std::mem::forget(self.operations.clone().write_owned().await);
     }

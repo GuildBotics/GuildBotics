@@ -1,0 +1,29 @@
+test_every_code_host_answers_every_operation_of_the_port -> Rust trait requires every method; code_contract calls full operation surface
+test_only_the_call_that_drafted_a_pr_reports_a_conversion -> code_contract (tokio::join exactly one conversion)
+test_draft_conversion_refuses_a_write_outside_scope -> code_contract (absent outside URL is rejected before read)
+test_a_closed_pull_request_is_not_drafted -> code_closed_contract
+test_a_pull_request_with_a_current_head_and_passing_ci_is_ready -> code_contract + provider current-head CI fixtures
+test_base_progress_blocks_only_when_the_host_requires_up_to_date -> tests/readiness.rs shared Freshness cases + provider behind-head fixtures
+test_a_pull_request_whose_base_is_gone_is_not_judged -> code_missing_base_contract
+test_a_pull_request_is_reviewed_and_its_threads_replied_to -> code_contract + code_other_actor_contract
+test_a_verdict_lands_only_on_the_head_the_member_read -> code_stale_head_contract + code_other_actor_contract
+test_request_changes_is_given_or_refused_as_unsupported -> code_other_actor_contract (both restored providers support request_changes)
+test_writes_outside_the_configured_scope_are_refused -> code_contract; local every_local_write_refuses_other_scope_without_changing_files
+test_a_reaction_reaches_only_what_the_item_it_names_holds -> code_contract (conversation/inline/review IDs)
+test_a_pull_request_names_no_ticket -> code_kind_boundary_contract (distinct unused head aliases on create, plus update/read)
+test_a_reaction_of_no_meaning_is_refused_before_anything_is_written -> code_contract rejects unknown SemanticReaction JSON before a provider call (typed port boundary)
+test_a_pull_request_operation_reaches_no_ticket -> code_kind_boundary_contract
+test_a_pull_requests_resource_is_read_only_of_a_pull_request -> code_kind_boundary_contract (all frozen parametrized resources)
+test_a_tickets_own_resource_is_the_ticket_services -> code_kind_boundary_contract (Resource::ALL ticket subset)
+test_the_pull_requests_of_another_services_ticket_are_unsupported -> code_contract
+test_a_merge_closes_every_ticket_the_pull_request_closes -> code_link_population/case_finished case0 + referring alias7
+test_a_merge_closes_only_a_ticket_the_code_host_can_close -> code_link_population + code_cross_repo_link_contract
+test_a_closing_child_link_keeps_parent_context_without_closing_it -> code_link_population/case_finished cases1,2
+test_ticket_links_can_switch_between_reference_and_closing -> code_link_population/case_finished cases3,4
+test_replacing_links_removes_old_links_and_their_closing_effect -> code_link_population/case_finished cases5,6
+test_unsupported_link_replacement_writes_nothing -> code_link_population + code_cross_repo_link_contract
+test_an_artifact_is_only_the_current_heads -> code_artifact_contract + code_old_artifact_contract
+test_dependency_alerts_are_read_or_refused_as_unsupported -> code_contract (Unsupported supported by both frozen providers)
+test_the_callers_git_environment_does_not_reach_the_service -> provider fixture process environment isolation; root to pin explicit GIT_DIR invocation
+test_the_git_remote_names_its_repository_and_its_open_pull_requests -> code_contract + code_open_order_contract
+test_member_show_reads_default_branch_for_every_provider -> CLI member show excluded #89; default_branch and repository reads remain code_contract

@@ -24,7 +24,7 @@ impl WriteScope {
         {
             Ok(ScopedPath { scope: self, path })
         } else {
-            Err(ServiceError::Failed)
+            Err(ServiceError::OutOfScope)
         }
     }
 }

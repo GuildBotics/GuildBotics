@@ -187,6 +187,16 @@ pub async fn serve(
     terminate: impl Future<Output = ()> + Send + 'static,
     announce: bool,
 ) -> anyhow::Result<u8> {
+    serve_with_api(config, interrupt, terminate, announce, None).await
+}
+
+pub(crate) async fn serve_with_api(
+    config: Config,
+    interrupt: impl Future<Output = ()> + Send + 'static,
+    terminate: impl Future<Output = ()> + Send + 'static,
+    announce: bool,
+    ready: Option<tokio::sync::oneshot::Sender<crate::api::DataApi>>,
+) -> anyhow::Result<u8> {
     let layout = config.layout();
     layout.create()?;
     let store = Store::open(
@@ -257,6 +267,9 @@ pub async fn serve(
     crate::domain::attachments::start(app.clone());
 
     let router = crate::http::router(app.clone());
+    if let Some(ready) = ready {
+        let _ = ready.send(crate::api::DataApi::new(app.clone()));
+    }
     if announce {
         println!("branvil listening on http://{bound} (base URL {base_url})");
         std::io::stdout().flush()?;

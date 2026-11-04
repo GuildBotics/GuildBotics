@@ -1,12 +1,16 @@
 //! Contracts shared by service providers and their callers.
 //! No provider, transport, credential store, or host dependency belongs here.
 
+mod chat;
 mod models;
 mod resources;
+mod services;
 mod status;
 
+pub use chat::*;
 pub use models::*;
 pub use resources::*;
+pub use services::*;
 pub use status::*;
 
 use serde::{Deserialize, Serialize};
@@ -25,11 +29,19 @@ pub enum SemanticReaction {
     Support,
 }
 
-/// All ports fail through this one hierarchy. Messages are fixed, safe text;
-/// raw provider responses and credentials must never become service errors.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// All ports fail through this hierarchy. Display returns a locale key;
+/// only explicitly safe parameters may accompany it at a presentation boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServiceError {
     Failed,
+    OutOfScope,
+    MissingCredential {
+        name: String,
+    },
+    MissingScope {
+        needed: String,
+        provided: String,
+    },
     NotFound,
     /// Only when the operation never reached the service.
     Unavailable,
@@ -40,18 +52,37 @@ pub enum ServiceError {
     InvalidResult,
 }
 
+impl ServiceError {
+    pub fn translation_key(&self) -> &'static str {
+        match self {
+            Self::Failed => "integrations.resources.service_failed",
+            Self::OutOfScope => "integrations.resources.out_of_scope",
+            Self::MissingCredential { .. } => "integrations.resources.missing_credential",
+            Self::MissingScope { .. } => "integrations.slack.chat_service.missing_scope",
+            Self::NotFound => "integrations.resources.not_found",
+            Self::Unavailable => "integrations.resources.unavailable",
+            Self::Unsupported => "integrations.resources.operation_unsupported",
+            Self::InvalidResource => "integrations.resources.resource",
+            Self::InvalidParameters => "integrations.resources.parameters",
+            Self::InvalidContinuation => "integrations.resources.continuation",
+            Self::InvalidResult => "integrations.resources.invalid_result",
+        }
+    }
+    pub fn translation_args(&self) -> std::collections::BTreeMap<String, String> {
+        match self {
+            Self::MissingScope { needed, provided } => [
+                ("needed".into(), needed.clone()),
+                ("provided".into(), provided.clone()),
+            ]
+            .into(),
+            Self::MissingCredential { name } => [("name".into(), name.clone())].into(),
+            _ => Default::default(),
+        }
+    }
+}
 impl std::fmt::Display for ServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Failed => "The service operation failed.",
-            Self::NotFound => "The item was not found in this service.",
-            Self::Unavailable => "No connection was made to the service.",
-            Self::Unsupported => "This service does not support the operation.",
-            Self::InvalidResource => "Unknown service resource.",
-            Self::InvalidParameters => "Invalid resource parameters.",
-            Self::InvalidContinuation => "This resource does not accept a continuation.",
-            Self::InvalidResult => "The service returned an invalid result.",
-        })
+        f.write_str(self.translation_key())
     }
 }
 

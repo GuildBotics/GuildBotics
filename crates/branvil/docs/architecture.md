@@ -3,9 +3,15 @@
 Branvil is one Rust process (`branvil serve`) plus Git child processes, and a
 separate CI runner process (`branvil runner`) that executes jobs in microVMs. It
 listens on loopback only; other machines reach it through OpenSSH port forwarding
-managed by an OS service (see `README.md`). The HTTP API is the only way into the
-data: the GUI, the GuildBotics `branvil` provider, and the `branvil` CLI's
-admin commands all use it.
+managed by an OS service (see `README.md`). The authenticated data API is the
+boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
+`api::DataApi` directly in the service process. Both call the same domain
+operations, with the same member permissions, locks, events and CI triggers.
+`api::Running` starts that service and exposes its shared data handle.
+Authenticate each member through `DataApi::authenticate`; every operation
+checks the token again so revocation takes effect. Smart HTTP and Git hook
+callbacks continue to use loopback HTTP. Shut down through `Running::stop`
+before exiting the embedding process.
 
 ```
 browser GUI ─┐                         ┌─ redb (branvil.redb)

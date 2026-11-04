@@ -144,19 +144,30 @@ async fn job_log(
         None => 64 << 10,
     }
     .clamp(1, 4 << 20);
+    Ok(ok(data_job_log(&app, &c, &repo, &id, tail).await?))
+}
+
+pub(crate) async fn data_job_log(
+    app: &Shared,
+    c: &Caller,
+    repo: &str,
+    id: &str,
+    tail: u64,
+) -> AppResult<serde_json::Value> {
+    let tail = tail.clamp(1, 4 << 20);
     // A check run of the upstream host, as a published pull request's
     // checks name it.
-    if let Some(v) = crate::upstream::ops::check_log(&app, &c, &repo, &id, tail).await? {
-        return Ok(ok(v));
+    if let Some(v) = crate::upstream::ops::check_log(app, c, repo, id, tail).await? {
+        return Ok(v);
     }
-    let (_, a) = attempt_of(&app, &c, &repo, &id).await?;
+    let (_, a) = attempt_of(app, c, repo, id).await?;
     let (log, size) = app.ci.log_tail(&a.id, tail).await?;
-    Ok(ok(serde_json::json!({
+    Ok(serde_json::json!({
         "log": log,
         "log_bytes": size,
         "truncated": size > tail,
         "pruned": a.files_pruned,
-    })))
+    }))
 }
 
 async fn job_retry(
@@ -200,22 +211,7 @@ async fn artifact_get(
     c: Caller,
     Path((repo, sha, name)): Path<(String, String, String)>,
 ) -> R {
-    let repo = crate::domain::repos::visible(&app, &c, &repo).await?;
-    let not_found =
-        || AppError::not_found(format!("No artifact {name} of {sha} in {}.", repo.path));
-    if !util::is_sha(&sha) || !util::valid_name(&name) {
-        return Err(not_found());
-    }
-    let (id, s, n) = (repo.id.clone(), sha.to_lowercase(), name.clone());
-    let a = app
-        .store
-        .read(move |r| artifact_attempt(r, &id, &s, &n))
-        .await?
-        .ok_or_else(not_found)?;
-    let path = app.ci.artifact_path(&a.id, &name);
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|_| not_found())?;
+    let file = data_artifact_file(&app, &c, &repo, &sha, &name).await?;
     let len = file.metadata().await.map_err(AppError::internal)?.len();
     let stream = tokio_stream::wrappers::ReceiverStream::new(stream_file(file));
     let mut resp = Response::new(Body::from_stream(stream));
@@ -231,6 +227,32 @@ async fn artifact_get(
             .map_err(AppError::internal)?,
     );
     Ok(resp)
+}
+
+pub(crate) async fn data_artifact_file(
+    app: &Shared,
+    c: &Caller,
+    repo: &str,
+    sha: &str,
+    name: &str,
+) -> AppResult<tokio::fs::File> {
+    let repo = crate::domain::repos::visible(app, c, repo).await?;
+    let not_found =
+        || AppError::not_found(format!("No artifact {name} of {sha} in {}.", repo.path));
+    if !util::is_sha(sha) || !util::valid_name(name) {
+        return Err(not_found());
+    }
+    let (id, s, n) = (repo.id.clone(), sha.to_lowercase(), name.to_string());
+    let a = app
+        .store
+        .read(move |r| artifact_attempt(r, &id, &s, &n))
+        .await?
+        .ok_or_else(not_found)?;
+    let path = app.ci.artifact_path(&a.id, name);
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| not_found())?;
+    Ok(file)
 }
 
 /// Streams a file in 64 KiB chunks.

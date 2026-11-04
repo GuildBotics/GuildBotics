@@ -1,5 +1,20 @@
 use gb_integrations::*;
+use gb_ports::ServiceError;
 use gb_ports::{Check, ReadinessRollup};
+
+#[test]
+fn refusals_distinguish_scope_from_provider_failure() {
+    for (scope, path) in [
+        ("", "group/repo"),
+        ("group", "elsewhere/repo"),
+        ("group", "group/../repo"),
+    ] {
+        assert!(matches!(
+            WriteScope::new(scope).authorize(path),
+            Err(ServiceError::OutOfScope)
+        ));
+    }
+}
 
 #[test]
 fn log_failures_and_rollup_failures_are_distinct_populations() {

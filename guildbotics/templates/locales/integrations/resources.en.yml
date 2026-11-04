@@ -1,4 +1,11 @@
 en:
+  service_failed: "The service operation failed."
+  out_of_scope: "Writes are limited to the project's configured scope."
+  missing_credential: "Configure the member's %{name} credential in the identity secret store."
+  not_found: "The item was not found in this service."
+  unavailable: "No connection was made to the service."
+  operation_unsupported: "This service does not support the operation."
+  invalid_result: "The service returned an invalid result."
   unsupported: "Configure a supported %{service} in project.services to use it; '%{name}' is not one."
   too_large: "The response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
   resource: "Unsupported read resource. See member help for the supported names."

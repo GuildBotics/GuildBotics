@@ -1,0 +1,134 @@
+Frozen Slack tests and Rust contract mapping
+Frozen source: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
+Adapter tests: crates/gb-integrations/src/factory/slack/tests.rs
+Inventory inspected before implementation. Setup/driver exclusions below identify architectural scope, not substitute coverage.
+Transport mocks only; no Slack endpoint called.
+
+tests/guildbotics/integrations/slack/test_app_manifest.py
+  test_build_app_manifest_contains_required_scopes_and_events -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_build_app_manifest_keeps_bot_user_always_online -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_build_app_manifest_does_not_share_module_level_lists -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_bot_display_name_folds_into_slack_allowed_characters -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_registration_url_carries_url_encoded_manifest_json -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_registration_url_stays_well_within_browser_url_limits -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+  test_app_directory_url_points_at_the_app_list -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
+
+tests/guildbotics/integrations/slack/test_message_events.py
+  test_chat_event_reads_a_thread_reply -> timestamp_event_subtypes_and_status + participant_mentions_and_permalinks + slack_answer_error_classification
+  test_chat_event_starts_its_own_thread_without_thread_ts -> timestamp_event_subtypes_and_status + participant_mentions_and_permalinks + slack_answer_error_classification
+  test_chat_event_is_none_for_what_is_no_conversation -> timestamp_event_subtypes_and_status + participant_mentions_and_permalinks + slack_answer_error_classification
+  test_a_message_no_timestamp_names_is_refused -> timestamp_event_subtypes_and_status + participant_mentions_and_permalinks + slack_answer_error_classification
+  test_slack_api_error_names_the_code_of_a_failed_call -> timestamp_event_subtypes_and_status + participant_mentions_and_permalinks + slack_answer_error_classification
+
+tests/guildbotics/integrations/slack/test_slack_chat_service.py
+  test_reaction_retry_is_idempotent_only_for_the_same_existing_reaction -> every_semantic_reaction_uses_its_slack_name + web_requests_and_metadata + strict_answers_and_error_taxonomy
+  test_get_bot_identity_uses_auth_test -> web_requests_and_metadata + strict_answers_and_error_taxonomy
+  test_list_channel_events_normalizes_messages -> web_requests_and_metadata + strict_answers_and_error_taxonomy
+  test_list_thread_events_uses_conversations_replies -> web_requests_and_metadata + strict_answers_and_error_taxonomy
+  test_resolve_channel_id_uses_conversations_list_and_caches -> channel_pagination_cache_and_narrow_scope_probe
+  test_post_message_and_add_reaction_send_expected_payloads -> web_requests_and_metadata + strict_answers_and_error_taxonomy
+  test_add_reaction_raises_for_unknown_semantic_reaction -> unrepresentable: SemanticReaction closed Rust enum and serde reject unknown reactions before provider calls
+  test_normalize_and_render_participant_text_for_slack_mentions -> participant_mentions_and_permalinks
+  test_render_participant_text_does_not_convert_ephemeral_labels -> participant_mentions_and_permalinks
+  test_render_participant_text_converts_hyphenated_person_labels -> participant_mentions_and_permalinks
+  test_slack_api_error_raises_runtime_error -> credential_failure_observation_is_safe_and_probes_are_quiet + slack_answer_error_classification
+  test_missing_scope_error_names_the_scope_slack_asked_for -> missing_scope_preserves_only_safe_scope_arguments
+  test_auth_error_records_no_credential_event_when_opted_out -> credentials_checked_independently_without_values + credential_failure_observation_is_safe_and_probes_are_quiet
+  test_a_timestamp_is_a_time_to_the_microsecond_both_ways -> timestamp_event_subtypes_and_status
+  test_mentions_read_both_forms_of_a_user_mention -> participant_mentions_and_permalinks
+  test_a_permalink_names_its_message_and_thread -> participant_mentions_and_permalinks
+  test_a_url_that_is_no_permalink_is_refused -> participant_mentions_and_permalinks
+  test_a_missing_thread_is_the_ports_thread_not_found -> strict_answers_and_error_taxonomy
+  test_credentials_are_each_tried_and_named_without_their_values -> credentials_checked_independently_without_values + credential_failure_observation_is_safe_and_probes_are_quiet
+  test_a_credential_that_gets_no_slack_answer_failed -> credentials_transport_failure_is_classified_without_sensitive_text
+  test_a_member_without_a_bot_token_is_told_where_it_goes -> missing_bot_credential_names_the_member_key_without_preventing_checks
+  test_a_history_that_cannot_be_read_whole_is_no_page -> strict_answers_and_error_taxonomy
+  test_a_channel_list_that_cannot_be_read_names_no_absent_channel -> strict_answers_and_error_taxonomy
+  test_an_identity_whose_answer_names_no_user_failed -> strict_answers_and_error_taxonomy
+  test_a_post_whose_answer_names_no_message_failed -> strict_answers_and_error_taxonomy
+  test_a_slack_at_no_url_cannot_be_reached -> credentials_transport_failure_is_classified_without_sensitive_text
+
+tests/guildbotics/integrations/slack/test_slack_provider.py
+  test_members_sharing_an_app_token_share_a_connection -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_a_connection_is_per_slack_too -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_a_member_without_an_app_token_cannot_connect -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_slack_is_where_the_projects_chat_service_says -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_a_listener_connects_with_the_first_members_app_token -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_a_subscribed_agent_needs_both_tokens -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+
+tests/guildbotics/integrations/slack/test_slack_setup.py
+  test_the_chat_names_its_web_api_only_when_it_is_not_slacks -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_a_human_stores_only_a_user_id -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_an_agent_stores_only_the_tokens_it_is_given -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_the_view_shows_the_user_id_and_which_tokens_are_held -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_a_channel_is_named_by_its_id_or_its_name -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_start_registration_returns_deep_link -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_start_registration_rejects_invalid_app_name -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_start_registration_requires_a_name -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_start_registration_accepts_the_maximum_length_name -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_the_check_falls_back_to_the_saved_members_tokens -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_the_check_of_a_new_member_has_no_stored_tokens -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_bot_identity_and_workspace -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_sends_each_token_to_its_own_slack_method -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_surfaces_slack_error_codes_per_token -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_keeps_a_valid_token_when_the_other_fails -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_flags_a_token_whose_scopes_were_never_granted -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_confirms_scopes_with_a_narrow_read -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_skips_the_scope_probe_when_the_token_is_bad -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_a_channel_the_bot_never_joined -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_confirms_a_channel_the_bot_can_read -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_an_unresolvable_channel_name -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_uses_a_channel_id_without_resolving_it -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_skips_channels_when_the_scopes_are_missing -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_the_source_of_each_checked_token -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_falls_back_to_the_stored_token_for_empty_fields -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_prefers_the_entered_token_over_the_stored_one -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_does_not_record_a_credential_failure_event -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_missing_tokens_without_calling_slack -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_detects_swapped_bot_and_app_tokens -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_network_failures_without_leaking_the_token -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+  test_verify_tokens_reports_http_errors_as_unreachable -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
+
+tests/guildbotics/integrations/slack/test_slack_socket_listener.py
+  test_slack_socket_listener_reconnects_and_keeps_drained_events -> socket_ack_reconnect_queue_and_stop + permanent_socket_auth_never_retries_or_restarts + timestamp_event_subtypes_and_status
+  test_invalid_auth_surfaces_warning_and_stops_retrying -> socket_ack_reconnect_queue_and_stop + permanent_socket_auth_never_retries_or_restarts + timestamp_event_subtypes_and_status
+  test_to_incoming_event_ignores_non_conversational_subtypes -> socket_ack_reconnect_queue_and_stop + permanent_socket_auth_never_retries_or_restarts + timestamp_event_subtypes_and_status
+  test_to_incoming_event_keeps_conversational_subtypes -> socket_ack_reconnect_queue_and_stop + permanent_socket_auth_never_retries_or_restarts + timestamp_event_subtypes_and_status
+  test_a_frame_that_is_no_message_is_acked_and_the_next_still_arrives -> socket_ack_reconnect_queue_and_stop + permanent_socket_auth_never_retries_or_restarts + timestamp_event_subtypes_and_status
+
+tests/guildbotics/integrations/slack/test_workflow_status.py
+  test_a_status_comes_back_from_the_metadata_that_carries_it -> web_requests_and_metadata + timestamp_event_subtypes_and_status + gb-ports/tests/contracts.rs workflow status validation
+  test_the_metadata_names_itself_and_asks_to_be_suppressed -> web_requests_and_metadata + timestamp_event_subtypes_and_status + gb-ports/tests/contracts.rs workflow status validation
+  test_empty_fields_are_left_out_of_the_metadata -> web_requests_and_metadata + timestamp_event_subtypes_and_status + gb-ports/tests/contracts.rs workflow status validation
+  test_metadata_that_is_no_status_carries_none -> web_requests_and_metadata + timestamp_event_subtypes_and_status + gb-ports/tests/contracts.rs workflow status validation
+  test_fields_a_status_does_not_have_are_passed_over -> web_requests_and_metadata + timestamp_event_subtypes_and_status + gb-ports/tests/contracts.rs workflow status validation
+
+tests/guildbotics/drivers/test_event_listener_runner.py
+  test_runner_notifies_when_worker_thread_stops -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_a_message_goes_round_to_the_members_reply_on_the_local_chat -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_members_of_one_connection_share_one_listener -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_no_chat_service_means_nothing_to_listen_to -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_a_member_who_cannot_connect_is_skipped -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_received_events_are_queued_with_their_channels_participation -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_a_workflow_status_message_is_marked_processed_not_queued -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_an_event_is_queued_for_each_member_who_has_not_handled_it -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_backfill_reads_the_channel_and_known_threads_once_per_interval -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_backfill_receive_cutoff_floors_the_window_and_filters_events -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_messages_of_one_time_are_both_backfilled_in_the_order_of_their_ids -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_thread_backfill_reads_from_the_newest_known_message_less_overlap -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_a_thread_that_is_gone_is_not_backfilled_again -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_backfill_is_due_once_per_member_channel_and_interval -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_backfill_failure_updates_attempt_cadence -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_a_channel_name_is_resolved_once_while_the_subscription_stands -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_subscription_signature_follows_participation -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_aclose_sources_stops_listeners_and_clears_caches -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_get_status_summary_surfaces_auth_failed_connections -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_stop_cancels_in_flight_cycle -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_socket_notification_persists_while_backfill_is_waiting -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_receive_save_failure_retains_event_and_marks_unavailable -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_receiver_can_restart_on_another_event_loop -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_write_lock_wait_keeps_heartbeat_alive_and_prevents_publication -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+  test_wake_receiver_uses_one_loop_reference_during_shutdown -> DRIVER: host dispatch/backfill/heartbeat/pending persistence migration, outside Socket Mode connection/queue adapter. Not claimed covered by adapter tests.
+
+Additional Rust contracts: bounded stop; open/receive cancellation; deterministic open timeout and retry cadence; observer counters; avatar selection; EN/JA diagnostic keys; scope argument filtering.
+Mutation evidence: disabling envelope_id lookup fails socket_ack_reconnect_queue_and_stop; original source restored and suite rerun.

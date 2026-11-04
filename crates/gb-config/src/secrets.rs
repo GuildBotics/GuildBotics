@@ -152,6 +152,7 @@ pub struct SecretStore<'a> {
     writes: &'a SharedWrites,
     root: PathBuf,
     device: DeviceKey<'a>,
+    identity_scope: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +213,13 @@ fn valid_key(key: &str) -> bool {
 }
 
 impl<'a> SecretStore<'a> {
+    /// Provider factories must never resolve member credentials in a workspace store.
+    pub fn is_identity(&self) -> bool {
+        self.identity_scope
+    }
+    pub fn identity_root(&self) -> &Path {
+        &self.writes.identity
+    }
     pub fn new(
         writes: &'a SharedWrites,
         scope: Scope,
@@ -226,6 +234,7 @@ impl<'a> SecretStore<'a> {
             writes,
             root,
             device,
+            identity_scope: matches!(scope, Scope::Identity),
         })
     }
     fn aad(id: &str) -> String {
