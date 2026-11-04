@@ -133,7 +133,8 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace",
+  # Serialize Cargo compilation/linking to fit the runner memory budget.
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo nextest run --locked --workspace",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
