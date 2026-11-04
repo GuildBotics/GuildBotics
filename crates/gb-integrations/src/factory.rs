@@ -15,6 +15,8 @@ pub struct IntegrationConfig {
     pub person_id: String,
     pub display_name: String,
     pub accounts: BTreeMap<String, ActorName>,
+    /// Branvil logins and display names of the workspace team.
+    pub branvil_members: BTreeMap<String, String>,
     pub ticket_provider: String,
     pub code_provider: String,
     pub chat_provider: String,
@@ -71,12 +73,15 @@ impl<'a> ServiceIntegrationFactory<'a> {
         };
         for entry in entries.into_iter().flatten() {
             let entry = entry.map_err(|_| ServiceError::Failed)?;
-            if !entry.path().is_dir() {
+            if !entry.path().is_dir() || !entry.path().join("identity.yml").is_file() {
                 continue;
             }
             let id = entry.file_name().to_string_lossy().into_owned();
             if id != self.config.person_id && id.replace('-', "_").to_uppercase() + "_" == prefix {
-                return Err(ServiceError::Failed);
+                return Err(ServiceError::CredentialPrefixConflict {
+                    member: self.config.person_id.clone(),
+                    conflicting_member: id,
+                });
             }
         }
         self.secrets
@@ -116,7 +121,8 @@ impl<'a> ServiceIntegrationFactory<'a> {
             scope.into(),
             self.config.person_id.clone(),
             self.observer.clone(),
-        ))
+        )
+        .with_members(&self.config.branvil_members))
     }
     pub fn create_ticket_service(&self) -> Result<Arc<dyn TicketService>, ServiceError> {
         match self.config.ticket_provider.as_str() {
@@ -147,6 +153,7 @@ impl<'a> ServiceIntegrationFactory<'a> {
                     Arc::new(slack::WebTransport::new()?),
                     self.observer.clone(),
                 )
+                .with_member(self.config.person_id.clone())
                 .with_token_name(format!(
                     "{}_SLACK_BOT_TOKEN",
                     self.config.person_id.replace('-', "_").to_uppercase()
@@ -160,6 +167,19 @@ impl<'a> ServiceIntegrationFactory<'a> {
             slack::BASE_URL.into()
         } else {
             self.config.slack_base_url.trim_end_matches('/').into()
+        }
+    }
+    /// Check token presence for a subscribed Slack agent. The host owns
+    /// subscription and human/agent eligibility when selecting this check.
+    pub fn verify_chat_credentials(&self) -> Result<(), ServiceError> {
+        match self.config.chat_provider.as_str() {
+            "slack" => {
+                self.required_secret("SLACK_BOT_TOKEN")?;
+                self.required_secret("SLACK_APP_TOKEN")?;
+                Ok(())
+            }
+            "local" => Ok(()),
+            _ => Err(ServiceError::Unsupported),
         }
     }
     pub fn listener_key(&self) -> Result<String, ServiceError> {
@@ -188,13 +208,16 @@ impl<'a> ServiceIntegrationFactory<'a> {
                 on_activity,
                 self.observer.clone(),
             ))),
-            "slack" => Ok(Arc::new(slack::SlackListener::new(
-                self.required_secret("SLACK_APP_TOKEN")?,
-                self.slack_base(),
-                Arc::new(slack::WebTransport::new()?),
-                on_activity,
-                self.observer.clone(),
-            ))),
+            "slack" => Ok(Arc::new(
+                slack::SlackListener::new(
+                    self.required_secret("SLACK_APP_TOKEN")?,
+                    self.slack_base(),
+                    Arc::new(slack::WebTransport::new()?),
+                    on_activity,
+                    self.observer.clone(),
+                )
+                .with_member(self.config.person_id.clone()),
+            )),
             _ => Err(ServiceError::Unsupported),
         }
     }

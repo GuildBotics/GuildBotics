@@ -17,7 +17,8 @@ impl LocalService {
         Ok((r, v))
     }
     fn links(&self, links: &[TicketLink], repo: &str) -> Result<Value, ServiceError> {
-        for l in links {
+        let mut links = links.to_vec();
+        for l in &mut links {
             let local = l.url.starts_with("local:");
             if local {
                 let r = Ref::locate(&l.url, WorkKind::Ticket)?;
@@ -25,6 +26,7 @@ impl LocalService {
                 if l.closes && self.store.tracker(&r.place)?["repository"] != repo {
                     return Err(ServiceError::Unsupported);
                 }
+                l.url = r.url();
             } else if l.closes {
                 return Err(ServiceError::Unsupported);
             }
@@ -132,15 +134,20 @@ impl LocalService {
         if head.is_empty() {
             return Err(ServiceError::Failed);
         }
-        let c = match fs::read_to_string(
-            self.store
-                .dir(WorkKind::PullRequest, &r.place)
-                .join("checks")
-                .join(&head),
-        ) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.checks.clone(),
-            Err(_) => return Err(ServiceError::Failed),
+        let path = self
+            .store
+            .dir(WorkKind::PullRequest, &r.place)
+            .join("checks")
+            .join(&head);
+        let c = if path.is_file() {
+            let value = fs::read_to_string(path).map_err(|_| ServiceError::Failed)?;
+            if value.is_empty() {
+                self.checks.clone()
+            } else {
+                value
+            }
+        } else {
+            self.checks.clone()
         };
         let freshness = if v["state"] == "open" {
             let base = self.store.tip(&r.place, text(&v, "base"))?;
@@ -578,11 +585,13 @@ impl CodeHostingService for LocalService {
     }
     fn convert_pull_request_to_draft<'a>(&'a self, u: &'a str) -> ServiceFuture<'a, bool> {
         Box::pin(async move {
-            let _g = lock()?;
             let r = Ref::locate(u, WorkKind::PullRequest)?;
             self.store.scope.authorize(&r.place)?;
             let path = self.store.path(&r).with_extension("lock");
-            let _file = super::store::file_lock(&path)?;
+            let _file = tokio::task::spawn_blocking(move || super::store::file_lock(&path))
+                .await
+                .map_err(|_| ServiceError::Failed)??;
+            let _g = lock()?;
             let mut v = self.store.load(&r)?;
             if v["state"] != "open" || v["draft"] == true {
                 return Ok(false);

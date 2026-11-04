@@ -35,6 +35,11 @@ tests/guildbotics/integrations/test_local_awaited_checks.py
   test_a_wait_names_the_work_it_resumes -> tests/patrol_cases.rs::a_wait_names_the_work_it_resumes
 
 Additional local invariants pinned:
+  all eight damaged records through read/reaction/listener, other channels and three invalid statuses -> chat.rs::tests::frozen_bad_lines_preserve_channel_thread_reaction_and_other_channels
+  missing blocker NotFound and leaving an out-of-scope parent by replacement/removal -> relations_validate_before_writes_and_working_ignores_open_blockers
+  empty chat cursor, missing thread, resolve None/Some, non-ASCII cursor -> chat_malformed_records_cursor_status_and_listener_partial_lines
+  bounded draft file lock, independent writes during contention and missing parent directory -> draft_lock_times_out_without_blocking_other_local_writes
+  canonical trailing-slash ticket links and empty/non-file checks defaults -> pull_request_git_unicode_files_reviews_threads_checks_and_artifacts
   bounded listener stop -> blocked_worker_shutdown_finishes_within_frozen_two_second_bound
   lifecycle serialization -> concurrent_start_waits_for_stop_of_previous_generation
   detached generation isolation -> detached_worker_cannot_be_revived_by_next_start
@@ -46,6 +51,7 @@ Additional local invariants pinned:
 
 Mutation evidence: Store.save authorization removed -> write population test fails; restored.
 Mutation evidence: stop_worker timeout detachment replaced by joining -> bounded shutdown test fails; restored.
+Mutation evidence for review repairs: canonical link storage, empty-check fallback, empty chat cursor, canonical numbers, unrelated writes during lock contention, and lock-parent creation were each removed; the corresponding tests failed and all edits were restored.
 
 Shared frozen ticket contract population (same helpers execute local and Branvil fixtures):
 tests/guildbotics/integrations/contracts/test_ticket_service_contract.py

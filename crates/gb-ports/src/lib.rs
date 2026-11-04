@@ -37,8 +37,16 @@ pub enum SemanticReaction {
 pub enum ServiceError {
     Failed,
     OutOfScope,
+    BranvilTokenMissing {
+        name: String,
+    },
+    BranvilUsernameMissing,
     MissingCredential {
         name: String,
+    },
+    CredentialPrefixConflict {
+        member: String,
+        conflicting_member: String,
     },
     MissingScope {
         needed: String,
@@ -59,7 +67,12 @@ impl ServiceError {
         match self {
             Self::Failed => "integrations.resources.service_failed",
             Self::OutOfScope => "integrations.resources.out_of_scope",
+            Self::BranvilTokenMissing { .. } => "integrations.branvil.api.token_missing",
+            Self::BranvilUsernameMissing => "integrations.branvil.api.username_missing",
             Self::MissingCredential { .. } => "integrations.resources.missing_credential",
+            Self::CredentialPrefixConflict { .. } => {
+                "integrations.resources.credential_prefix_conflict"
+            }
             Self::MissingScope { .. } => "integrations.slack.chat_service.missing_scope",
             Self::NotFound => "integrations.resources.not_found",
             Self::Unavailable => "integrations.resources.unavailable",
@@ -72,12 +85,22 @@ impl ServiceError {
     }
     pub fn translation_args(&self) -> std::collections::BTreeMap<String, String> {
         match self {
+            Self::CredentialPrefixConflict {
+                member,
+                conflicting_member,
+            } => [
+                ("member".into(), member.clone()),
+                ("conflicting_member".into(), conflicting_member.clone()),
+            ]
+            .into(),
             Self::MissingScope { needed, provided } => [
                 ("needed".into(), needed.clone()),
                 ("provided".into(), provided.clone()),
             ]
             .into(),
-            Self::MissingCredential { name } => [("name".into(), name.clone())].into(),
+            Self::MissingCredential { name } | Self::BranvilTokenMissing { name } => {
+                [("name".into(), name.clone())].into()
+            }
             _ => Default::default(),
         }
     }

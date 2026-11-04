@@ -2,11 +2,20 @@
 use crate::app::Shared;
 use crate::auth::{self, Caller};
 use crate::domain::tickets::{NewComment, NewReaction, ReactionAdded};
-pub use crate::domain::{CommentView, Page, PageReq};
+pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
 pub use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange};
 pub use crate::model::{MemberKind, Repo, Workspace};
+pub use crate::upstream::host::{AlertState, DependencyAlert};
+
+/// Paging input verified against the actual operation, caller and filters at dispatch.
+#[derive(Clone, Debug)]
+pub struct PageReq {
+    binding: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
 
 /// A clone shares the service's locks, transactions, events and CI queue.
 #[derive(Clone)]
@@ -50,6 +59,25 @@ pub struct MemberApi {
     token: String,
 }
 impl MemberApi {
+    pub async fn upstream_dependency_alerts(
+        &self,
+        repo: &str,
+        state: AlertState,
+        page: PageReq,
+    ) -> AppResult<Page<DependencyAlert>> {
+        let _open = self.api.guard()?;
+        let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "upstream_dependency_alerts", (&repo, &state))?;
+        crate::upstream::ops::dependency_alerts(&self.api.app, &caller, repo, state, page).await
+    }
+    pub async fn upstream_dependency_alert(
+        &self,
+        repo: &str,
+        id: &str,
+    ) -> AppResult<DependencyAlert> {
+        let _open = self.api.guard()?;
+        crate::upstream::ops::dependency_alert(&self.api.app, &self.caller().await?, repo, id).await
+    }
     pub async fn identity(&self) -> AppResult<members::MemberView> {
         let _open = self.api.guard()?;
         Ok(members::member_view(&self.caller().await?.member))
@@ -98,7 +126,32 @@ impl MemberApi {
         limit: Option<usize>,
         cursor: Option<&str>,
     ) -> AppResult<PageReq> {
-        PageReq::new(&self.api.app.cursor_key, binding, limit, cursor)
+        if !(1..=100).contains(&limit.unwrap_or(30)) {
+            return Err(AppError::invalid("limit must be between 1 and 100."));
+        }
+        Ok(PageReq {
+            binding,
+            limit,
+            cursor: cursor.map(str::to_owned),
+        })
+    }
+    fn bound_page(
+        &self,
+        page: PageReq,
+        caller: &Caller,
+        operation: &str,
+        conditions: impl std::fmt::Debug,
+    ) -> AppResult<crate::domain::PageReq> {
+        crate::domain::PageReq::new(
+            &self.api.app.cursor_key,
+            format!(
+                "{}\n{}\n{operation}\n{conditions:?}",
+                page.binding,
+                crate::util::fold(caller.name())
+            ),
+            page.limit,
+            page.cursor.as_deref(),
+        )
     }
     pub async fn tickets_create_ticket(
         &self,
@@ -117,6 +170,7 @@ impl MemberApi {
     ) -> AppResult<Page<tickets::TicketView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_list_tickets", (&repo_path, &q))?;
         tickets::list_tickets(&self.api.app, &caller, repo_path, q, page).await
     }
     pub async fn tickets_get_ticket(
@@ -171,6 +225,7 @@ impl MemberApi {
     ) -> AppResult<Page<CommentView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_list_comments", (&repo_path, &key))?;
         tickets::list_comments(&self.api.app, &caller, repo_path, key, page).await
     }
     pub async fn tickets_add_comment(
@@ -213,6 +268,7 @@ impl MemberApi {
     ) -> AppResult<Page<tickets::LinkedPull>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_ticket_pulls", (&repo_path, &key))?;
         tickets::ticket_pulls(&self.api.app, &caller, repo_path, key, page).await
     }
     pub async fn tickets_mentioned(
@@ -223,6 +279,7 @@ impl MemberApi {
     ) -> AppResult<Page<tickets::CardView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_mentioned", (&workspace, &q))?;
         tickets::mentioned(&self.api.app, &caller, workspace, q, page).await
     }
     pub async fn tickets_cards(
@@ -233,6 +290,7 @@ impl MemberApi {
     ) -> AppResult<Page<tickets::CardView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_cards", (&workspace, &q))?;
         tickets::cards(&self.api.app, &caller, workspace, q, page).await
     }
     pub async fn tickets_closed(
@@ -243,6 +301,7 @@ impl MemberApi {
     ) -> AppResult<Page<tickets::ClosedItem>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "tickets_closed", (&workspace, &q))?;
         tickets::closed(&self.api.app, &caller, workspace, q, page).await
     }
     pub async fn pulls_create(
@@ -262,6 +321,7 @@ impl MemberApi {
     ) -> AppResult<Page<pulls::PullView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_list", (&repo_path, &q))?;
         pulls::list(&self.api.app, &caller, repo_path, q, page).await
     }
     pub async fn pulls_get(&self, repo_path: &str, number: u64) -> AppResult<pulls::PullView> {
@@ -281,6 +341,7 @@ impl MemberApi {
     ) -> AppResult<Page<pulls::PatrolEntry>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_patrol", (&q,))?;
         pulls::patrol(&self.api.app, &caller, q, page).await
     }
     pub async fn pulls_update(
@@ -322,6 +383,7 @@ impl MemberApi {
     ) -> AppResult<Page<CommentView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_list_comments", (&repo_path, &number))?;
         pulls::list_comments(&self.api.app, &caller, repo_path, number, page).await
     }
     pub async fn pulls_add_comment(
@@ -352,6 +414,7 @@ impl MemberApi {
     ) -> AppResult<Page<pulls::ReviewView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_list_reviews", (&repo_path, &number))?;
         pulls::list_reviews(&self.api.app, &caller, repo_path, number, page).await
     }
     pub async fn pulls_inline_comment(
@@ -372,6 +435,7 @@ impl MemberApi {
     ) -> AppResult<Page<pulls::ThreadView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_list_threads", (&repo_path, &number))?;
         pulls::list_threads(&self.api.app, &caller, repo_path, number, page).await
     }
     pub async fn pulls_thread_comments(
@@ -383,6 +447,12 @@ impl MemberApi {
     ) -> AppResult<Page<pulls::ThreadCommentView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(
+            page,
+            &caller,
+            "pulls_thread_comments",
+            (&repo_path, &number, &id),
+        )?;
         pulls::thread_comments(&self.api.app, &caller, repo_path, number, id, page).await
     }
     pub async fn pulls_reply(
@@ -426,6 +496,7 @@ impl MemberApi {
     ) -> AppResult<Page<FileChange>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_files", (&repo_path, &number))?;
         pulls::files(&self.api.app, &caller, repo_path, number, page).await
     }
     pub async fn pulls_commits(
@@ -436,6 +507,7 @@ impl MemberApi {
     ) -> AppResult<Page<CommitSummary>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "pulls_commits", (&repo_path, &number))?;
         pulls::commits(&self.api.app, &caller, repo_path, number, page).await
     }
     pub async fn pulls_checks(&self, repo_path: &str, number: u64) -> AppResult<pulls::ChecksView> {
@@ -466,6 +538,7 @@ impl MemberApi {
     pub async fn repos_list(&self, page: PageReq) -> AppResult<Page<repos::RepoView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "repos_list", ())?;
         repos::list(&self.api.app, &caller, page).await
     }
     pub async fn repos_create(&self, input: repos::NewRepo) -> AppResult<repos::RepoView> {
@@ -527,6 +600,7 @@ impl MemberApi {
     ) -> AppResult<Page<repos::WorkspaceView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "repos_list_workspaces", ())?;
         repos::list_workspaces(&self.api.app, &caller, page).await
     }
     pub async fn repos_create_workspace(
@@ -554,6 +628,7 @@ impl MemberApi {
     pub async fn members_list(&self, page: PageReq) -> AppResult<Page<members::MemberView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "members_list", ())?;
         members::list(&self.api.app, &caller, page).await
     }
     pub async fn members_create(
@@ -599,6 +674,7 @@ impl MemberApi {
     ) -> AppResult<Page<members::TokenView>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "members_list_tokens", (&name,))?;
         members::list_tokens(&self.api.app, &caller, name, page).await
     }
     pub async fn members_revoke_token(&self, name: String, id: String) -> AppResult<()> {
@@ -629,6 +705,7 @@ impl MemberApi {
     ) -> AppResult<Page<attachments::TicketAttachment>> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "attachments_of_ticket", (&repo_path, &key))?;
         attachments::of_ticket(&self.api.app, &caller, repo_path, key, page).await
     }
 }
@@ -744,6 +821,155 @@ mod tests {
                 .len(),
             1
         );
+        // An arbitrary identical client binding cannot defeat operation/caller/filter binding.
+        agent
+            .tickets_create_ticket("test/repo", input(json!({"title":"Second"})))
+            .await
+            .unwrap();
+        let first = agent
+            .tickets_list_tickets(
+                "test/repo",
+                Default::default(),
+                agent.page("same".into(), Some(1), None).unwrap(),
+            )
+            .await
+            .unwrap();
+        let cursor = first.next_cursor.unwrap();
+        let next = || agent.page("same".into(), Some(2), Some(&cursor)).unwrap();
+        assert_eq!(
+            agent
+                .tickets_list_tickets("test/repo", Default::default(), next())
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        macro_rules! rejects {
+            ($call:expr) => {
+                assert_eq!($call.await.unwrap_err().code, "invalid_cursor");
+            };
+        }
+        rejects!(owner.tickets_list_tickets(
+            "test/repo",
+            Default::default(),
+            owner.page("same".into(), Some(2), Some(&cursor)).unwrap()
+        ));
+        rejects!(agent.tickets_list_tickets("test/other", Default::default(), next()));
+        for q in [
+            tickets::TicketQuery {
+                q: Some("Second".into()),
+                ..Default::default()
+            },
+            tickets::TicketQuery {
+                state: Some("all".into()),
+                ..Default::default()
+            },
+            tickets::TicketQuery {
+                lane: Some("ready".into()),
+                ..Default::default()
+            },
+            tickets::TicketQuery {
+                assignee: Some("me".into()),
+                ..Default::default()
+            },
+            tickets::TicketQuery {
+                label: Some("bug".into()),
+                ..Default::default()
+            },
+        ] {
+            rejects!(agent.tickets_list_tickets("test/repo", q, next()));
+        }
+        rejects!(agent.tickets_list_comments("test/repo", &ticket.key, next()));
+        rejects!(agent.tickets_ticket_pulls("test/repo", &ticket.key, next()));
+        rejects!(agent.tickets_mentioned("test", input(json!({"mentions":"me"})), next()));
+        rejects!(agent.tickets_cards("test", Default::default(), next()));
+        rejects!(agent.tickets_closed("test", Default::default(), next()));
+        rejects!(agent.pulls_list("test/repo", Default::default(), next()));
+        rejects!(agent.pulls_patrol(Default::default(), next()));
+        rejects!(agent.pulls_list_comments("test/repo", 1, next()));
+        rejects!(agent.pulls_list_reviews("test/repo", 1, next()));
+        rejects!(agent.pulls_list_threads("test/repo", 1, next()));
+        rejects!(agent.pulls_thread_comments("test/repo", 1, "thread", next()));
+        rejects!(agent.pulls_files("test/repo", 1, next()));
+        rejects!(agent.pulls_commits("test/repo", 1, next()));
+        rejects!(agent.repos_list(next()));
+        rejects!(agent.repos_list_workspaces(next()));
+        rejects!(agent.members_list(next()));
+        rejects!(agent.members_list_tokens("agent1".into(), next()));
+        rejects!(agent.attachments_of_ticket("test/repo", &ticket.key, next()));
+        rejects!(agent.upstream_dependency_alerts("test/repo", AlertState::Open, next()));
+        // App::finish is the domain boundary shared by HTTP and in-process writes.
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+        let app = api.app.clone();
+        let caller = owner.caller().await.unwrap();
+        let waiting = tokio::spawn(async move {
+            app.finish(move |app| async move {
+                started_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                let ticket = tickets::create_ticket(
+                    &app,
+                    &caller,
+                    "test/repo",
+                    input(json!({"title":"Survives cancellation"})),
+                )
+                .await
+                .unwrap();
+                written_tx.send(ticket.key).unwrap();
+            })
+            .await;
+        });
+        started_rx.await.unwrap();
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        let key = tokio::time::timeout(std::time::Duration::from_secs(5), written_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let url = format!("{}/api/v1/repos/test%2Frepo/tickets/{key}", api.base_url());
+        let observed: serde_json::Value = client
+            .get(&url)
+            .bearer_auth(&owner.token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(observed["title"], "Survives cancellation");
+        let posted: serde_json::Value = client
+            .post(format!("{url}/comments"))
+            .bearer_auth(&owner.token)
+            .json(&json!({"body":"From HTTP"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let comments = owner
+            .tickets_list_comments(
+                "test/repo",
+                &key,
+                owner.page("comments".into(), Some(10), None).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(comments.items.len(), 1);
+        assert_eq!(comments.items[0].id, posted["id"].as_str().unwrap());
+        assert_eq!(comments.items[0].body, "From HTTP");
         owner
             .members_revoke_token("agent1".into(), issued.id)
             .await

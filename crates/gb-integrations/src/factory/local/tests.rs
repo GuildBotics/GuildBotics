@@ -71,6 +71,28 @@ async fn relations_validate_before_writes_and_working_ignores_open_blockers() {
     );
     let r = Ref::locate(&second.target.url, WorkKind::Ticket).unwrap();
     let before = fs::read(s.store.path(&r)).unwrap();
+    {
+        let blocked_by = vec!["local://tickets/acme/team/T-999".into()];
+        let mut q = request("acme/team");
+        q.blocked_by = blocked_by.clone();
+        assert_eq!(
+            s.create_ticket(q).await.unwrap_err(),
+            ServiceError::NotFound
+        );
+        assert_eq!(
+            s.update_ticket(
+                &second.target.url,
+                UpdateTicket {
+                    add_blocked_by: blocked_by,
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap_err(),
+            ServiceError::NotFound
+        );
+        assert_eq!(before, fs::read(s.store.path(&r)).unwrap());
+    }
     assert!(
         s.update_ticket(
             &second.target.url,
@@ -96,23 +118,93 @@ async fn relations_validate_before_writes_and_working_ignores_open_blockers() {
     .unwrap();
     s.store.save(&r, &mut v).unwrap();
     let before = fs::read(s.store.path(&r)).unwrap();
-    assert!(
-        s.update_ticket(
-            &r.url(),
-            UpdateTicket {
-                parent: Some(String::new()),
-                ..Default::default()
-            }
-        )
-        .await
-        .is_err()
+    for parent in [String::new(), first.target.url.clone()] {
+        assert_eq!(
+            s.update_ticket(
+                &r.url(),
+                UpdateTicket {
+                    body: Some("should not persist".into()),
+                    parent: Some(parent),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap_err(),
+            ServiceError::OutOfScope
+        );
+        assert_eq!(before, fs::read(s.store.path(&r)).unwrap());
+    }
+}
+#[tokio::test]
+async fn draft_lock_times_out_without_blocking_other_local_writes() {
+    let (_d, s) = fixture();
+    let missing = "local://code/acme/fresh/pulls/1";
+    assert_eq!(
+        s.convert_pull_request_to_draft(missing).await.unwrap_err(),
+        ServiceError::NotFound
     );
-    assert_eq!(before, fs::read(s.store.path(&r)).unwrap());
+    assert!(
+        s.store
+            .dir(WorkKind::PullRequest, "acme/fresh")
+            .join("pulls/1.lock")
+            .is_file()
+    );
+    let url = shared_local_pr(&s, "feature", "main").await;
+    let r = Ref::locate(&url, WorkKind::PullRequest).unwrap();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(s.store.path(&r).with_extension("lock"))
+        .unwrap();
+    file.lock().unwrap();
+    let s = Arc::new(s);
+    let other = s.clone();
+    let target = url.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tx.send(()).unwrap();
+                other.convert_pull_request_to_draft(&target).await
+            })
+    });
+    rx.recv().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let chat = LocalChat::new(s.store.root.clone(), "local-aiko", "Aiko");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let posting = std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(chat.post_message("other", "unrelated", None, None));
+        tx.send(result.is_ok()).unwrap();
+    });
+    let independent = rx.recv_timeout(std::time::Duration::from_millis(500));
+    let started = std::time::Instant::now();
+    let result = worker.join().unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(6));
+    assert_eq!(result.unwrap_err(), ServiceError::Failed);
+    file.unlock().unwrap();
+    posting.join().unwrap();
+    assert!(independent.unwrap());
+    assert!(s.convert_pull_request_to_draft(&url).await.unwrap());
+    assert!(!s.convert_pull_request_to_draft(&url).await.unwrap());
 }
 #[tokio::test]
 async fn chat_malformed_records_cursor_status_and_listener_partial_lines() {
     let (d, _s) = fixture();
     let c = LocalChat::new(d.path().into(), "local-aiko", "Aiko");
+    assert_eq!(c.resolve_channel_id("missing").await.unwrap(), None);
+    assert_eq!(
+        c.list_thread_events("missing", "root", None, 30)
+            .await
+            .unwrap_err(),
+        ServiceError::NotFound
+    );
     assert!(
         c.list_channel_events("missing", ChannelEventsQuery::default())
             .await
@@ -121,10 +213,21 @@ async fn chat_malformed_records_cursor_status_and_listener_partial_lines() {
             .is_empty()
     );
     fs::create_dir_all(d.path().join("chat/unreadable.jsonl")).unwrap();
-    assert!(
+    assert_eq!(
+        c.resolve_channel_id("unreadable").await.unwrap(),
+        Some("unreadable".into())
+    );
+    assert_eq!(
+        c.list_thread_events("unreadable", "root", None, 30)
+            .await
+            .unwrap_err(),
+        ServiceError::Failed
+    );
+    assert_eq!(
         c.list_channel_events("unreadable", ChannelEventsQuery::default())
             .await
-            .is_err()
+            .unwrap_err(),
+        ServiceError::Failed
     );
     let calls = Arc::new(AtomicUsize::new(0));
     let copy = calls.clone();
@@ -159,6 +262,66 @@ async fn chat_malformed_records_cursor_status_and_listener_partial_lines() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].message.message_id, "good");
     assert!(events[0].status.is_none());
+    assert_eq!(
+        c.resolve_channel_id("events").await.unwrap(),
+        Some("events".into())
+    );
+    let channel = c
+        .list_channel_events(
+            "events",
+            ChannelEventsQuery {
+                cursor: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(channel.events.len(), 1);
+    assert_eq!(channel.events[0].message.message_id, "good");
+    assert_eq!(
+        c.list_thread_events("events", "good", Some(String::new()), 30)
+            .await
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
+    c.add_reaction("events", "good", SemanticReaction::Ack)
+        .await
+        .unwrap();
+    assert_eq!(
+        c.list_thread_events("events", "good", None, 30)
+            .await
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
+    let records = fs::read_to_string(d.path().join("chat/events.jsonl")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(records.lines().last().unwrap()).unwrap(),
+        json!({"message_id":"good","reaction":"ack","author":"local-aiko"})
+    );
+    for cursor in ["bad", "²"] {
+        assert_eq!(
+            c.list_channel_events(
+                "events",
+                ChannelEventsQuery {
+                    cursor: Some(cursor.into()),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap_err(),
+            ServiceError::InvalidContinuation
+        );
+        assert_eq!(
+            c.list_thread_events("events", "good", Some(cursor.into()), 30)
+                .await
+                .unwrap_err(),
+            ServiceError::InvalidContinuation
+        );
+    }
     listener.stop().await.unwrap();
     assert!(!listener.connected());
     assert!(!listener.auth_failed());
@@ -178,10 +341,16 @@ fn local_urls_and_scope_reject_all_escape_shapes() {
     for u in [
         "local://tickets/acme/team/T-0",
         "local://tickets/acme/team/T-01",
+        "local://tickets/acme/team/T-+1",
+        "local://tickets/acme/team/T-10000000000",
         "local://tickets/acme/../T-1",
         "local://tickets/acme/team/T-1?x=1",
         "local://tickets/acme/team/T-1#x",
         "local://code/acme/repo/pulls/-1",
+        "local://code/acme/repo/pulls/+1",
+        "local://code/acme/repo/pulls/01",
+        "local://code/acme/repo/pulls/0",
+        "local://code/acme/repo/pulls/10000000000",
     ] {
         let k = if u.contains("code/") {
             WorkKind::PullRequest
@@ -241,6 +410,59 @@ async fn pull_request_git_unicode_files_reviews_threads_checks_and_artifacts() {
         .await
         .unwrap();
     let head = detail.items()[0]["head_sha"].as_str().unwrap();
+    let check_path = s
+        .store
+        .dir(WorkKind::PullRequest, "acme/repo")
+        .join("checks")
+        .join(head);
+    fs::create_dir_all(check_path.parent().unwrap()).unwrap();
+    for directory in [false, true] {
+        if directory {
+            fs::create_dir(&check_path).unwrap();
+        } else {
+            fs::write(&check_path, "").unwrap();
+        }
+        assert_eq!(
+            s.readiness(url, false, MAX_LOG_TAIL_BYTES)
+                .await
+                .unwrap()
+                .rollup,
+            ReadinessRollup::Success
+        );
+        if directory {
+            fs::remove_dir(&check_path).unwrap();
+        } else {
+            fs::remove_file(&check_path).unwrap();
+        }
+    }
+    let linked = s.create_ticket(request("acme/team")).await.unwrap();
+    s.update_pull_request(
+        url,
+        UpdatePullRequest {
+            tickets: Some(vec![TicketLink {
+                url: format!("{}/", linked.target.url),
+                closes: true,
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let links = CodeHostingService::read(
+        &s,
+        Resource::TicketPullRequests,
+        &linked.target.url,
+        None,
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(links.items()[0]["url"], *url);
+    let r = Ref::locate(url, WorkKind::PullRequest).unwrap();
+    assert_eq!(
+        s.store.load(&r).unwrap()["tickets"][0]["url"],
+        linked.target.url
+    );
     let page = CodeHostingService::read(&s, Resource::PullRequestFiles, url, None, "")
         .await
         .unwrap();

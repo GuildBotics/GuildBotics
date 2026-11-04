@@ -57,6 +57,8 @@ impl Ref {
             || u.fragment().is_some()
             || !valid_repository_path(place)
             || n.starts_with('0')
+            || n.len() > 10
+            || !n.bytes().all(|b| b.is_ascii_digit())
             || n.parse::<u64>().ok().filter(|n| *n > 0).is_none()
         {
             return Err(ServiceError::NotFound);
@@ -350,12 +352,23 @@ pub(super) fn page(
     )
 }
 pub(super) fn file_lock(path: &Path) -> Result<fs::File, ServiceError> {
+    fs::create_dir_all(path.parent().ok_or(ServiceError::Failed)?)
+        .map_err(|_| ServiceError::Failed)?;
     let f = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(path)
         .map_err(|_| ServiceError::Failed)?;
-    f.lock().map_err(|_| ServiceError::Failed)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match f.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return Err(ServiceError::Failed),
+        }
+    }
     Ok(f)
 }

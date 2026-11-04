@@ -138,7 +138,9 @@ fn page(
     cursor: Option<String>,
     limit: usize,
 ) -> Result<ChatEventPage, ServiceError> {
-    let cursor = cursor.unwrap_or_else(|| "0".into());
+    let cursor = cursor
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "0".into());
     if !cursor.bytes().all(|b| b.is_ascii_digit()) || cursor.is_empty() {
         return Err(ServiceError::InvalidContinuation);
     }
@@ -514,6 +516,96 @@ impl Drop for LocalListener {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn frozen_bad_lines_preserve_channel_thread_reaction_and_other_channels() {
+        let root = tempfile::tempdir().unwrap();
+        let chat = LocalChat::new(root.path().into(), "aiko", "Aiko");
+        let listener = listener(root.path());
+        listener.start().await.unwrap();
+        for (index, bad) in [
+            "not json",
+            "null",
+            "[1,2]",
+            r#"{"text":"no id","occurred_at":"2026-10-01T00:00:00+00:00"}"#,
+            r#"{"message_id":"x","occurred_at":"yesterday"}"#,
+            r#"{"message_id":null,"occurred_at":"2026-10-01T00:00:00+00:00"}"#,
+            r#"{"reaction":"ack"}"#,
+            r#"{"message_id":"x","occurred_at":"2026-10-01T00:00:00"}"#,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let c = format!("case{index}");
+            fs::create_dir_all(&chat.root).unwrap();
+            let message = |id| {
+                json!({"message_id":id,"thread_id":id,"occurred_at":"2026-10-01T00:00:00Z","text":id}).to_string()
+            };
+            fs::write(
+                chat.path(&c).unwrap(),
+                format!("{}\n{bad}\n{}\n", message("t1"), message("t2")),
+            )
+            .unwrap();
+            let channel = chat
+                .list_channel_events(&c, ChannelEventsQuery::default())
+                .await
+                .unwrap();
+            assert_eq!(
+                channel
+                    .events
+                    .iter()
+                    .map(|e| e.message.message_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["t1", "t2"]
+            );
+            assert_eq!(
+                chat.list_thread_events(&c, "t1", None, 30)
+                    .await
+                    .unwrap()
+                    .events
+                    .len(),
+                1
+            );
+            chat.add_reaction(&c, "t2", SemanticReaction::Ack)
+                .await
+                .unwrap();
+            assert_eq!(
+                chat.messages(&c).unwrap()[1]["reactions"][0]["reaction"],
+                "ack"
+            );
+        }
+        let events = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut events = vec![];
+            while events.len() < 16 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                events.extend(listener.drain_events());
+            }
+            events
+        })
+        .await
+        .unwrap();
+        assert_eq!(events.len(), 16);
+        assert!(listener.connected());
+        listener.stop().await.unwrap();
+        for status in [
+            json!({"kind":"workflow_error","reason":"unknown","person_id":"otota"}),
+            json!({"kind":"other","reason":"failed","person_id":"otota"}),
+            json!("failed"),
+        ] {
+            chat.append(
+                "status",
+                &json!({"message_id":"t1","occurred_at":"2026-10-01T00:00:00Z","status":status}),
+            )
+            .unwrap();
+            assert!(
+                chat.list_channel_events("status", ChannelEventsQuery::default())
+                    .await
+                    .unwrap()
+                    .events[0]
+                    .status
+                    .is_none()
+            );
+        }
+    }
     #[test]
     fn every_frozen_damaged_record_is_skipped_alone() {
         for bad in [

@@ -1,4 +1,5 @@
 //! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
+mod alerts;
 #[path = "../support/contracts.rs"]
 mod contracts;
 mod driver;
@@ -131,6 +132,42 @@ async fn api_call(base: &str, path: &str, token: &str, body: Value) -> Value {
 async fn finish(base: &str, runner: &str, sha: &str, conclusion: &str) {
     finish_artifact(base, runner, sha, conclusion, None).await;
 }
+async fn next_claim(base: &str, runner: &str) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+        loop {
+            let response = client
+                .post(format!("{base}/api/v1/runner/claim"))
+                .bearer_auth(runner)
+                .json(&json!({"executor":"microsandbox","executor_state":"ready"}))
+                .send()
+                .await
+                .unwrap();
+            match response.status() {
+                reqwest::StatusCode::NO_CONTENT => {
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                }
+                reqwest::StatusCode::OK => {
+                    let claim: Value = response.json().await.unwrap();
+                    for field in ["attempt_id", "lease", "sha"] {
+                        assert!(
+                            claim[field].as_str().is_some_and(|v| !v.is_empty()),
+                            "fixture claim missing {field}"
+                        );
+                    }
+                    return claim;
+                }
+                status => panic!("fixture claim status {status}"),
+            }
+        }
+    })
+    .await
+    .expect("fixture queued job did not appear within 15 seconds")
+}
 async fn finish_artifact(
     base: &str,
     runner: &str,
@@ -139,13 +176,7 @@ async fn finish_artifact(
     artifact: Option<&[u8]>,
 ) {
     for _ in 0..100 {
-        let attempt = api_call(
-            base,
-            "/runner/claim",
-            runner,
-            json!({"executor":"microsandbox","executor_state":"ready"}),
-        )
-        .await;
+        let attempt = next_claim(base, runner).await;
         let matching = attempt["sha"].as_str() == Some(sha);
         if matching && let Some(bytes) = artifact {
             let response = reqwest::Client::builder()
@@ -281,6 +312,7 @@ async fn scenario() {
     let data = temp.path().join("branvil");
     ::branvil::api::initialize(&data, "owner").unwrap();
     let owner_token = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
+    let alert_host = alerts::Host::configure(&data);
     let running = ::branvil::api::Running::start(&data).await.unwrap();
     let base = running.data.base_url().to_owned();
     let owner = running
@@ -333,6 +365,7 @@ async fn scenario() {
         person_id: "aiko".into(),
         display_name: "Aiko".into(),
         accounts: [("branvil".into(), ActorName("aiko-service".into()))].into(),
+        branvil_members: Default::default(),
         ticket_provider: "branvil".into(),
         code_provider: "branvil".into(),
         chat_provider: "local".into(),
@@ -353,10 +386,20 @@ async fn scenario() {
     ticket_relations(t.as_ref()).await;
     contracts::chat_contract(factory.create_chat_service().unwrap().as_ref(), "contract").await;
     let git = Git::new(temp.path());
+    // An empty runner queue is temporary while push processing registers jobs.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            next_claim(&base, &runner.token)
+        )
+        .await
+        .is_err()
+    );
     let main = git.commit("", ".branvil/ci.toml", PIPELINE);
     let remote = c.clone_url(REPO).await.unwrap();
     assert!(remote.starts_with(&base));
     git.push(&remote, &main, "main", "owner", owner_token.trim());
+    alerts::contract(&alert_host, c.as_ref(), &base, owner_token.trim(), &main).await;
     let head = git.commit(&main, "feature.txt", "feature\n");
     let credential = c.git_credential().await.unwrap().unwrap();
     git.push(

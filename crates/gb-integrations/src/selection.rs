@@ -41,7 +41,7 @@ pub fn linked_pull_state<'a>(
     let open = all.iter().any(|(s, _)| *s == "open");
     all.into_iter()
         .filter(|(s, _)| !open || *s == "open")
-        .max_by_key(|(_, at)| *at)
+        .reduce(|first, next| if next.1 > first.1 { next } else { first })
         .map(|(s, _)| s)
 }
 #[derive(Debug, PartialEq, Eq)]

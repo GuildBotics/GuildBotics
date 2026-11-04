@@ -35,6 +35,7 @@ pub enum IntegrationEvent {
     ReceiveAuthFailed {
         provider: &'static str,
         code: &'static str,
+        member: String,
     },
     ReceiveReconnecting {
         provider: &'static str,
@@ -62,6 +63,7 @@ pub(super) enum SlackFailure {
     Unavailable,
     InvalidResult,
     Api,
+    ApiCode(&'static str),
     Auth(&'static str),
     ThreadMissing,
     AlreadyReacted,
@@ -160,6 +162,8 @@ pub(super) fn answer(payload: Value) -> Result<Value, SlackFailure> {
             needed: safe_scopes(text(&payload, "needed")),
             provided: safe_scopes(text(&payload, "provided")),
         },
+        "ratelimited" => SlackFailure::ApiCode("ratelimited"),
+        "team_access_not_granted" => SlackFailure::ApiCode("team_access_not_granted"),
         _ => SlackFailure::Api,
     })
 }
@@ -186,6 +190,7 @@ fn safe_scopes(value: &str) -> String {
         .join(",")
 }
 pub(super) struct SlackChatService {
+    member: String,
     token: String,
     token_name: String,
     app_token: String,
@@ -203,6 +208,7 @@ impl SlackChatService {
         observer: IntegrationObserver,
     ) -> Self {
         Self {
+            member: String::new(),
             token,
             token_name: "SLACK_BOT_TOKEN".into(),
             app_token,
@@ -211,6 +217,10 @@ impl SlackChatService {
             channels: Mutex::new(BTreeMap::new()),
             observer,
         }
+    }
+    pub(super) fn with_member(mut self, member: String) -> Self {
+        self.member = member;
+        self
     }
     pub(super) fn with_token_name(mut self, name: String) -> Self {
         self.token_name = name;
@@ -338,11 +348,15 @@ impl ChatService for SlackChatService {
                 } else {
                     Some(
                         async {
-                            let p = answer(
-                                self.transport
-                                    .post(&self.base, method, token, Form::new())
-                                    .await?,
-                            )?;
+                            let p = if name == "bot_token" {
+                                self.post(method, Form::new()).await?
+                            } else {
+                                answer(
+                                    self.transport
+                                        .post(&self.base, method, token, Form::new())
+                                        .await?,
+                                )?
+                            };
                             if name == "bot_token" && named(&p, "user_id").is_err() {
                                 return Err(SlackFailure::InvalidResult);
                             }
@@ -356,10 +370,29 @@ impl ChatService for SlackChatService {
                     None => (CredentialStatus::Unconfigured, ""),
                     Some(Ok(())) => (CredentialStatus::Ok, ""),
                     Some(Err(SlackFailure::Auth(code))) => {
+                        error_args.insert("member".into(), self.member.clone());
                         error_args.insert("code".into(), code.into());
+                        error_args.insert(
+                            "name".into(),
+                            if name == "bot_token" {
+                                self.token_name.clone()
+                            } else {
+                                self.token_name.strip_suffix("BOT_TOKEN").map_or_else(
+                                    || "SLACK_APP_TOKEN".into(),
+                                    |prefix| format!("{prefix}APP_TOKEN"),
+                                )
+                            },
+                        );
                         (
                             CredentialStatus::Failed,
                             "integrations.slack.chat_service.authentication_failed",
+                        )
+                    }
+                    Some(Err(SlackFailure::ApiCode(code))) => {
+                        error_args.insert("code".into(), code.into());
+                        (
+                            CredentialStatus::Failed,
+                            "integrations.slack.chat_service.api_failed",
                         )
                     }
                     Some(Err(SlackFailure::MissingScope { needed, provided })) => {
@@ -389,7 +422,13 @@ impl ChatService for SlackChatService {
         account.0.trim().into()
     }
     fn parse_message_url(&self, url: &str) -> Result<ChatMessageRef, ServiceError> {
-        let parsed = reqwest::Url::parse(url).map_err(|_| ServiceError::NotFound)?;
+        let parsed = reqwest::Url::parse(url)
+            .or_else(|_| {
+                reqwest::Url::parse("https://slack.invalid/")
+                    .unwrap()
+                    .join(url)
+            })
+            .map_err(|_| ServiceError::NotFound)?;
         let parts: Vec<_> = parsed.path().trim_matches('/').split('/').collect();
         if parts.len() < 3 || parts[parts.len() - 3] != "archives" {
             return Err(ServiceError::NotFound);

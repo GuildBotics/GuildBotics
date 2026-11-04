@@ -1261,12 +1261,21 @@ pub async fn code_contract(
     );
     let commit_url = service.commit_url(repository, head);
     assert!(commit_url.is_empty() || commit_url.contains(head));
-    assert!(matches!(
-        service
-            .read(Resource::DependencyAlerts, repository, None, "")
-            .await,
-        Err(ServiceError::Unsupported)
-    ));
+    match service
+        .read(Resource::DependencyAlerts, repository, None, "")
+        .await
+    {
+        Ok(page) => {
+            for alert in page.items() {
+                assert!(alert["id"].as_str().is_some_and(|id| !id.is_empty()));
+                assert!(
+                    ["open", "resolved", "dismissed"].contains(&alert["state"].as_str().unwrap())
+                );
+            }
+        }
+        Err(ServiceError::Unsupported) => {}
+        Err(error) => panic!("dependency alerts read failed: {error:?}"),
+    }
     for limit in [0, MAX_LOG_TAIL_BYTES + 1] {
         for logs in [false, true] {
             assert!(matches!(

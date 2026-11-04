@@ -1,5 +1,5 @@
 //! Frozen origin/python-host Slack service, message-event and socket contracts.
-use super::listener::{Socket, SocketTransport};
+use super::listener::{Socket, SocketFrame, SocketTransport};
 use super::*;
 use serde_json::json;
 use std::{
@@ -304,10 +304,10 @@ struct MockSocket {
     fail_acks: bool,
 }
 impl Socket for MockSocket {
-    fn receive(&mut self) -> SlackFuture<'_, Option<String>> {
+    fn receive(&mut self) -> SlackFuture<'_, Option<SocketFrame>> {
         Box::pin(async move {
             match self.frames.pop_front() {
-                Some(v) => Ok(v),
+                Some(v) => Ok(v.map(SocketFrame::Text)),
                 None => std::future::pending().await,
             }
         })
@@ -321,6 +321,9 @@ impl Socket for MockSocket {
                 Ok(())
             }
         })
+    }
+    fn ping(&mut self, _: Vec<u8>) -> SlackFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
     }
     fn close(&mut self) -> SlackFuture<'_, ()> {
         Box::pin(async move {
@@ -546,7 +549,7 @@ async fn avatar_prefers_largest_profile_image_and_requires_one() {
 }
 
 #[tokio::test]
-async fn credential_failure_observation_is_safe_and_probes_are_quiet() {
+async fn credential_failure_observation_records_bot_checks_only() {
     let observations = Arc::new(Mutex::new(Vec::new()));
     let saved = observations.clone();
     let http = MockHttp::with(vec![
@@ -571,10 +574,16 @@ async fn credential_failure_observation_is_safe_and_probes_are_quiet() {
     );
     assert_eq!(
         *observations.lock().unwrap(),
-        vec![IntegrationEvent::CredentialFailed {
-            provider: "slack",
-            code: "invalid_auth"
-        }]
+        vec![
+            IntegrationEvent::CredentialFailed {
+                provider: "slack",
+                code: "invalid_auth"
+            },
+            IntegrationEvent::CredentialFailed {
+                provider: "slack",
+                code: "invalid_auth"
+            }
+        ]
     );
 }
 #[tokio::test]
@@ -623,7 +632,12 @@ fn credential_diagnostic_keys_exist_in_both_locales() {
     let ja = include_str!(
         "../../../../../guildbotics/templates/locales/integrations/slack/chat_service.ja.yml"
     );
-    for key in ["authentication_failed", "request_failed", "missing_scope"] {
+    for key in [
+        "authentication_failed",
+        "request_failed",
+        "missing_scope",
+        "api_failed",
+    ] {
         for catalog in [en, ja] {
             assert!(
                 catalog
@@ -635,6 +649,9 @@ fn credential_diagnostic_keys_exist_in_both_locales() {
     for catalog in [en, ja] {
         assert!(catalog.contains("%{needed}"));
         assert!(catalog.contains("%{provided}"));
+        assert!(catalog.contains("%{member}"));
+        assert!(catalog.contains("%{name}"));
+        assert!(catalog.contains("%{code}"));
     }
 }
 
@@ -836,4 +853,242 @@ async fn envelopes_without_a_conversation_are_acked_and_never_queued() {
     until(|| acks.lock().unwrap().len() == 5).await;
     listener.stop().await.unwrap();
     assert!(listener.drain_events().is_empty());
+}
+
+// The real websocket adapter must expose pong frames to the listener. Text
+// traffic and unsolicited pongs cannot substitute for the matching reply.
+#[tokio::test(start_paused = true)]
+async fn websocket_keepalive_detects_blackhole_and_reconnects() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", server.local_addr().unwrap());
+    let pings = Arc::new(AtomicUsize::new(0));
+    let observed = pings.clone();
+    let server_task = tokio::spawn(async move {
+        let mut handlers = tokio::task::JoinSet::new();
+        for connection in 0..2 {
+            let (stream, _) = server.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            let count = observed.clone();
+            handlers.spawn(async move {
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                if connection == 1 {
+                    socket
+                        .send(Message::Text(envelope("after-reconnect", "1.0").into()))
+                        .await
+                        .unwrap();
+                }
+                while let Some(Ok(frame)) = socket.next().await {
+                    match frame {
+                        Message::Ping(payload) => {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            if connection == 0 {
+                                // send replaces tungstenite's automatically queued pong.
+                                socket
+                                    .send(Message::Pong(b"wrong-payload".to_vec().into()))
+                                    .await
+                                    .unwrap();
+                                socket.send(Message::Text("{}".into())).await.unwrap();
+                                // Keep the TCP connection open, without flushing another pong.
+                                std::future::pending::<()>().await;
+                            } else {
+                                socket.send(Message::Pong(payload)).await.unwrap();
+                            }
+                        }
+                        Message::Close(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        }
+        while let Some(result) = handlers.join_next().await {
+            result.unwrap();
+        }
+    });
+    let http = MockHttp::with(vec![
+        json!({"ok":true,"url":url}),
+        json!({"ok":true,"url":url}),
+    ]);
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let seen = observations.clone();
+    let listener = SlackListener::new(
+        "synthetic".into(),
+        BASE_URL.into(),
+        http,
+        Arc::new(|| {}),
+        Arc::new(move |event| seen.lock().unwrap().push(event)),
+    );
+    async fn settle() {
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+        }
+    }
+    listener.start().await.unwrap();
+    settle().await;
+    assert!(listener.connected());
+    tokio::time::advance(Duration::from_secs(19)).await;
+    settle().await;
+    assert_eq!(pings.load(Ordering::SeqCst), 0);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert_eq!(pings.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_secs(19)).await;
+    settle().await;
+    assert!(listener.connected());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert!(!listener.connected());
+    // Close timeout is bounded by one second, followed by the frozen retry delay.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert!(listener.connected());
+    assert_eq!(listener.drain_events().len(), 1);
+    for _ in 0..3 {
+        tokio::time::advance(Duration::from_secs(20)).await;
+        settle().await;
+        assert!(listener.connected());
+    }
+    assert!(pings.load(Ordering::SeqCst) >= 3);
+    listener.stop().await.unwrap();
+    assert!(!listener.connected());
+    assert!(observations.lock().unwrap().iter().any(|event| matches!(
+        event,
+        IntegrationEvent::ReceiveStopped {
+            connect_attempts: 2,
+            received_events: 1,
+            acks_sent: 1,
+            ..
+        }
+    )));
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn credential_diagnostics_retain_safe_codes_and_member() {
+    for code in ["ratelimited", "team_access_not_granted", "invalid_auth"] {
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let seen = observations.clone();
+        let chat = SlackChatService::new(
+            "synthetic-bot".into(),
+            "".into(),
+            BASE_URL.into(),
+            MockHttp::with(vec![json!({"ok":false,"error":code})]),
+            Arc::new(move |event| seen.lock().unwrap().push(event)),
+        )
+        .with_member("yuki".into())
+        .with_token_name("YUKI_SLACK_BOT_TOKEN".into());
+        let checks = chat.check_credentials().await.unwrap();
+        assert_eq!(checks[0].error_args["code"], code);
+        if code == "invalid_auth" {
+            assert_eq!(checks[0].error_args["member"], "yuki");
+            assert_eq!(observations.lock().unwrap().len(), 1);
+        } else {
+            assert_eq!(
+                checks[0].error,
+                "integrations.slack.chat_service.api_failed"
+            );
+            assert!(observations.lock().unwrap().is_empty());
+        }
+    }
+    let chat = service(MockHttp::with(vec![
+        json!({"ok":false,"error":"synthetic_private_secret"}),
+        json!({"ok":true}),
+    ]));
+    let checks = chat.check_credentials().await.unwrap();
+    assert!(!format!("{checks:?}").contains("synthetic_private_secret"));
+    let chat = service(MockHttp::with(vec![]));
+    for url in ["/archives/C/p1000001", "slack.example/archives/C/p1000001"] {
+        assert_eq!(chat.parse_message_url(url).unwrap().message_id, "1.000001");
+    }
+}
+
+struct UnauthorizedHttp(AtomicUsize);
+impl SlackTransport for UnauthorizedHttp {
+    fn post<'a>(&'a self, _: &'a str, _: &'a str, _: &'a str, _: Form) -> SlackFuture<'a, Value> {
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(SlackFailure::Auth("unauthorized"))
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn socket_http_unauthorized_retries_but_body_auth_names_member() {
+    let http = Arc::new(UnauthorizedHttp(AtomicUsize::new(0)));
+    let listener = SlackListener::with_socket(
+        "synthetic".into(),
+        BASE_URL.into(),
+        http.clone(),
+        Arc::new(MockSockets::default()),
+        Arc::new(|| {}),
+        Arc::new(|_| {}),
+    );
+    listener.start().await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(!listener.auth_failed());
+    assert_eq!(http.0.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_millis(999)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(http.0.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(http.0.load(Ordering::SeqCst), 2);
+    listener.stop().await.unwrap();
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let seen = observations.clone();
+    let listener = SlackListener::with_socket(
+        "synthetic".into(),
+        BASE_URL.into(),
+        MockHttp::with(vec![json!({"ok":false,"error":"invalid_auth"})]),
+        Arc::new(MockSockets::default()),
+        Arc::new(|| {}),
+        Arc::new(move |event| seen.lock().unwrap().push(event)),
+    )
+    .with_member("yuki".into());
+    listener.start().await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(listener.auth_failed());
+    assert!(
+        observations
+            .lock()
+            .unwrap()
+            .contains(&IntegrationEvent::ReceiveAuthFailed {
+                provider: "slack",
+                code: "invalid_auth",
+                member: "yuki".into(),
+            })
+    );
+    listener.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_cancels_pending_pong_without_waiting_for_deadline() {
+    let closed = Arc::new(AtomicUsize::new(0));
+    let sockets = Arc::new(MockSockets::default());
+    sockets.queue.lock().unwrap().push_back(MockSocket {
+        frames: VecDeque::new(),
+        acks: Arc::new(Mutex::new(Vec::new())),
+        closed: closed.clone(),
+        fail_acks: false,
+    });
+    let listener = SlackListener::with_socket(
+        "synthetic".into(),
+        BASE_URL.into(),
+        MockHttp::with(vec![json!({"ok":true,"url":"wss://synthetic"})]),
+        sockets,
+        Arc::new(|| {}),
+        Arc::new(|_| {}),
+    );
+    listener.start().await.unwrap();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(20)).await;
+    tokio::task::yield_now().await;
+    assert!(listener.connected());
+    let before = tokio::time::Instant::now();
+    listener.stop().await.unwrap();
+    assert_eq!(tokio::time::Instant::now(), before);
+    assert!(!listener.connected());
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
 }

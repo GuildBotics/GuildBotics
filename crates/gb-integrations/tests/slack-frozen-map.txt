@@ -2,7 +2,7 @@ Frozen Slack tests and Rust contract mapping
 Frozen source: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
 Adapter tests: crates/gb-integrations/src/factory/slack/tests.rs
 Inventory inspected before implementation. Setup/driver exclusions below identify architectural scope, not substitute coverage.
-Transport mocks only; no Slack endpoint called.
+Transport mocks and a local websocket server only; no Slack endpoint called.
 
 tests/guildbotics/integrations/slack/test_app_manifest.py
   test_build_app_manifest_contains_required_scopes_and_events -> SETUP: registration manifest/URL generation belongs to setup migration, not ChatService or Socket Mode adapter.
@@ -31,15 +31,15 @@ tests/guildbotics/integrations/slack/test_slack_chat_service.py
   test_normalize_and_render_participant_text_for_slack_mentions -> participant_mentions_and_permalinks
   test_render_participant_text_does_not_convert_ephemeral_labels -> participant_mentions_and_permalinks
   test_render_participant_text_converts_hyphenated_person_labels -> participant_mentions_and_permalinks
-  test_slack_api_error_raises_runtime_error -> credential_failure_observation_is_safe_and_probes_are_quiet + slack_answer_error_classification
+  test_slack_api_error_raises_runtime_error -> credential_failure_observation_records_bot_checks_only + slack_answer_error_classification
   test_missing_scope_error_names_the_scope_slack_asked_for -> missing_scope_preserves_only_safe_scope_arguments
-  test_auth_error_records_no_credential_event_when_opted_out -> credentials_checked_independently_without_values + credential_failure_observation_is_safe_and_probes_are_quiet
+  test_auth_error_records_no_credential_event_when_opted_out -> credentials_checked_independently_without_values + credential_failure_observation_records_bot_checks_only
   test_a_timestamp_is_a_time_to_the_microsecond_both_ways -> timestamp_event_subtypes_and_status
   test_mentions_read_both_forms_of_a_user_mention -> participant_mentions_and_permalinks
   test_a_permalink_names_its_message_and_thread -> participant_mentions_and_permalinks
   test_a_url_that_is_no_permalink_is_refused -> participant_mentions_and_permalinks
   test_a_missing_thread_is_the_ports_thread_not_found -> strict_answers_and_error_taxonomy
-  test_credentials_are_each_tried_and_named_without_their_values -> credentials_checked_independently_without_values + credential_failure_observation_is_safe_and_probes_are_quiet
+  test_credentials_are_each_tried_and_named_without_their_values -> credentials_checked_independently_without_values + credential_failure_observation_records_bot_checks_only
   test_a_credential_that_gets_no_slack_answer_failed -> credentials_transport_failure_is_classified_without_sensitive_text
   test_a_member_without_a_bot_token_is_told_where_it_goes -> missing_bot_credential_names_the_member_key_without_preventing_checks
   test_a_history_that_cannot_be_read_whole_is_no_page -> strict_answers_and_error_taxonomy
@@ -49,12 +49,12 @@ tests/guildbotics/integrations/slack/test_slack_chat_service.py
   test_a_slack_at_no_url_cannot_be_reached -> credentials_transport_failure_is_classified_without_sensitive_text
 
 tests/guildbotics/integrations/slack/test_slack_provider.py
-  test_members_sharing_an_app_token_share_a_connection -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
-  test_a_connection_is_per_slack_too -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
-  test_a_member_without_an_app_token_cannot_connect -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
-  test_slack_is_where_the_projects_chat_service_says -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
-  test_a_listener_connects_with_the_first_members_app_token -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
-  test_a_subscribed_agent_needs_both_tokens -> FACTORY: root tests/flows.rs; ServiceIntegrationFactory owns identity SecretStore resolution, provider selection, hashed token/base connection keys.
+  test_members_sharing_an_app_token_share_a_connection -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
+  test_a_connection_is_per_slack_too -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
+  test_a_member_without_an_app_token_cannot_connect -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
+  test_slack_is_where_the_projects_chat_service_says -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
+  test_a_listener_connects_with_the_first_members_app_token -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
+  test_a_subscribed_agent_needs_both_tokens -> FACTORY: tests/factory.rs slack_shared_connections_base_and_required_token_population + slack_listener_uses_bound_members_app_token_and_base + member_scoped_secrets_and_collision_withholding.
 
 tests/guildbotics/integrations/slack/test_slack_setup.py
   test_the_chat_names_its_web_api_only_when_it_is_not_slacks -> SETUP: registration/configuration/setup orchestration belongs to setup migration. Provider identity/check/probe primitives covered by Slack service tests.
@@ -132,3 +132,8 @@ tests/guildbotics/drivers/test_event_listener_runner.py
 
 Additional Rust contracts: bounded stop; open/receive cancellation; deterministic open timeout and retry cadence; observer counters; avatar selection; EN/JA diagnostic keys; scope argument filtering.
 Mutation evidence: disabling envelope_id lookup fails socket_ack_reconnect_queue_and_stop; original source restored and suite rerun.
+
+Review regressions: websocket_keepalive_detects_blackhole_and_reconnects uses a real local websocket and paused time to pin 20s ping/20s matching pong deadline and reconnection, including healthy pongs, text traffic, wrong pongs and ACK counters. socket_http_unauthorized_retries_but_body_auth_names_member pins transient HTTP401 vs terminal body auth and lowercase member diagnostic. credential_diagnostics_retain_safe_codes_and_member pins named ratelimited/team_access_not_granted diagnostics and scheme-less links.
+Safety boundary: arbitrary unknown Slack response codes remain redacted (unlike frozen str(exc)), because upstream-controlled error strings can contain credentials; the fixed allowlist retains recognized codes without echoing arbitrary payloads.
+Factory verify_chat_credentials checks both tokens; human/subscription eligibility remains the future host responsibility in #90.
+Mutation evidence for review repairs: changing the initial ping interval from20s to200s fails websocket_keepalive_detects_blackhole_and_reconnects at the20s assertion; removing the identity.yml eligibility check fails member_scoped_secrets_and_collision_withholding for a stale member directory. Both mutations restored.

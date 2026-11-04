@@ -57,7 +57,40 @@ impl CodeHostingService for BranvilService {
                 return Err(ServiceError::InvalidResource);
             }
             if resource == Resource::DependencyAlerts {
-                return Err(ServiceError::Unsupported);
+                if !crate::valid_repository_path(subject) {
+                    return Err(ServiceError::NotFound);
+                }
+                let m = self.member().await?;
+                if let Some(id) = c["id"].as_str().filter(|s| !s.is_empty()) {
+                    let alert = m
+                        .upstream_dependency_alert(subject, id)
+                        .await
+                        .map_err(error)?;
+                    return ReadPage::of(resource, [value(alert)?], None, None);
+                }
+                use branvil::api::AlertState;
+                let state = match text(&c, "state") {
+                    "resolved" => AlertState::Resolved,
+                    "dismissed" => AlertState::Dismissed,
+                    _ => AlertState::Open,
+                };
+                let p = m
+                    .upstream_dependency_alerts(
+                        subject,
+                        state,
+                        self.page(&m, resource, subject, &c, continuation)?,
+                    )
+                    .await
+                    .map_err(error)?;
+                return ReadPage::of(
+                    resource,
+                    p.items
+                        .into_iter()
+                        .map(value)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    p.next_cursor,
+                    None,
+                );
             }
             if resource == Resource::PullRequestReadiness {
                 let r = CodeHostingService::readiness(

@@ -149,3 +149,22 @@ fn patrol_reviews_statements_individually_and_limits_only_new_heads() {
     pr.is_draft = true;
     assert_eq!(pull_request_work(&pr, "aiko", Utc::now()), None);
 }
+
+#[test]
+fn linked_pull_timestamp_ties_keep_the_first_observed_state() {
+    for states in [["merged", "closed"], ["closed", "merged"]] {
+        assert_eq!(
+            linked_pull_state(states.iter().map(|s| (*s, "same"))),
+            Some(states[0])
+        );
+    }
+    assert_eq!(
+        linked_pull_state([("merged", "later"), ("open", "earlier")]),
+        Some("open")
+    );
+    assert_eq!(
+        linked_pull_state([("closed", "earlier"), ("merged", "later")]),
+        Some("merged")
+    );
+    assert_eq!(linked_pull_state([]), None);
+}

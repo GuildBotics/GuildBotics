@@ -460,6 +460,7 @@ impl AwaitedFixture {
                 person_id: "aiko".into(),
                 display_name: "Aiko".into(),
                 accounts: Default::default(),
+                branvil_members: Default::default(),
                 ticket_provider: "local".into(),
                 code_provider: "local".into(),
                 chat_provider: "local".into(),

@@ -138,7 +138,7 @@ commands = [
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
-# Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
+# Exercise the Rust provider and Branvil in the same process.
 [[jobs]]
 name = "branvil-integration"
 paths = ["crates/branvil/**", "crates/gb-integrations/**", "crates/gb-ports/**", "crates/gb-config/**", "crates/gb-base/**", "scripts/branvil-integration.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
@@ -147,6 +147,7 @@ commands = ["find crates -exec touch -c {} +", "CARGO_HOME=/work/.ci/cargo-home 
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
+# Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
 [[jobs]]
 name = "rust-duplicates"
 paths = ["crates/**/*.rs", "jscpd.rust.json"]

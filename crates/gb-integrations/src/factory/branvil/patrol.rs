@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 fn array<'a>(v: &'a Value, k: &str) -> &'a [Value] {
     v[k].as_array().map(Vec::as_slice).unwrap_or(&[])
 }
-fn fold(v: &str) -> String {
+pub(super) fn fold(v: &str) -> String {
     use unicode_casefold::UnicodeCaseFold;
     v.case_fold().collect()
 }
@@ -110,7 +110,11 @@ impl BranvilService {
         card["pull_requests"] = json!(pulls);
         Ok(card)
     }
-    async fn select_card(&self, card: &Value, finish: bool) -> Result<Option<Task>, ServiceError> {
+    pub(super) async fn select_card(
+        &self,
+        card: &Value,
+        finish: bool,
+    ) -> Result<Option<Task>, ServiceError> {
         let me = fold(&self.username);
         let assigned = fold(text(&card["assignee"], "name")) == me;
         let lane = text(card, "lane");
@@ -133,13 +137,14 @@ impl BranvilService {
             .iter()
             .map(|c| TaskMessage {
                 content: text(c, "body").into(),
-                author: text(c, "author").into(),
-                author_type: if fold(text(c, "author")) == me {
-                    "Assistant"
-                } else {
-                    "User"
-                }
-                .into(),
+                author: self
+                    .members
+                    .get(&fold(text(c, "author")))
+                    .filter(|name| !name.is_empty())
+                    .map(String::as_str)
+                    .unwrap_or_else(|| self.author_type(text(c, "author")))
+                    .into(),
+                author_type: self.author_type(text(c, "author")).into(),
                 timestamp: text(c, "created_at").into(),
                 ..Default::default()
             })
@@ -406,15 +411,16 @@ impl BranvilService {
         }
         Ok(false)
     }
-    async fn pull_work(&self, p: &Value, a: &Value) -> Result<Option<Task>, ServiceError> {
+    pub(super) async fn pull_work(
+        &self,
+        p: &Value,
+        a: &Value,
+    ) -> Result<Option<Task>, ServiceError> {
         if text(p, "head_sha").is_empty() || self.scope.authorize(text(p, "repository")).is_err() {
             return Ok(None);
         }
         let me = fold(&self.username);
-        if fold(text(p, "author")) == me && self.pull_interactive(p).await? {
-            return Ok(None);
-        }
-        Ok(crate::patrol(
+        let task = crate::patrol(
             self,
             &self.snapshot(p, a),
             &me,
@@ -422,7 +428,11 @@ impl BranvilService {
             &self.person_id,
             Utc::now(),
         )
-        .await)
+        .await;
+        if task.is_some() && fold(text(p, "author")) == me && self.pull_interactive(p).await? {
+            return Ok(None);
+        }
+        Ok(task)
     }
     pub(super) async fn pull_candidates(&self) -> Result<Vec<Task>, ServiceError> {
         let m = self.member().await?;

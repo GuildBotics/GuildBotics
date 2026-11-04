@@ -1,4 +1,5 @@
 en:
-  authentication_failed: "Slack rejected the configured credential (%{code}). Update it and restart the service."
+  authentication_failed: "Slack rejected member %{member}'s %{name} credential (%{code}). Update it and restart the service."
   request_failed: "Slack did not return a valid answer."
   missing_scope: "Slack needs these scopes: %{needed}. Granted scopes: %{provided}. Update OAuth & Permissions and reinstall the app."
+  api_failed: "Slack API failed (%{code})."

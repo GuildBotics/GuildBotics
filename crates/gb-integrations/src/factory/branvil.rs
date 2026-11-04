@@ -17,6 +17,7 @@ pub(super) struct BranvilService {
     person_id: String,
     workspace: String,
     scope: WriteScope,
+    members: std::collections::BTreeMap<String, String>,
 }
 impl BranvilService {
     pub(super) fn new(
@@ -35,7 +36,19 @@ impl BranvilService {
             person_id,
             scope: WriteScope::new(&workspace),
             workspace,
+            members: Default::default(),
         }
+    }
+    pub(super) fn with_members(
+        mut self,
+        members: &std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.members = members
+            .iter()
+            .filter(|(login, _)| !login.trim().is_empty())
+            .map(|(login, name)| (patrol::fold(login.trim()), name.clone()))
+            .collect();
+        self
     }
     fn api_error(&self, e: AppError) -> ServiceError {
         if e.code == "unauthorized" {
@@ -48,7 +61,7 @@ impl BranvilService {
     }
     async fn member(&self) -> Result<MemberApi, ServiceError> {
         if self.token.is_empty() {
-            return Err(ServiceError::MissingCredential {
+            return Err(ServiceError::BranvilTokenMissing {
                 name: format!(
                     "{}_BRANVIL_TOKEN",
                     self.person_id.replace('-', "_").to_uppercase()
@@ -56,9 +69,7 @@ impl BranvilService {
             });
         }
         if self.username.is_empty() {
-            return Err(ServiceError::MissingCredential {
-                name: "account_info.branvil_username".into(),
-            });
+            return Err(ServiceError::BranvilUsernameMissing);
         }
         let m = self
             .api
@@ -93,7 +104,7 @@ impl BranvilService {
         if found != kind || key.is_empty() || key.contains('/') {
             return Err(ServiceError::NotFound);
         }
-        if kind == "pulls" && key.parse::<u64>().is_err() {
+        if kind == "pulls" && number(key).is_err() {
             return Err(ServiceError::NotFound);
         }
         Ok((repo.into(), key.into()))
@@ -153,10 +164,10 @@ impl BranvilService {
         }
     }
     fn author_type(&self, author: &str) -> &'static str {
-        if author.eq_ignore_ascii_case(&self.username) {
-            "Assistant"
-        } else if author.is_empty() {
+        if author.is_empty() {
             ""
+        } else if patrol::fold(author) == patrol::fold(&self.username) {
+            "Assistant"
         } else {
             "User"
         }
@@ -234,6 +245,13 @@ fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ServiceError> {
     serde_json::from_value(v).map_err(|_| ServiceError::InvalidResult)
 }
 fn number(key: &str) -> Result<u64, ServiceError> {
+    if key.is_empty()
+        || key.len() > 10
+        || key.starts_with('0')
+        || !key.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(ServiceError::NotFound);
+    }
     key.parse().map_err(|_| ServiceError::NotFound)
 }
 fn error(e: AppError) -> ServiceError {

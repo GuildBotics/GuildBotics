@@ -1,7 +1,8 @@
 en:
   service_failed: "The service operation failed."
   out_of_scope: "Writes are limited to the project's configured scope."
-  missing_credential: "Configure the member's %{name} credential in the identity secret store."
+  missing_credential: "Set the member's %{name} credential in Settings > Members > Environment Variables."
+  credential_prefix_conflict: "Members '%{member}' and '%{conflicting_member}' use the same credential prefix. Rename one member before configuring credentials."
   not_found: "The item was not found in this service."
   unavailable: "No connection was made to the service."
   operation_unsupported: "This service does not support the operation."
