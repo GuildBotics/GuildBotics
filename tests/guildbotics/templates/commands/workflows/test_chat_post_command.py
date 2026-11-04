@@ -5,34 +5,38 @@ import types
 import pytest
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.entities.team import Person
-from guildbotics.integrations.local.chat import LocalChatService
-from guildbotics.integrations.local.identity import username
 from guildbotics.templates.commands.workflows import chat_post_command
-from tests.guildbotics.local_chat import lines, say
+from guildbotics.runtime.port import ServiceError
+
+POSTS = {}
+
+
+class Chat:
+    async def resolve_channel_id(self, name):
+        return "dev-chat" if name.lstrip("#") == "dev-chat" else None
+
+    async def post_message(self, channel_id, message, **kwargs):
+        if channel_id == "../etc":
+            raise ServiceError("Unsupported local chat channel")
+        POSTS.setdefault(channel_id, []).append(message)
 
 
 def _context(command_result: object = "hello") -> types.SimpleNamespace:
     """A command's context, whose chat is the local one with ``dev-chat``."""
-    say("dev-chat", "welcome", message_id="0")
+    POSTS.clear()
     calls: list[tuple[str, tuple]] = []
 
     async def invoke(name: str, *args):
         calls.append((name, args))
         return command_result
 
-    person = Person(person_id="aiko", name="Aiko")
-    ctx = types.SimpleNamespace(
-        invoke=invoke, get_chat_service=lambda: LocalChatService(person)
-    )
+    ctx = types.SimpleNamespace(invoke=invoke, get_chat_service=lambda: Chat())
     ctx._calls = calls
     return ctx
 
 
 def _posts(channel_id: str) -> list[str]:
-    return [
-        line["text"] for line in lines(channel_id) if line["author"] == username("aiko")
-    ]
+    return POSTS.get(channel_id, [])
 
 
 @pytest.mark.asyncio

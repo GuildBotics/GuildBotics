@@ -206,46 +206,6 @@ def test_public_path_operations_preserve_absolute_permission_path(
     assert Path(error.value.filename) == path
 
 
-@pytest.mark.skipif(
-    os.name == "nt", reason="POSIX directory-relative permission refusal"
-)
-@pytest.mark.parametrize("language", ["en", "ja"])
-def test_protected_link_permission_error_names_owner_and_denied_component(
-    tmp_path, monkeypatch, symlinks, language
-):
-    from guildbotics.environment.contract import DeniedPath
-    from guildbotics.utils import i18n_tool
-
-    target = tmp_path / "blocked"
-    target.mkdir()
-    protected = tmp_path / "home/.ssh"
-    protected.parent.mkdir()
-    protected.symlink_to(target / "keys", target_is_directory=True)
-    original = os.open
-
-    def deny(name, *args, **kwargs):
-        if name == "blocked":
-            raise PermissionError(13, "denied", name)
-        return original(name, *args, **kwargs)
-
-    monkeypatch.setattr(os, "open", deny)
-    previous = i18n_tool.get_language()
-    i18n_tool.set_language(language)
-    try:
-        with pytest.raises(HostPathPermissionError) as failure:
-            DeniedPath(protected, "credentials").facts()
-        assert str(failure.value) == i18n_tool.t(
-            "safe_paths.protected_unavailable",
-            protected=protected,
-            reason=safe_paths.filesystem_permission_problem(target),
-        )
-    finally:
-        i18n_tool.set_language(previous)
-    assert failure.value.filename == str(target)
-    assert str(protected) in str(failure.value)
-    assert str(target) in str(failure.value)
-
-
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_macos_documents_permission_guidance_keeps_absolute_path(
     tmp_path, monkeypatch, language

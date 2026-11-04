@@ -215,7 +215,7 @@ version to exactly its target:
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
-  --no-hashes --prune microsandbox --prune wakepy \
+  --no-hashes \
   -o guildbotics/templates/environment/requirements.txt
 ```
 

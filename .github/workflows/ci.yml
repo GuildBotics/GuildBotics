@@ -14,51 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  test-windows:
-    # Linux runs the full suite. Windows checks the host OS boundaries: native
-    # paths and locks, process lifecycle, and Git for Windows integration.
-    runs-on: windows-latest
-    env:
-      UV_LOCKED: "1"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v9.0.0
-        with:
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: uv sync --extra test --extra dev
-
-      - name: Run Mypy
-        run: uv run --no-sync mypy guildbotics
-
-      - name: Run tests
-        # A short base directory: tests create Git repositories, whose own
-        # paths are long enough to pass MAX_PATH from the default one.
-        # The selected contracts need no second runner or full-suite shards.
-        run: >-
-          uv run --no-sync python -m pytest tests/ -m windows --strict-markers
-          -n 4 --durations=30
-          --basetemp=${{ runner.temp }}/gb
-          --junitxml=${{ runner.temp }}/pytest-windows.xml
-          --phase-durations-json=${{ runner.temp }}/pytest-windows-phases.json
-
-      - name: Upload Windows pytest durations
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-pytest-durations
-          path: |
-            ${{ runner.temp }}/pytest-windows.xml
-            ${{ runner.temp }}/pytest-windows-phases.json
-          if-no-files-found: error
-
   clippy-macos:
     # The job runs for every change, so its check always reports; Clippy runs
     # only when the change concerns the Rust code.

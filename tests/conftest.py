@@ -30,12 +30,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
-from guildbotics.utils.local_api import PORT_ENV
 from tests.git_seed import WorkerGitSeed
-from tests.guildbotics.command_environment_doubles import (  # noqa: F401
-    commands_in_process,
-    in_trace,
-)
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
@@ -470,26 +465,7 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(home))
     # The machine's server port is machine state too: a test's server and its
     # clients use the default one, under this home.
-    monkeypatch.delenv(PORT_ENV, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def host_facts(monkeypatch) -> dict[str, str]:
-    """Give every agent environment the same host time zone and UI language,
-    whatever the machine the suite runs on is set to.
-
-    The host's facts are part of every environment's variables, so without
-    this an assertion on them would pass on one developer's machine and fail
-    on another's. Returns the variables, for the tests that state them.
-    """
-    from langcodes import Language
-
-    from guildbotics.environment import spec
-
-    monkeypatch.setattr(spec, "reload_localzone", lambda: None)
-    monkeypatch.setattr(spec, "get_localzone_name", lambda: "Asia/Tokyo")
-    monkeypatch.setattr(spec, "os_ui_language", lambda: Language.get("ja-JP"))
-    return {"TZ": "Asia/Tokyo", "LANGUAGE": "ja_JP"}
+    monkeypatch.delenv("GUILDBOTICS_SERVER_PORT", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -522,20 +498,6 @@ def _ignore_ambient_command_environment(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_secret_key_registry():
-    """Keep the process-lifetime secret-key provenance registry test-local.
-
-    The registry is deliberately monotonic in production, so without this
-    reset a key registered by one test would stay secret for the whole suite.
-    """
-    from guildbotics.utils import secret_store
-
-    secret_store._KNOWN_SECRET_ENV_KEYS.clear()
-    yield
-    secret_store._KNOWN_SECRET_ENV_KEYS.clear()
-
-
-@pytest.fixture(autouse=True)
 def _isolate_inference(monkeypatch):
     """Start every test with no way to the inference APIs installed.
 
@@ -546,28 +508,6 @@ def _isolate_inference(monkeypatch):
     from guildbotics.intelligences.brains import inference
 
     monkeypatch.setattr(inference, "_installed", None)
-
-
-@pytest.fixture(autouse=True)
-def _installed_member_cli(monkeypatch):
-    """Start every test with the member CLI the host entries install.
-
-    It stays for the process once installed; without this a test that
-    replaced it would decide what a later test's brokers run.
-    """
-    from guildbotics.cli.member import run_in_process
-    from guildbotics.environment import member_broker
-
-    monkeypatch.setattr(member_broker, "_member_cli", run_in_process)
-
-
-@pytest.fixture
-def direct_inference():
-    """Brains call the inference APIs themselves, as on the host."""
-    from guildbotics.environment.inference_host import DirectInference
-    from guildbotics.intelligences.brains.inference import install_inference
-
-    install_inference(DirectInference())
 
 
 @pytest.fixture(autouse=True)
@@ -610,45 +550,6 @@ def _restore_guildbotics_log_handlers():
     before = list(logger.handlers)
     yield
     _restore_logger_handlers(logger, before)
-
-
-@pytest.fixture(autouse=True)
-def fake_keyring():
-    """Keep tests off the developer's real OS keychain."""
-    import keyring
-    from keyring.backend import KeyringBackend
-    from keyring.errors import PasswordDeleteError
-
-    class InMemoryKeyring(KeyringBackend):
-        priority = 1  # type: ignore[assignment]
-
-        def __init__(self):
-            super().__init__()
-            self.passwords: dict[tuple[str, str], str] = {}
-
-        def get_password(self, service, username):
-            return self.passwords.get((service, username))
-
-        def set_password(self, service, username, password):
-            self.passwords[(service, username)] = password
-
-        def delete_password(self, service, username):
-            if (service, username) not in self.passwords:
-                raise PasswordDeleteError(username)
-            del self.passwords[(service, username)]
-
-    backend = InMemoryKeyring()
-    original = keyring.get_keyring()
-    keyring.set_keyring(backend)
-    yield backend
-    keyring.set_keyring(original)
-
-
-@pytest.fixture(autouse=True)
-def fake_wakepy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep tests from holding the developer's machine awake for real: every
-    wakepy mode succeeds without touching the operating system."""
-    monkeypatch.setenv("WAKEPY_FAKE_SUCCESS", "1")
 
 
 class _PlatformView:

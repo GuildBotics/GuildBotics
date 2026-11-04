@@ -2,12 +2,9 @@
 imports nothing only the host may hold, and every shared package is used
 there.
 
-The map is the import-linter configuration in ``pyproject.toml``, which
-checks the imports it can see. What it cannot see is checked here by
-running it: the brains the member's slots name and the bundled commands are
-loaded by name or path. The guest and the shared packages are the
-``environment-loads-no-host-only-library`` contract's sources, and the
-libraries only the host uses its forbidden modules.
+Import-linter checks that shared code never imports guest implementation.
+The package population and dynamic imports are checked here by driving the
+guest entry, named brains, bundled commands, and their response classes.
 """
 
 from __future__ import annotations
@@ -24,19 +21,12 @@ import grimp
 import yaml
 
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
-_CONTRACT = next(
-    contract
-    for contract in tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"][
-        "importlinter"
-    ]["contracts"]
-    if contract["id"] == "environment-loads-no-host-only-library"
+_SHARED = tuple(
+    "guildbotics." + name
+    for name in ("commands", "intelligences", "runtime", "loader", "entities", "utils")
 )
-#: Every guildbotics package the environment may load: the guest and the
-#: shared packages.
-_ALLOWED: tuple[str, ...] = tuple(_CONTRACT["source_modules"])
-_SHARED = tuple(name for name in _ALLOWED if name != "guildbotics.guest")
-#: Third-party libraries only the host uses.
-_HOST_ONLY: set[str] = set(_CONTRACT["forbidden_modules"])
+_ALLOWED = ("guildbotics.guest", *_SHARED)
+_HOST_ONLY = {"fastapi", "keyring", "microsandbox", "uvicorn"}
 _TEMPLATES = Path(__file__).resolve().parents[2] / "guildbotics" / "templates"
 _BRAIN_MAPPING = _TEMPLATES / "intelligences" / "brain_mapping.yml"
 
@@ -236,3 +226,13 @@ def test_a_shared_package_the_guest_does_not_reach_is_reported() -> None:
         "guildbotics.loader",
         "guildbotics.loader.yaml",
     ]
+
+
+def test_python_package_contains_no_host_entries():
+    root = _PYPROJECT.parent / "guildbotics"
+    host = "app_api cli drivers setup environment capabilities integrations workspace observability local_git".split()
+    assert not [name for name in host if (root / name).exists()]
+    assert (
+        "scripts"
+        not in tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["project"]
+    )

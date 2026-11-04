@@ -13,12 +13,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from starlette.applications import Starlette
-from starlette.routing import Route
-from starlette.testclient import TestClient
 
-from guildbotics.environment import command_environment, member_broker, worktree
-from guildbotics.environment.spec import WORKTREE_SOURCE, WorktreeCopy
 from guildbotics.guest.host_client import _result
 from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
@@ -43,51 +38,9 @@ ENTRY = _load("entry")
 
 
 @pytest.mark.parametrize("case", HTTP, ids=lambda case: case["id"])
-def test_http_server_and_client(case):
+def test_http_client_from_fixture(case):
     """Only the host operation is substituted; the HTTP boundary is real."""
-    broker = member_broker.MemberCapabilityBroker(lambda *a, **kw: None)
-    broker._token = "golden-dummy"
-    action = case["action"]
-    calls = []
-
-    async def answer(name, arguments):
-        calls.append((name, arguments))
-        if "error" in action:
-            error = action["error"]
-            if error["type"] == "AgentRuntimeError":
-                raise AgentRuntimeError(
-                    AgentRuntimeErrorCategory(error["category"]),
-                    error["message"],
-                    details=error["details"],
-                )
-            raise HostCallError(error["category"], error["message"], error["details"])
-        if action.get("oversized"):
-            return "x" * member_broker._MAX_OUTPUT_BYTES
-        return action["result"]
-
-    broker._host = answer
-    app = Starlette(routes=[Route("/host/{call}", broker.call_host, methods=["POST"])])
-    request = case["request"]
-    with TestClient(app) as client:
-        kwargs = (
-            {"json": request["json"]}
-            if "json" in request
-            else {"content": request["text"]}
-        )
-        response = client.request(
-            request["method"], request["path"], headers=request["headers"], **kwargs
-        )
     expected = case["response"]
-    assert response.status_code == expected["status"]
-    if "json" in expected:
-        assert response.json() == expected["json"]
-    else:
-        assert response.text == expected["text"]
-    if case["id"] in {"bad-bearer", "bad-host", "invalid-json"}:
-        assert calls == []
-    else:
-        assert calls == [("probe", request["json"])]
-
     # Feed the stored response independently, so a matching drift on both sides fails.
     response = httpx.Response(
         expected["status"],
@@ -163,31 +116,6 @@ def test_entry_writes_only_reply_to_stdout(case):
     assert done.stderr.decode().splitlines() == case["stderr_lines"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("case", ENTRY, ids=lambda case: case["id"])
-async def test_host_execute_reads_fixture_reply(case):
-    data = case["stdout"].encode()
-    # Multiple reads are necessary even when JSON contains escaped newlines.
-    stream = SimpleNamespace(read=AsyncMock(side_effect=[data[:7], data[7:], b""]))
-    process = SimpleNamespace(
-        stdout=stream,
-        stderr=asyncio.StreamReader(),
-        stdin=SimpleNamespace(
-            write=lambda data: None, drain=AsyncMock(), close=lambda: None
-        ),
-        wait=AsyncMock(return_value=0),
-        kill=AsyncMock(),
-    )
-    process.stderr.feed_eof()
-    environment = SimpleNamespace(run=AsyncMock(return_value=process))
-    shared = object.__new__(command_environment._SharedEnvironment)
-    shared._environment = environment
-    shared._worktree = None
-    reply = await shared.execute(CommandRequest.model_validate(case["request"]))
-    assert reply.model_dump(mode="json") == case["reply"]
-    assert stream.read.await_count == 2
-
-
 @pytest.mark.parametrize("case", _load("admits"), ids=lambda case: case["id"])
 def test_mount_admission(case):
     assert admits(case["mounts"], case["cwd"]) is case["expected"]
@@ -238,42 +166,3 @@ async def test_worktree_producer_and_host_consumers(
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     assert worktree_copy.main(argv("changes")) == 0
     assert _jsonl(sys.stdout.getvalue()) == _jsonl(case["changes_jsonl"])
-
-    # The host sees a remote process only. Assert its argv and stdin, and return
-    # the fixed JSONL rather than regenerating expected values from Python types.
-    class Guest:
-        def python(self, module, *args):
-            assert module == "guildbotics.guest.worktree_copy"
-            return list(args)
-
-        async def run_here(
-            self, args, *, cwd, env, stdout_limit, stdin=b"", stdout=None
-        ):
-            operation = args[0]
-            expected = case["argv"][operation]
-            assert args == [
-                arg.replace("{source}", WORKTREE_SOURCE).replace(
-                    "{destination}", "/work"
-                )
-                for arg in expected
-            ]
-            assert cwd == "/" and env == {}
-            if operation == "copy":
-                return GuestResult(0, case["copied_jsonl"].encode(), b"")
-            assert _jsonl(stdin.decode()) == _jsonl(case["copied_jsonl"])
-            stdout.write_text(case["changes_jsonl"], encoding="utf-8")
-            return GuestResult(0, b"", b"")
-
-    monkeypatch.setattr(worktree, "_guest", lambda _: Guest())
-    copied = await worktree.copy_worktree(
-        object(), WorktreeCopy(source, (0, 0), ("mounted",)), "/work"
-    )
-    assert list(copied.copied.values()) == _jsonl(case["copied_jsonl"])
-    observed = []
-
-    def consume(work, path, cancelled):
-        observed.extend(worktree._changes(path, work.copy.excluded, True))
-
-    monkeypatch.setattr(worktree, "_write", consume)
-    await worktree.write_back(object(), copied)
-    assert observed == _jsonl(case["changes_jsonl"])

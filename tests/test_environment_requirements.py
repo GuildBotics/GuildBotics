@@ -2,8 +2,7 @@
 
 ``templates/environment/requirements.txt`` is what the snapshot installs for
 GuildBotics' own code inside the microVM. It is exported from ``uv.lock``
-without what only the host uses -- ``microsandbox``, which drives the microVMs,
-and ``wakepy``, which keeps the host awake -- and this test exports it again
+for the guest; this test exports it again
 and fails when a lock change was not exported. Lines are compared as a set, so
 the exporter's ordering is not part of the contract.
 """
@@ -25,10 +24,6 @@ EXPORT = [
     "--no-header",
     "--no-annotate",
     "--no-hashes",
-    "--prune",
-    "microsandbox",
-    "--prune",
-    "wakepy",
 ]
 
 

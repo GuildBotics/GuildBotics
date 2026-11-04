@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.context import create_context
 from guildbotics.guest import entry as command_entry
 from guildbotics.guest.host_client import (
     HostClient,
@@ -129,7 +128,7 @@ async def test_the_context_has_the_hosts_brains_and_reaches_the_rest_through_the
 
     assert reply.failure is None
     assert reply.result == [
-        type(create_context().brain_factory).__name__,
+        "ConfiguredBrainFactory",
         WindowIntegrationFactory.__name__,
         WindowInference.__name__,
     ]

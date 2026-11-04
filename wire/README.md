@@ -34,7 +34,7 @@ member CLI の JSON 出力は `ReadPage` と `Chat*Output`、ダウンロード�
 
 `golden/` は Python と Rust が共通で読む、実装の現在の動作の例です。
 `uv run --no-sync pytest tests/guildbotics/test_wire_golden.py` で Python の
-送る側・受ける側に通します。型の網羅は `schema/` が担当します。
+guest側の送信・応答解釈・worktree生成に通します。host側はRustの契約テストで検査します。型の網羅は `schema/` が担当します。
 
 - `http.json`: 要求（method・path・headers・json または text）、host の操作結果
   （action）、HTTP 応答、client が取り出す結果または例外。`oversized` は受信側の

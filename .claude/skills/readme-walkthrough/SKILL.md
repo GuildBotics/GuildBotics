@@ -115,3 +115,5 @@ Write the report in Japanese to `tmp/readme-walkthrough-report-<YYYYMMDD>.md` an
 4. **補足**: 齟齬を見つけたら、もう一方の言語の README（`README.md` ⇔ `README.ja.md`)の対応箇所も確認し、同じ齟齬があるかを併記する
 
 Do not fix anything. Propose fixes only after the user has read the report and asked for them.
+
+#122でPython hostを削除したため、この手順は#96の書き直しまで実行しない。

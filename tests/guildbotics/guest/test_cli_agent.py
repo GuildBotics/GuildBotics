@@ -12,11 +12,11 @@ from guildbotics.intelligences.agent_runtime.wire import (
     SummaryEntry,
 )
 from guildbotics.runtime.chat_service import message_position
-from tests.guildbotics.environment.window_doubles import (
+from tests.guildbotics.guest.window_doubles import (
     WindowDouble,
     enter_command,
 )
-from tests.guildbotics.local_chat import at, position
+from tests.guildbotics.guest.time_helpers import at, position
 from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 

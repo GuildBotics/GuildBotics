@@ -6,11 +6,12 @@
 path 部品順、`.`・余分な区切り、内外の file/directory symlink と切れたリンクを含みます。
 directory の path 集合とファイル内容の revision を別々に検証し、実ファイルの config 外参照は拒否します。
 
-Python 版と Rust 版の host が、同じファイルを同じ形で読み書きし、同じ答えを出すことを確かめる例です。
-`golden/` の値は Python 版の実装から作り、次のテストで両方の言語に通します。
+凍結点の Python 版と Rust 版の host が、同じファイルを同じ形で読み書きし、同じ答えを出すことを確かめる例です。
+`golden/` の host 側の答えは `origin/python-host` の独立checkoutで生成し、JSONをこのcheckoutへ写します。
+削除済みの生成モジュールをmainで実行しません。コマンド/YAMLの共有側の生成器はmainに残ります。
 
 ```bash
-uv run --no-sync python -m pytest tests/guildbotics/test_records_golden.py tests/guildbotics/test_commands_golden.py tests/guildbotics/test_environment_golden.py tests/guildbotics/test_yaml_golden.py
+uv run --no-sync python -m pytest tests/guildbotics/test_commands_golden.py tests/guildbotics/test_yaml_golden.py
 cargo nextest run --locked -p gb-workspace -p gb-observability -p gb-config -p gb-environment
 ```
 

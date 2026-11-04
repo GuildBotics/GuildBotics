@@ -1,7 +1,6 @@
 # The checks of every push and pull request. GitHub Actions runs only what
-# this runner cannot: the Windows contracts and the macOS Clippy
-# (.github/workflows/ci.yml), and the Desktop E2E
-# (.github/workflows/desktop-e2e.yml) and Branvil E2E
+# this runner cannot: macOS Clippy
+# (.github/workflows/ci.yml), and Branvil E2E
 # (.github/workflows/branvil-e2e.yml).
 # The runner supplies the image version, CPUs, memory and network access.
 # Commands start in /work, a Git checkout of the commit with its history and
@@ -34,14 +33,13 @@ commands = ['''
 set -eu
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home
 uv sync --extra test --extra dev
-uv run --no-sync python scripts/generate-cli-reference.py --check
 uv run --no-sync python scripts/generate-wire-schema.py --check
 uv run --no-sync ruff format --check guildbotics tests
 uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-GUILDBOTICS_BLACKBOX_PROVIDER=local uv run --no-sync python -m pytest tests/ -n auto --durations=30
+uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
@@ -162,33 +160,3 @@ commands = [
 timeout_secs = 1200
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
 artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/timing.json"] }]
-
-# The `branvil` provider against this commit's Branvil crate
-# (scripts/branvil-integration.sh): the paths of both sides.
-[[jobs]]
-name = "branvil-integration"
-paths = [
-  "guildbotics/**",
-  "pyproject.toml",
-  "uv.lock",
-  ".python-version",
-  "crates/*/src/**",
-  "crates/*/Cargo.toml",
-  "crates/*/build.rs",
-  "Cargo.toml",
-  "Cargo.lock",
-  "rust-toolchain*",
-  ".cargo/**",
-  "integration/**",
-  "scripts/branvil-integration.sh",
-]
-image = "guildbotics/agent-environment:dev"
-commands = ['''
-set -eu
-export CARGO_HOME=/work/.ci/cargo-home
-find crates -exec touch -c {} +
-UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 uv sync --extra test --extra dev
-CARGO_INCREMENTAL=0 scripts/branvil-integration.sh
-''']
-timeout_secs = 1800
-cache = { paths = [".ci/uv", ".ci/cargo-home/registry", "target"], key_files = ["uv.lock", "rust-toolchain.toml"] }

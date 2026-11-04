@@ -93,18 +93,9 @@ def test_only_the_environment_drives_the_microvm_runtime() -> None:
     assert users == {"gb-environment"}
 
 
-def test_the_runtime_is_the_python_sdks() -> None:
-    """The crate drives the ``msb`` the Python SDK places and marks with its
-    version, which the crate checks against its own."""
-    [python] = [
-        dependency.split("==")[1]
-        for dependency in _load("pyproject.toml")["project"]["dependencies"]
-        if dependency.startswith("microsandbox==")
-    ]
+def test_the_runtime_crates_and_version_check_are_pinned() -> None:
     crates = _load("crates/gb-environment/Cargo.toml")["dependencies"]
     runtime = (ROOT / "crates/gb-environment/src/runtime.rs").read_text("utf-8")
     [checked] = re.findall(r'RUNTIME_VERSION: &str = "([^"]+)"', runtime)
-
-    assert crates["microsandbox"]["version"] == f"={python}"
-    assert crates["microsandbox-utils"] == f"={python}"
-    assert checked == python
+    assert crates["microsandbox"]["version"] == f"={checked}"
+    assert crates["microsandbox-utils"] == f"={checked}"

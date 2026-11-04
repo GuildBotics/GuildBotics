@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Native console tools use the local code page; UTF-8 protocols do not.
 LOCALE_OUTPUT = {
-    "guildbotics/environment/toolchain.py:device_nameservers": "PowerShell prints ASCII addresses and console-code-page diagnostics.",
     "guildbotics/utils/os_language.py:_macos_ui_language_tag": "macOS defaults prints ASCII language tags in its native locale.",
     "guildbotics/utils/processes.py:launching_app_name": "macOS ps prints native process paths in its native locale.",
 }

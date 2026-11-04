@@ -1,3 +1,5 @@
+> main の Python host・CLI は #122 で削除済みです。以下の Python host の手順は凍結点 `origin/python-host` のものです。Rust 向けの利用手順は #96 で更新します。
+
 <h1>GuildBotics</h1>
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)

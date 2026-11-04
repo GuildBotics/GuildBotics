@@ -6,28 +6,7 @@ from zoneinfo import ZoneInfo
 import i18n  # type: ignore
 import pytest
 
-from guildbotics.utils import rate_limit_display
 from guildbotics.utils.i18n_tool import set_language
-
-
-@pytest.fixture(autouse=True)
-def _isolated_branvil_retry_state(monkeypatch):
-    from guildbotics.integrations.branvil import api
-
-    monkeypatch.setattr(api, "_REACHABILITY", {})
-
-
-@pytest.fixture
-def local_rate_limit_timezone(monkeypatch, request):
-    """Fix the host timezone without changing process-global OS state."""
-    zone = ZoneInfo(getattr(request, "param", "Asia/Tokyo"))
-
-    class LocalDatetime(datetime):
-        def astimezone(self, tz=None):
-            return super().astimezone(zone if tz is None else tz)
-
-    monkeypatch.setattr(rate_limit_display, "datetime", LocalDatetime)
-    return zone
 
 
 @pytest.fixture
