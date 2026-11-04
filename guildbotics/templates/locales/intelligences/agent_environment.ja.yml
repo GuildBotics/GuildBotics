@@ -44,8 +44,8 @@ ja:
     not_a_mapping: "%{where}: 宣言はマッピングでなければなりません"
     no_device_resolver: "%{where}: dns.nameservers が '%{host}' ですが、この端末には IPv4 のリゾルバがありません。nameservers を明示してください"
   image:
-    missing: "ベースイメージ %{reference} はこの端末（%{architecture}）に読み込まれていません。 `%{command}` で読み込んでください。"
-    mismatch: "この端末の turn はベースイメージ %{reference} の %{held} で動きます。宣言が %{architecture} 向けに指すのは %{digest} です。 `%{command}` で読み込んでください。"
+    missing: "ベースイメージ %{reference} はこの端末（%{architecture}）に読み込まれていません。`%{command}` で読み込んでください。"
+    mismatch: "この端末の turn はベースイメージ %{reference} の %{held} で動きます。宣言が %{architecture} 向けに指すのは %{digest} です。`%{command}` で読み込んでください。"
     undeclared: "この端末の turn はベースイメージ %{reference} の %{held} で動きます。宣言は %{declared} 向けにはありますが、この端末のアーキテクチャ（%{architecture}）向けにはありません。%{architecture} 向けに宣言すると揃います。"
     wrong_architecture: "アーカイブ %{path} の image は %{architecture} 向けで、この端末（%{device}）では動きません。"
     no_ci_runner: "ワークスペースのコードホストには GuildBotics が image を読み込む CI ランナーがありません。読み込むものはありません。"
