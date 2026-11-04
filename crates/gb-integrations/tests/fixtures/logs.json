@@ -1,0 +1,458 @@
+[
+  {
+    "text": "",
+    "repeats": 1,
+    "already_truncated": false,
+    "lengths": [
+      0,
+      0
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 0,
+          "tail_limit_bytes": 65536,
+          "truncated": false
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 0,
+          "tail_limit_bytes": 65536,
+          "truncated": false
+        }
+      ]
+    },
+    "page_bytes": 871
+  },
+  {
+    "text": "",
+    "repeats": 1,
+    "already_truncated": true,
+    "lengths": [
+      0,
+      0
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 0,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 0,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 869
+  },
+  {
+    "text": "short 🦀\n",
+    "repeats": 1,
+    "already_truncated": false,
+    "lengths": [
+      8,
+      8
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 11,
+          "tail_limit_bytes": 65536,
+          "truncated": false
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 11,
+          "tail_limit_bytes": 65536,
+          "truncated": false
+        }
+      ]
+    },
+    "page_bytes": 913
+  },
+  {
+    "text": "short 🦀\n",
+    "repeats": 1,
+    "already_truncated": true,
+    "lengths": [
+      8,
+      8
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 11,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 11,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 911
+  },
+  {
+    "text": "\"\\\n\u0000日本🦀",
+    "repeats": 70000,
+    "already_truncated": false,
+    "lengths": [
+      62329,
+      62329
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 116869,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 116869,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 655347
+  },
+  {
+    "text": "\"\\\n\u0000日本🦀",
+    "repeats": 70000,
+    "already_truncated": true,
+    "lengths": [
+      62329,
+      62329
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 116869,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 116869,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 655347
+  },
+  {
+    "text": "ascii",
+    "repeats": 150000,
+    "already_truncated": false,
+    "lengths": [
+      327239,
+      327239
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 327239,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 327239,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 655357
+  },
+  {
+    "text": "ascii",
+    "repeats": 150000,
+    "already_truncated": true,
+    "lengths": [
+      327240,
+      327240
+    ],
+    "expected": {
+      "target": {
+        "kind": "pull_request",
+        "url": "local:pr/1",
+        "title": "PR 🦀",
+        "label": "!1"
+      },
+      "base_sha": null,
+      "head_sha": "head",
+      "behind_by": null,
+      "out_of_date": null,
+      "current_base_sha": null,
+      "current_head_sha": "head",
+      "rollup": "no_checks",
+      "checks": [],
+      "checks_expected": false,
+      "readiness": "not_applicable",
+      "completion_blockers": [],
+      "failed_logs": [
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 327240,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        },
+        {
+          "job_id": "1",
+          "name": "ci",
+          "conclusion": "failure",
+          "url": "",
+          "artifact_names": [
+            "trace 🦀"
+          ],
+          "log": "",
+          "log_bytes": 327240,
+          "tail_limit_bytes": 65536,
+          "truncated": true
+        }
+      ]
+    },
+    "page_bytes": 655359
+  }
+]

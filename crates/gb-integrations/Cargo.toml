@@ -1,0 +1,13 @@
+[package]
+name = "gb-integrations"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Service provider integration and shared completion decisions"
+license = "MIT"
+repository = "https://github.com/GuildBotics/GuildBotics"
+publish = false
+
+[dependencies]
+gb-ports = { path = "../gb-ports" }
+serde_json = "1.0.154"

@@ -2029,6 +2029,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gb-integrations"
+version = "0.1.0"
+dependencies = [
+ "gb-ports",
+ "serde_json",
+]
+
+[[package]]
 name = "gb-observability"
 version = "0.1.0"
 dependencies = [
