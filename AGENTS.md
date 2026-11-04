@@ -8,7 +8,7 @@
 - `.gitignore` 対象は参照しない。互換用フォールバックや旧形式の並行サポートを追加しない。
 - 自然言語の意味判定は既存のLLM判定基盤を使う。キーワード列挙で代替しない。
 - コメントとdocstringは英語で書く。
-- 利用者に見せる文（エラー・案内・ログを含む）は `guildbotics/templates/locales/` のキーで出す
+- 画面・CLI・API が利用者に返すエラーや案内は `guildbotics/templates/locales/` のキーで出す
   （Rust は `crates/gb-server/src/i18n.rs`、Python は `guildbotics.utils.i18n_tool.t()`）。固定文を書かない。
 
 ## 現在の実装と境界
