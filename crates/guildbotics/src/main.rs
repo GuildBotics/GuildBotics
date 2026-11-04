@@ -22,6 +22,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage this device's isolated environment
+    Environment {
+        #[arg(long, global = true)]
+        workspace: Option<std::path::PathBuf>,
+        #[command(subcommand)]
+        command: EnvironmentCommand,
+    },
     /// Run the server
     Server {
         #[command(subcommand)]
@@ -43,6 +50,9 @@ enum Command {
     },
 }
 
+mod environment_cli;
+use environment_cli::EnvironmentCommand;
+
 #[derive(Subcommand)]
 enum ServerCommand {
     /// Run the server in the foreground until SIGINT or SIGTERM (a first
@@ -60,7 +70,25 @@ fn main() -> ExitCode {
     if let Some(code) = branvil::askpass_main() {
         return code;
     }
+    if let Ok(data) = gb_base::home::data() {
+        let binary = gb_environment::placed_files(&data.join("msb"))[0].clone();
+        if let Err(error) =
+            branvil::set_runtime_binary(std::path::absolute(binary).unwrap_or_default())
+        {
+            eprintln!("guildbotics: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
     match Cli::parse().command {
+        Command::Environment { command, workspace } => {
+            match environment_cli::run(command, workspace) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("guildbotics: {e:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Branvil { args } => {
             branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
         }

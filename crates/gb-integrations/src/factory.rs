@@ -64,18 +64,19 @@ impl<'a> ServiceIntegrationFactory<'a> {
             .secrets
             .identity_root()
             .join(".guildbotics/config/team/members");
-        if members.exists() {
-            for entry in std::fs::read_dir(members).map_err(|_| ServiceError::Failed)? {
-                let entry = entry.map_err(|_| ServiceError::Failed)?;
-                if !entry.path().is_dir() {
-                    continue;
-                }
-                let id = entry.file_name().to_string_lossy().into_owned();
-                if id != self.config.person_id
-                    && id.replace('-', "_").to_uppercase() + "_" == prefix
-                {
-                    return Err(ServiceError::Failed);
-                }
+        let entries = match std::fs::read_dir(members) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(ServiceError::Failed),
+        };
+        for entry in entries.into_iter().flatten() {
+            let entry = entry.map_err(|_| ServiceError::Failed)?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if id != self.config.person_id && id.replace('-', "_").to_uppercase() + "_" == prefix {
+                return Err(ServiceError::Failed);
             }
         }
         self.secrets

@@ -7,6 +7,26 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+#[test]
+fn rate_limit_reset_requires_an_explicit_zone_and_preserves_unknown_holds() {
+    let now = gb_ports::parse_timestamp("2026-01-02T00:00:00Z").unwrap();
+    for (time, held) in [
+        ("2026-01-02T00:00", true),
+        ("20260101T2359", true),
+        (" 2026-01-01T23:59+00:00 ", true),
+        ("2026-01-01T23:59+00:00", false),
+        ("20260102T0000Z", false),
+        ("2026-W01-5T00:00+00:00", false),
+        ("2026-01-02🦀00:00+00:00", false),
+        ("20260102T0001", true),
+        ("2026-W01-5T00:01+00:00", true),
+        ("invalid", true),
+    ] {
+        let status=gb_ports::WorkflowStatus::from_payload(&json!({"kind":"workflow_error","reason":"rate_limited","person_id":"aiko","retry_after_at":time})).unwrap();
+        assert_eq!(status.holds_selection(now), held, "{time}");
+    }
+}
+
 fn normalize<T: DeserializeOwned + Serialize>(value: Value) -> Result<Value, serde_json::Error> {
     serde_json::to_value(serde_json::from_value::<T>(value)?)
 }

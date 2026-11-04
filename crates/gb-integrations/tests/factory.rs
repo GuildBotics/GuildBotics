@@ -164,6 +164,8 @@ fn member_scoped_secrets_and_collision_withholding() {
             .join(".guildbotics/config/team/members/aiko_bob"),
     )
     .unwrap();
+    // Collision checks must use the store's root even if the caller supplies another.
+    c.identity_root = d.path().join("unrelated-root");
     let collision = ServiceIntegrationFactory::new(c, &secrets, None, Arc::new(|_| {})).unwrap();
     assert!(matches!(
         collision.listener_key(),

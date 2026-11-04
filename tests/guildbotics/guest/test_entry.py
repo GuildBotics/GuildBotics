@@ -17,16 +17,17 @@ from pathlib import Path
 import pytest
 
 from guildbotics.guest import entry as command_entry
+from guildbotics.guest.inference import GuestInference
 from guildbotics.guest.host_client import (
     HostClient,
 )
 from guildbotics.guest.window import (
     WindowChatService,
-    WindowInference,
     WindowIntegrationFactory,
 )
 from guildbotics.intelligences.agent_runtime.wire import (
     COMMAND_ENV,
+    RESOLVED_GUEST_ENV,
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
     CommandAccess,
@@ -64,6 +65,19 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     write_member(config, "person_id: aiko\nname: Aiko\nis_active: true\n")
     (config / "commands").mkdir()
     monkeypatch.setenv(GUILDBOTICS_CONFIG_DIR, str(config))
+    resolved = tmp_path / "resolved.json"
+    resolved.write_text(
+        json.dumps(
+            {
+                "language": "en",
+                "project": {"name": "demo"},
+                "member": {"person_id": "aiko", "name": "Aiko", "is_active": True},
+                "brains": {},
+                "commands": {"probe": str(config / "commands/probe.py")},
+            }
+        )
+    )
+    monkeypatch.setenv(RESOLVED_GUEST_ENV, str(resolved))
     return config
 
 
@@ -128,9 +142,9 @@ async def test_the_context_has_the_hosts_brains_and_reaches_the_rest_through_the
 
     assert reply.failure is None
     assert reply.result == [
-        "ConfiguredBrainFactory",
+        "ResolvedBrainFactory",
         WindowIntegrationFactory.__name__,
-        WindowInference.__name__,
+        GuestInference.__name__,
     ]
 
 
@@ -307,3 +321,46 @@ def test_the_entry_is_the_process_the_host_starts(tmp_path, config_dir):
     assert reply.failure is None
     assert reply.text_output == "THE INPUT"
     assert {"WARNING careful", "printed"} <= set(finished.stderr.splitlines())
+
+
+@pytest.mark.asyncio
+async def test_resolved_entry_never_loads_the_team_from_configuration(
+    config_dir, tmp_path, monkeypatch
+):
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("guest read configuration")
+
+    monkeypatch.setattr(YamlTeamLoader, "load", forbidden)
+    path = config_dir / "commands/probe.py"
+    path.write_text(_FACTORIES)
+    reply = await command_entry.run(
+        _request(path, tmp_path, wants_result=True),
+        _facts(tmp_path),
+        HostClient("http://window.test/host", "token"),
+    )
+    assert reply.failure is None
+    assert reply.result[0] == "ResolvedBrainFactory"
+
+
+@pytest.mark.asyncio
+async def test_child_rejects_an_existing_file_outside_the_resolved_table(
+    config_dir, tmp_path
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.commands.discovery import resolve_command_reference
+    from guildbotics.runtime.context import Context
+    from guildbotics.entities.team import Team, Project, Person
+
+    context = Context(
+        WindowIntegrationFactory(HostClient("http://window.test/host", "token")),
+        object(),
+        person=Person(person_id="aiko", name="Aiko"),
+        team=Team(project=Project(), members=[]),
+        resolved_commands={},
+    )
+    unknown = tmp_path / "unknown.py"
+    unknown.write_text("def main(context): return 1")
+    with pytest.raises(CommandError, match="not resolved by the host"):
+        resolve_command_reference(tmp_path, str(unknown), context)

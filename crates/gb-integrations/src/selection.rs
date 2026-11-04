@@ -2,57 +2,8 @@
 use chrono::{DateTime, Utc};
 use gb_ports::{TaskMessage, WorkflowStatus};
 
-/// Frozen timestamp parsing treats an ISO time without a zone as UTC.
-pub fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
-    let raw = value.trim();
-    if let Ok(time) = DateTime::parse_from_rfc3339(raw) {
-        return Some(time.with_timezone(&Utc));
-    }
-    // ISO calendar and week dates, with optional time and zone. Chrono owns
-    // calendar validation; the spelling is normalized before its time parser.
-    for (width, format, monday) in [
-        (10, "%Y-%m-%d", false),
-        (8, "%Y%m%d", false),
-        (10, "%G-W%V-%u", false),
-        (8, "%GW%V%u", false),
-        (8, "%G-W%V-%u", true),
-        (7, "%GW%V%u", true),
-    ] {
-        let Some(part) = raw.get(..width) else {
-            continue;
-        };
-        let date = if monday {
-            format!("{part}{}1", if part.contains('-') { "-" } else { "" })
-        } else {
-            part.to_string()
-        };
-        let Ok(day) = chrono::NaiveDate::parse_from_str(&date, format) else {
-            continue;
-        };
-        let rest = &raw[width..];
-        if rest.is_empty() {
-            return day.and_hms_opt(0, 0, 0).map(|t| t.and_utc());
-        }
-        let separator = rest.chars().next()?;
-        let value = format!(
-            "{}T{}",
-            day.format("%Y-%m-%d"),
-            &rest[separator.len_utf8()..]
-        );
-        for time in ["%H:%M:%S%.f", "%H:%M", "%H", "%H%M%S%.f", "%H%M"] {
-            let pattern = format!("%Y-%m-%dT{time}");
-            if let Ok(time) = chrono::NaiveDateTime::parse_from_str(&value, &pattern) {
-                return Some(time.and_utc());
-            }
-            for zone in ["%#z", "%::z"] {
-                if let Ok(time) = DateTime::parse_from_str(&value, &format!("{pattern}{zone}")) {
-                    return Some(time.with_timezone(&Utc));
-                }
-            }
-        }
-    }
-    None
-}
+pub use gb_ports::parse_timestamp;
+
 pub fn since_assignment<'a>(
     comments: &'a [TaskMessage],
     assigned_at: &str,

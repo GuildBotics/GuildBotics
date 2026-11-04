@@ -40,7 +40,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     SummaryEntry,
 )
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
-from guildbotics.intelligences.cli_agents import get_cli_agent_mapping
+from guildbotics.intelligences.cli_agents import ExecutableInfo, get_cli_agent_mapping
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -338,14 +338,24 @@ class CliAgentBrain(Brain):
     Intelligence that runs an AI CLI tool.
     """
 
-    def __init__(self, *args: Any, cli_agent: str = "default", **kwargs: Any):
+    def __init__(
+        self,
+        *args: Any,
+        cli_agent: str = "default",
+        resolved_cli: ExecutableInfo | None = None,
+        **kwargs: Any,
+    ):
         """Take the :class:`Brain` arguments, and the AI CLI tool slot to run."""
         super().__init__(*args, **kwargs)
         self.prompt_info = PromptInfo(
             response_class=self.response_class,
             description=self.description,
         )
-        self.executable_info = get_cli_agent_mapping(self.person_id)[cli_agent]
+        self.executable_info = (
+            resolved_cli
+            if resolved_cli is not None
+            else get_cli_agent_mapping(self.person_id)[cli_agent]
+        )
         self.cli_agent = cli_agent
 
     @property

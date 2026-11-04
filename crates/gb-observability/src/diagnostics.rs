@@ -154,6 +154,16 @@ impl Diagnostics {
         Ok(())
     }
 
+    /// The active system transcript, using the same ID exposed by trace reads.
+    pub fn system_trace_id(&self) -> Option<String> {
+        SYSTEMS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&self.sessions)
+            .and_then(|record| record["attributes"]["system_session_id"].as_str())
+            .map(|id| format!("system:{id}"))
+    }
+
     pub fn finish_system_session(&self) -> std::io::Result<()> {
         let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
         let Some(mut record) = SYSTEMS

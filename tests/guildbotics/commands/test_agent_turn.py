@@ -119,3 +119,67 @@ async def test_terminal_cli_failures_are_not_retried(category):
         )
     assert caught.value is error
     assert len(calls) == 1 and ledger.completed == []
+
+
+@pytest.mark.parametrize("category", ["process", "protocol", "session_unavailable"])
+@pytest.mark.asyncio
+async def test_other_cli_failures_keep_the_attempt_budget_without_completion_events(
+    category,
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.agent_runtime.models import (
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    ledger = Ledger()
+    error = CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="", stderr="failed", returncode=1, error_category=category
+        ),
+    )
+    attempts = []
+
+    async def invoke(context, parameters):
+        attempts.append(context["attempt"])
+        raise CommandError("wrapped") from error
+
+    with pytest.raises(CompletionRetryExhausted):
+        await run_agent_turn(
+            invoke=invoke,
+            execution_context={"max_completion_attempts": 3},
+            ledger=ledger,
+        )
+    assert attempts == [1, 2, 3]
+    assert ledger.missing == [] and ledger.completed == []
+
+
+@pytest.mark.parametrize("event_id", ["E1", ""])
+@pytest.mark.asyncio
+async def test_chat_event_and_non_event_work_complete_with_their_own_parameters(
+    event_id,
+):
+    ledger = Ledger()
+    seen = []
+
+    async def invoke(context, parameters):
+        seen.append((context, parameters))
+        ledger.complete = True
+        return "completed"
+
+    assert (
+        await run_agent_turn(
+            invoke=invoke,
+            execution_context={"event_id": event_id, "max_completion_attempts": 2},
+            ledger=ledger,
+        )
+        == "completed"
+    )
+    assert len(seen) == 1 and ledger.completed == [1]
+    assert ledger.run_id in seen[0][0]["continuation_input"]
+    if event_id:
+        assert event_id in seen[0][0]["continuation_input"]
+        assert seen[0][1] == {"previous_attempt_evidence": "[]"}
+    else:
+        assert seen[0][1] == {}

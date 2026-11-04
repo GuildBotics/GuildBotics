@@ -8,6 +8,115 @@ use std::path::Path;
 use gb_config::agent_environment::{PATH, Resources, resources};
 use serde_json::{Value, json};
 
+#[test]
+fn invalid_declarations_name_the_component_and_the_selected_file() {
+    use gb_config::agent_environment::image;
+    let config = tempfile::tempdir().unwrap();
+    let templates = tempfile::tempdir().unwrap();
+    let path = config.path().join(PATH);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let resource_error = format!(
+        "The resources in {} must be positive integers: memory_mib and cpus.",
+        path.display()
+    );
+    let image_error = format!(
+        "The base image in {} must declare a reference and SHA256 digests by architecture.",
+        path.display()
+    );
+    for declaration in [
+        "resources: {cpus: 0}",
+        "resources: {cpus: true}",
+        "resources: {cpus: 1.5}",
+        "resources: {cpus: '2'}",
+        "resources: {memory_mib: -1}",
+        "resources: {unknown: 1}",
+        "resources: []",
+        "[",
+        "[]",
+    ] {
+        std::fs::write(&path, declaration).unwrap();
+        assert_eq!(
+            resources(config.path(), templates.path())
+                .unwrap_err()
+                .to_string(),
+            resource_error,
+            "{declaration}"
+        );
+    }
+    for declaration in ["image: {}", "image: []", "[", "[]"] {
+        std::fs::write(&path, declaration).unwrap();
+        assert_eq!(
+            image(config.path(), templates.path())
+                .unwrap_err()
+                .to_string(),
+            image_error,
+            "{declaration}"
+        );
+    }
+    // An I/O failure uses the same component and the fallback file's path.
+    std::fs::remove_file(&path).unwrap();
+    let fallback = templates.path().join(PATH);
+    assert_eq!(
+        resources(config.path(), templates.path())
+            .unwrap_err()
+            .to_string(),
+        resource_error.replace(&path.display().to_string(), &fallback.display().to_string())
+    );
+    assert_eq!(
+        image(config.path(), templates.path())
+            .unwrap_err()
+            .to_string(),
+        image_error.replace(&path.display().to_string(), &fallback.display().to_string())
+    );
+}
+
+#[test]
+fn a_custom_image_has_a_reference_and_content_digests() {
+    use gb_config::agent_environment::image;
+    let config = tempfile::tempdir().unwrap();
+    let templates = tempfile::tempdir().unwrap();
+    let path = config.path().join(PATH);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let valid = json!({"reference": "local/agent:1", "digests": {"arm64": format!("sha256:{}", "a".repeat(64))}});
+    std::fs::write(&path, json!({"image": valid}).to_string()).unwrap();
+    let read = image(config.path(), templates.path()).unwrap().unwrap();
+    assert_eq!(read.reference, "local/agent:1");
+    assert_eq!(read.digests["arm64"], format!("sha256:{}", "a".repeat(64)));
+    for field in ["reference", "digests"] {
+        let mut absent = valid.clone();
+        absent.as_object_mut().unwrap().remove(field);
+        std::fs::write(&path, json!({"image": absent}).to_string()).unwrap();
+        assert!(image(config.path(), templates.path()).is_err());
+    }
+    for reference in ["", "-option", "two words", "line\nbreak"] {
+        let mut invalid = valid.clone();
+        invalid["reference"] = json!(reference);
+        std::fs::write(&path, json!({"image": invalid}).to_string()).unwrap();
+        assert!(image(config.path(), templates.path()).is_err());
+    }
+    for digests in [
+        json!({}),
+        json!({"arm64": "sha256:short"}),
+        json!({"arm64": format!("sha256:{}", "A".repeat(64))}),
+        json!({"ARM": format!("sha256:{}", "a".repeat(64))}),
+        json!({"x86_64": format!("sha256:{}", "a".repeat(64))}),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["digests"] = digests;
+        std::fs::write(&path, json!({"image": invalid}).to_string()).unwrap();
+        assert!(image(config.path(), templates.path()).is_err());
+    }
+    for declaration in [json!({}), json!({"image": null})] {
+        std::fs::write(&path, declaration.to_string()).unwrap();
+        assert_eq!(image(config.path(), templates.path()).unwrap(), None);
+    }
+    std::fs::remove_file(&path).unwrap();
+    let template = templates.path().join(PATH);
+    std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+    std::fs::write(&template, json!({"image": valid}).to_string()).unwrap();
+    assert_eq!(image(config.path(), templates.path()).unwrap(), Some(read));
+}
+
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../records/golden/environment.json");
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()

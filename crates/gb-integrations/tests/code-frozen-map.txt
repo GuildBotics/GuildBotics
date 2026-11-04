@@ -24,6 +24,6 @@ test_replacing_links_removes_old_links_and_their_closing_effect -> code_link_pop
 test_unsupported_link_replacement_writes_nothing -> code_link_population + code_cross_repo_link_contract
 test_an_artifact_is_only_the_current_heads -> code_artifact_contract + code_old_artifact_contract
 test_dependency_alerts_are_read_or_refused_as_unsupported -> code_contract (Unsupported supported by both frozen providers)
-test_the_callers_git_environment_does_not_reach_the_service -> provider fixture process environment isolation; root to pin explicit GIT_DIR invocation
+test_the_callers_git_environment_does_not_reach_the_service -> provider fixture process environment isolation; integration script is also run with poisoned parent GIT_DIR and GIT_CONFIG_COUNT
 test_the_git_remote_names_its_repository_and_its_open_pull_requests -> code_contract + code_open_order_contract
 test_member_show_reads_default_branch_for_every_provider -> CLI member show excluded #89; default_branch and repository reads remain code_contract

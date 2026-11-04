@@ -35,15 +35,115 @@ impl Default for Resources {
 
 /// A declaration that cannot be read, which nothing boots from.
 #[derive(Debug, PartialEq)]
-pub struct DeclarationProblem(pub PathBuf);
+pub enum DeclarationProblem {
+    Resources(PathBuf),
+    Image(PathBuf),
+    ImageField(PathBuf, ImageIssue),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ImageIssue {
+    Reference(String),
+    NoDigests,
+    Architecture(String),
+    Digest(String),
+}
+
+impl std::fmt::Display for ImageIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reference(value) => write!(f, "'{value}' is not an image reference"),
+            Self::NoDigests => write!(f, "an image names at least one digest, by architecture"),
+            Self::Architecture(value) => {
+                write!(f, "'{value}' is not an architecture name (amd64, arm64)")
+            }
+            Self::Digest(value) => write!(
+                f,
+                "'{value}' is not an image digest (sha256:<64 hex digits>)"
+            ),
+        }
+    }
+}
+
+/// The custom base image, whose actual local contents identify a snapshot.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaseImage {
+    pub reference: String,
+    pub digests: std::collections::BTreeMap<String, String>,
+}
+
+pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, DeclarationProblem> {
+    let own = config.join(PATH);
+    let path = if own.exists() {
+        own
+    } else {
+        templates.join(PATH)
+    };
+    let problem = || DeclarationProblem::Image(path.clone());
+    let text = std::fs::read_to_string(&path).map_err(|_| problem())?;
+    let declaration = yaml::value(&text).map_err(|_| problem())?;
+    let declaration = declaration.as_object().ok_or_else(problem)?;
+    let Some(value) = declaration.get("image").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let image: BaseImage = serde_json::from_value(value.clone()).map_err(|_| problem())?;
+    if image.reference.is_empty()
+        || image.reference.starts_with('-')
+        || image.reference.chars().any(char::is_whitespace)
+    {
+        return Err(DeclarationProblem::ImageField(
+            path.clone(),
+            ImageIssue::Reference(image.reference),
+        ));
+    }
+    if image.digests.is_empty() {
+        return Err(DeclarationProblem::ImageField(
+            path.clone(),
+            ImageIssue::NoDigests,
+        ));
+    }
+    for (arch, digest) in &image.digests {
+        if arch.is_empty()
+            || !arch
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        {
+            return Err(DeclarationProblem::ImageField(
+                path.clone(),
+                ImageIssue::Architecture(arch.clone()),
+            ));
+        }
+        if !digest.strip_prefix("sha256:").is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        }) {
+            return Err(DeclarationProblem::ImageField(
+                path.clone(),
+                ImageIssue::Digest(digest.clone()),
+            ));
+        }
+    }
+    Ok(Some(image))
+}
 
 impl std::fmt::Display for DeclarationProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "The resources in {} must be positive integers: memory_mib and cpus.",
-            self.0.display()
-        )
+        match self {
+            Self::ImageField(path, issue) => write!(f, "{}: {issue}", path.display()),
+            Self::Resources(path) => write!(
+                f,
+                "The resources in {} must be positive integers: memory_mib and cpus.",
+                path.display()
+            ),
+            Self::Image(path) => write!(
+                f,
+                "The base image in {} must declare a reference and SHA256 digests by architecture.",
+                path.display()
+            ),
+        }
     }
 }
 
@@ -58,7 +158,7 @@ pub fn resources(config: &Path, templates: &Path) -> Result<Resources, Declarati
     } else {
         templates.join(PATH)
     };
-    let problem = || DeclarationProblem(path.clone());
+    let problem = || DeclarationProblem::Resources(path.clone());
     let text = std::fs::read_to_string(&path).map_err(|_| problem())?;
     let declaration = yaml::value(&text).map_err(|_| problem())?;
     let Value::Object(declaration) = declaration else {

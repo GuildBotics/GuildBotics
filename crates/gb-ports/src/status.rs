@@ -100,8 +100,8 @@ impl WorkflowStatus {
         match self.0.reason {
             WorkflowStatusReason::Failed => true,
             WorkflowStatusReason::RateLimited => {
-                DateTime::parse_from_rfc3339(&self.0.retry_after_at)
-                    .map_or(true, |retry| retry > now)
+                crate::timestamps::parse_retry_timestamp(&self.0.retry_after_at)
+                    .is_none_or(|retry| retry > now)
             }
             _ => false,
         }

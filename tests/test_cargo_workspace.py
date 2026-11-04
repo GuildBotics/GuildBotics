@@ -61,7 +61,13 @@ _ALLOWED = {
         "gb-wire",
         "loopback-auth",
     },
-    "guildbotics": {"gb-server", "gb-environment", "branvil", "loopback-auth"},
+    "guildbotics": {
+        "gb-base",
+        "gb-server",
+        "gb-environment",
+        "branvil",
+        "loopback-auth",
+    },
 }
 
 

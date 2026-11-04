@@ -1,11 +1,30 @@
-Frozen specification: origin/python-host (fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0)
-Old tests -> Rust coverage targets (recorded before implementation)
-contracts/test_ticket_service_contract.py -> branvil_contract: read/write, search conditions and pagination, creation assignment/relations/lane/interactive, scope guards, reaction ownership, labels, attachments, patrol/refresh/move/closed
-contracts/test_code_hosting_contract.py -> branvil_contract: resource dispatch, exact review head, reviews/threads/reactions, draft conversion, ticket links, freshness/current-head checks, git identity/remotes
-contracts/test_member_directory_contract.py -> branvil_contract: authenticated member lookup
-integration/branvil/test_smoke.py::test_tickets_and_their_relations -> branvil_public::ticket_relations
-integration/branvil/test_smoke.py::test_a_push_a_pull_request_and_its_merge -> branvil_public::push_pull_merge
-integration/branvil/test_smoke.py::test_checks_decide_readiness_of_the_current_head -> branvil_public::readiness
-integration/branvil/test_smoke.py remaining cases -> branvil_contract: initial state/interactive, mention discovery, newest-first pages, reused CI, landing gate
-Branvil provider tests test_branvil_{provider,tickets,ticket_selector,code_hosting,owner_git}.py -> branvil_contract (identity, selection, normalization, credentials, readiness)
-Implicit guarantees to preserve: one process-wide App/Store; authentication rechecked after revocation; owner/agent/runner role guards; operation cancellation shielding; per-repository locks; journal recovery before requests; events and CI triggers; cursor signing and collection binding; isolated Git environment.
+Frozen specification: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
+Inventory was inspected before implementation; final executable names below replace the planned targets.
+Run: scripts/branvil-integration.sh (custom harness, deliberately separate from nextest).
+
+Shared contract populations (identical helper functions run against local and Branvil):
+contracts/test_ticket_service_contract.py -> tests/support/contracts.rs ticket_contract, ticket_patrol_contract, ticket_scope_contract, ticket_attachment_contract, ticket_wrong_subject_contract, ticket_search_decoy_contract. Each old test is enumerated in ../local-frozen-map.txt.
+contracts/test_code_hosting_contract.py -> tests/support/contracts.rs code_contract plus kind/closed/stale-head/other-actor/artifact/old-artifact/Unicode/missing-base/open-order/link/cross-repository helpers. Each old test is enumerated in ../code-frozen-map.txt.
+contracts/test_member_directory_contract.py -> code_contract member names; factory/branvil/tests.rs member_identity_scope_and_resource_boundaries. ActorName field population is also tested in gb-ports/tests/contracts.rs.
+
+integration/branvil/test_smoke.py:
+  test_initial_ticket_state_and_interactive_patrol_exclusion -> main.rs ticket_relations + ticket_patrol_contract
+  test_tickets_and_their_relations -> main.rs ticket_relations + ticket_contract + ticket_patrol_contract
+  test_mention_shapes_and_workspace_discovery -> ticket_patrol_contract + factory/branvil/tests.rs mentions_match_the_frozen_ascii_name_boundaries
+  test_a_push_a_pull_request_and_its_merge -> main.rs scenario (real Git push, public factory, exact-head review, CI and merge)
+  test_open_pull_requests_follow_newest_first_pages -> code_open_order_contract (101 open pull requests)
+  test_checks_decide_readiness_of_the_current_head -> main.rs scenario (pending, failing logs, success, moved head, artifact freshness)
+  test_a_reused_result_is_ready_through_the_provider -> extra.rs reused_and_gates
+  test_a_behind_head_exposes_the_landing_gate_checks -> extra.rs reused_and_gates (success/failure/conflict, separate repositories)
+
+test_branvil_tickets.py / test_branvil_ticket_selector.py -> ticket_patrol_contract + ticket_contract + ticket_scope_contract + tests/selection.rs + tests/patrol_cases.rs. These pin assignment, mentions, held/rate-limit statuses, interactive inheritance, blocked/working lanes and refresh without duplicates through the real public factory.
+test_branvil_code_hosting.py -> shared code helpers above + tests/readiness.rs frozen golden population + tests/patrol_cases.rs author/reviewer/limit/awaited decisions. Readiness API tail bounds and member/scope/cursor/URL failures are in factory/branvil/tests.rs.
+  HTTP-client retry/deadline/probe tests are intentionally not ported: #81/#88 replace that transport with the same-process DataApi and remove request replay. crates/branvil/src/api.rs tests pin revocation, cancellation shielding, stopped handles and shared HTTP/API state instead.
+  CLI alert-command rendering is not covered here; member CLI migration is #89. Port alert dispatch remains implemented.
+test_branvil_provider.py:
+  service member identity, missing token, identity mismatch and refused token -> factory/branvil/tests.rs + tests/factory.rs; service account and person id differ in main.rs fixture.
+  HTTP reachability/response-format/diagnose and image-load polling tests are intentionally not duplicated in the in-process service port. Connection/setup/image lifecycle belongs to the environment/configuration migration; the old transport no longer exists in this provider.
+test_branvil_owner_git.py -> owner credential-helper issuance/rotation, keychain/helper setup and connection ownership belong to the member/connection CLI (#89), not this service port. This PR tests the provider's returned member Git credentials/remotes, actual authenticated push, refused identities, and poisoned parent Git environment.
+test_branvil_setup.py -> connection/setup migration, outside #88's service ports and listener. No setup UI/connection workflow coverage is claimed.
+
+Preserved guarantees: one process-wide App/Store; operation-time authentication/revocation; owner/agent/runner authorization; per-repository exclusion; journal recovery; events and CI; cursor binding; isolated Git environment. HTTP handlers and DataApi call the same domain operations. Branvil does not depend on GuildBotics crates.

@@ -195,7 +195,11 @@
         "io_type": {
           "enum": [
             "cli_agent.request",
-            "cli_agent.response"
+            "cli_agent.response",
+            "llm.request",
+            "llm.response",
+            "jev.request",
+            "jev.response"
           ],
           "title": "Io Type",
           "type": "string"

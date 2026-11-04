@@ -24,8 +24,8 @@
 # say so, until they load the new archive.
 #
 # GUILDBOTICS_CLI names the CLI that loads and declares (default: the
-# Desktop's managed CLI, or `guildbotics` on PATH); set it to `uv run
-# --no-sync guildbotics` to use this checkout's own CLI. Extra arguments for
+# Desktop's managed CLI, or `guildbotics` on PATH); set it to this checkout's
+# compiled Rust executable to use a development version. Extra arguments for
 # it (such as `--workspace <dir>`) go in GUILDBOTICS_CLI_ARGS.
 set -euo pipefail
 
@@ -51,8 +51,8 @@ elif [ -x "${HOME}/.guildbotics/bin/guildbotics" ]; then
 else
     guildbotics=guildbotics
 fi
-# shellcheck disable=SC2086 # GUILDBOTICS_CLI and its args may carry words
-cli() { ${guildbotics} environment ${GUILDBOTICS_CLI_ARGS:-} "$@"; }
+# shellcheck disable=SC2086 # Optional CLI args are split into words
+cli() { "${guildbotics}" environment ${GUILDBOTICS_CLI_ARGS:-} "$@"; }
 
 case "$(uname -m)" in
     x86_64 | amd64) device_arch=amd64 ;;

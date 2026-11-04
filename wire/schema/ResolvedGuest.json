@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "ResolvedBrain": {
+      "additionalProperties": false,
+      "description": "A brain slot whose settings were resolved once by the host.",
+      "properties": {
+        "definition": {
+          "additionalProperties": true,
+          "default": {},
+          "title": "Definition",
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "model",
+            "ai_cli",
+            "jev",
+            "invalid"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "slot"
+      ],
+      "title": "ResolvedBrain",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-secret command data mounted read-only; no guest configuration lookup.",
+  "properties": {
+    "brains": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ResolvedBrain"
+      },
+      "title": "Brains",
+      "type": "object"
+    },
+    "clone_paths": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "title": "Clone Paths",
+      "type": "object"
+    },
+    "commands": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Commands",
+      "type": "object"
+    },
+    "inference_keys": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "title": "Inference Keys",
+      "type": "object"
+    },
+    "inference_urls": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "title": "Inference Urls",
+      "type": "object"
+    },
+    "language": {
+      "title": "Language",
+      "type": "string"
+    },
+    "member": {
+      "additionalProperties": true,
+      "title": "Member",
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": true,
+      "title": "Project",
+      "type": "object"
+    }
+  },
+  "required": [
+    "language",
+    "project",
+    "member",
+    "brains",
+    "commands"
+  ],
+  "title": "ResolvedGuest",
+  "type": "object"
+}

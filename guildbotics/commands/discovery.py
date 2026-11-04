@@ -104,6 +104,11 @@ def resolve_prospective_shared_command(
 
 def resolve_named_command(context: Context, identifier: str) -> Path:
     """Resolve a logical command name to an on-disk prompt or script."""
+    if context.resolved_commands is not None:
+        path = context.resolved_commands.get(identifier)
+        if path is None:
+            raise CommandError(f"Command '{identifier}' was not resolved by the host.")
+        return Path(path)
     language_code = context.team.project.get_language_code()
     resolved = resolve_command_path(identifier, language_code, context.person.person_id)
     if resolved is None:
@@ -203,6 +208,13 @@ def logical_command_name(root: Path, path: Path, language_code: str) -> str:
 
 def resolve_command_reference(base_dir: Path, value: str, context: Context) -> Path:
     """Resolve a command reference relative to a base directory or by name."""
+    if context.resolved_commands is not None:
+        if value in context.resolved_commands:
+            return Path(context.resolved_commands[value])
+        resolved_anchor = str((base_dir / value).resolve())
+        if resolved_anchor in context.resolved_commands.values():
+            return Path(resolved_anchor)
+        raise CommandError(f"Command '{value}' was not resolved by the host.")
     candidate_path = Path(value)
     if candidate_path.is_absolute():
         if not candidate_path.exists():

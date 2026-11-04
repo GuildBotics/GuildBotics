@@ -62,7 +62,7 @@ def _layouts(config: Path, *, model_id: str, cli_model: str, brain_slot: str) ->
     )
     _write(
         intel / "brain_mapping.yml",
-        f"default:\n  class: {_BRAIN_CLASS}\n  args:\n    model: {brain_slot}\n",
+        f"default:\n  kind: model\n  model: {brain_slot}\n",
     )
 
 

@@ -51,7 +51,7 @@ for module in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
 templates = get_template_path()
 mapping = load_yaml_file(templates / "intelligences" / "brain_mapping.yml")
 for slot in mapping.values():
-    importlib.import_module(slot["class"].rpartition(".")[0])
+    importlib.import_module({"model":"guildbotics.intelligences.brains.agno_agent", "ai_cli":"guildbotics.guest.cli_agent", "jev":"guildbotics.intelligences.brains.jev"}[slot["kind"]])
 for path in sorted((templates / "commands").rglob("*.py")):
     _load_python_module(path)
 for path in sorted((templates / "commands").rglob("*.md")):
@@ -185,7 +185,12 @@ def _unreached_shared_packages(graph: grimp.ImportGraph) -> list[str]:
     name, so no import reaches them)."""
     mapping = yaml.safe_load(_BRAIN_MAPPING.read_text(encoding="utf-8"))
     roots = {"guildbotics.guest.entry", "guildbotics.guest.worktree_copy"} | {
-        slot["class"].rpartition(".")[0] for slot in mapping.values()
+        {
+            "model": "guildbotics.intelligences.brains.agno_agent",
+            "ai_cli": "guildbotics.guest.cli_agent",
+            "jev": "guildbotics.intelligences.brains.jev",
+        }[slot["kind"]]
+        for slot in mapping.values()
     }
     reached = set(roots).union(*(graph.find_upstream_modules(root) for root in roots))
     packages = sorted(
