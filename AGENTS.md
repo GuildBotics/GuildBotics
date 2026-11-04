@@ -1,9 +1,6 @@
 # AGENTS.md
 
-Python host の凍結点は `origin/python-host`（`fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`）です。
-このブランチには commit せず、以後動かしません。削除した実装と当時のガイドは
-`git show origin/python-host:<path>`（ガイドは `AGENTS.md`）で参照します。
-本番の Python checkout は #97 まで main へ更新しません。
+消した Python の host の実装と知見は、凍結ブランチ `origin/python-host`（`fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`）で `git show origin/python-host:<path>` で読みます（当時のガイドは `AGENTS.md`）。
 
 このファイルは、このリポジトリで作業する AI/自動化エージェント向けの実装ベースの作業ガイドです。
 
