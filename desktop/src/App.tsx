@@ -1,3 +1,4 @@
+import { AppShell } from "@guildbotics/ui/AppShell";
 import {
   ActionIcon,
   Alert,
@@ -152,85 +153,85 @@ export function App() {
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
   useWorkspaceChangeReload();
   return (
-    <main className="shell">
-      <aside className="sidebar">
-        <nav className="nav">
-          {configured ? (
-            <GuardedNavLink className="nav-item" to="/activity">
-              <RotateCcwClock size={18} /> {t("app.nav.activity")}
+    <AppShell
+      sidebar={
+        <>
+          <nav className="nav">
+            {configured ? (
+              <GuardedNavLink className="nav-item" to="/activity">
+                <RotateCcwClock size={18} /> {t("app.nav.activity")}
+              </GuardedNavLink>
+            ) : null}
+            <GuardedNavLink className="nav-item" to="/service">
+              <Activity size={18} />
+              <span className="nav-item-label">{t("app.nav.service")}</span>
+              <NavStatusIndicator
+                label={t(`app.navStatus.service.${serviceNavState}`)}
+                state={serviceNavState}
+              />
             </GuardedNavLink>
-          ) : null}
-          <GuardedNavLink className="nav-item" to="/service">
-            <Activity size={18} />
-            <span className="nav-item-label">{t("app.nav.service")}</span>
-            <NavStatusIndicator
-              label={t(`app.navStatus.service.${serviceNavState}`)}
-              state={serviceNavState}
-            />
-          </GuardedNavLink>
-          <GuardedNavLink className="nav-item" to="/commands">
-            <Terminal size={18} />
-            <span className="nav-item-label">{t("app.nav.commands")}</span>
-            <NavStatusIndicator
-              label={t(`app.navStatus.commands.${commandNavState}`)}
-              state={commandNavState}
-            />
-          </GuardedNavLink>
-          <GuardedNavLink className="nav-item" to="/diagnostics">
-            <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
-          </GuardedNavLink>
-          <GuardedNavLink className="nav-item" to="/setup">
-            <Settings size={18} /> {t("app.nav.setup")}
-          </GuardedNavLink>
-          {configured ? <BranvilNavItem /> : null}
-        </nav>
-        <Select
-          className="sidebar-language"
-          classNames={{
-            input: "sidebar-language-input",
-            label: "sidebar-language-label",
-          }}
-          label={t("app.language.label")}
-          data={[
-            { label: t("app.language.english"), value: "en" },
-            { label: t("app.language.japanese"), value: "ja" },
-          ]}
-          value={appLanguage}
-          onChange={(value) => {
-            if (value === "en" || value === "ja") {
-              void setAppLanguage(value as AppLanguage);
-            }
-          }}
-        />
-      </aside>
-
-      <section className="workspace">
-        {config.data?.workspace_problem ? (
-          <Alert color="danger" role="alert">
-            {config.data.workspace_problem}
-          </Alert>
-        ) : null}
-        {config.data?.input_store_problem &&
-        config.data.input_store_problem !== config.data.workspace_problem ? (
-          <Alert color="danger" role="alert">
-            {config.data.input_store_problem}
-          </Alert>
-        ) : null}
-        {configured ? <SystemAlertBand /> : null}
-        <Routes>
-          <Route
-            element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
-            path="/activity"
+            <GuardedNavLink className="nav-item" to="/commands">
+              <Terminal size={18} />
+              <span className="nav-item-label">{t("app.nav.commands")}</span>
+              <NavStatusIndicator
+                label={t(`app.navStatus.commands.${commandNavState}`)}
+                state={commandNavState}
+              />
+            </GuardedNavLink>
+            <GuardedNavLink className="nav-item" to="/diagnostics">
+              <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
+            </GuardedNavLink>
+            <GuardedNavLink className="nav-item" to="/setup">
+              <Settings size={18} /> {t("app.nav.setup")}
+            </GuardedNavLink>
+            {configured ? <BranvilNavItem /> : null}
+          </nav>
+          <Select
+            className="sidebar-language"
+            classNames={{
+              input: "sidebar-language-input",
+              label: "sidebar-language-label",
+            }}
+            label={t("app.language.label")}
+            data={[
+              { label: t("app.language.english"), value: "en" },
+              { label: t("app.language.japanese"), value: "ja" },
+            ]}
+            value={appLanguage}
+            onChange={(value) => {
+              if (value === "en" || value === "ja") {
+                void setAppLanguage(value as AppLanguage);
+              }
+            }}
           />
-          <Route element={<ServicePage />} path="/service" />
-          <Route element={<Navigate replace to="/service" />} path="/overview" />
-          <Route element={<CommandsPage />} path="/commands" />
-          <Route element={<DiagnosticsPage />} path="/diagnostics" />
-          <Route element={<SetupPage />} path="/setup" />
-          <Route element={<IndexRedirect />} path="*" />
-        </Routes>
-      </section>
-    </main>
+        </>
+      }
+    >
+      {config.data?.workspace_problem ? (
+        <Alert color="danger" role="alert">
+          {config.data.workspace_problem}
+        </Alert>
+      ) : null}
+      {config.data?.input_store_problem &&
+      config.data.input_store_problem !== config.data.workspace_problem ? (
+        <Alert color="danger" role="alert">
+          {config.data.input_store_problem}
+        </Alert>
+      ) : null}
+      {configured ? <SystemAlertBand /> : null}
+      <Routes>
+        <Route
+          element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
+          path="/activity"
+        />
+        <Route element={<ServicePage />} path="/service" />
+        <Route element={<Navigate replace to="/service" />} path="/overview" />
+        <Route element={<CommandsPage />} path="/commands" />
+        <Route element={<DiagnosticsPage />} path="/diagnostics" />
+        <Route element={<SetupPage />} path="/setup" />
+        <Route element={<IndexRedirect />} path="*" />
+      </Routes>
+    </AppShell>
   );
 }
 

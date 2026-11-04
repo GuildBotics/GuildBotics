@@ -4,6 +4,7 @@ import { App } from "./App";
 import { installDragScroll } from "./dragScroll";
 import { createQueryClient } from "./query/hooks";
 import "@mantine/core/styles.css";
+import "@guildbotics/ui/markdown.css";
 import "./styles.css";
 
 const root = document.getElementById("root");

@@ -10,10 +10,10 @@ import { keys } from "../query/keys";
 import { applyChange } from "../query/events";
 import { fakeApi, json, apiError } from "../test/fakeApi";
 import examples from "../../../tests/fixtures/markdown-references.json";
-import { drawDiagram } from "../components/diagram";
+import { drawDiagram } from "@guildbotics/ui/diagram";
 
 // Mermaid needs a layout engine to measure text, which jsdom does not have.
-vi.mock("../components/diagram", () => ({ drawDiagram: vi.fn() }));
+vi.mock("@guildbotics/ui/diagram", () => ({ drawDiagram: vi.fn() }));
 
 const endpoint = "/api/v1/repos/acme/demo/markdown";
 

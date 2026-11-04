@@ -52,7 +52,7 @@ const STACKS: Stack[] = [
   },
   {
     name: "configured",
-    testMatch: /(service|commands|decisions)\.spec\.ts$/,
+    testMatch: /(service|commands|decisions|visual)\.spec\.ts$/,
     backendPort: port("GUILDBOTICS_E2E_CONFIGURED_BACKEND_PORT", 8767),
     env: { GUILDBOTICS_E2E_SEED: "1" },
   },

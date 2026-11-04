@@ -11,13 +11,13 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{ts,json,html}\"",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "duplicates": "jscpd --config jscpd.config.json",
+    "duplicates": "jscpd --config jscpd.config.json src ../packages/ui/src",
     "test": "vitest run && npm run test:e2e-preflight",
     "test:watch": "vitest",
     "test:e2e-preflight": "node --test e2e/preflight.test.mjs",
     "e2e": "node e2e/preflight.mjs && vite build && playwright test",
     "e2e:install": "playwright install chromium",
-    "quality": "npm run format:check && npm run lint && npm run typecheck && npm run duplicates && npm run test"
+    "quality": "npm run quality --workspace @guildbotics/ui && npm run format:check && npm run lint && npm run typecheck && npm run duplicates && npm run test"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
@@ -41,7 +41,8 @@
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.8",
     "react-router": "^8.3.0",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "@guildbotics/ui": "*"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

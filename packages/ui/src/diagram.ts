@@ -31,7 +31,10 @@ let previous: Promise<unknown> = Promise.resolve();
  * source gives them. Its colors are the design tokens where it appears, as
  * colors: an image cannot read the page's CSS variables.
  */
-export function drawDiagram(source: string, where: HTMLElement): Promise<{ src: string; alt: string }> {
+export function drawDiagram(
+  source: string,
+  where: HTMLElement,
+): Promise<{ src: string; alt: string }> {
   const turn = previous.then(() => draw(source, where));
   previous = turn.catch(() => undefined);
   return turn;
@@ -40,7 +43,16 @@ export function drawDiagram(source: string, where: HTMLElement): Promise<{ src: 
 async function draw(source: string, where: HTMLElement): Promise<{ src: string; alt: string }> {
   const c = tokenColors(where);
   // Series that must tell apart (pie slices, mindmap and timeline branches).
-  const series = (["--color-brand", "--color-info", "--color-warning", "--color-danger", "--color-success", "--color-text-muted"] as const).map((token) => c[token]);
+  const series = (
+    [
+      "--color-brand",
+      "--color-info",
+      "--color-warning",
+      "--color-danger",
+      "--color-success",
+      "--color-text-muted",
+    ] as const
+  ).map((token) => c[token]);
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
@@ -57,7 +69,12 @@ async function draw(source: string, where: HTMLElement): Promise<{ src: string; 
       tertiaryColor: c["--color-bg-panel-subtle"],
       lineColor: c["--color-text-muted"],
       textColor: c["--color-text-main"],
-      ...Object.fromEntries(series.flatMap((color, i) => [[`pie${i + 1}`, color], [`cScale${i}`, color]])),
+      ...Object.fromEntries(
+        series.flatMap((color, i) => [
+          [`pie${i + 1}`, color],
+          [`cScale${i}`, color],
+        ]),
+      ),
       scaleLabelColor: "#ffffff",
       pieStrokeColor: c["--color-bg-panel"],
       pieSectionTextColor: "#ffffff",
@@ -92,7 +109,10 @@ export function svgImage(svg: string): { src: string; alt: string } {
     .map((e) => e?.textContent?.trim())
     .filter(Boolean)
     .join(": ");
-  return { src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`, alt };
+  return {
+    src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`,
+    alt,
+  };
 }
 
 /** The tokens as `#rrggbb`, which Mermaid can blend: a token may be light-dark() of oklch(). */

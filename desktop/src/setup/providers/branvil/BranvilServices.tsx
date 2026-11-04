@@ -9,7 +9,7 @@ import {
   type ServiceKind,
   type ServiceSelection,
 } from "../../../api/client";
-import { RequiredLabel } from "../../formParts";
+import { RequiredLabel } from "@guildbotics/ui/formParts";
 import type { FieldErrors, ServiceUi } from "../types";
 import { branvilKey, createWorkspace, listWorkspaces } from "./api";
 import { BranvilConnection, BranvilGitConfig, useConnection } from "./BranvilConnection";

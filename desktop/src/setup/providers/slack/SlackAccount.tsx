@@ -2,7 +2,7 @@ import { PasswordInput, SegmentedControl, Stack, TextInput } from "@mantine/core
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
-import { RequiredLabel } from "../../formParts";
+import { RequiredLabel } from "@guildbotics/ui/formParts";
 import { MASKED_SECRET_PLACEHOLDER } from "../../secretInput";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
 import type { AccountView } from "./api";

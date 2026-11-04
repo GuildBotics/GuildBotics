@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectServices, ServiceSelection } from "../../../api/client";
-import { InfoCallout, RequiredLabel } from "../../formParts";
+import { InfoCallout, RequiredLabel } from "@guildbotics/ui/formParts";
 import type { FieldErrors, ServiceUi } from "../types";
 import {
   DEFAULT_LANE_MAP,
