@@ -18,8 +18,10 @@ fixture による表示検証は通常 journey から分ける。別途ビルド
 `npm run e2e:visual --workspace branvil-web` を実行する。
 性能調査も同様に `e2e:perf` で明示して実行する。
 
-#118 の変更前後の画像は [screenshots](../../../../docs/screenshots/shared-api-118) に保存。
-desktop は隔離した実 backend、Branvil は表示検証の固定 fixture を使用する。
-desktop の画像は `GUILDBOTICS_SCREENSHOT_PHASE=before` または `after` と
-`GUILDBOTICS_SCREENSHOT_DIR=../docs/screenshots/shared-api-118/desktop` を指定し、
-desktop の `visual.spec.ts` で再生成できる。
+レビュー用の画像は一時資料として扱い、ソースへコミットしない。
+Branvil の表示検証は Playwright の test-results に画像を出力する。
+desktop の撮影は `GUILDBOTICS_SCREENSHOT_PHASE=before` または `after` を指定し、
+`visual.spec.ts` を実行する。既定の保存先は
+`~/Documents/GuildBotics/screenshots/desktop/`（必要なら
+`GUILDBOTICS_SCREENSHOT_DIR` で上書きする）。
+#118 では画像レビュー済みの確認結果を PR 本文に残す。

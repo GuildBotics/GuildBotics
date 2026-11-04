@@ -54,7 +54,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
-paths = ["packages/ui/**", "docs/screenshots/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
+paths = ["packages/ui/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",
@@ -62,7 +62,6 @@ commands = [
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
-artifacts = [{ name = "desktop-visual", paths = ["docs/screenshots"] }]
 
 [[jobs]]
 name = "rust-fmt"
