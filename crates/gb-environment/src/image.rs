@@ -4,7 +4,11 @@ use crate::Sentence;
 use gb_config::agent_environment::{BaseImage, DeclarationProblem, ImageIssue};
 
 pub fn device_architecture() -> &'static str {
-    match std::env::consts::ARCH {
+    architecture(std::env::consts::ARCH)
+}
+
+fn architecture(arch: &str) -> &str {
+    match arch {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
         other => other,
@@ -117,4 +121,18 @@ pub fn load_command(home: &std::path::Path) -> Result<String, String> {
         "'{}' environment image load <archive.tar>",
         executable.replace('\'', "'\"'\"'")
     ))
+}
+
+#[cfg(test)]
+mod architecture_tests {
+    #[test]
+    fn cpu_names_match_image_architectures_and_preserve_other_targets() {
+        for (host, image) in [
+            ("x86_64", "amd64"),
+            ("aarch64", "arm64"),
+            ("riscv64", "riscv64"),
+        ] {
+            assert_eq!(super::architecture(host), image);
+        }
+    }
 }

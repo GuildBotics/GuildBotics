@@ -115,6 +115,11 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 &language,
             )
             .await?;
+            for field in ["problem", "warning"] {
+                if let Some(text) = view[field].as_str().filter(|text| !text.is_empty()) {
+                    println!("{text}");
+                }
+            }
             println!("{}", serde_json::to_string_pretty(&view)?);
         }
         EnvironmentCommand::Image { command } => match command {

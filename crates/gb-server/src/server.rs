@@ -153,6 +153,7 @@ impl Server {
         work.close();
         work.wait().await;
         crate::tool_login::drain_private().await;
+        gb_environment::runtime::drain_vms().await;
         cancelling.abort();
         if let Some(diagnostics) = diagnostics {
             match tokio::task::spawn_blocking(move || diagnostics.finish_system_session()).await {

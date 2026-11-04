@@ -88,6 +88,9 @@ async def test_inference_runs_in_guest_through_the_gateway_and_records_on_host(
     monkeypatch.setattr(module, "load_class", lambda _: Model)
     monkeypatch.setattr(agno.agent, "Agent", Agent)
     resolved = data()
+    resolved.brains["default"].definition["effort"] = {
+        "high": {"reasoning_effort": "high"}
+    }
     resolved.inference_urls = {"openai": "http://127.0.0.1:1234/v1"}
     resolved.inference_keys = {"openai": "fixture-placeholder"}
     answer = await module.GuestInference(resolved, Window()).agno(
@@ -95,7 +98,7 @@ async def test_inference_runs_in_guest_through_the_gateway_and_records_on_host(
         AgnoCall(
             brain="reply",
             slot="main",
-            effort=ResolvedEffort(),
+            effort=ResolvedEffort(resolved="high"),
             description="instruction",
             message="question",
         ),
@@ -104,6 +107,7 @@ async def test_inference_runs_in_guest_through_the_gateway_and_records_on_host(
     assert captured["api_key"] == "fixture-placeholder"
     assert captured["base_url"] == resolved.inference_urls["openai"]
     assert [entry.type for entry in recorded] == ["io", "io", "summary"]
+    assert recorded[-1].effort == "high"
     assert [entry.io_type for entry in recorded if entry.type == "io"] == [
         "llm.request",
         "llm.response",
@@ -256,3 +260,72 @@ async def test_actual_provider_sdk_preserves_gateway_paths_and_auth_headers(
         headers[header]
         == ("Bearer " if provider == "openai" else "") + "fixture-placeholder"
     )
+
+
+@pytest.mark.asyncio
+async def test_file_markdown_command_runs_with_host_resolved_brain(
+    tmp_path, monkeypatch
+):
+    from guildbotics.commands.markdown_command import MarkdownCommand
+    from guildbotics.commands.models import CommandSpec
+    from guildbotics.guest.resolved import team
+    from guildbotics.intelligences.brains.agno_agent import AgnoAgentDefaultBrain
+    from guildbotics.runtime.context import Context
+
+    path = tmp_path / "hello.md"
+    path.write_text("---\nbrain: default\neffort: high\n---\nSay hello")
+    resolved = data()
+    resolved.commands = {"hello": str(path)}
+    captured = {}
+
+    async def run(brain, message, **kwargs):
+        captured.update(
+            name=brain.name, effort=brain.effort, description=brain.description
+        )
+        assert message == "question"
+        assert kwargs["session_state"]["shared"] == 7
+        return "hello"
+
+    monkeypatch.setattr(AgnoAgentDefaultBrain, "run", run)
+    context = Context(
+        None,
+        ResolvedBrainFactory(resolved),
+        team(resolved).members[0],
+        message="question",
+        team=team(resolved),
+        resolved_commands=resolved.commands,
+    )
+    context.shared_state = {"shared": 7}
+    spec = CommandSpec(
+        name="hello",
+        base_dir=tmp_path,
+        command_class=MarkdownCommand,
+        path=path,
+        cwd=tmp_path,
+    )
+    result = await MarkdownCommand(context, spec, tmp_path).run()
+    assert result.result == "hello"
+    assert captured == {"name": "hello", "effort": "high", "description": "Say hello"}
+
+
+def test_invalid_resolved_slot_fails_only_when_selected():
+    resolved = data()
+    payload = resolved.model_dump()
+    payload["brains"]["broken"] = {
+        "kind": "invalid",
+        "slot": "broken",
+        "definition": {"error": "Unsupported brain kind"},
+    }
+    resolved = ResolvedGuest.model_validate(payload)
+    factory = ResolvedBrainFactory(resolved)
+    factory.create_brain(
+        "aiko", "hello", "en", logging.getLogger(), config={"body": "ok"}
+    )
+    with pytest.raises(ValueError, match="broken.*Unsupported brain kind"):
+        factory.create_brain(
+            "aiko",
+            "hello",
+            "en",
+            logging.getLogger(),
+            config={"body": "ok", "brain": "broken"},
+        )

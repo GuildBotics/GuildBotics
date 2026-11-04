@@ -13,7 +13,8 @@
       "enum": [
         "model",
         "ai_cli",
-        "jev"
+        "jev",
+        "invalid"
       ],
       "title": "Kind",
       "type": "string"

@@ -22,6 +22,7 @@ def render() -> str:
             [
                 {
                     "name": agent.name,
+                    "label": agent.label,
                     "package": agent.provision.package,
                     "install": agent.provision.install,
                     "provision": agent.provision.model_dump(mode="json"),

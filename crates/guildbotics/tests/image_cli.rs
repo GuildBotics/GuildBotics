@@ -121,3 +121,50 @@ fn loads_and_reloads_real_archives_without_booting_a_vm() {
         }
     }
 }
+
+#[test]
+fn environment_help_and_status_reach_the_real_entry_without_starting_a_vm() {
+    let cli = env!("CARGO_BIN_EXE_guildbotics");
+    let help = Command::new(cli)
+        .args(["environment", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8(help.stdout).unwrap();
+    for command in ["status", "build", "remove", "login", "usage", "image"] {
+        assert!(text.contains(command), "{text}");
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("data")).unwrap();
+    std::fs::write(root.path().join("data/msb"), "cannot be a runtime").unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".guildbotics/config")).unwrap();
+    let output = Command::new(cli)
+        .env("HOME", root.path())
+        .env("GUILDBOTICS_HOME", root.path())
+        .args(["environment", "--workspace"])
+        .arg(workspace)
+        .arg("status")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let (guidance, document) = text
+        .split_once("\n{")
+        .expect("guidance precedes JSON status");
+    let view: serde_json::Value = serde_json::from_str(&format!("{{{document}")).unwrap();
+    assert_eq!(guidance, view["problem"].as_str().unwrap());
+    assert_eq!(view["problem_setting"], "runtime");
+    assert_eq!(view["runtime"]["available"], false);
+    assert!(
+        view["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["label"] == "Claude Code")
+    );
+}

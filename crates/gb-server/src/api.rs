@@ -185,6 +185,11 @@ routes!(
         "/intelligences/agent-environment/images",
         crate::environment::images
     ),
+    (
+        get,
+        "/intelligences/cli-agents/{agent}/usage",
+        crate::environment::usage
+    ),
     (get, "/config/status", crate::screens::config_status),
     (get, "/team", crate::screens::team),
     (get, "/commands/files", crate::screens::files),

@@ -303,4 +303,33 @@ mod tests {
             assert_eq!(actual, b"a *************** z");
         }
     }
+    #[test]
+    fn wildcard_routes_stay_under_their_prefix_and_explicit_origins_are_pinned() {
+        let policy = Policy {
+            provider: Provider::OpenAi,
+            origin: "https://primary.example".into(),
+            routes: vec![
+                ("POST".into(), "/agents/*".into()),
+                ("GET".into(), "https://profile.example/me".into()),
+            ],
+        };
+        assert_eq!(
+            policy.target("POST", "/agents/owner/repo?x=1").unwrap(),
+            "https://primary.example/agents/owner/repo?x=1"
+        );
+        assert_eq!(
+            policy.target("GET", "/me").unwrap(),
+            "https://profile.example/me"
+        );
+        for path in [
+            "/agents",
+            "/agents/",
+            "/agents//repo",
+            "/agents/../admin",
+            "/agents/%2e%2e/admin",
+            "/agents/owner/../../admin",
+        ] {
+            assert!(policy.target("POST", path).is_err(), "{path}");
+        }
+    }
 }

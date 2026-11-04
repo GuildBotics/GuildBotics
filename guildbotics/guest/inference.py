@@ -1,6 +1,8 @@
 """Inference runs in the guest; leased gateway credentials stay on the host."""
 
+from asyncio import CancelledError
 from copy import deepcopy
+from logging import getLogger
 from typing import Any
 
 import httpx
@@ -19,7 +21,7 @@ from guildbotics.intelligences.brains.inference import (
     InferenceFailure,
     JevCall,
 )
-from guildbotics.intelligences.effort import effort_settings
+from guildbotics.intelligences.effort import effort_diagnostics, effort_settings
 from guildbotics.intelligences.llm_providers import classify_failure
 from guildbotics.utils.import_utils import load_class
 
@@ -58,7 +60,10 @@ class GuestInference:
         if provider is None:
             raise ValueError("Unsupported inference model_class")
         params = deepcopy(config.parameters)
-        params.update(effort_settings(config.effort, call.effort))
+        overlay = effort_settings(
+            config.effort, call.effort, logger=getLogger(__name__)
+        )
+        params.update(overlay)
         params["api_key"] = self.data.inference_keys[provider]
         url = self.data.inference_urls[provider]
         if provider == "gemini":
@@ -98,6 +103,9 @@ class GuestInference:
                     span=call.span,
                     io_type="llm.request",
                     payload={
+                        "effort": effort_diagnostics(
+                            call.effort, overlay, model=str(params.get("id", ""))
+                        ),
                         "brain": call.brain,
                         "slot": call.slot,
                         "message": call.message,
@@ -136,6 +144,7 @@ class GuestInference:
                     SummaryEntry(
                         span=call.span,
                         slot=call.slot,
+                        effort=call.effort.resolved if overlay else "",
                         tool=provider,
                         model_specified=bool(answer.model),
                         status="finished",
@@ -145,23 +154,30 @@ class GuestInference:
                 ]
             )
             return answer
-        except Exception as exc:
+        except (Exception, CancelledError) as exc:
             await self.client.record(
                 [
                     SummaryEntry(
                         span=call.span,
                         slot=call.slot,
+                        effort=call.effort.resolved if overlay else "",
                         tool=provider,
                         model_specified=bool(params.get("id")),
                         status="failed",
                     )
                 ]
             )
+            if isinstance(exc, CancelledError):
+                raise
             failure = InferenceFailure(exc)
             failure.category = classify_failure(provider, failure)
             raise failure from exc
 
     async def jev(self, call: JevCall) -> dict[str, Any]:
+        url = self.data.inference_urls.get("jev")
+        key = self.data.inference_keys.get("jev")
+        if not url or not key:
+            raise ValueError("The resolved Jev gateway is missing.")
         await self.client.record(
             [
                 IoEntry(
@@ -174,10 +190,8 @@ class GuestInference:
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
-                    self.data.inference_urls["jev"].rstrip("/") + "/systemone",
-                    headers={
-                        "Authorization": "Bearer " + self.data.inference_keys["jev"]
-                    },
+                    url.rstrip("/") + "/systemone",
+                    headers={"Authorization": "Bearer " + key},
                     json={
                         "state": call.state,
                         "questions": call.questions,
@@ -205,7 +219,7 @@ class GuestInference:
                 ]
             )
             return answer
-        except Exception as exc:
+        except (Exception, CancelledError) as exc:
             await self.client.record(
                 [
                     SummaryEntry(
@@ -217,6 +231,8 @@ class GuestInference:
                     )
                 ]
             )
+            if isinstance(exc, CancelledError):
+                raise
             failure = InferenceFailure(exc)
             failure.category = classify_failure("jev", failure)
             raise failure from exc

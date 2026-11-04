@@ -63,7 +63,8 @@ fn folded(value: &str) -> String {
 fn name(value: &str, excluded: &[String], sensitive: bool) -> Result<PathBuf, String> {
     let p = Path::new(value);
     if value.is_empty()
-        || value.contains(['\\', '\0', ':'])
+        || value.contains(['\\', '\0'])
+        || (cfg!(windows) && value.contains(':'))
         || p.is_absolute()
         || p.components().any(|c| !matches!(c, Component::Normal(_)))
         || p.to_string_lossy() != value
@@ -112,6 +113,12 @@ fn case_sensitive(root: &File) -> Result<bool, String> {
     directory.remove_file(&name).map_err(|e| e.to_string())?;
     result
 }
+fn check_size(copied: usize, changes: usize) -> Result<(), String> {
+    if copied > 64 * 1024 * 1024 || changes > 1024 * 1024 * 1024 {
+        return Err("Worktree response exceeds its limit".into());
+    }
+    Ok(())
+}
 type DecodedChange = (PathBuf, Change, Option<Vec<u8>>);
 fn records(
     copy: &Copy,
@@ -119,13 +126,10 @@ fn records(
     changes: &[u8],
     sensitive: bool,
 ) -> Result<(BTreeMap<String, Copied>, Vec<DecodedChange>), String> {
-    if copied.len() > 64 * 1024 * 1024 || changes.len() > 1024 * 1024 * 1024 {
-        return Err("Worktree response exceeds its limit".into());
-    }
+    check_size(copied.len(), changes.len())?;
     let mut originals = BTreeMap::new();
     for line in copied.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
         let record: Copied = serde_json::from_slice(line).map_err(|e| e.to_string())?;
-        name(&record.path, &copy.excluded, sensitive)?;
         if originals.insert(record.path.clone(), record).is_some() {
             return Err("Copied file repeated".into());
         }
@@ -153,32 +157,19 @@ fn records(
     Ok((originals, changes_decoded))
 }
 /// Apply only regular-file data through held directory capabilities.
-pub use portable::write_back;
+pub use portable::{write_back, write_back_async};
 
 mod portable {
     use super::*;
     use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
     use cap_std::fs::{Dir, OpenOptions as CapOpen};
     pub(super) fn open_root(path: &Path) -> Result<Dir, String> {
-        let mut anchor = PathBuf::new();
-        let mut parts = Vec::new();
-        for part in path.components() {
-            match part {
-                Component::Prefix(_) | Component::RootDir => anchor.push(part),
-                Component::Normal(name) => parts.push(name),
-                _ => return Err("Invalid working directory".into()),
-            }
-        }
-        if anchor.as_os_str().is_empty() {
+        if !path.is_absolute() {
             return Err("Working directory must be absolute".into());
         }
-        let mut dir = Dir::open_ambient_dir(anchor, cap_std::ambient_authority())
-            .map_err(|e| e.to_string())?;
-        for part in parts {
-            dir = dir.open_dir_nofollow(part).map_err(|e| e.to_string())?;
-        }
-        Ok(dir)
+        gb_base::host_path::open_directory(path, false).map_err(|e| e.to_string())
     }
+
     fn parent(root: &Dir, path: &Path, create: bool) -> Result<Option<Dir>, String> {
         let mut dir = root.try_clone().map_err(|e| e.to_string())?;
         for part in path.parent().unwrap().components() {
@@ -245,6 +236,38 @@ mod portable {
     pub fn write_back(copy: &Copy, copied: &[u8], changes: &[u8]) -> Result<(), String> {
         let _held = gb_base::files::FileLock::hold(&copy.lock, std::time::Duration::from_secs(600))
             .map_err(|e| e.to_string())?;
+        write_back_held(copy, copied, changes)
+    }
+    pub async fn write_back_async(
+        copy: &Copy,
+        copied: &[u8],
+        changes: &[u8],
+    ) -> Result<(), String> {
+        let _held = tokio::time::timeout(std::time::Duration::from_secs(600), async {
+            loop {
+                if let Some(held) =
+                    gb_base::files::FileLock::try_hold(&copy.lock).map_err(|e| e.to_string())?
+                {
+                    return Ok::<_, String>(held);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .map_err(|_| "Worktree write-back lock timed out".to_owned())??;
+        // No await after acquiring the lock: cancellation while waiting cannot write later.
+        write_back_held(copy, copied, changes)
+    }
+    fn write_back_held(copy: &Copy, copied: &[u8], changes: &[u8]) -> Result<(), String> {
+        transaction(copy, copied, changes, || {}, || {})
+    }
+    fn transaction(
+        copy: &Copy,
+        copied: &[u8],
+        changes: &[u8],
+        before_stage: impl FnOnce(),
+        before_commit: impl FnOnce(),
+    ) -> Result<(), String> {
         let root = open_root(&copy.host)?;
         if identity(&root.try_clone().map_err(|e| e.to_string())?.into_std_file())? != copy.identity
         {
@@ -297,6 +320,7 @@ mod portable {
             }
             planned.push((path, bytes, change.executable, current.map(|s| s.2)));
         }
+        before_stage();
         let mut staged: Vec<(Dir, PathBuf, Option<PathBuf>)> = Vec::new();
         let stage = (|| -> Result<(), String> {
             for (path, bytes, executable, permissions) in planned {
@@ -344,6 +368,7 @@ mod portable {
             }
             Ok(())
         })();
+        before_commit();
         let commit = if stage.is_ok() {
             staged.iter().try_for_each(|(dir, destination, temporary)| {
                 match temporary {
@@ -361,6 +386,121 @@ mod portable {
             }
         }
         stage.and(commit)
+    }
+    #[test]
+    fn worktree_payload_limits_include_the_exact_boundary() {
+        assert!(check_size(64 * 1024 * 1024, 1024 * 1024 * 1024).is_ok());
+        assert!(check_size(64 * 1024 * 1024 + 1, 0).is_err());
+        assert!(check_size(0, 1024 * 1024 * 1024 + 1).is_err());
+    }
+    #[test]
+    fn staging_failure_cleans_temporary_files_without_committing_good_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let copy = Copy::new(
+            root.path().to_owned(),
+            "/work".into(),
+            vec![],
+            root.path().join("lock"),
+        )
+        .unwrap();
+        let error = transaction(&copy, b"", b"{\"path\":\"good\",\"content\":\"eA==\"}\n{\"path\":\"parent/file\",\"content\":\"eA==\"}",
+            || std::fs::write(root.path().join("parent"), b"not a directory").unwrap(), || {}).unwrap_err();
+        assert!(!error.is_empty());
+        assert!(!root.path().join("good").exists());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn partial_commit_failure_is_reported_and_unused_staged_files_are_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let copy = Copy::new(
+            root.path().to_owned(),
+            "/work".into(),
+            vec![],
+            root.path().join("lock"),
+        )
+        .unwrap();
+        let error = transaction(&copy, b"", b"{\"path\":\"good\",\"content\":\"eA==\"}\n{\"path\":\"blocked\",\"content\":\"eA==\"}",
+            || {}, || std::fs::create_dir(root.path().join("blocked")).unwrap()).unwrap_err();
+        assert!(error.starts_with("Partial worktree write:"));
+        assert_eq!(std::fs::read(root.path().join("good")).unwrap(), b"x");
+        assert!(root.path().join("blocked").is_dir());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_swapped_after_preflight_is_never_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("parent")).unwrap();
+        let copy = Copy::new(
+            root.path().to_owned(),
+            "/work".into(),
+            vec![],
+            root.path().join("lock"),
+        )
+        .unwrap();
+        assert!(
+            transaction(
+                &copy,
+                b"",
+                br#"{"path":"parent/file","content":"eA=="}"#,
+                || {
+                    std::fs::rename(root.path().join("parent"), root.path().join("moved")).unwrap();
+                    std::os::unix::fs::symlink(outside.path(), root.path().join("parent")).unwrap();
+                },
+                || {}
+            )
+            .is_err()
+        );
+        assert!(!outside.path().join("file").exists());
+    }
+    #[tokio::test]
+    async fn a_waiting_writer_detects_the_earlier_writers_change_after_lock_release() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("file"), b"old").unwrap();
+        let copy = Copy::new(
+            root.path().to_owned(),
+            "/work".into(),
+            vec![],
+            root.path().join("lock"),
+        )
+        .unwrap();
+        let baseline = serde_json::to_vec(&serde_json::json!({"path":"file","sha256":Sha256::digest(b"old").iter().map(|byte|format!("{byte:02x}")).collect::<String>(),"executable":false})).unwrap();
+        let held = gb_base::files::FileLock::try_hold(&copy.lock)
+            .unwrap()
+            .unwrap();
+        let mut waiting = Box::pin(write_back_async(
+            &copy,
+            &baseline,
+            br#"{"path":"file","content":"c2Vjb25k"}"#,
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut waiting)
+                .await
+                .is_err()
+        );
+        transaction(
+            &copy,
+            &baseline,
+            br#"{"path":"file","content":"Zmlyc3Q="}"#,
+            || {},
+            || {},
+        )
+        .unwrap();
+        drop(held);
+        assert!(
+            waiting
+                .await
+                .unwrap_err()
+                .contains("Worktree conflict: file")
+        );
+        assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"first");
+    }
+    #[test]
+    fn colon_names_follow_the_host_platform() {
+        for path in ["notes/12:00.txt", "C:/relative", "a:stream"] {
+            assert_eq!(name(path, &[], true).is_err(), cfg!(windows), "{path}");
+        }
     }
     #[test]
     fn case_folding_matches_host_aliases_without_collapsing_sensitive_names() {
@@ -396,7 +536,7 @@ mod portable {
         .unwrap();
         write_back(&copy, b"", br#"{"path":"new/nested","content":"b2s="}"#).unwrap();
         assert_eq!(std::fs::read(root.join("new/nested")).unwrap(), b"ok");
-        for bad in ["../outside", "excluded/a", "C:/outside", ".git/config"] {
+        for bad in ["../outside", "excluded/a", ".git/config"] {
             let changes = format!(
                 "{{\"path\":\"good\",\"content\":\"eA==\"}}\n{}",
                 serde_json::json!({"path":bad,"content":"eA=="})

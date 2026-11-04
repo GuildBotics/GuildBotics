@@ -147,3 +147,73 @@ pub fn gettext_name(tag: &str) -> Option<String> {
         None => language,
     })
 }
+
+/// Resolve the current host zone on every environment, with UTC on failure.
+/// The native resolver maps Windows registry zones to IANA names too.
+pub fn time_zone() -> String {
+    resolve_time_zone(std::env::var("TZ").ok().as_deref(), || {
+        iana_time_zone::get_timezone().ok()
+    })
+}
+
+fn resolve_time_zone(configured: Option<&str>, host: impl FnOnce() -> Option<String>) -> String {
+    match configured {
+        Some(zone) if valid_zone(zone) => zone.to_owned(),
+        Some(_) => "UTC".into(),
+        None => host()
+            .filter(|zone| valid_zone(zone))
+            .unwrap_or_else(|| "UTC".into()),
+    }
+}
+
+fn valid_zone(zone: &str) -> bool {
+    zone.parse::<chrono_tz::Tz>().is_ok()
+}
+
+#[cfg(test)]
+mod time_zone_tests {
+    use super::*;
+    #[test]
+    fn each_environment_rereads_host_iana_zone_and_unknown_or_unreadable_is_utc() {
+        for zone in ["Asia/Tokyo", "America/Los_Angeles"] {
+            assert_eq!(resolve_time_zone(None, || Some(zone.into())), zone);
+        }
+        for zone in [
+            None,
+            Some("Not/A_Zone".into()),
+            Some("Tokyo Standard Time".into()),
+        ] {
+            assert_eq!(resolve_time_zone(None, || zone), "UTC");
+        }
+        assert_eq!(
+            resolve_time_zone(Some("America/New_York"), || panic!("TZ must win")),
+            "America/New_York"
+        );
+        assert_eq!(
+            resolve_time_zone(Some("Not/A_Zone"), || panic!(
+                "invalid TZ must not select another zone"
+            )),
+            "UTC"
+        );
+    }
+    #[test]
+    fn only_known_iana_names_are_accepted_as_configured_zones() {
+        for zone in ["", "../etc/passwd", "/etc/passwd", "zone.tab", "Not/A_Zone"] {
+            assert!(!valid_zone(zone));
+        }
+        for zone in ["UTC", "Asia/Tokyo", "America/New_York"] {
+            assert!(valid_zone(zone));
+        }
+    }
+    #[test]
+    fn valid_iana_override_is_independent_of_the_native_zone() {
+        assert_eq!(
+            resolve_time_zone(Some("America/New_York"), || Some("Asia/Tokyo".into())),
+            "America/New_York"
+        );
+        assert_eq!(
+            resolve_time_zone(Some("Not/A_Zone"), || Some("Asia/Tokyo".into())),
+            "UTC"
+        );
+    }
+}

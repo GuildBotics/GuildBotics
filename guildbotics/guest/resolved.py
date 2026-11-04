@@ -52,7 +52,14 @@ class ResolvedBrainFactory(BrainFactory):
             response_class,
         )
         effort = normalize_effort(config.get("effort", ""))
-        slot = self.data.brains[config.get("brain", "default")]
+        slot_name = config.get("brain", "default")
+        slot = self.data.brains.get(slot_name)
+        if slot is None:
+            raise ValueError(f"Unknown resolved brain slot '{slot_name}'.")
+        if slot.kind == "invalid":
+            raise ValueError(
+                f"Invalid brain slot '{slot_name}': {slot.definition['error']}"
+            )
         if slot.kind == "model":
             return AgnoAgentDefaultBrain(
                 *args,

@@ -14,7 +14,7 @@ use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, AeadCore, OsRng, Payload},
 };
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use gb_base::{
     files::{FileLock, SHARED_WRITE_TIMEOUT, read_if_present},
@@ -38,6 +38,43 @@ pub trait Keychain: Send + Sync {
     fn create(&self, encoded_key: &str) -> anyhow::Result<()>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeychainFailure {
+    Locked,
+    Unavailable,
+}
+impl std::fmt::Display for KeychainFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Locked => "OS keychain is locked or access is restricted",
+            Self::Unavailable => "OS keychain unavailable",
+        })
+    }
+}
+impl std::error::Error for KeychainFailure {}
+fn system_keychain_error(error: keyring::Error) -> anyhow::Error {
+    #[cfg(target_os = "macos")]
+    if let keyring::Error::PlatformFailure(source) = &error
+        && source
+            .downcast_ref::<security_framework::base::Error>()
+            .is_some_and(|error| error.code() == -25308)
+    {
+        return KeychainFailure::Locked.into();
+    }
+    match error {
+        keyring::Error::NoStorageAccess(_) if !cfg!(target_os = "macos") => {
+            KeychainFailure::Locked.into()
+        }
+        _ => KeychainFailure::Unavailable.into(),
+    }
+}
+fn sanitized_keychain_error(error: anyhow::Error) -> anyhow::Error {
+    error
+        .downcast_ref::<KeychainFailure>()
+        .copied()
+        .unwrap_or(KeychainFailure::Unavailable)
+        .into()
+}
 pub struct SystemKeychain;
 fn keychain_target(windows: bool) -> Option<String> {
     // Python's WindowsCredentialManager._target (windows_credentials.py).
@@ -68,11 +105,11 @@ fn write_entry(entry: &keyring::Entry, value: &str, windows: bool) -> keyring::R
 }
 impl Keychain for SystemKeychain {
     fn read(&self) -> anyhow::Result<Option<String>> {
-        let entry = keychain_entry().map_err(|_| anyhow::anyhow!("OS keychain unavailable"))?;
+        let entry = keychain_entry().map_err(system_keychain_error)?;
         match read_entry(&entry, cfg!(target_os = "windows")) {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => bail!("OS keychain locked or unavailable"),
+            Err(error) => Err(system_keychain_error(error)),
         }
     }
     fn create(&self, encoded_key: &str) -> anyhow::Result<()> {
@@ -83,14 +120,20 @@ impl Keychain for SystemKeychain {
                 .and_then(|chain| {
                     chain.add_generic_password(SERVICE, ACCOUNT, encoded_key.as_bytes())
                 })
-                .map_err(|_| anyhow::anyhow!("OS keychain could not create device key"))?;
+                .map_err(|error| {
+                    anyhow::Error::from(if error.code() == -25308 {
+                        KeychainFailure::Locked
+                    } else {
+                        KeychainFailure::Unavailable
+                    })
+                })?;
         }
         #[cfg(not(target_os = "macos"))]
         {
             ensure!(self.read()?.is_none(), "device key already exists");
             keychain_entry()
                 .and_then(|entry| write_entry(&entry, encoded_key, cfg!(target_os = "windows")))
-                .map_err(|_| anyhow::anyhow!("OS keychain could not create device key"))?;
+                .map_err(system_keychain_error)?;
         }
         Ok(())
     }
@@ -103,10 +146,7 @@ pub struct DeviceKey<'a> {
 }
 impl DeviceKey<'_> {
     fn read(&self) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
-        let stored = self
-            .keychain
-            .read()
-            .map_err(|_| anyhow::anyhow!("OS keychain locked or unavailable"))?;
+        let stored = self.keychain.read().map_err(sanitized_keychain_error)?;
         stored
             .map(|stored| {
                 let stored = Zeroizing::new(stored);
@@ -135,7 +175,7 @@ impl DeviceKey<'_> {
         let encoded = Zeroizing::new(B64.encode(&key));
         self.keychain
             .create(&encoded)
-            .map_err(|_| anyhow::anyhow!("OS keychain could not create device key"))?;
+            .map_err(sanitized_keychain_error)?;
         Ok(key)
     }
 }
@@ -526,5 +566,48 @@ mod tests {
         assert_eq!(entry.get_secret().unwrap(), "synthetic-名".as_bytes());
         entry.set_secret(&[0xff]).unwrap();
         assert!(read_entry(&entry, true).is_err());
+    }
+    #[test]
+    fn keychain_access_failures_remain_typed_and_never_include_backend_details() {
+        for (error, expected) in [
+            (
+                keyring::Error::NoStorageAccess(Box::new(std::io::Error::other(
+                    "synthetic-private",
+                ))),
+                if cfg!(target_os = "macos") {
+                    KeychainFailure::Unavailable
+                } else {
+                    KeychainFailure::Locked
+                },
+            ),
+            (
+                keyring::Error::PlatformFailure(Box::new(std::io::Error::other(
+                    "synthetic-private",
+                ))),
+                KeychainFailure::Unavailable,
+            ),
+        ] {
+            let error = sanitized_keychain_error(system_keychain_error(error));
+            assert_eq!(error.downcast_ref::<KeychainFailure>(), Some(&expected));
+            assert!(!error.to_string().contains("synthetic-private"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keychain_locked_status_uses_the_same_error_type_as_keyring() {
+        let locked = system_keychain_error(keyring::Error::PlatformFailure(Box::new(
+            security_framework::base::Error::from_code(-25308),
+        )));
+        assert_eq!(
+            locked.downcast_ref::<KeychainFailure>(),
+            Some(&KeychainFailure::Locked)
+        );
+        let unavailable = system_keychain_error(keyring::Error::NoStorageAccess(Box::new(
+            security_framework::base::Error::from_code(-25291),
+        )));
+        assert_eq!(
+            unavailable.downcast_ref::<KeychainFailure>(),
+            Some(&KeychainFailure::Unavailable)
+        );
     }
 }

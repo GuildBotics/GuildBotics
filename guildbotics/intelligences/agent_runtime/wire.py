@@ -137,7 +137,7 @@ class ResolvedBrain(BaseModel):
     """A brain slot whose settings were resolved once by the host."""
 
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["model", "ai_cli", "jev"]
+    kind: Literal["model", "ai_cli", "jev", "invalid"]
     slot: str
     definition: dict[str, Any] = {}
 

@@ -185,6 +185,12 @@ pub async fn run(
         false,
     )
     .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    contract::reject_windows_temp_mounts(
+        &shape.mounts,
+        cfg!(windows),
+        std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
+    )
+    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
     for mount in &shape.mounts {
         if let Some(source) = &mount.host {
             contract::validate_mount_source(source, &access)
@@ -193,7 +199,7 @@ pub async fn run(
     }
     let stdin = serde_json::to_vec(&shape.request).expect("JSON");
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();
-    let ended = runtime::run_once(
+    runtime::run_once(
         &runtime::Boot {
             home: &host.data.join("msb"),
             snapshot: &snapshot,
@@ -210,13 +216,7 @@ pub async fn run(
             stdin: &stdin,
         },
     )
-    .await?;
-    serde_json::from_slice(&ended.reply).map_err(|_| {
-        Failure::Command(Sentence::Key(
-            "intelligences.agent_environment.runtime.no_reply",
-            vec![("code", ended.code.to_string())],
-        ))
-    })
+    .await
 }
 
 /// The workspace's configuration directory.
@@ -324,10 +324,7 @@ pub fn shape(
     };
     let mut env = vec![
         ("HOME".to_string(), guest_path(&host.home)?),
-        (
-            "TZ".into(),
-            std::env::var("TZ").unwrap_or_else(|_| "UTC".into()),
-        ),
+        ("TZ".into(), language::time_zone()),
         ("AGNO_TELEMETRY".into(), "false".into()),
     ];
     if let Some(language) = language {

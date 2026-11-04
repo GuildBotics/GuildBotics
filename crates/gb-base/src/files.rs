@@ -33,6 +33,11 @@ impl FileLock {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let file = options.open(path)?;
+        Self::try_file(file)
+    }
+
+    /// Lock an already opened file without reopening any pathname.
+    pub fn try_file(file: File) -> std::io::Result<Option<FileLock>> {
         match file.try_lock() {
             Ok(()) => Ok(Some(FileLock(file))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),

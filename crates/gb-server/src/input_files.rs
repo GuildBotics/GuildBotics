@@ -11,6 +11,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::{Dir, OpenOptions};
 use gb_base::files::FileLock;
 use serde_json::json;
 
@@ -21,46 +23,122 @@ pub const REQUEST_LIMIT: usize = MAX_BYTES + 64 * 1024;
 const NAME_CHARS: usize = 60;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The lock drops before the temporary directory, including on Windows.
+/// Session ownership uses held directories so replacing an ancestor redirects no IO.
 pub struct InputFileStore {
-    _lock: FileLock,
-    directory: tempfile::TempDir,
+    lock: Option<FileLock>,
+    root: Dir,
+    session: Dir,
+    name: String,
+    directory: PathBuf,
+}
+impl Drop for InputFileStore {
+    fn drop(&mut self) {
+        drop(self.lock.take());
+        let _ = self.root.remove_dir_all(&self.name);
+    }
+}
+fn try_lock(directory: &Dir, name: &str) -> std::io::Result<Option<FileLock>> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(true)
+        .follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    FileLock::try_file(directory.open_with(name, &options)?.into_std())
+}
+fn hold_lock(directory: &Dir, name: &str) -> std::io::Result<FileLock> {
+    let deadline = std::time::Instant::now() + LOCK_TIMEOUT;
+    loop {
+        if let Some(lock) = try_lock(directory, name)? {
+            return Ok(lock);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Input session lock is busy",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+struct Pending {
+    file: Option<std::fs::File>,
+    directory: Dir,
+    temporary: String,
+}
+impl Write for Pending {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.file.as_mut().unwrap().write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.as_mut().unwrap().flush()
+    }
+}
+impl Pending {
+    fn persist(mut self, destination: &Path) -> std::io::Result<()> {
+        drop(self.file.take());
+        let name = destination.file_name().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid upload name")
+        })?;
+        self.directory
+            .rename(&self.temporary, &self.directory, name)
+    }
+}
+impl Drop for Pending {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = self.directory.remove_file(&self.temporary);
+    }
 }
 
 impl InputFileStore {
     pub fn new(root: &Path) -> anyhow::Result<Self> {
-        let root = gb_base::host_path::directory(root, true)?;
-        let _cleanup = FileLock::hold(&root.join(".cleanup.lock"), LOCK_TIMEOUT)?;
-        for entry in std::fs::read_dir(&root)? {
+        let root_path = gb_base::host_path::normalize(root)?;
+        let root = gb_base::host_path::open_directory(&root_path, true)?;
+        let _cleanup = hold_lock(&root, ".cleanup.lock")?;
+        for entry in root.entries()? {
             let entry = entry?;
             if !entry.file_name().to_string_lossy().starts_with("session-")
                 || !entry.file_type()?.is_dir()
             {
                 continue;
             }
-            let lock_path = entry.path().join(".session.lock");
-            if std::fs::symlink_metadata(&lock_path)
-                .is_ok_and(|metadata| metadata.file_type().is_symlink())
-            {
+            let Ok(session) = root.open_dir_nofollow(entry.file_name()) else {
                 continue;
-            }
-            if let Some(lock) = FileLock::try_hold(&lock_path)? {
+            };
+            if let Ok(Some(lock)) = try_lock(&session, ".session.lock") {
                 drop(lock);
-                std::fs::remove_dir_all(entry.path())?;
+                drop(session);
+                root.remove_dir_all(entry.file_name())?;
             }
         }
-        let directory = tempfile::Builder::new()
-            .prefix("session-")
-            .tempdir_in(root)?;
-        let lock = FileLock::hold(&directory.path().join(".session.lock"), LOCK_TIMEOUT)?;
+        let name = format!("session-{}", uuid::Uuid::new_v4().simple());
+        let mut options = cap_std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use cap_std::fs::DirBuilderExt;
+            options.mode(0o700);
+        }
+        root.create_dir_with(&name, &options)?;
+        let session = root.open_dir_nofollow(&name)?;
+        let lock = hold_lock(&session, ".session.lock")?;
+        let directory = root_path.join(&name);
         Ok(Self {
-            _lock: lock,
+            lock: Some(lock),
+            root,
+            session,
+            name,
             directory,
         })
     }
 
     pub fn directory(&self) -> &Path {
-        self.directory.path()
+        &self.directory
     }
 
     /// Never accepts a caller's source directory or guest destination.
@@ -76,10 +154,7 @@ impl InputFileStore {
         })
     }
 
-    fn pending(
-        &self,
-        filename: Option<&str>,
-    ) -> anyhow::Result<(tempfile::NamedTempFile, PathBuf)> {
+    fn pending(&self, filename: Option<&str>) -> anyhow::Result<(Pending, PathBuf)> {
         gb_base::host_path::directory(self.directory(), false)?;
         let name = filename
             .unwrap_or("")
@@ -101,18 +176,28 @@ impl InputFileStore {
         } else {
             &name
         };
-        let prefix = tempfile::Builder::new()
-            .prefix("upload-")
-            .suffix(".upload")
-            .tempfile_in(self.directory())?;
-        // A random basename is generated by tempfile, so concurrent identical names differ.
-        let random = prefix
-            .path()
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let random = format!("upload-{}", uuid::Uuid::new_v4().simple());
+        let temporary = format!("{random}.upload");
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = self.session.open_with(&temporary, &options)?.into_std();
         let destination = self.directory().join(format!("{random}-{name}"));
-        Ok((prefix, destination))
+        Ok((
+            Pending {
+                file: Some(file),
+                directory: self.session.try_clone()?,
+                temporary,
+            },
+            destination,
+        ))
     }
 }
 
@@ -259,6 +344,72 @@ mod tests {
             assert!(outside.path().exists());
         }
     }
+    #[test]
+    fn unusable_orphan_locks_do_not_block_a_new_session() {
+        let root = tempfile::tempdir().unwrap();
+        let orphan = root.path().join("session-unreadable");
+        std::fs::create_dir_all(orphan.join(".session.lock")).unwrap();
+        let sentinel = orphan.join("keep");
+        std::fs::write(&sentinel, b"old session").unwrap();
+        let store = InputFileStore::new(root.path()).unwrap();
+        assert!(store.directory().is_dir());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"old session");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uploads_and_cleanup_keep_the_held_session_when_ancestors_are_swapped() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("inputs");
+        let store = InputFileStore::new(&root).unwrap();
+        let session = store.directory().file_name().unwrap().to_owned();
+        let (mut pending, destination) = store.pending(Some("result.txt")).unwrap();
+        let original = fixture.path().join("original");
+        std::fs::rename(&root, &original).unwrap();
+        let outside = fixture.path().join("outside");
+        let unrelated_session = outside.join(&session);
+        std::fs::create_dir_all(&unrelated_session).unwrap();
+        let sentinel = unrelated_session.join(destination.file_name().unwrap());
+        std::fs::write(&sentinel, b"private outside content").unwrap();
+        std::os::unix::fs::symlink(&outside, &root).unwrap();
+        assert!(store.pending(Some("after-swap.txt")).is_err());
+        pending.write_all(b"uploaded content").unwrap();
+        pending.persist(&destination).unwrap();
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"private outside content"
+        );
+        drop(store);
+        assert!(!original.join(&session).exists());
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"private outside content"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_directories_and_files_have_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let store = InputFileStore::new(fixture.path()).unwrap();
+        let (mut pending, destination) = store.pending(Some("file.txt")).unwrap();
+        pending.write_all(b"content").unwrap();
+        pending.persist(&destination).unwrap();
+        assert_eq!(
+            std::fs::metadata(store.directory())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(destination).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
     fn api(root: &Path) -> Shared {
         std::sync::Arc::new(crate::api::Api {
             inputs: InputFileStore::new(&root.join("command_inputs")).unwrap(),

@@ -94,6 +94,12 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         Some("ja_JP".into()),
     )
     .unwrap();
+    assert!(
+        made.mounts
+            .windows(2)
+            .all(|pair| Path::new(&pair[0].guest).components().count()
+                <= Path::new(&pair[1].guest).components().count())
+    );
     let cwd = spelled(&named(&machine.workspace.join("somewhere")));
     let config = named(&machine.workspace.join(".guildbotics/config"));
     let members = named(

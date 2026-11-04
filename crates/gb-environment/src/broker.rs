@@ -81,6 +81,22 @@ pub fn rejection(arguments: &[String], person: &str) -> Option<&'static str> {
     None
 }
 
+const OUTPUT_LIMIT: u64 = 10 * 1024 * 1024;
+async fn read_output(reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(OUTPUT_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > OUTPUT_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            "Member CLI output is too large.",
+        ));
+    }
+    Ok(bytes)
+}
+
 /// The member CLI implementation is injected from the layer above the
 /// broker (#89). No service CLI or shell is discovered through PATH.
 #[derive(Clone)]
@@ -113,6 +129,10 @@ impl Broker {
         *self.active.lock().await = None;
     }
     pub async fn execute(&self, request: Request) -> Result {
+        self.execute_with_timeout(request, Duration::from_secs(300))
+            .await
+    }
+    async fn execute_with_timeout(&self, request: Request, timeout: Duration) -> Result {
         let _serial = self.serial.lock().await;
         if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
             return Result::refused("The command broker is closed.");
@@ -126,8 +146,11 @@ impl Broker {
         if let Some(reason) = rejection(&request.arguments, &self.invocation.person_id) {
             return Result::refused(reason);
         }
-        match tokio::time::timeout(Duration::from_secs(300), self.run(request)).await {
+        match tokio::time::timeout(timeout, self.run(request)).await {
             Ok(Ok(result)) => result,
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                Result::refused("Member CLI output is too large.")
+            }
             Ok(Err(_)) => Result::refused("The member CLI could not execute."),
             Err(_) => Result::refused("The member CLI timed out."),
         }
@@ -156,24 +179,12 @@ impl Broker {
             stdin.write_all(&input).await?;
             stdin.shutdown().await
         };
-        let mut stdout = child
-            .stdout
-            .take()
-            .expect("piped stdout")
-            .take(10 * 1024 * 1024 + 1);
-        let mut stderr = child
-            .stderr
-            .take()
-            .expect("piped stderr")
-            .take(10 * 1024 * 1024 + 1);
-        let mut out = vec![];
-        let mut err = vec![];
-        let read =
-            async { tokio::try_join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err)) };
-        let (_, _) = tokio::try_join!(write, read)?;
-        if out.len() > 10 * 1024 * 1024 || err.len() > 10 * 1024 * 1024 {
-            return Ok(Result::refused("Member CLI output is too large."));
-        }
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        // Either overflow ends the join immediately; dropping the child then
+        // closes both pipes and kills the process, even for infinite output.
+        let read = async { tokio::try_join!(read_output(stdout), read_output(stderr)) };
+        let (_, (out, err)) = tokio::try_join!(write, read)?;
         let code = child.wait().await?.code().unwrap_or(-1);
         Ok(Result {
             exit_code: code,
@@ -275,5 +286,125 @@ mod external_tests {
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.starts_with("member|context|run-id|"));
         assert!(result.stdout.ends_with("literal $(false)"));
+    }
+    fn invocation(root: &std::path::Path) -> Invocation {
+        Invocation {
+            person_id: "aiko".into(),
+            run_id: "run".into(),
+            trace_id: "trace".into(),
+            work_kind: "ticket".into(),
+            work_identity: "87".into(),
+            cwd: root.into(),
+            access: gb_wire::CommandAccess {
+                read_only: true,
+                inspects: vec![],
+            },
+        }
+    }
+    fn script(root: &std::path::Path, text: &str) -> PathBuf {
+        let program = root.join("member-cli");
+        std::fs::write(&program, format!("#!/bin/sh\n{text}\n")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        program
+    }
+    fn request(grant: &str, command: &str) -> Request {
+        Request {
+            arguments: vec![command.into(), "--person=aiko".into()],
+            stdin: String::new(),
+            turn_grant: grant.into(),
+        }
+    }
+    #[tokio::test]
+    async fn member_timeout_and_request_cancellation_release_the_serial_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(
+            dir.path(),
+            r#"case "$2" in context) exec sleep 30;; *) printf done;; esac"#,
+        );
+        let broker = Broker::new(program, invocation(dir.path()));
+        let grant = broker.activate().await;
+        let timeout = broker
+            .execute_with_timeout(request(&grant, "context"), Duration::from_millis(30))
+            .await;
+        assert_eq!(timeout.exit_code, 2);
+        assert!(timeout.stderr.contains("timed out"));
+        assert_eq!(broker.execute(request(&grant, "help")).await.stdout, "done");
+        let busy = broker.serial.lock().await;
+        let queued_broker = broker.clone();
+        let queued_grant = grant.clone();
+        let queued = tokio::spawn(async move {
+            queued_broker
+                .execute(request(&queued_grant, "context"))
+                .await
+        });
+        tokio::task::yield_now().await;
+        queued.abort();
+        assert!(queued.await.unwrap_err().is_cancelled());
+        broker.deactivate().await;
+        drop(busy);
+        assert_eq!(broker.execute(request(&grant, "help")).await.exit_code, 2);
+        let fresh = broker.activate().await;
+        assert_eq!(broker.execute(request(&fresh, "help")).await.stdout, "done");
+        broker.close();
+        assert!(
+            broker
+                .execute(request(&fresh, "help"))
+                .await
+                .stderr
+                .contains("closed")
+        );
+    }
+    #[tokio::test]
+    async fn every_member_request_gets_the_host_invocation_and_never_another_turns_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(
+            dir.path(),
+            r#"printf '%s\n' "$GUILDBOTICS_MEMBER_INVOCATION" "$GUILDBOTICS_TRACE_ID" "$GUILDBOTICS_WORK_KIND" "$GUILDBOTICS_WORK_IDENTITY"
+cat"#,
+        );
+        let broker = Broker::new(program, invocation(dir.path()));
+        let stale = broker.activate().await;
+        let grant = broker.activate().await;
+        assert!(
+            broker
+                .execute(request(&stale, "help"))
+                .await
+                .stderr
+                .contains("expired")
+        );
+        for _ in 0..2 {
+            let mut input = request(&grant, "context");
+            input.stdin = "literal $(false)".into();
+            let output = broker.execute(input).await;
+            assert_eq!(output.exit_code, 0);
+            let mut lines = output.stdout.lines();
+            let metadata: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+            assert_eq!(metadata["person_id"], "aiko");
+            assert_eq!(metadata["cwd"], dir.path().to_string_lossy().as_ref());
+            assert_eq!(metadata["access"]["read_only"], true);
+            assert_eq!(
+                lines.collect::<Vec<_>>(),
+                ["trace", "ticket", "87", "literal $(false)"]
+            );
+        }
+    }
+    #[tokio::test]
+    async fn oversized_output_is_bounded_without_waiting_for_a_blocked_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Broker::new(
+            script(dir.path(), "head -c 20971520 /dev/zero"),
+            invocation(dir.path()),
+        );
+        let grant = broker.activate().await;
+        let result = broker
+            .execute_with_timeout(request(&grant, "help"), Duration::from_secs(2))
+            .await;
+        assert_eq!(result.exit_code, 2);
+        assert!(
+            result.stderr.contains("output is too large"),
+            "{}",
+            result.stderr
+        );
+        assert!(result.stdout.is_empty());
     }
 }

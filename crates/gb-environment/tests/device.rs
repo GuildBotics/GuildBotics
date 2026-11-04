@@ -30,7 +30,7 @@ fn fixture() -> (tempfile::TempDir, Host, PathBuf) {
     write(
         &workspace,
         ".guildbotics/config/intelligences/agent_environment.yml",
-        "{}",
+        "dns: {nameservers: [1.1.1.1]}",
     );
     (d, host, workspace)
 }
@@ -89,7 +89,7 @@ async fn declaration_precedes_snapshot_and_access_preview_keeps_document_rows() 
     write(
         &workspace,
         ".guildbotics/config/intelligences/agent_environment.yml",
-        "{}",
+        "dns: {nameservers: [1.1.1.1]}",
     );
     let preview = device::read(&host, &workspace).await;
     let documents = preview.view["access"]["documents"].as_array().unwrap();
@@ -121,4 +121,26 @@ async fn rendered_warning_is_shared_with_image_and_runtime_refusal_stays_first()
     assert_eq!(view["runtime"]["reason"], view["problem"]);
     assert_eq!(view["image"]["warning"], view["warning"]);
     assert_eq!(view["warning"], "different image");
+}
+
+#[tokio::test]
+async fn status_preserves_the_declared_network_and_dns_wire_fields() {
+    let (_d, host, workspace) = fixture();
+    for (mode, domains) in [
+        ("deny", vec![]),
+        ("allowlist", vec!["api.example.test"]),
+        ("unrestricted", vec![]),
+    ] {
+        write(&workspace, ".guildbotics/config/intelligences/agent_environment.yml", &serde_json::json!({"network":{"mode":mode,"allowed_domains":domains,"allow_local_network":true},"dns":{"nameservers":["1.1.1.1","8.8.8.8"]}}).to_string());
+        let status = device::read(&host, &workspace).await;
+        assert_eq!(
+            status.view["network"],
+            serde_json::json!({"mode":mode,"allowed_domains":domains,"allow_local_network":true})
+        );
+        assert_eq!(status.view["dns"]["declared"], "1.1.1.1, 8.8.8.8");
+        assert_eq!(
+            status.view["dns"]["nameservers"],
+            serde_json::json!(["1.1.1.1", "8.8.8.8"])
+        );
+    }
 }

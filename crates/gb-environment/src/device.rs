@@ -77,10 +77,10 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
             return device;
         }
     };
-    match crate::contract::network(&config, &templates, false) {
-        Ok(network) => {
-            device.view["network"] = json!({"unrestricted":network.unrestricted,"domains":network.domains,"local_network":network.local_network});
-            device.view["dns"] = json!({"declared":network.nameservers.join(", "),"nameservers":network.nameservers,"problem":""});
+    match crate::contract::network_reading(&config, &templates, false) {
+        Ok((_, view)) => {
+            device.view["network"] = view["network"].clone();
+            device.view["dns"] = view["dns"].clone();
         }
         Err(error) => {
             device.view["dns"]["problem"] = json!(error);

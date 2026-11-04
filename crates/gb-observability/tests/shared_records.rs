@@ -297,7 +297,10 @@ fn every_update_overwrites_a_foreign_generation() {
 fn system_sessions_share_a_transcript_and_finish_with_counts_from_disk() {
     let root = tempfile::tempdir().unwrap();
     let diagnostics = gb_observability::Diagnostics::open(root.path());
+    assert!(diagnostics.system_trace_id().is_none());
     diagnostics.start_system_session("service-1").unwrap();
+    let active_trace = diagnostics.system_trace_id().unwrap();
+    assert!(active_trace.starts_with("system:system-"));
     diagnostics.start_system_session("service-2").unwrap();
     let other = gb_observability::Diagnostics::open(root.path());
     other.record(
@@ -334,7 +337,9 @@ fn system_sessions_share_a_transcript_and_finish_with_counts_from_disk() {
     let id = records[0]["attributes"]["system_session_id"]
         .as_str()
         .unwrap();
-    let detail = diagnostics.trace_detail(&format!("system:{id}")).unwrap();
+    assert_eq!(active_trace, format!("system:{id}"));
+    assert!(diagnostics.system_trace_id().is_none());
+    let detail = diagnostics.trace_detail(&active_trace).unwrap();
     assert_eq!(detail["records"].as_array().unwrap().len(), 3);
     assert_eq!(detail["transcript_available"], true);
     assert_eq!(

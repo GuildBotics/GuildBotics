@@ -189,6 +189,7 @@ struct GatewayState {
     policy: Policy,
     source: TokenSource,
     leases: Leases,
+    refused: Arc<std::sync::Mutex<std::collections::BTreeSet<(u64, String, String)>>>,
     client: reqwest::Client,
 }
 /// Owns a command-level lease; dropping the listener revokes it. Turn-level
@@ -226,6 +227,7 @@ impl Gateway {
             policy,
             source,
             leases: leases.clone(),
+            refused: Arc::default(),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(600))
@@ -283,6 +285,7 @@ impl Gateway {
             policy,
             source,
             leases: leases.clone(),
+            refused: Arc::default(),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(600))
@@ -348,7 +351,18 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
             .unwrap_or("/"),
     ) {
         Ok(target) => target,
-        Err(_) => return StatusCode::FORBIDDEN.into_response(),
+        Err(_) => {
+            let method = request.method().as_str();
+            let path = request.uri().path();
+            if state.refused.lock().expect("gateway refusal log").insert((
+                generation,
+                method.into(),
+                path.into(),
+            )) {
+                tracing::warn!("Gateway refused {method} {path}");
+            }
+            return StatusCode::FORBIDDEN.into_response();
+        }
     };
     let supplied: BTreeMap<String, String> = request
         .headers()
@@ -356,6 +370,7 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
         .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_owned())))
         .collect();
     let method = request.method().clone();
+    let path = request.uri().path().to_owned();
     let body = match axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await {
         Ok(body) => body,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -391,6 +406,7 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
         .get("content-encoding")
         .is_some_and(|v| v != "identity")
     {
+        tracing::warn!("Gateway refused an encoded answer to {} {}", method, path);
         return StatusCode::BAD_GATEWAY.into_response();
     }
     let status = response.status();
@@ -557,6 +573,175 @@ mod tests {
         delta["event"]["name"] = "delta".into();
         assert!(record_entry(delta, "trace", "run", "aiko", "write").is_none());
     }
+    #[test]
+    fn failed_agent_events_mask_credentials_and_preserve_command_correlation() {
+        let entry = json!({"type":"event","span":null,"conversation":{"person_id":"aiko","adapter":"codex","work_kind":"ticket","work_identity":"issue-300"},"generation":2,"context_cursor":"cursor-1","event":{"kind":"failed","name":"failed","message":"Authorization: Bearer top-secret","command":"tool --token command-secret","details":{"access_token":"secret","nested":{"password":"secret"},"output":"API_KEY=output-secret"}}});
+        let record = record_entry(entry, "trace-1", "run-1", "aiko", "write").unwrap();
+        assert_eq!(record["type"], "agent_runtime.failed");
+        assert_eq!(record["trace_id"], "trace-1");
+        assert_eq!(record["person_id"], "aiko");
+        assert_eq!(record["attributes"]["agent.run_id"], "run-1");
+        assert_eq!(record["attributes"]["agent.conversation_generation"], 2);
+        assert_eq!(record["attributes"]["agent.context_cursor"], "cursor-1");
+        assert_eq!(record["payload"]["message"], "Authorization: ***");
+        assert_eq!(record["payload"]["command"], "tool --token ***");
+        assert_eq!(
+            record["payload"]["details"],
+            json!({"access_token":"***","nested":{"password":"***"},"output":"API_KEY=***"})
+        );
+    }
+
+    #[test]
+    fn conversation_snapshots_persist_and_rotate_only_within_the_commands_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let invocation = gb_environment::broker::Invocation {
+            person_id: "aiko".into(),
+            run_id: "run-1".into(),
+            trace_id: "trace-1".into(),
+            work_kind: "ticket".into(),
+            work_identity: "issue-300".into(),
+            cwd: root.path().into(),
+            access: gb_wire::CommandAccess {
+                read_only: false,
+                inspects: vec![],
+            },
+        };
+        let context = Context {
+            broker: Broker::new(root.path().join("unused-cli"), invocation.clone()),
+            invocation,
+            workspace: root.path().into(),
+            home: root.path().to_string_lossy().into(),
+            mounts: BTreeMap::new(),
+            turn_mounts: BTreeMap::new(),
+            tools: ["codex".into()].into(),
+            summary_tools: ["codex".into()].into(),
+            loans: BTreeMap::new(),
+            rate_limits: BTreeMap::new(),
+            record: Arc::new(|_| {}),
+        };
+        let key = json!({"person_id":"aiko","adapter":"codex","work_kind":"ticket","work_identity":"issue-300"});
+        assert!(conversation(&context, "resolve", &json!({"key":key,"policy":"resume"})).is_err());
+        let mut record = conversation(
+            &context,
+            "resolve",
+            &json!({"key":key,"policy":"auto","model":"model-a"}),
+        )
+        .map_err(|error| error.message)
+        .unwrap();
+        assert_eq!(record["generation"], 0);
+        assert_eq!(record["provider_session_id"], "");
+        record["provider_session_id"] = "provider-session".into();
+        record["provider_turn_id"] = "provider-turn".into();
+        record["context_cursor"] = "cursor-1".into();
+        record["last_event_id"] = "event-1".into();
+        record["last_run_id"] = "run-1".into();
+        record["effective_model"] = "model-a".into();
+        record["effective_effort"] = "high".into();
+        record["turn_count"] = 1.into();
+        record["input_tokens"] = 20.into();
+        let saved = conversation(&context, "save", &json!({"record":record}))
+            .map_err(|error| error.message)
+            .unwrap();
+        record["context_cursor"] = "uncommitted".into();
+        let resumed = conversation(&context, "resolve", &json!({"key":key,"policy":"resume"}))
+            .map_err(|error| error.message)
+            .unwrap();
+        for field in [
+            "provider_session_id",
+            "provider_turn_id",
+            "context_cursor",
+            "last_event_id",
+            "last_run_id",
+            "effective_model",
+            "effective_effort",
+            "turn_count",
+            "input_tokens",
+            "generation",
+            "created_at",
+        ] {
+            assert_eq!(resumed[field], saved[field], "{field}");
+        }
+        assert_eq!(resumed["context_cursor"], "cursor-1");
+        assert!(resumed.get("version").is_none());
+        let unhealthy = conversation(
+            &context,
+            "mark_unhealthy",
+            &json!({"record":resumed,"reason":"context_compaction"}),
+        )
+        .map_err(|error| error.message)
+        .unwrap();
+        assert_eq!(unhealthy["healthy"], false);
+        let rotated = conversation(&context, "resolve", &json!({"key":key,"policy":"auto"}))
+            .map_err(|error| error.message)
+            .unwrap();
+        assert_eq!(rotated["generation"], 1);
+        assert_eq!(rotated["provider_session_id"], "");
+        assert_eq!(rotated["context_cursor"], "");
+        assert_eq!(rotated["rotation_reason"], "context_compaction");
+        let fresh = conversation(&context, "resolve", &json!({"key":key,"policy":"fresh"}))
+            .map_err(|error| error.message)
+            .unwrap();
+        assert_eq!(fresh["generation"], 2);
+        assert_eq!(fresh["rotation_reason"], "fresh");
+        for (field, value) in [
+            ("person_id", "kenji"),
+            ("adapter", "claude"),
+            ("work_kind", "chat"),
+            ("work_identity", "../other-work"),
+        ] {
+            let mut foreign = key.clone();
+            foreign[field] = value.into();
+            assert!(
+                conversation(&context, "resolve", &json!({"key":foreign,"policy":"auto"})).is_err()
+            );
+            let mut foreign_record = fresh.clone();
+            foreign_record["key"] = foreign;
+            assert!(conversation(&context, "save", &json!({"record":foreign_record})).is_err());
+        }
+        let parent = root
+            .path()
+            .join(".guildbotics/local/agent-runtime/conversations/aiko/codex");
+        let files = std::fs::read_dir(parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 1);
+        let stored: Value = serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+        assert_eq!(stored["version"], 1);
+        assert_eq!(stored["generation"], 2);
+        std::fs::write(&files[0], "not JSON").unwrap();
+        assert!(conversation(&context, "resolve", &json!({"key":key,"policy":"auto"})).is_err());
+    }
+
+    #[tokio::test]
+    async fn next_turn_waits_for_the_active_turn_and_cancelled_waiters_keep_its_grant() {
+        let serial = Arc::new(tokio::sync::Mutex::new(()));
+        let current = Arc::new(tokio::sync::Mutex::new(Some("first".into())));
+        let released = Arc::new(tokio::sync::Notify::new());
+        let second = wait_for_turn(&serial, &current, &released);
+        tokio::pin!(second);
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        let cancelled = {
+            let serial = serial.clone();
+            let current = current.clone();
+            let released = released.clone();
+            tokio::spawn(async move { wait_for_turn(&serial, &current, &released).await })
+        };
+        tokio::task::yield_now().await;
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        assert_eq!(current.lock().await.as_deref(), Some("first"));
+        let ending = serial.lock().await;
+        *current.lock().await = None;
+        released.notify_waiters();
+        drop(ending);
+        let second_guard = second.await;
+        *current.lock().await = Some("second".into());
+        assert_eq!(current.lock().await.as_deref(), Some("second"));
+        drop(second_guard);
+    }
+
     #[tokio::test]
     async fn host_calls_require_the_command_token_and_preserve_the_wire_envelope() {
         let dir = tempfile::tempdir().unwrap();
@@ -654,11 +839,31 @@ pub struct Context {
     pub rate_limits: BTreeMap<String, usize>,
     pub record: Arc<dyn Fn(Value) + Send + Sync>,
 }
+async fn wait_for_turn(
+    serial: &Arc<tokio::sync::Mutex<()>>,
+    current: &tokio::sync::Mutex<Option<String>>,
+    released: &tokio::sync::Notify,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    loop {
+        let changed = released.notified();
+        tokio::pin!(changed);
+        let _ = changed.as_mut().enable();
+        let guard = serial.clone().lock_owned().await;
+        if current.lock().await.is_none() {
+            return guard;
+        }
+        // End-turn calls need the serial lock to revoke the active grant.
+        drop(guard);
+        changed.await;
+    }
+}
+
 impl HttpHost {
     pub async fn start_context(context: Context) -> std::io::Result<Self> {
         let endpoint = Arc::new(tokio::sync::OnceCell::<(String, String)>::new());
         let current = Arc::new(tokio::sync::Mutex::new(None::<String>));
         let serial = Arc::new(tokio::sync::Mutex::new(()));
+        let released = Arc::new(tokio::sync::Notify::new());
         let broker = context.broker.clone();
         let stored = endpoint.clone();
         let calls: HostCalls = Arc::new(move |name, args| {
@@ -666,8 +871,13 @@ impl HttpHost {
             let endpoint = endpoint.clone();
             let current = current.clone();
             let serial = serial.clone();
+            let released = released.clone();
             Box::pin(async move {
-                let _serial = serial.lock().await;
+                let _serial = if name == "begin_turn" {
+                    wait_for_turn(&serial, &current, &released).await
+                } else {
+                    serial.lock_owned().await
+                };
                 match name.as_str() {
                     "begin_turn" => {
                         let tool = args["tool"]
@@ -717,6 +927,7 @@ impl HttpHost {
                             loan.end().await;
                         }
                         *active = None;
+                        released.notify_waiters();
                         Ok(json!({"refusal":""}))
                     }
                     "member" => {
@@ -975,7 +1186,7 @@ pub fn tool_status(data: &std::path::Path, home: &std::path::Path, catalog: &Val
   let command=format!("'{cli}' environment login {name}");
   let mut status=gb_config::credential_vault::status(&device,&path,&label,command.clone());
   if status.saved {
-    let valid=gb_config::credential_vault::unseal(&device,&path,&label).ok().flatten().and_then(|files| files.get(provision["auth"].as_str().unwrap_or("")).and_then(|raw|serde_json::from_slice::<Value>(raw).ok())).and_then(|document|crate::tool_login::at(&document,&broker["access_token"]).and_then(Value::as_str).map(|s|!s.is_empty())).unwrap_or(false);
+    let valid=gb_config::credential_vault::unseal(&device,&path,&label).ok().flatten().is_some_and(|files| crate::tool_login::valid(&files,tool));
     if !valid {status.saved=false;status.state="corrupt";}
   }
   Some(json!({"name":name,"provisioned":!provision["package"].as_str().unwrap_or("").is_empty()||!provision["install"].as_str().unwrap_or("").is_empty(),"saved":status.saved,"credentials":status.state,"authentication_failed":data.join("agent_environment").join(name).join("authentication-failed").is_file(),"login_command":command,"usage":{"state":"unchecked"}}))
@@ -1035,7 +1246,13 @@ pub async fn prepare_command(
         .filter_map(|brain| brain["definition"]["adapter"].as_str())
         .map(str::to_owned)
         .collect();
-    let redactor = gb_observability::redaction::Redactor::from_environment(
+    let mut secret_names = gb_config::secrets::read_secret_index(&roots.config)
+        .map_err(|_| "The workspace secret index cannot be read.".to_owned())?;
+    secret_names.extend(
+        gb_config::secrets::read_secret_index(&host.identity_root.join(".guildbotics/config"))
+            .map_err(|_| "The identity secret index cannot be read.".to_owned())?,
+    );
+    secret_names.extend(
         [
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
@@ -1046,6 +1263,7 @@ pub async fn prepare_command(
         ]
         .map(str::to_owned),
     );
+    let redactor = gb_observability::redaction::Redactor::from_environment(secret_names);
     let diagnostics = gb_observability::Diagnostics::open(workspace);
     let trace_id = command.trace_id.clone();
     let person_id = command.person_id.clone();
@@ -1681,3 +1899,7 @@ fn rotation_reason(record: &Value) -> &str {
     }
     ""
 }
+
+#[cfg(test)]
+#[path = "gateway_tests.rs"]
+mod gateway_contract_tests;

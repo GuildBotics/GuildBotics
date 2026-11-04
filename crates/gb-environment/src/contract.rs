@@ -59,7 +59,15 @@ fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, Stri
     match std::fs::read_to_string(path) {
         Ok(text) => gb_config::yaml_value(&text)
             .map_err(|e| e.to_string())
-            .and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
+            .and_then(|v| {
+                if v.is_null() {
+                    Ok(T::default())
+                } else if v.is_object() {
+                    serde_json::from_value(v).map_err(|e| e.to_string())
+                } else {
+                    Err(format!("{}: grants must be a mapping", path.display()))
+                }
+            }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
@@ -67,7 +75,8 @@ fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, Stri
 fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
     let path = Path::new(name);
     if name.is_empty()
-        || name.contains('\\')
+        || (!absolute && name.contains('\\'))
+        || name.contains("//")
         || name.contains('\0')
         || (!absolute && path.is_absolute())
         || path
@@ -176,6 +185,22 @@ pub fn resolve(
     read_only: bool,
     create: bool,
 ) -> Result<Resolved, String> {
+    resolve_with_probe(workspace, home, registered, read_only, create, |path| {
+        for entry in std::fs::read_dir(path).map_err(|e| format!("{}: {e}", path.display()))? {
+            entry.map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    })
+}
+
+fn resolve_with_probe(
+    workspace: &Path,
+    home: &Path,
+    registered: &[PathBuf],
+    read_only: bool,
+    create: bool,
+    probe: impl Fn(&Path) -> Result<(), String>,
+) -> Result<Resolved, String> {
     let home = gb_base::host_path::directory(home, false).map_err(|e| e.to_string())?;
     let shared: Shared = load(
         &workspace
@@ -221,12 +246,21 @@ pub fn resolve(
         .map(|(i, path)| serde_json::json!({"path":path,"builtin":i<builtin_count}))
         .collect();
     for path in &denied {
-        expanded.extend(protected_names(path)?);
+        expanded.extend(protected_names(path));
     }
     denied = expanded;
     // Validate the whole population before creating even the built-in exchange.
     for (path, _, document, _, _) in &planned {
         validate_source(path, &denied, true, *document || !create)?;
+    }
+    for (path, _, document, _, _) in &planned {
+        let mut present = path.as_path();
+        while !present.exists() && *document {
+            present = present.parent().ok_or("Grant has no existing parent")?;
+        }
+        if present.exists() {
+            probe(present)?;
+        }
     }
     let mut grants = Vec::new();
     let mut documents = Vec::new();
@@ -297,6 +331,23 @@ pub fn network(
     templates: &Path,
     read_only: bool,
 ) -> Result<crate::runtime::Network, String> {
+    network_reading(config, templates, read_only).map(|(network, _)| network)
+}
+
+pub fn network_reading(
+    config: &Path,
+    templates: &Path,
+    read_only: bool,
+) -> Result<(crate::runtime::Network, serde_json::Value), String> {
+    network_with_resolvers(config, templates, read_only, device_nameservers)
+}
+
+fn network_with_resolvers(
+    config: &Path,
+    templates: &Path,
+    read_only: bool,
+    resolvers: impl FnOnce() -> Vec<String>,
+) -> Result<(crate::runtime::Network, serde_json::Value), String> {
     let own = config.join(gb_config::agent_environment::PATH);
     let path = if own.exists() {
         own
@@ -305,6 +356,24 @@ pub fn network(
     };
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let value = gb_config::yaml_value(&text).map_err(|e| e.to_string())?;
+    let object = value
+        .as_object()
+        .ok_or("Environment declaration must be an object")?;
+    if object
+        .keys()
+        .any(|key| !["image", "resources", "network", "dns"].contains(&key.as_str()))
+    {
+        return Err("Unknown environment declaration field".into());
+    }
+    gb_config::agent_environment::resources(config, templates).map_err(|e| e.to_string())?;
+    gb_config::agent_environment::image(config, templates).map_err(|e| e.to_string())?;
+    let dns = object
+        .get("dns")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("DNS declaration is required")?;
+    if dns.keys().any(|key| key != "nameservers") {
+        return Err("Unknown DNS declaration field".into());
+    }
     let policy: Network = match value.get("network") {
         None => Network::default(),
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
@@ -312,19 +381,9 @@ pub fn network(
     policy.validate()?;
     let mut nameservers = Vec::new();
     match value.pointer("/dns/nameservers") {
-        None => nameservers = vec!["1.1.1.1".into(), "8.8.8.8".into()],
+        None => return Err("DNS nameservers are required".into()),
         Some(serde_json::Value::String(host)) if host == "host" => {
-            let text = std::fs::read_to_string("/etc/resolv.conf").map_err(|e| e.to_string())?;
-            for line in text.lines() {
-                let mut parts = line.split_whitespace();
-                if parts.next() == Some("nameserver")
-                    && let Some(ip) = parts
-                        .next()
-                        .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
-                {
-                    nameservers.push(ip.to_string());
-                }
-            }
+            nameservers = resolvers();
         }
         Some(serde_json::Value::Array(list)) => {
             for entry in list {
@@ -341,6 +400,14 @@ pub fn network(
     if nameservers.is_empty() {
         return Err("No IPv4 DNS resolver is available".into());
     }
+    let declared = match value
+        .pointer("/dns/nameservers")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("host") => "host".to_owned(),
+        _ => nameservers.join(", "),
+    };
+    let view = serde_json::json!({"network":{"mode": match policy.mode { Mode::Deny=>"deny", Mode::Allowlist=>"allowlist", Mode::Unrestricted=>"unrestricted" },"allowed_domains":policy.allowed_domains,"allow_local_network":policy.allow_local_network},"dns":{"declared":declared,"nameservers":nameservers,"problem":""}});
     let network = crate::runtime::Network {
         unrestricted: !read_only && policy.mode == Mode::Unrestricted,
         domains: if read_only {
@@ -353,11 +420,107 @@ pub fn network(
         nameservers,
     };
     network.policy()?;
-    Ok(network)
+    Ok((network, view))
+}
+
+/// The platform's IPv4 DNS servers in original order, without duplicates.
+fn resolver_addresses(text: &str, resolv_conf: bool) -> Vec<String> {
+    let mut result = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let candidate = if resolv_conf {
+            if fields.next() != Some("nameserver") {
+                continue;
+            }
+            fields.next()
+        } else {
+            fields.next()
+        };
+        if let Some(ip) = candidate.and_then(|s| s.parse::<std::net::Ipv4Addr>().ok()) {
+            let ip = ip.to_string();
+            if !result.contains(&ip) {
+                result.push(ip);
+            }
+        }
+    }
+    result
+}
+
+#[cfg(any(windows, test))]
+fn windows_dns_arguments() -> [&'static str; 4] {
+    [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-DnsClientServerAddress -AddressFamily IPv4 | ForEach-Object { $_.ServerAddresses }",
+    ]
+}
+
+fn device_nameservers() -> Vec<String> {
+    #[cfg(windows)]
+    let text = std::process::Command::new("powershell")
+        .args(windows_dns_arguments())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    #[cfg(not(windows))]
+    let text = std::fs::read_to_string("/etc/resolv.conf").ok();
+    text.map(|text| resolver_addresses(&text, !cfg!(windows)))
+        .unwrap_or_default()
+}
+
+/// Host temporary sources on Windows cannot be mounted by the runtime.
+/// An empty guest cwd is fine: only actual host sources cross this boundary.
+pub fn reject_windows_temp_mounts(
+    mounts: &[Mount],
+    windows: bool,
+    local_app_data: Option<&Path>,
+) -> Result<(), String> {
+    if !windows {
+        return Ok(());
+    }
+    let Some(local) = local_app_data else {
+        return Ok(());
+    };
+    let temp = gb_base::host_path::normalize(&local.join("Temp")).map_err(|e| e.to_string())?;
+    let temporary_names = protected_names(&temp);
+    for source in mounts.iter().filter_map(|mount| mount.host.as_ref()) {
+        let source_names = protected_names(source);
+        if source_names.iter().any(|source| {
+            temporary_names
+                .iter()
+                .any(|root| windows_path_contains(root, source))
+        }) {
+            return Err(format!(
+                "Windows temporary directory {} cannot be mounted: {}",
+                temp.display(),
+                source.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+// Fold each component independently so sibling prefixes stay distinct. Use
+// the same Unicode normalization/case policy as Windows worktree names.
+fn windows_path_contains(root: &Path, path: &Path) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let components = |path: &Path| {
+        path.components()
+            .map(|part| {
+                unicase::UniCase::unicode(
+                    part.as_os_str().to_string_lossy().nfd().collect::<String>(),
+                )
+                .to_folded_case()
+            })
+            .collect::<Vec<_>>()
+    };
+    components(path).starts_with(&components(root))
 }
 
 // Protect link spellings as well as their destinations, including absent tails.
-fn protected_names(path: &Path) -> Result<Vec<PathBuf>, String> {
+fn protected_names(path: &Path) -> Vec<PathBuf> {
     let mut seen = vec![path.to_owned()];
     let mut current = path.to_owned();
     for _ in 0..40 {
@@ -365,10 +528,16 @@ fn protected_names(path: &Path) -> Result<Vec<PathBuf>, String> {
         let mut prefix = PathBuf::new();
         let mut changed = false;
         for (i, part) in components.iter().enumerate() {
-            prefix.push(part);
+            if matches!(part, Component::ParentDir) {
+                prefix.pop();
+            } else {
+                prefix.push(part);
+            }
             match std::fs::symlink_metadata(&prefix) {
                 Ok(m) if m.file_type().is_symlink() => {
-                    let dest = std::fs::read_link(&prefix).map_err(|e| e.to_string())?;
+                    let Ok(dest) = std::fs::read_link(&prefix) else {
+                        return seen;
+                    };
                     let mut next = if dest.is_absolute() {
                         dest
                     } else {
@@ -377,32 +546,44 @@ fn protected_names(path: &Path) -> Result<Vec<PathBuf>, String> {
                     for rest in &components[i + 1..] {
                         next.push(rest);
                     }
-                    let next = std::path::absolute(next).map_err(|e| e.to_string())?;
-                    let mut normalized = PathBuf::new();
-                    for component in next.components() {
-                        match component {
-                            Component::ParentDir => {
-                                normalized.pop();
-                            }
-                            Component::CurDir => {}
-                            other => normalized.push(other),
-                        }
+                    // Keep unresolved tails intact: a link before `..` must be
+                    // followed before the parent component is interpreted.
+                    if seen.contains(&next) {
+                        return seen;
                     }
-                    current = normalized;
+                    current = next;
                     seen.push(current.clone());
                     changed = true;
                     break;
                 }
+                Ok(metadata) if !metadata.is_dir() && i + 1 < components.len() => {
+                    // A file cannot be traversed to interpret a later `..`.
+                    // Close the inspected obstacle, not the unreachable tail.
+                    if !seen.contains(&prefix) {
+                        seen.push(prefix);
+                    }
+                    return seen;
+                }
                 Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(seen),
-                Err(e) => return Err(e.to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if components[i + 1..].contains(&Component::ParentDir)
+                        && !seen.contains(&prefix)
+                    {
+                        seen.push(prefix);
+                    }
+                    return seen;
+                }
+                Err(_) => return seen,
             }
         }
         if !changed {
-            return Ok(seen);
+            if !seen.contains(&prefix) {
+                seen.push(prefix);
+            }
+            return seen;
         }
     }
-    Err("Protected path passes through too many links".into())
+    seen
 }
 
 /// Member checkouts are host-owned precise children of workspace state. This
@@ -548,4 +729,376 @@ pub fn plan(
         mounts,
         copy,
     })
+}
+
+#[cfg(test)]
+mod frozen_tests {
+    use super::*;
+    fn put(root: &Path, relative: &str, value: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value).unwrap();
+    }
+    const SHARED: &str = ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml";
+    const LOCAL: &str = ".guildbotics/local/cli_agent_filesystem_grants.yml";
+    #[test]
+    fn grant_documents_local_paths_optional_files_and_invalid_population() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let workspace = dir.path().join("workspace");
+        for value in [None, Some("null"), Some("{}")] {
+            if let Some(value) = value {
+                put(&workspace, SHARED, value);
+                put(&workspace, LOCAL, value);
+            }
+            let value = resolve(&workspace, &home, &[], false, false).unwrap();
+            assert_eq!(value.view["documents"].as_array().unwrap().len(), 1);
+            assert_eq!(value.view["paths"], serde_json::json!([]));
+        }
+        for path in [
+            "/etc",
+            "C:\\Users\\x",
+            "",
+            ".",
+            "..",
+            "Documents/../secrets",
+            "a//b",
+            "./a",
+        ] {
+            put(
+                &workspace,
+                SHARED,
+                &serde_json::json!({"documents":[{"path":path,"access":"read"}]}).to_string(),
+            );
+            assert!(
+                resolve(&workspace, &home, &[], false, true).is_err(),
+                "{path}"
+            );
+            assert!(!home.join("Documents").exists());
+        }
+        for scope in [SHARED, LOCAL] {
+            put(&workspace, SHARED, "{}");
+            put(&workspace, LOCAL, "{}");
+            for invalid in [
+                "documents: [",
+                "[]",
+                "unknown: true",
+                "paths: [{path: '..', access: read}]",
+            ] {
+                put(&workspace, scope, invalid);
+                assert!(
+                    resolve(&workspace, &home, &[], false, false).is_err(),
+                    "scope={scope}, content={invalid:?}"
+                );
+            }
+            put(&workspace, scope, "{}");
+            assert!(resolve(&workspace, &home, &[], false, false).is_ok());
+        }
+        std::fs::create_dir(home.join("cache")).unwrap();
+        let outside = dir.path().join("tools");
+        std::fs::create_dir(&outside).unwrap();
+        put(
+            &workspace,
+            SHARED,
+            "documents: [{path: Documents/shared, access: read}]",
+        );
+        put(&workspace, LOCAL, &serde_json::json!({"paths":[{"path":"cache","access":"read_write"},{"path":outside,"access":"read"}],"deny":["cache/private"]}).to_string());
+        assert!(resolve(&workspace, &home, &[], false, true).is_err()); // A grant containing a deny is refused.
+        put(&workspace, LOCAL, &serde_json::json!({"paths":[{"path":"cache","access":"read_write"},{"path":outside,"access":"read"}]}).to_string());
+        let value = resolve(&workspace, &home, &[], false, true).unwrap();
+        assert_eq!(value.view["paths"][0]["grant"], "cache");
+        assert_eq!(
+            value.view["paths"][1]["grant"],
+            outside.to_string_lossy().as_ref()
+        );
+        assert_eq!(value.view["documents"][1]["grant"], "Documents/shared");
+        put(&workspace, LOCAL, "paths: [{path: absent, access: read}]");
+        assert!(resolve(&workspace, &home, &[], false, true).is_err());
+        assert_eq!(
+            resolve(&workspace, &home, &[], false, false).unwrap().view["paths"][0]["present"],
+            false
+        );
+    }
+    #[test]
+    fn preflight_enumerates_open_grants_and_existing_parents_before_creating_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir(home.join("Documents")).unwrap();
+        let error = resolve_with_probe(&workspace, &home, &[], false, true, |path| {
+            if path == home.join("Documents") {
+                Err(format!("{}: permission denied", path.display()))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert!(error.contains("permission denied"));
+        assert!(!home.join("Documents/GuildBotics").exists());
+        for scope in [SHARED, LOCAL] {
+            std::fs::create_dir_all(home.join("extra")).unwrap();
+            put(
+                &workspace,
+                scope,
+                if scope == SHARED {
+                    "documents: [{path: extra, access: read}]"
+                } else {
+                    "paths: [{path: extra, access: read}]"
+                },
+            );
+            assert!(
+                resolve_with_probe(&workspace, &home, &[], false, false, |path| {
+                    if path == home.join("extra") {
+                        Err("changed into a file during enumeration".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err()
+                .contains("changed into a file")
+            );
+            put(&workspace, scope, "{}");
+        }
+        put(&workspace, LOCAL, "paths: [{path: absent, access: read}]");
+        assert!(
+            resolve_with_probe(&workspace, &home, &[], false, false, |path| {
+                assert_ne!(path, home.join("absent"));
+                Ok(())
+            })
+            .is_ok()
+        );
+        std::fs::write(home.join("absent"), "not a directory").unwrap();
+        assert!(resolve(&workspace, &home, &[], false, false).is_err());
+    }
+    #[test]
+    fn windows_temp_guard_checks_host_sources_only_and_is_platform_specific() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("AppData/Local");
+        std::fs::create_dir_all(local.join("Temp/workspace/.guildbotics/config")).unwrap();
+        let source = local.join("Temp/workspace/.guildbotics/config");
+        let mount = |host| Mount {
+            host,
+            guest: "/work".into(),
+            readonly: true,
+        };
+        assert!(
+            reject_windows_temp_mounts(&[mount(Some(source.clone()))], true, Some(&local)).is_err()
+        );
+        for spelling in [
+            "TEMP/workspace/.guildbotics/config",
+            "temp/workspace/.guildbotics/config",
+            "TeMp/workspace/.guildbotics/config",
+        ] {
+            assert!(
+                reject_windows_temp_mounts(
+                    &[mount(Some(local.join(spelling)))],
+                    true,
+                    Some(&local)
+                )
+                .is_err(),
+                "{spelling}"
+            );
+        }
+        assert!(windows_path_contains(
+            Path::new("/Users/é/AppData/Local/Temp"),
+            Path::new("/users/É/appdata/local/TEMP/work")
+        ));
+        assert!(reject_windows_temp_mounts(&[mount(None)], true, Some(&local)).is_ok());
+        assert!(reject_windows_temp_mounts(&[mount(Some(source))], false, Some(&local)).is_ok());
+        assert!(
+            reject_windows_temp_mounts(
+                &[mount(Some(local.join("Temporary/work")))],
+                true,
+                Some(&local)
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn strict_environment_declarations_reject_unknown_fields_and_require_ipv4_dns() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let templates = dir.path().join("templates");
+        const PATH: &str = gb_config::agent_environment::PATH;
+        put(&templates, PATH, "dns: {nameservers: [1.1.1.1]}");
+        assert_eq!(
+            network(&config, &templates, false).unwrap().nameservers,
+            ["1.1.1.1"]
+        );
+        for invalid in [
+            "[]",
+            "{}",
+            "dns: {}",
+            "dns: {nameservers: [1.1.1.1], search: [corp]}",
+            "dns: {nameservers: []}",
+            "dns: {nameservers: [host]}",
+            "dns: {nameservers: [one.one.one.one]}",
+            "dns: {nameservers: [::1]}",
+            "dns: {nameservers: system}",
+            "dns: {nameservers: [1.1.1.1]}\npackages: {}",
+            "dns: {nameservers: [1.1.1.1]}\nresources: {cpus: 0}",
+            "dns: {nameservers: [1.1.1.1]}\nresources: {gpu: 1}",
+            "dns: {nameservers: [1.1.1.1]}\nnetwork: {mode: allowlist}",
+            "dns: {nameservers: [1.1.1.1]}\nimage: {reference: x}",
+        ] {
+            put(&config, PATH, invalid);
+            assert!(network(&config, &templates, false).is_err(), "{invalid}");
+        }
+        put(
+            &config,
+            PATH,
+            "dns: {nameservers: [10.0.0.53]}\nnetwork: {mode: unrestricted}",
+        );
+        assert_eq!(
+            network(&config, &templates, false).unwrap().nameservers,
+            ["10.0.0.53"]
+        );
+        assert!(network(&config, &templates, false).unwrap().unrestricted);
+    }
+    #[test]
+    fn device_dns_parsing_ignores_ipv6_and_deduplicates_preserving_order() {
+        assert!(windows_dns_arguments()[3].contains("IPv4"));
+        let dir = tempfile::tempdir().unwrap();
+        let templates = dir.path().join("templates");
+        let config = dir.path().join("config");
+        put(
+            &templates,
+            gb_config::agent_environment::PATH,
+            "dns: {nameservers: host}",
+        );
+        assert!(
+            network_with_resolvers(&config, &templates, false, Vec::new)
+                .unwrap_err()
+                .contains("No IPv4 DNS resolver")
+        );
+        assert_eq!(
+            network_with_resolvers(&config, &templates, false, || vec!["192.168.3.1".into()])
+                .unwrap()
+                .0
+                .nameservers,
+            ["192.168.3.1"]
+        );
+        put(
+            &templates,
+            gb_config::agent_environment::PATH,
+            "dns: {nameservers: [10.0.0.53]}",
+        );
+        assert_eq!(
+            network_with_resolvers(&config, &templates, false, || panic!(
+                "explicit DNS must not read host"
+            ))
+            .unwrap()
+            .0
+            .nameservers,
+            ["10.0.0.53"]
+        );
+
+        assert_eq!(
+            resolver_addresses(
+                "search corp\nnameserver ::1\nnameserver 192.168.3.1\nnameserver 1.1.1.1\nnameserver 192.168.3.1\nnameserver\n",
+                true
+            ),
+            ["192.168.3.1", "1.1.1.1"]
+        );
+        assert_eq!(
+            resolver_addresses("10.0.0.53\r\n::1\r\n10.0.0.54\r\n10.0.0.53\r\n", false),
+            ["10.0.0.53", "10.0.0.54"]
+        );
+        assert!(resolver_addresses("", true).is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unresolved_protected_aliases_close_names_without_blocking_unrelated_work() {
+        use std::os::unix::fs::symlink;
+        for shape in ["self", "mutual", "broken", "file"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let target = dir.path().join("target");
+            if shape == "file" {
+                std::fs::write(&target, "file").unwrap();
+            }
+            symlink(
+                if shape == "self" {
+                    home.join(".ssh")
+                } else {
+                    target.clone()
+                },
+                home.join(".ssh"),
+            )
+            .unwrap();
+            if shape == "mutual" {
+                symlink(home.join(".ssh"), &target).unwrap();
+            }
+            let access = resolve(&dir.path().join("workspace"), &home, &[], false, false).unwrap();
+            let work = dir.path().join("work");
+            std::fs::create_dir(&work).unwrap();
+            assert!(validate_source(&work, &access.denied, true, false).is_ok());
+            assert!(validate_source(&home, &access.denied, true, false).is_err());
+            if shape == "self" {
+                // A self-link never names this unrelated absent target.
+                assert!(validate_source(&target, &access.denied, true, true).is_ok());
+            } else {
+                assert!(
+                    validate_source(&target, &access.denied, true, true).is_err(),
+                    "shape={shape}"
+                );
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn untraversable_protected_targets_close_names_without_stopping_other_work() {
+        use std::os::unix::fs::symlink;
+        for name in [".ssh", ".config/gh", ".local/share/keyrings"] {
+            for file in [false, true] {
+                for tail in ["../ordinary", "child"] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let protected = dir.path().join("home").join(name);
+                    std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+                    let obstacle = dir.path().join("obstacle");
+                    if file {
+                        std::fs::write(&obstacle, "not a directory").unwrap();
+                    }
+                    symlink(obstacle.join(tail), &protected).unwrap();
+                    let ordinary = dir.path().join("ordinary");
+                    std::fs::create_dir(&ordinary).unwrap();
+                    let denied = protected_names(&protected);
+                    assert!(
+                        validate_source(&ordinary, &denied, true, false).is_ok(),
+                        "name={name}, file={file}, tail={tail}, denied={denied:?}"
+                    );
+                    for blocked in [protected.parent().unwrap(), obstacle.as_path()] {
+                        assert!(
+                            validate_source(blocked, &denied, true, true).is_err(),
+                            "name={name}, file={file}, tail={tail}, blocked={blocked:?}, denied={denied:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_deny_alias_protects_both_spelling_and_target_and_cannot_deny_home() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let private = dir.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        symlink(&private, home.join("deny")).unwrap();
+        let workspace = dir.path().join("workspace");
+        put(&workspace, LOCAL, "deny: [deny]");
+        let access = resolve(&workspace, &home, &[], false, false).unwrap();
+        for path in [&home, &private] {
+            assert!(validate_source(path, &access.denied, true, false).is_err());
+        }
+        std::fs::remove_file(home.join("deny")).unwrap();
+        symlink(&home, home.join("deny")).unwrap();
+        assert!(resolve(&workspace, &home, &[], false, false).is_err());
+    }
 }
