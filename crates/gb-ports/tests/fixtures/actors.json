@@ -1,0 +1,29 @@
+{
+  "tracker_tickets": [],
+  "tickets": [
+    "assignees"
+  ],
+  "ticket_comments": [
+    "author"
+  ],
+  "ticket_attachments": [],
+  "ticket_pull_requests": [],
+  "pull_requests": [
+    "assignees",
+    "author",
+    "requested_reviewers"
+  ],
+  "pull_request_comments": [
+    "author"
+  ],
+  "pull_request_reviews": [
+    "author"
+  ],
+  "pull_request_files": [],
+  "pull_request_threads": [],
+  "review_thread_comments": [
+    "author"
+  ],
+  "pull_request_readiness": [],
+  "dependency_alerts": []
+}

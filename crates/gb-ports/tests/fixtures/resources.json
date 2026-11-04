@@ -1,0 +1,67 @@
+{
+  "tracker_tickets": {
+    "subject": "ticket",
+    "ticket_service": true,
+    "detail": false
+  },
+  "tickets": {
+    "subject": "ticket",
+    "ticket_service": true,
+    "detail": true
+  },
+  "ticket_comments": {
+    "subject": "ticket",
+    "ticket_service": true,
+    "detail": false
+  },
+  "ticket_attachments": {
+    "subject": "ticket",
+    "ticket_service": true,
+    "detail": false
+  },
+  "ticket_pull_requests": {
+    "subject": "ticket",
+    "ticket_service": false,
+    "detail": false
+  },
+  "pull_requests": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": true
+  },
+  "pull_request_comments": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": false
+  },
+  "pull_request_reviews": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": false
+  },
+  "pull_request_files": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": false
+  },
+  "pull_request_threads": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": false
+  },
+  "review_thread_comments": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": false
+  },
+  "pull_request_readiness": {
+    "subject": "pull_request",
+    "ticket_service": false,
+    "detail": true
+  },
+  "dependency_alerts": {
+    "subject": "repository",
+    "ticket_service": false,
+    "detail": false
+  }
+}
