@@ -327,9 +327,14 @@ guildbotics environment image list [OPTIONS]
 
 Load an image archive into this device's runtime.
 
-The archive must be built for this device's CPU architecture. Its own
-tags are kept. What was loaded is printed by reference, with the digest
-the declaration names it by.
+Accepts Docker save and OCI layout archives, as tar or gzip-compressed tar.
+Use a single-platform archive built for this device's CPU architecture:
+the first image's architecture is checked when the archive declares it.
+Its own tags are kept; `--tag` adds a reference to the first image.
+What was loaded is printed by reference, with its configuration digest
+(the digest the declaration names), including when a tag is reloaded.
+This command needs the device's installed microVM runtime, but does not
+boot a microVM.
 
 ```text
 guildbotics environment image load [OPTIONS] ARCHIVE

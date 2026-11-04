@@ -13,12 +13,16 @@ anyhow = "1"
 branvil = { path = "../branvil" }
 clap = { version = "4.6.7", features = ["derive"] }
 gb-server = { path = "../gb-server" }
+gb-base = { path = "../gb-base" }
+gb-environment = { path = "../gb-environment" }
 tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
-gb-environment = { path = "../gb-environment" }
+flate2 = "1"
+sha2 = "0.11.1"
+tar = "0.4"
 loopback-auth = { path = "../loopback-auth" }
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 serde_json = "1.0.154"

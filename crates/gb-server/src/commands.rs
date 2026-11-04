@@ -425,13 +425,17 @@ mod tests {
             reference: "local/agent:1".into(),
             digests: [("arm64".into(), format!("sha256:{}", "a".repeat(64)))].into(),
         };
+        let command =
+            gb_environment::image::load_command(std::path::Path::new("/home/a user's")).unwrap();
         let mismatch = gb_environment::image::status(
             &image,
             "arm64",
             Some(format!("sha256:{}", "b".repeat(64))),
+            &command,
         );
-        let missing = gb_environment::image::status(&image, "arm64", None);
-        let undeclared = gb_environment::image::status(&image, "amd64", Some("sha256:bbbb".into()));
+        let missing = gb_environment::image::status(&image, "arm64", None, &command);
+        let undeclared =
+            gb_environment::image::status(&image, "amd64", Some("sha256:bbbb".into()), &command);
         let mut sentences = vec![
             missing.refusal.unwrap(),
             mismatch.warning.unwrap(),
@@ -451,6 +455,7 @@ mod tests {
             DeclarationProblem::Image("/config/file.yml".into()),
         ));
         for sentence in sentences {
+            let guidance = matches!(&sentence, Sentence::Key(key, _) if key.ends_with("image.missing") || key.ends_with("image.mismatch"));
             let source = match &sentence {
                 Sentence::AtPath(path, _) => Some(path.display().to_string()),
                 _ => None,
@@ -459,10 +464,9 @@ mod tests {
             let ja = super::say(sentence, "ja");
             assert_ne!(en, ja);
             for text in [&en, &ja] {
-                assert!(
-                    !text.contains("environment image load") && !text.contains("load archive"),
-                    "unavailable CLI guidance: {text}"
-                );
+                if guidance {
+                    assert!(text.contains(&command), "missing CLI guidance: {text}");
+                }
                 if let Some(path) = &source {
                     assert!(text.starts_with(&format!("{path}: ")), "{text}");
                 }
@@ -470,16 +474,13 @@ mod tests {
                 assert!(!text.starts_with("intelligences."), "{text}");
             }
         }
-        let sentence = gb_environment::image::status(&image, "arm64", None)
+        let sentence = gb_environment::image::status(&image, "arm64", None, &command)
             .refusal
             .unwrap();
         for language in ["ja", "en"] {
             let text = super::say(sentence.clone(), language);
             assert!(text.contains("local/agent:1") && text.contains("arm64"));
-            assert!(
-                !text.contains("load archive"),
-                "unavailable CLI guidance: {text}"
-            );
+            assert!(text.contains(&command), "missing CLI guidance: {text}");
         }
     }
     use super::*;

@@ -22,6 +22,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage this device's isolated environment
+    Environment {
+        #[command(subcommand)]
+        command: EnvironmentCommand,
+    },
     /// Run the server
     Server {
         #[command(subcommand)]
@@ -44,6 +49,42 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum EnvironmentCommand {
+    /// Load a base image into this device's runtime
+    Image {
+        #[command(subcommand)]
+        command: ImageCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImageCommand {
+    /// Load a Docker save or OCI archive built for this device's CPU
+    Load {
+        archive: std::path::PathBuf,
+        /// Add a reference to the first loaded image, keeping its own tags
+        #[arg(long)]
+        tag: Option<String>,
+    },
+}
+
+fn environment(command: EnvironmentCommand) -> anyhow::Result<()> {
+    let EnvironmentCommand::Image {
+        command: ImageCommand::Load { archive, tag },
+    } = command;
+    let home = gb_base::home::data()?.join("msb");
+    let loaded = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(gb_environment::load_image(&home, &archive, tag))
+        .map_err(anyhow::Error::msg)?;
+    for (reference, digest) in loaded {
+        println!("loaded {reference} {digest}");
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
 enum ServerCommand {
     /// Run the server in the foreground until SIGINT or SIGTERM (a first
     /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
@@ -61,6 +102,13 @@ fn main() -> ExitCode {
         return code;
     }
     match Cli::parse().command {
+        Command::Environment { command } => match environment(command) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("guildbotics: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Branvil { args } => {
             branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
         }

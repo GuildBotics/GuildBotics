@@ -20,9 +20,9 @@ microsandbox-utils = "=0.6.17"
 serde_json = "1.0.154"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11.1"
+tar = "0.4"
+flate2 = "1"
+tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
-
-[dev-dependencies]
-tempfile = "3.27.0"

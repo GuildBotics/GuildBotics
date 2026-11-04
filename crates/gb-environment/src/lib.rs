@@ -12,6 +12,7 @@
 //! answer.
 
 pub mod image;
+pub mod image_archive;
 pub mod language;
 pub mod recipe;
 mod runtime;
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use gb_wire::{CommandAccess, CommandFacts, CommandReply, CommandRequest, InspectsItem};
 
-pub use runtime::{Mount, placed_files};
+pub use runtime::{Mount, load_image, placed_files};
 
 /// Where the code every microVM mounts is inside it.
 pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
@@ -133,7 +134,9 @@ pub async fn run(
         Some(image) => {
             let held = runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image)
                 .await?;
-            let status = image::status(&image, image::device_architecture(), held);
+            let command =
+                image::load_command(&host.home).map_err(|e| Failure::Command(Sentence::Text(e)))?;
+            let status = image::status(&image, image::device_architecture(), held, &command);
             if let Some(refusal) = status.refusal {
                 return Err(Failure::Command(refusal));
             }

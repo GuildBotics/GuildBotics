@@ -20,10 +20,16 @@ pub struct Status {
 
 /// Only eligible local content is passed as `held`; an inventory error is
 /// propagated by the caller, never treated as an absent image.
-pub fn status(image: &BaseImage, architecture: &str, held: Option<String>) -> Status {
+pub fn status(
+    image: &BaseImage,
+    architecture: &str,
+    held: Option<String>,
+    command: &str,
+) -> Status {
     let mut params = vec![
         ("reference", image.reference.clone()),
         ("architecture", architecture.into()),
+        ("command", command.into()),
     ];
     let Some(digest) = held.as_ref() else {
         return Status {
@@ -96,4 +102,19 @@ pub fn declaration_problem(problem: DeclarationProblem) -> Sentence {
         ),
         other => Sentence::Text(other.to_string()),
     }
+}
+
+/// The installed CLI, shell-quoted so a person can paste the instruction.
+pub fn load_command(home: &std::path::Path) -> Result<String, String> {
+    if !home.is_absolute() {
+        return Err("The home directory for the managed CLI must be absolute.".into());
+    }
+    let executable = home.join(".guildbotics/bin/guildbotics");
+    let executable = executable
+        .to_str()
+        .ok_or("The managed CLI path is not UTF-8.")?;
+    Ok(format!(
+        "'{}' environment image load <archive.tar>",
+        executable.replace('\'', "'\"'\"'")
+    ))
 }

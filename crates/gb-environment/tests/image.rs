@@ -15,7 +15,7 @@ fn base() -> BaseImage {
 #[test]
 fn local_content_determines_readiness_and_declaration_differences_only_warn() {
     let image = base();
-    let missing = status(&image, "arm64", None);
+    let missing = status(&image, "arm64", None, "load instruction");
     assert_eq!(
         missing.refusal,
         Some(Sentence::Key(
@@ -23,16 +23,17 @@ fn local_content_determines_readiness_and_declaration_differences_only_warn() {
             vec![
                 ("reference", image.reference.clone()),
                 ("architecture", "arm64".into()),
+                ("command", "load instruction".into()),
             ]
         ))
     );
     assert_eq!(missing.warning, None);
     let held = image.digests["arm64"].clone();
-    let matched = status(&image, "arm64", Some(held.clone()));
+    let matched = status(&image, "arm64", Some(held.clone()), "load instruction");
     assert_eq!(matched.held, Some(held));
     assert_eq!((matched.refusal, matched.warning), (None, None));
     let other = format!("sha256:{}", "b".repeat(64));
-    let mismatch = status(&image, "arm64", Some(other.clone()));
+    let mismatch = status(&image, "arm64", Some(other.clone()), "load instruction");
     assert_eq!(mismatch.held, Some(other.clone()));
     assert_eq!(mismatch.refusal, None);
     let Some(Sentence::Key(key, params)) = mismatch.warning else {
@@ -41,7 +42,7 @@ fn local_content_determines_readiness_and_declaration_differences_only_warn() {
     assert_eq!(key, "intelligences.agent_environment.image.mismatch");
     assert!(params.contains(&("held", "sha256:bbbbbbbbbbbb".into())));
     assert!(params.contains(&("digest", "sha256:aaaaaaaaaaaa".into())));
-    let undeclared = status(&image, "amd64", Some(other.clone()));
+    let undeclared = status(&image, "amd64", Some(other.clone()), "load instruction");
     assert_eq!(undeclared.refusal, None);
     assert_eq!(undeclared.held, Some(other));
     let Some(Sentence::Key(key, params)) = undeclared.warning else {

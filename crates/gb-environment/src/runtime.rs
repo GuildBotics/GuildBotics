@@ -122,6 +122,46 @@ async fn backend(home: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Import into the local image store, without booting a microVM. Inspect
+/// returned handles rather than comparing inventories: reloading a tag is valid.
+pub async fn load_image(
+    home: &Path,
+    archive: &Path,
+    tag: Option<String>,
+) -> Result<Vec<(String, String)>, String> {
+    crate::image_archive::validate(archive, crate::image::device_architecture())
+        .map_err(|e| format!("{}: {e}", archive.display()))?;
+    ready(home).map_err(|_| {
+        format!(
+            "The microVM runtime under {} is unavailable or is not version {RUNTIME_VERSION}.",
+            home.display()
+        )
+    })?;
+    backend(home).await.map_err(|e| format!("{e:?}"))?;
+    let unpacked = crate::image_archive::uncompressed(archive).map_err(|e| e.to_string())?;
+    let input = unpacked.as_ref().map(|file| file.path()).unwrap_or(archive);
+    let handles = microsandbox::Image::load(input, tag.into_iter().collect())
+        .await
+        .map_err(|e| format!("{}: {e}", archive.display()))?;
+    if handles.is_empty() {
+        return Err(format!("No image was loaded from {}.", archive.display()));
+    }
+    let mut loaded = Vec::new();
+    for handle in handles {
+        let reference = handle.reference().to_owned();
+        let detail = microsandbox::Image::inspect(&reference)
+            .await
+            .map_err(|e| e.to_string())?;
+        let digest = detail
+            .config
+            .map(|c| c.digest)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("No configuration digest for {reference}"))?;
+        loaded.push((reference, digest));
+    }
+    Ok(loaded)
+}
+
 /// Read a custom reference without pulling it or booting a microVM.
 pub async fn held_image(
     home: &Path,
