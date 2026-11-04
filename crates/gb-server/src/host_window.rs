@@ -281,7 +281,11 @@ impl Gateway {
         lifetime(&mut ca);
         let ca_pem = ca.self_signed(&ca_key)?.pem().into_bytes();
         let key = rcgen::KeyPair::generate()?;
+        let subject = names.first().cloned().unwrap_or_default();
         let mut parameters = rcgen::CertificateParams::new(names)?;
+        parameters
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, subject);
         parameters.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
         parameters.use_authority_key_identifier_extension = true;
         lifetime(&mut parameters);
