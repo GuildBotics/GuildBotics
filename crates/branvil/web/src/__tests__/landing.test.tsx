@@ -55,7 +55,7 @@ describe.each(["en", "ja"] as const)("queue path (%s)", (lang) => {
     await waitFor(() => expect(list.querySelector("[data-state]")).toBeInTheDocument());
     return list.querySelector("[data-state]") as HTMLElement;
   };
-  const tone = (badge: HTMLElement, color: string) => expect(badge).toHaveStyle(`--badge-color: var(--mantine-color-${color}-light-color)`);
+  const tone = (badge: HTMLElement, color: string) => expect(badge).toHaveStyle(`--badge-color: ${color === "neutral" ? "var(--color-text-subtle)" : `var(--color-${color}-text)`}`);
   it.each(NEXT)("says %s in the list, with the next step in its title", async (next) => {
     fakeApi(routes(entry(next)));
     renderApp("/acme/demo", lang);

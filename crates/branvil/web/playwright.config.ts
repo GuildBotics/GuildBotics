@@ -1,11 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Runs against a live `branvil serve` that serves this GUI. Not part of
-// `npm run test`; the environment variables are listed in e2e/smoke.spec.ts.
-const baseURL = process.env.BRANVIL_E2E_BASE_URL;
+// Real journeys own a disposable service; fixture layout and performance runs are opt-in.
+const visual = process.env.BRANVIL_E2E_VISUAL === "1";
+const perf = process.env.BRANVIL_E2E_PERF === "1";
+const baseURL = process.env.BRANVIL_E2E_BASE_URL ?? "http://127.0.0.1:7889";
+process.env.BRANVIL_E2E_BASE_URL = baseURL;
 
 export default defineConfig({
   testDir: "./e2e",
+  testMatch: visual ? /.*-layout\.spec\.ts$/ : perf ? /perf\.spec\.ts$/ : /smoke\.spec\.ts$/,
+  globalSetup: visual || perf ? undefined : "./e2e/start-stack.ts",
+  forbidOnly: Boolean(process.env.CI),
+  retries: 0,
   timeout: 60_000,
   fullyParallel: false,
   workers: 1,

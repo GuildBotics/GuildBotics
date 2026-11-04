@@ -19,9 +19,13 @@ export function normalizeLanguage(value: string | null | undefined): AppLanguage
 export function createAppI18n({
   resources,
   storageKey,
+  initialLanguage,
+  flat = false,
 }: {
   resources: Resource;
   storageKey: string;
+  initialLanguage?: AppLanguage;
+  flat?: boolean;
 }) {
   const i18n = createInstance();
 
@@ -40,9 +44,10 @@ export function createAppI18n({
 
   i18n.use(initReactI18next).init({
     resources,
-    lng: getInitialAppLanguage(),
+    lng: initialLanguage ?? getInitialAppLanguage(),
+    keySeparator: flat ? false : ".",
     fallbackLng: "en",
-    interpolation: { escapeValue: false },
+    interpolation: { escapeValue: false, ...(flat ? { prefix: "{", suffix: "}" } : {}) },
   });
   return { i18n, getInitialAppLanguage, setAppLanguage };
 }

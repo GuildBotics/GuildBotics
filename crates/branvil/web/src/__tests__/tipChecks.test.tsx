@@ -7,7 +7,7 @@ import { I18nProvider } from "../i18n";
 import { applyChange } from "../query/events";
 import { createQueryClient } from "../query/hooks";
 import { apiError, fakeApi, json } from "../test/fakeApi";
-import { theme } from "../theme";
+import { theme } from "@guildbotics/ui/theme";
 import { TipChecks } from "../views/pulls/TipChecks";
 
 const SHA = "a".repeat(40);

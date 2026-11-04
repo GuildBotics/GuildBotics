@@ -22,7 +22,7 @@ const pulls = STATES.map((_, i) => ({
   title: `Layout fixture ${i}: a long title remains readable through its pull request`,
   author: AUTHOR, state: "open", merged: false, draft: true,
   head: `feature/${i}`, head_sha: SHA, base: "main", base_sha: SHA,
-  reviewers: [], review_states: Array.from({ length: COUNTS[i] }, (_, n) => ({
+  unanswered: [], reviewers: [], review_states: Array.from({ length: COUNTS[i] }, (_, n) => ({
     member: `review-bot-${n}`, requested: n % 4 === 3,
     verdict: ["approve", "request_changes", "comment", null][n % 4], outdated: n % 3 === 2,
   })), approvals: 0, tickets: [], labels: [], changed_files: 0,
