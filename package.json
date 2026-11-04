@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "desktop",
-    "crates/branvil/web"
+    "crates/branvil/web",
+    "packages/ui"
   ],
   "engines": {
     "node": ">=24"

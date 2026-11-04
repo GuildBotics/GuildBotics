@@ -7,11 +7,13 @@ import { HashRouter } from "react-router";
 
 import { App } from "./App";
 import { EntryPage } from "./session/EntryPage";
-import { theme } from "./theme";
+import { theme } from "@guildbotics/ui/theme";
 import "./i18n";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
+import "@guildbotics/ui/styles.css";
 import "./styles.css";
+import "@guildbotics/ui/components.css";
 
 const queryClient = new QueryClient();
 

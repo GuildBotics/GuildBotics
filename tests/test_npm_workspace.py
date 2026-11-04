@@ -1,4 +1,4 @@
-"""Keep both screens on one dependency graph and the image's browser."""
+"""Keep the screens and shared UI on one dependency graph and the image's browser."""
 
 import json
 import re
@@ -15,8 +15,8 @@ def test_screens_share_dependency_ranges_and_one_lock():
         assert not (ROOT / workspace / "package-lock.json").exists()
         package = json.loads((ROOT / workspace / "package.json").read_text())
         assert lock["packages"][workspace]["name"] == package["name"]
-        for section in ("dependencies", "devDependencies"):
-            for name, version in package[section].items():
+        for section in ("dependencies", "devDependencies", "peerDependencies"):
+            for name, version in package.get(section, {}).items():
                 assert version.startswith("^")
                 assert ranges.setdefault(name, version) == version
 

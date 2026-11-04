@@ -9,6 +9,8 @@
     "package-lock.json",
     "src/**/*.test.ts",
     "src/**/*.test.tsx",
-    "src/test/**"
+    "src/test/**",
+    "**/*.test.ts",
+    "**/*.test.tsx"
   ]
 }

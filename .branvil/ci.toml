@@ -53,7 +53,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
-paths = ["desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
+paths = ["packages/ui/**", "docs/screenshots/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",
@@ -61,6 +61,7 @@ commands = [
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
+artifacts = [{ name = "desktop-visual", paths = ["docs/screenshots"] }]
 
 [[jobs]]
 name = "rust-fmt"
@@ -150,7 +151,7 @@ cache = { paths = [".ci/npm"], key_files = ["jscpd.rust.json"] }
 
 [[jobs]]
 name = "branvil-web"
-paths = ["crates/branvil/web/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", "desktop/package.json"]
+paths = ["packages/ui/**", "crates/branvil/web/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", "desktop/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",

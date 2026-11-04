@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { svgImage } from "../components/diagram";
+import { svgImage } from "@guildbotics/ui/diagram";
 
 // Only the image step is under test; Mermaid needs a layout engine to draw.
 vi.mock("mermaid", () => ({ default: {} }));

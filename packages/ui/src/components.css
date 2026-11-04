@@ -1,0 +1,13 @@
+/* ==========================================================================
+   Design System Custom Overrides & Aesthetics Tune-up
+   ========================================================================== */
+
+/* Inner Element Border Radius (規格化) */
+.mantine-Button-root,
+.mantine-Select-input,
+.mantine-TextInput-input,
+.mantine-PasswordInput-input,
+.mantine-NumberInput-input,
+.mantine-Switch-track {
+  border-radius: 6px !important;
+}

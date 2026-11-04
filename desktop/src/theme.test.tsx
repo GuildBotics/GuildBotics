@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { TestMantineProvider } from "./test/TestMantineProvider";
-import { theme } from "./theme";
+import { theme } from "@guildbotics/ui/theme";
 
 function renderThemed(ui: ReactNode) {
   return render(<TestMantineProvider theme={theme}>{ui}</TestMantineProvider>);

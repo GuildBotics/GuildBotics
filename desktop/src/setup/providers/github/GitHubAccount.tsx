@@ -15,7 +15,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiRequestError } from "../../../api/client";
-import { RequiredLabel } from "../../formParts";
+import { RequiredLabel } from "@guildbotics/ui/formParts";
 import { MASKED_SECRET_PLACEHOLDER } from "../../secretInput";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
 import { ensureAgentField, resolveUser, type AccountView, type AppRegistrationStatus } from "./api";

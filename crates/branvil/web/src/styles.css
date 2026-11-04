@@ -394,85 +394,6 @@ a:hover {
   padding: 10px 12px;
 }
 
-/* ---- Markdown ---- */
-.markdown {
-  color: var(--color-text-main);
-  font-size: 14px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.markdown > :first-child {
-  margin-top: 0;
-}
-
-.markdown > :last-child {
-  margin-bottom: 0;
-}
-
-.markdown p,
-.markdown ul,
-.markdown ol {
-  margin: 0 0 8px;
-}
-
-.markdown :not(pre) > code {
-  background: var(--color-bg-hover);
-  border-radius: 4px;
-  font-size: 12px;
-  padding: 1px 5px;
-}
-
-.markdown pre {
-  min-height: 0;
-  white-space: pre;
-}
-
-.markdown figure[data-diagram] {
-  margin: 0 0 8px;
-}
-
-.markdown figure[data-diagram] button {
-  display: block;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: zoom-in;
-}
-
-.markdown figure[data-diagram] button:focus-visible {
-  outline: 2px solid var(--color-brand);
-  outline-offset: 2px;
-}
-
-.markdown figure[data-diagram] img {
-  display: block;
-  max-width: 100%;
-  height: auto;
-}
-
-.diagram-full-size {
-  display: block;
-}
-
-.markdown figure[data-diagram] summary {
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.markdown [data-diagram-error] {
-  color: var(--mantine-color-red-text);
-  font-family: var(--mantine-font-family-monospace);
-  font-size: 12px;
-  white-space: pre-wrap;
-}
-
-.markdown a {
-  color: var(--mantine-color-anchor);
-}
-
 /* The service supplies the kind and state; SVG masks are GUI-owned icons. */
 .markdown a[data-branvil-kind] {
   font-weight: 500;
@@ -516,52 +437,6 @@ a:hover {
 .markdown a[data-branvil-kind="ticket"][data-branvil-state="closed"]::before,
 .markdown a[data-branvil-state="merged"]::before {
   background: var(--color-info-text);
-}
-
-/* An attached screenshot shrinks to the column instead of widening the page. */
-.markdown img {
-  height: auto;
-  max-width: 100%;
-}
-
-/* The table scrolls inside its own box so a wide grid does not widen the page.
-   display:block is what lets overflow apply to a table. */
-.markdown table {
-  border-collapse: collapse;
-  display: block;
-  margin: 0 0 8px;
-  max-width: 100%;
-  overflow: auto;
-  width: max-content;
-}
-
-.markdown th,
-.markdown td {
-  border: 1px solid var(--color-border);
-  /* anywhere on .markdown would shrink a wide table instead of scrolling it. */
-  overflow-wrap: normal;
-  padding: 6px 12px;
-}
-
-.markdown th {
-  background: var(--color-bg-panel-subtle);
-  font-weight: 700;
-  text-align: left;
-}
-
-.markdown th[align="left"],
-.markdown td[align="left"] {
-  text-align: left;
-}
-
-.markdown th[align="center"],
-.markdown td[align="center"] {
-  text-align: center;
-}
-
-.markdown th[align="right"],
-.markdown td[align="right"] {
-  text-align: right;
 }
 
 code,
