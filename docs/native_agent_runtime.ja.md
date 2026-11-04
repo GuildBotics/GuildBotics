@@ -80,9 +80,9 @@ GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコー�
 `/opt/guildbotics/venv`にPython 3.15（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
 入れます）と固定した依存を入れ、`to_pdf`が使うWeasyPrintのネイティブライブラリ（Pango）と、欧文・
 日本語のフォント（`fonts-dejavu-core`、`fonts-noto-cjk`）を`apt-get`で入れます。依存の一覧は
-`guildbotics/environment/requirements.txt`で、`uv.lock`からhostでしか使わない
+`guildbotics/templates/environment/requirements.txt`で、`uv.lock`からhostでしか使わない
 `microsandbox`を除いて書き出したものです（`uv.lock`を変えたら書き出し直します。書き出しの
-コマンドは、ずれを検出するテスト`test_requirements.py`が失敗時に表示します）。snapshotの名前は
+コマンドは、ずれを検出するテスト`tests/test_environment_requirements.py`が失敗時に表示します）。snapshotの名前は
 各ビルド手順の中身から作るので、依存の一覧を変えるとsnapshotは古い扱いになり、再ビルドされます。
 再ビルドの間（数十秒〜数分）はコマンドを起動できません。コードそのものはsnapshotに入れず、動いている
 プロセス自身の`guildbotics`パッケージ（ソースから動かしているときはチェックアウト、配布版では自分の

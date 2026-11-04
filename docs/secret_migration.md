@@ -4,6 +4,12 @@ Python 版から Rust 版へ切り替えるときに一度だけ実行する保�
 本番実行は #97、写しによるリハーサルは #108 で行う。通常起動からは呼ばれない。
 現在の OS アダプターは macOS 用で、Windows / Linux では実行を拒否する。
 
+移行ツールの保存先は凍結ブランチ `origin/python-host`
+（`fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`）。main の host 削除後は
+この凍結点の checkout から実行する。本番の版にはツールがないため、
+本番 checkout を main に更新して実行してはいけない。具体的な動かし方は #108 の
+リハーサルで決める。以下は凍結点でのツールの引数。
+
 ## 実行
 
 1. Python / Rust のサーバー、CLI の書き込み、git credential helper を停止する。

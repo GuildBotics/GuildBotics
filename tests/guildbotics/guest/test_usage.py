@@ -1,23 +1,8 @@
-from __future__ import annotations
-
-import asyncio
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
+import json
 import pytest
-
-from guildbotics.environment import usage as usage_module
-from guildbotics.environment.usage import (
-    CLI_AGENT_USAGE_READERS,
-    CliAgentUsageError,
-    read_antigravity_usage,
-    read_claude_usage,
-    read_codex_usage,
-    read_copilot_usage,
-    read_grok_usage,
-)
 from guildbotics.intelligences.agent_runtime import usage_snapshots
 from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     parse_antigravity_usage,
@@ -26,6 +11,39 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     parse_copilot_quota,
     parse_grok_billing,
 )
+
+_CLAUDE_NOW = datetime(2026, 8, 7, 22, 0, 0, tzinfo=UTC)
+
+_CLAUDE_USAGE_TEXT = """\
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)
+Current week (all models): 56% used · resets Aug 8, 10am (Asia/Tokyo)
+Current week (Fable): 59% used · resets Aug 8, 10am (Asia/Tokyo)
+Extra budget: 5% used
+
+What's contributing to your limits usage?
+Last 24h · 313 requests · 7 sessions
+  51% of your usage was at >150k context
+"""
+
+_GROK_BILLING = {
+    "config": {
+        "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-08-07T07:37:18.756767+00:00",
+            "end": "2026-08-14T07:37:18.756767+00:00",
+        },
+        "creditUsagePercent": 37.5,
+        "onDemandCap": {"val": 0},
+        "onDemandUsed": {"val": 0},
+        "prepaidBalance": {"val": 0},
+        "isUnifiedBillingUser": True,
+        "billingPeriodStart": "2026-08-07T07:37:18.756767+00:00",
+        "billingPeriodEnd": "2026-08-14T07:37:18.756767+00:00",
+    },
+    "subscription_tier": "SuperGrok Lite",
+}
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _ANTIGRAVITY_USAGE_FIXTURE = json.loads(
@@ -198,25 +216,6 @@ def test_parse_codex_rate_limits_tolerates_empty_and_malformed_input() -> None:
         snapshot = parse_codex_rate_limits(raw)
         assert snapshot.windows == []
         assert not snapshot.limit_reached
-
-
-_GROK_BILLING = {
-    "config": {
-        "currentPeriod": {
-            "type": "USAGE_PERIOD_TYPE_WEEKLY",
-            "start": "2026-08-07T07:37:18.756767+00:00",
-            "end": "2026-08-14T07:37:18.756767+00:00",
-        },
-        "creditUsagePercent": 37.5,
-        "onDemandCap": {"val": 0},
-        "onDemandUsed": {"val": 0},
-        "prepaidBalance": {"val": 0},
-        "isUnifiedBillingUser": True,
-        "billingPeriodStart": "2026-08-07T07:37:18.756767+00:00",
-        "billingPeriodEnd": "2026-08-14T07:37:18.756767+00:00",
-    },
-    "subscription_tier": "SuperGrok Lite",
-}
 
 
 def test_parse_grok_billing_reads_subscription_window() -> None:
@@ -394,24 +393,6 @@ def test_parse_grok_billing_tolerates_empty_and_malformed_input() -> None:
         snapshot = parse_grok_billing(billing, subscription)
         assert snapshot.windows == []
         assert not snapshot.limit_reached
-
-
-# Verbatim shape of the `claude -p /usage` result text on 2.1.263; the trailing
-# contribution section must not produce windows.
-_CLAUDE_USAGE_TEXT = """\
-You are currently using your subscription to power your Claude Code usage
-
-Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)
-Current week (all models): 56% used · resets Aug 8, 10am (Asia/Tokyo)
-Current week (Fable): 59% used · resets Aug 8, 10am (Asia/Tokyo)
-Extra budget: 5% used
-
-What's contributing to your limits usage?
-Last 24h · 313 requests · 7 sessions
-  51% of your usage was at >150k context
-"""
-
-_CLAUDE_NOW = datetime(2026, 8, 7, 22, 0, 0, tzinfo=UTC)
 
 
 def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
@@ -616,386 +597,6 @@ def _antigravity_payload(
     }
 
 
-class _Writer:
-    def __init__(self, process: _Process) -> None:
-        self.process = process
-
-    def write(self, data: bytes) -> None:
-        for line in data.splitlines():
-            self.process.handle(json.loads(line))
-
-    async def drain(self) -> None:
-        return None
-
-
-class _Process:
-    """Fake ``codex app-server`` speaking just enough JSONL RPC for the probe."""
-
-    def __init__(self, rate_limits: dict[str, Any] | None = None, error: Any = None):
-        self.stdout = asyncio.StreamReader()
-        self.stdin = _Writer(self)
-        self.returncode: int | None = None
-        self.messages: list[dict[str, Any]] = []
-        self.rate_limits = rate_limits if rate_limits is not None else {}
-        self.error = error
-
-    def handle(self, message: dict[str, Any]) -> None:
-        self.messages.append(message)
-        if "method" not in message or "id" not in message:
-            return
-        request_id = message["id"]
-        if message["method"] == "initialize":
-            self._feed({"jsonrpc": "2.0", "id": request_id, "result": {}})
-            self._feed({"jsonrpc": "2.0", "method": "loginStatus", "params": {}})
-        elif message["method"] == "account/rateLimits/read":
-            if self.error is not None:
-                self._feed({"jsonrpc": "2.0", "id": request_id, "error": self.error})
-            else:
-                self._feed(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {"rateLimits": self.rate_limits},
-                    }
-                )
-
-    def _feed(self, message: dict[str, Any]) -> None:
-        self.stdout.feed_data(json.dumps(message).encode() + b"\n")
-
-
-@pytest.mark.asyncio
-async def test_read_codex_usage_probes_app_server(
-    monkeypatch, fake_environment
-) -> None:
-    process = _Process(
-        rate_limits={"primary": {"usedPercent": 12.0, "resetsAt": 2_000_000_000}}
-    )
-
-    async def create_process(*args, **_kwargs):
-        assert args[:2] == ("codex", "app-server")
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    snapshot = await read_codex_usage()
-
-    assert [message.get("method") for message in process.messages] == [
-        "initialize",
-        "initialized",
-        "account/rateLimits/read",
-    ]
-    assert snapshot.windows[0].used_percent == 12.0
-    assert not snapshot.limit_reached
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_codex_usage_raises_on_rpc_error(
-    monkeypatch, fake_environment
-) -> None:
-    process = _Process(error={"code": -32601, "message": "method not found"})
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError):
-        await read_codex_usage()
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_a_stalled_probe_environment_boot_fails_in_bounded_time(monkeypatch):
-    async def stall(_tool):
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(usage_module, "start_probe_environment", stall)
-    monkeypatch.setattr(usage_module, "PROBE_START_TIMEOUT_SECONDS", 0.01)
-
-    with pytest.raises(CliAgentUsageError, match="did not start in time"):
-        await read_codex_usage()
-
-
-@pytest.mark.asyncio
-async def test_cancelled_probe_start_releases_the_environment(
-    monkeypatch, fake_environment
-) -> None:
-    starting = asyncio.Event()
-
-    async def create_process(*_args, **_kwargs):
-        starting.set()
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    probe = asyncio.create_task(read_codex_usage())
-    await starting.wait()
-    probe.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await probe
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_codex_usage_raises_when_stream_closes(
-    monkeypatch, fake_environment
-) -> None:
-    process = _Process()
-    process.stdout.feed_eof()
-    process.handle = lambda _message: None  # type: ignore[method-assign]
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError):
-        await read_codex_usage()
-
-
-@pytest.mark.asyncio
-async def test_read_codex_usage_raises_when_start_fails(monkeypatch) -> None:
-    async def create_process(*_args, **_kwargs):
-        raise OSError("missing binary")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError):
-        await read_codex_usage()
-
-
-class _GrokProcess:
-    """Fake ``grok agent stdio`` speaking just enough ACP for the probe."""
-
-    def __init__(self, auth_error: Any = None):
-        self.stdout = asyncio.StreamReader()
-        self.stdin = _Writer(self)
-        self.returncode: int | None = None
-        self.messages: list[dict[str, Any]] = []
-        self.auth_error = auth_error
-
-    def handle(self, message: dict[str, Any]) -> None:
-        self.messages.append(message)
-        if "method" not in message or "id" not in message:
-            return
-        request_id = message["id"]
-        method = message["method"]
-        if method == "initialize":
-            # Grok interleaves private notifications with responses; the
-            # probe must skip them.
-            self._feed(
-                {"jsonrpc": "2.0", "method": "_x.ai/settings/update", "params": {}}
-            )
-            self._feed(
-                {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": 1}}
-            )
-        elif method == "authenticate":
-            if self.auth_error is not None:
-                self._feed(
-                    {"jsonrpc": "2.0", "id": request_id, "error": self.auth_error}
-                )
-            else:
-                self._feed({"jsonrpc": "2.0", "id": request_id, "result": {}})
-        elif method == "_x.ai/billing":
-            self._feed({"jsonrpc": "2.0", "id": request_id, "result": _GROK_BILLING})
-        elif method == "_x.ai/auth/check_subscription":
-            self._feed(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"authenticated": True, "meta": {"gate": None}},
-                }
-            )
-
-    def _feed(self, message: dict[str, Any]) -> None:
-        self.stdout.feed_data(json.dumps(message).encode() + b"\n")
-
-
-@pytest.mark.asyncio
-async def test_read_grok_usage_probes_agent_stdio(
-    monkeypatch, fake_environment
-) -> None:
-    process = _GrokProcess()
-
-    async def create_process(*args, **_kwargs):
-        assert args == ("grok", "--no-auto-update", "agent", "stdio")
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    snapshot = await read_grok_usage()
-
-    assert [message.get("method") for message in process.messages] == [
-        "initialize",
-        "authenticate",
-        "_x.ai/billing",
-        "_x.ai/auth/check_subscription",
-    ]
-    assert process.messages[1]["params"] == {"methodId": "cached_token"}
-    assert snapshot.agent == "grok"
-    assert snapshot.windows[0].used_percent == 37.5
-    assert snapshot.windows[0].resets_at == "2026-08-14T07:37:18.756767+00:00"
-    assert not snapshot.limit_reached
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_grok_usage_raises_without_saved_login(
-    monkeypatch, fake_environment
-) -> None:
-    process = _GrokProcess(auth_error={"code": -32000, "message": "not logged in"})
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError):
-        await read_grok_usage()
-    assert fake_environment.started[-1].closed
-
-
-class _ClaudeProcess:
-    """Fake ``claude -p /usage`` returning one JSON document on stdout."""
-
-    def __init__(self, payload: Any):
-        self.payload = payload
-        self.returncode: int | None = None
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        self.returncode = 0
-        raw = (
-            self.payload
-            if isinstance(self.payload, bytes)
-            else json.dumps(self.payload).encode()
-        )
-        return raw, b""
-
-
-@pytest.mark.asyncio
-async def test_read_claude_usage_probes_print_mode(
-    monkeypatch, fake_environment
-) -> None:
-    process = _ClaudeProcess(
-        {"is_error": False, "num_turns": 0, "result": _CLAUDE_USAGE_TEXT}
-    )
-
-    async def create_process(*args, **_kwargs):
-        assert args == (
-            "claude",
-            "-p",
-            "/usage",
-            "--output-format",
-            "json",
-            "--no-session-persistence",
-        )
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    snapshot = await read_claude_usage()
-
-    assert snapshot.agent == "claude"
-    assert snapshot.windows[0].used_percent == 24.0
-    assert [window.window for window in snapshot.windows] == [
-        "session",
-        "week",
-        "current_week_fable",
-        "extra_budget",
-    ]
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_claude_usage_raises_on_error_or_empty_panel(
-    monkeypatch, fake_environment
-) -> None:
-    # An error result, a panel without usage lines (e.g. API-key auth), and
-    # non-JSON output must all surface as CliAgentUsageError.
-    for payload in (
-        {"is_error": True, "result": "Not available"},
-        {"is_error": False, "result": "No usage panel"},
-        b"claude exploded",
-    ):
-        process = _ClaudeProcess(payload)
-
-        async def create_process(*_args, **_kwargs):
-            return process
-
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-        with pytest.raises(CliAgentUsageError):
-            await read_claude_usage()
-        assert fake_environment.started[-1].closed
-
-
-class _AntigravityProcess:
-    """Fake ``agy -p /usage`` returning one JSON document on stdout."""
-
-    def __init__(self, payload: Any, returncode: int = 0):
-        self.payload = payload
-        self.returncode: int | None = None
-        self._exit = returncode
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        self.returncode = self._exit
-        raw = (
-            self.payload
-            if isinstance(self.payload, bytes)
-            else json.dumps(self.payload).encode()
-        )
-        return raw, b""
-
-
-@pytest.mark.asyncio
-async def test_read_antigravity_usage_probes_print_mode(
-    monkeypatch, fake_environment
-) -> None:
-    process = _AntigravityProcess(_ANTIGRAVITY_USAGE_FIXTURE)
-
-    async def create_process(*args, **_kwargs):
-        assert args == ("agy", "-p", "/usage", "--output-format", "json")
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    snapshot = await read_antigravity_usage()
-
-    assert snapshot.agent == "antigravity"
-    assert snapshot.windows[0].label == "Gemini models"
-    assert snapshot.windows[-1].used_percent == 100.0
-    assert snapshot.limit_reached
-    assert fake_environment.started[-1].closed
-    assert fake_environment.started[-1].tool == "antigravity"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "payload,returncode",
-    [
-        ({"status": "ERROR", "error": "UNAUTHENTICATED"}, 0),
-        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 1),
-        (b"agy exploded", 0),
-        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 0),
-    ],
-)
-async def test_read_antigravity_usage_raises_on_auth_exit_json_or_empty(
-    monkeypatch, fake_environment, payload, returncode
-) -> None:
-    process = _AntigravityProcess(payload, returncode=returncode)
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError):
-        await read_antigravity_usage()
-    assert fake_environment.started[-1].closed
-
-
 def test_parse_copilot_quota_reads_measured_snapshots() -> None:
     now = datetime(2026, 9, 18, 23, 42, 5, tzinfo=UTC)
     snapshot = parse_copilot_quota(_COPILOT_QUOTA_FIXTURE, now=now)
@@ -1111,235 +712,3 @@ def _copilot_payload(key: str = "premium_interactions", **fields: Any) -> dict:
         **fields,
     }
     return {"quotaSnapshots": {key: entry}}
-
-
-class _FramedWriter:
-    """Fake stdin that parses ``Content-Length`` frames into messages."""
-
-    def __init__(self, process: _CopilotProcess) -> None:
-        self.process = process
-        self.buffer = b""
-
-    def write(self, data: bytes) -> None:
-        self.buffer += data
-        while True:
-            header, separator, rest = self.buffer.partition(b"\r\n\r\n")
-            if not separator:
-                return
-            name, _, length = header.partition(b":")
-            assert name == b"Content-Length", header
-            body, self.buffer = rest[: int(length)], rest[int(length) :]
-            self.process.handle(json.loads(body))
-
-    async def drain(self) -> None:
-        return None
-
-
-class _CopilotProcess:
-    """Fake ``copilot --headless --stdio`` speaking the Copilot SDK protocol."""
-
-    def __init__(self, quota: dict[str, Any] | None = None, error: Any = None) -> None:
-        self.stdout = asyncio.StreamReader()
-        self.stdin = _FramedWriter(self)
-        self.returncode: int | None = None
-        self.messages: list[dict[str, Any]] = []
-        self.quota = _COPILOT_QUOTA_FIXTURE if quota is None else quota
-        self.error = error
-
-    def handle(self, message: dict[str, Any]) -> None:
-        self.messages.append(message)
-        if "method" not in message or "id" not in message:
-            return
-        request_id = message["id"]
-        if message["method"] == "connect":
-            # The server may interleave notifications; the probe must skip them.
-            self._feed({"jsonrpc": "2.0", "method": "session.event", "params": {}})
-            self._feed(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"ok": True, "protocolVersion": 3, "version": "1.0.86"},
-                }
-            )
-        elif message["method"] == "account.getQuota":
-            if self.error is not None:
-                self._feed({"jsonrpc": "2.0", "id": request_id, "error": self.error})
-            else:
-                self._feed({"jsonrpc": "2.0", "id": request_id, "result": self.quota})
-
-    def _feed(self, message: dict[str, Any]) -> None:
-        body = json.dumps(message).encode()
-        self.stdout.feed_data(b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
-
-
-@pytest.mark.asyncio
-async def test_read_copilot_usage_probes_sdk_server(
-    monkeypatch, fake_environment
-) -> None:
-    process = _CopilotProcess()
-
-    async def create_process(*args, **_kwargs):
-        assert args == ("copilot", "--headless", "--stdio", "--no-auto-update")
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    snapshot = await read_copilot_usage()
-
-    assert [message["method"] for message in process.messages] == [
-        "connect",
-        "account.getQuota",
-    ]
-    assert process.messages[0]["params"]["supportedTaskKinds"] == []
-    assert [(w.window, w.used_percent) for w in snapshot.windows] == [
-        ("premium_interactions", 30.0)
-    ]
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error",
-    [
-        {"code": -32601, "message": "Unhandled method account.getQuota"},
-        {"code": -32603, "message": "Selected authentication is no longer available"},
-    ],
-)
-async def test_read_copilot_usage_raises_on_rpc_error(
-    monkeypatch, fake_environment, error
-) -> None:
-    process = _CopilotProcess(error=error)
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError, match=error["message"]):
-        await read_copilot_usage()
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_copilot_usage_raises_when_stream_closes(
-    monkeypatch, fake_environment
-) -> None:
-    process = _CopilotProcess()
-    process.stdout.feed_eof()
-    process.handle = lambda _message: None  # type: ignore[method-assign]
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError, match="closed the stream"):
-        await read_copilot_usage()
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_copilot_usage_raises_when_server_stays_silent(
-    monkeypatch, fake_environment
-) -> None:
-    process = _CopilotProcess()
-    process.handle = lambda _message: None  # type: ignore[method-assign]
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError, match="did not answer in time"):
-        await read_copilot_usage(timeout=0.05)
-    assert fake_environment.started[-1].closed
-
-
-@pytest.mark.asyncio
-async def test_read_copilot_usage_rejects_malformed_frame_header(
-    monkeypatch, fake_environment
-) -> None:
-    process = _CopilotProcess()
-    process.handle = lambda _message: None  # type: ignore[method-assign]
-    process.stdout.feed_data(b"Content-Length: many\r\n\r\n{}")
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(CliAgentUsageError, match="Malformed frame header"):
-        await read_copilot_usage()
-
-
-def test_usage_reader_registry_covers_supported_tools() -> None:
-    assert {
-        "antigravity": read_antigravity_usage,
-        "claude": read_claude_usage,
-        "codex": read_codex_usage,
-        "copilot": read_copilot_usage,
-        "grok": read_grok_usage,
-    } == CLI_AGENT_USAGE_READERS
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
-@pytest.mark.parametrize("outcome", ["windows", "limit", "empty", "error"])
-async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
-    monkeypatch, name, outcome
-):
-    from guildbotics.environment import provider_state
-    from guildbotics.intelligences.cli_agents import cli_agent_info
-
-    tool = cli_agent_info(name)
-    provider_state.record_authentication_outcome(tool, failed=True)
-    other = cli_agent_info("claude" if name == "codex" else "codex")
-    provider_state.record_authentication_outcome(other, failed=True)
-
-    async def read():
-        if outcome == "error":
-            raise CliAgentUsageError("connection failed")
-        return usage_snapshots.CliAgentUsageSnapshot(
-            agent=name,
-            windows=[usage_snapshots.CliAgentUsageWindow("primary", 12)]
-            if outcome == "windows"
-            else [],
-            limit_reached=outcome == "limit",
-        )
-
-    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
-    succeeded = outcome in {"windows", "limit"}
-    if not succeeded:
-        with pytest.raises(CliAgentUsageError):
-            await usage_module.read_cli_agent_usage(name)
-    else:
-        await usage_module.read_cli_agent_usage(name)
-    assert provider_state.authentication_failed(tool) is not succeeded
-    assert provider_state.authentication_failed(other)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
-async def test_what_a_tool_says_of_its_usage_is_told_with_its_login_masked(
-    monkeypatch, name
-):
-    """Every tool's usage is read where its login is held: whatever it, or
-    its provider through it, says of a failure is told with the login masked,
-    and nothing of the unmasked text goes along."""
-    from guildbotics.intelligences.cli_agents import cli_agent_info
-
-    async def read():
-        raise CliAgentUsageError("refused SECRET-459")
-
-    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
-    monkeypatch.setattr(
-        usage_module,
-        "masked",
-        lambda tool, text: f"{tool.name}:{text.replace('SECRET-459', '***')}",
-    )
-
-    with pytest.raises(CliAgentUsageError) as failed:
-        await usage_module.read_cli_agent_usage(name)
-
-    assert str(failed.value) == f"{cli_agent_info(name).name}:refused ***"
-    assert failed.value.__cause__ is None and failed.value.__suppress_context__

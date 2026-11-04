@@ -6,7 +6,6 @@ import langcodes
 from langcodes import Language
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
-from guildbotics.entities.task import ScheduledCommand
 from guildbotics.utils.person_id import person_secret_prefix, validate_person_id
 
 KNOWN_LANGUAGE_NAMES = {
@@ -299,23 +298,6 @@ class Person(BaseModel):
     def __hash__(self):
         """Return hash based on person_id."""
         return hash(self.person_id)
-
-    def get_scheduled_commands(self) -> list[ScheduledCommand]:
-        """
-        Get a list of scheduled commands for the person.
-
-        Returns:
-            list[ScheduledCommand]: A list of scheduled commands.
-        """
-        scheduled_commands: list[ScheduledCommand] = []
-        for task_schedule in self.task_schedules:
-            scheduled_commands.extend(
-                [
-                    ScheduledCommand(command=task_schedule.command, schedule=s)
-                    for s in task_schedule.schedules
-                ]
-            )
-        return scheduled_commands
 
     def to_person_env_key(self, key) -> str:
         return person_secret_prefix(self.person_id) + key.upper()

@@ -827,10 +827,10 @@ GuildBotics' factory makes:
 Only the owner's setup and merge and the runner's claim and finish call the
 API directly; every result is read through the provider. It needs no microVM,
 browser, or running service, and touches nothing of this machine's GuildBotics
-or Branvil ([`integration/branvil/test_smoke.py`](../../integration/branvil/test_smoke.py)).
+or Branvil ([`integration/branvil/test_smoke.py`](https://github.com/GuildBotics/GuildBotics/blob/python-host/integration/branvil/test_smoke.py)).
 
-Run it when you change the HTTP API or the provider. The pipeline runs it as
-the job `branvil-integration` with the same commit.
+The Python provider and its `branvil-integration` job were removed in #122.
+The source above is frozen; the Rust provider integration is restored in #88.
 
 ## Documents
 

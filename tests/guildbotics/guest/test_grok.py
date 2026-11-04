@@ -15,7 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.environment.member_broker import MemberCapabilityBroker
 from guildbotics.guest.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -34,14 +33,6 @@ from guildbotics.intelligences.agent_runtime.wire import (
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "grok_initialize_0_2_114.json").read_text()
 )
-
-
-@pytest.fixture(autouse=True)
-def _member_broker_without_socket(monkeypatch) -> None:
-    async def start(broker: MemberCapabilityBroker) -> None:
-        broker._url = "http://127.0.0.1:43123/mcp"
-
-    monkeypatch.setattr(MemberCapabilityBroker, "_start", start)
 
 
 #: What Grok Build 1.0.34 advertises when the environment names an external

@@ -2,26 +2,21 @@
 """Export the Python host/guest contracts as deterministic JSON Schema.
 
 Run with --check in CI; regenerate and commit wire/schema after type changes.
-Host argument objects come directly from the receiving method's signature.
+Host argument objects are declared on the guest's shared wire surface.
 The explicit call inventory makes a new host call require a schema decision.
 """
 
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import sys
 from pathlib import Path
-from typing import get_type_hints
 
-from pydantic import ConfigDict, TypeAdapter, create_model
+from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
-from guildbotics.capabilities.artifact_archive import Unpacked
 from guildbotics.commands.authoring import CommandAuthoringResult
-from guildbotics.environment.host_window import _CALLS, HostWindow
-from guildbotics.environment.member_execution import MemberCommandResult
 from guildbotics.intelligences.agent_runtime import wire
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionResult,
@@ -56,7 +51,7 @@ HOST_RESULTS = {
     "save": ConversationRecord,
     "mark_unhealthy": ConversationRecord,
     "record": type(None),
-    "member": MemberCommandResult,
+    "member": wire.MemberCommandResult,
     "agno": AgnoAnswer,
     "jev": dict[str, object],
 }
@@ -85,7 +80,7 @@ TYPES = (
     AgnoCall,
     AgnoAnswer,
     JevCall,
-    MemberCommandResult,
+    wire.MemberCommandResult,
     ConversationKey,
     ConversationRecord,
     ReadPage,
@@ -93,7 +88,7 @@ TYPES = (
     ChatPostOutput,
     ChatReactionOutput,
     ChatChannelOutput,
-    Unpacked,
+    wire.Unpacked,
 )
 
 
@@ -119,27 +114,13 @@ class WireJsonSchema(GenerateJsonSchema):
 
 def build_schemas() -> dict[str, str]:
     """Build one self-contained schema per named wire type and call side."""
-    if set(HOST_RESULTS) != _CALLS:
+    if set(HOST_RESULTS) != set(wire.HOST_ARGUMENTS):
         raise ValueError("Host calls changed; update HOST_RESULTS and wire schemas.")
     types = {item.__name__: item for item in TYPES}
     types["Entry"] = wire.Entry
     for call, result in HOST_RESULTS.items():
-        method = getattr(HostWindow, call)
-        hints = get_type_hints(method, include_extras=True)
-        fields = {
-            name: (
-                hints[name],
-                ...
-                if parameter.default is inspect.Parameter.empty
-                else parameter.default,
-            )
-            for name, parameter in inspect.signature(method).parameters.items()
-            if name != "self"
-        }
         stem = "".join(part.capitalize() for part in call.split("_"))
-        types[f"{stem}Arguments"] = create_model(
-            f"{stem}Arguments", __config__=ConfigDict(extra="forbid"), **fields
-        )
+        types[f"{stem}Arguments"] = wire.HOST_ARGUMENTS[call]
         types[f"{stem}Result"] = result
     return {
         f"{name}.json": json.dumps(

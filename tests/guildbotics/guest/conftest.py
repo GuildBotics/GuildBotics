@@ -5,9 +5,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.environment import usage
-from guildbotics.environment.member_broker import MemberCapabilityBroker
-from guildbotics.environment.runtime import AgentEnvironmentError
 from guildbotics.guest import (
     acp,
     antigravity,
@@ -19,20 +16,6 @@ from guildbotics.intelligences.agent_runtime.wire import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.cli_agents import cli_agent_info
-
-
-@pytest.fixture(autouse=True)
-def _adapter_member_broker_without_socket(request, monkeypatch) -> None:
-    """Keep adapter tests local; the broker and window modules own real HTTP
-    coverage."""
-    if request.module.__name__.endswith(("test_member_broker", "test_host_window")):
-        return
-
-    async def start(broker: MemberCapabilityBroker) -> None:
-        broker._url = "http://127.0.0.1:43123/mcp"
-        broker._port = 43123
-
-    monkeypatch.setattr(MemberCapabilityBroker, "_start", start)
 
 
 class FakeEnvironment:
@@ -95,9 +78,7 @@ class FakeEnvironment:
                 },
             )
         except OSError as exc:
-            # A probe runs in an environment of its own on the host; a turn's
-            # process in the command's.
-            error = AgentEnvironmentError if self.kwargs.get("probe") else TurnError
+            error = TurnError
             raise error(str(exc)) from exc
         return _ProcessInEnvironment(process)
 
@@ -170,13 +151,6 @@ class _ProcessInEnvironment:
 def fake_environment(request, monkeypatch) -> type[FakeEnvironment]:
     """Every adapter boots a fake environment unless a test says otherwise."""
     FakeEnvironment.started = []
-    if request.module.__name__.endswith("test_member_broker"):
-        return FakeEnvironment
-
-    async def start_probe(tool: str) -> FakeEnvironment:
-        return FakeEnvironment(tool, {"probe": True})
-
     for module in (codex, acp, claude, antigravity):
         monkeypatch.setattr(module, "start_turn", FakeEnvironment.start)
-    monkeypatch.setattr(usage, "start_probe_environment", start_probe)
     return FakeEnvironment

@@ -47,23 +47,7 @@ _CODEMIRROR_LEGACY_MODES = (
     "third-party package name, not compat with our own past."
 )
 
-_ONE_SHOT_CUTOVER = (
-    "Ticket #111 explicitly requires a one-time offline keychain cutover; "
-    "this module is never used as a runtime fallback or parallel store."
-)
-
 ALLOWED: tuple[Allowance, ...] = (
-    *(
-        Allowance(
-            "guildbotics/environment/secret_migration.py", needle, _ONE_SHOT_CUTOVER
-        )
-        for needle in (
-            "MigrationError",
-            "migrate(",
-            "cli.secret_migration",
-            "legacy keychain account",
-        )
-    ),
     Allowance(
         "guildbotics/guest/codex.py",
         "_LEGACY_APPROVAL_METHODS",

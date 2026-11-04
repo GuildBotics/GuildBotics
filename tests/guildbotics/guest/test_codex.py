@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.environment.contract import NetworkPolicy
 from guildbotics.guest.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
@@ -989,12 +988,6 @@ async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_the
 
 
 # --- access contract translation --------------------------------------------
-
-
-def _network(mode: str, *domains: str, local: bool = False) -> NetworkPolicy:
-    return NetworkPolicy.model_validate(
-        {"mode": mode, "allowed_domains": list(domains), "allow_local_network": local},
-    )
 
 
 def test_overrides_are_spelled_as_toml_values() -> None:

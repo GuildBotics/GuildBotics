@@ -12,13 +12,6 @@ from guildbotics.runtime.port import ServiceError, ServiceUnsupported
 from guildbotics.runtime.resources import ReadPage
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
-from tests.guildbotics.local_code_host import (
-    attachment,
-    comment,
-    local_member,
-    pull_request,
-    ticket,
-)
 
 TICKET_URL = "https://tickets.example.com/browse/OPS-7"
 PR_URL = "https://code.example.com/org/repo/pull/7"
@@ -119,38 +112,6 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 
 
 @pytest.mark.asyncio
-async def test_issue_inspect_reads_a_local_ticket_and_the_prs_that_refer_to_it():
-    member = local_member()
-    parent = ticket(4, interactive=True)
-    screen = attachment("screen-1", b"PNG!")
-    url = ticket(
-        1,
-        title="Login",
-        parent=parent,
-        comments=[comment("someone", f"it fails: ![screen]({screen})", id="c-1")],
-    )
-    pr = pull_request(2, "ticket/T-1", tickets=[{"url": url, "closes": False}])
-    pull_request(3, "elsewhere")
-
-    result = json.loads(await command("issue_inspect").main(member, url))
-
-    assert (result["url"], result["key"], result["title"]) == (url, "T-1", "Login")
-    assert result["interactive"] is False
-    assert result["interactive_ancestor"] == parent
-    assert [c["body"] for c in result["comments"]] == [f"it fails: ![screen]({screen})"]
-    assert result["attachments"] == [
-        {
-            "id": "screen-1",
-            "name": "screen.png",
-            "media_type": "image/png",
-            "size": 4,
-            "referenced_by": ["c-1"],
-        }
-    ]
-    assert [pull["url"] for pull in result["linked_pull_request_candidates"]] == [pr]
-
-
-@pytest.mark.asyncio
 async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
     readiness = {
         "readiness": "blocked",
@@ -208,11 +169,11 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
         await command("pr_inspect").main(service.context(), PR_URL, "true", "true")
     )
     assert result["checks"] == readiness
-    from guildbotics.integrations.github.pull_request_patrol import (
-        PULL_REQUEST_FEEDBACK_SOURCES,
-    )
-
-    assert PULL_REQUEST_FEEDBACK_SOURCES <= result.keys()
+    assert {
+        "conversation_comments",
+        "review_summaries",
+        "review_threads",
+    } <= result.keys()
     assert result["diff_complete"] is False
     assert (
         len(result["conversation_comments"])

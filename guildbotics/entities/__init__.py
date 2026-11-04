@@ -1,5 +1,5 @@
 from guildbotics.entities.message import FileInfo, Message, Reaction
-from guildbotics.entities.task import ScheduledCommand, Task
+from guildbotics.entities.task import Task
 from guildbotics.entities.task_run import TaskRunRecord, TaskRunResult
 from guildbotics.entities.team import (
     CommandSchedule,
@@ -20,7 +20,6 @@ __all__ = [
     "Project",
     "Reaction",
     "Role",
-    "ScheduledCommand",
     "Service",
     "Task",
     "TaskRunRecord",

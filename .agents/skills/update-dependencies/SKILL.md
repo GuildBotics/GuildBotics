@@ -5,6 +5,12 @@ description: Update GuildBotics' dependencies unattended - raise the pinned AI C
 
 # Updating the dependencies: AI CLI tools, their Node.js, and dependency alerts
 
+Until the Rust switch in #97, perform production updates in the production
+checkout using its own copy of these instructions. On main, the snapshot
+constants and dependency export are preserved under
+`guildbotics/templates/environment/`; the recipe and validation procedures
+will be rewritten in #87, #95, and #96.
+
 Invoke with `$update-dependencies` or "依存を更新して" for both parts, or name
 one part ("AI CLIツールを更新して", "依存アラートを解消して") to do only that. Check the official releases and the open
 dependency alerts, update the pins and the locks, run the non-device quality
@@ -15,10 +21,10 @@ merge.
 
 GuildBotics pins its provisioned tools in `CliAgentProvision` in
 `guildbotics/intelligences/cli_agents.py`, and the Node.js that Codex, Claude
-Code and Copilot run on in `NODE_VERSION` and `NODE_SHA256` in
-`guildbotics/environment/snapshot.py`; the snapshot installs that Node.js over
+Code and Copilot run on in `node_version` and `node_sha256` in
+`guildbotics/templates/environment/recipe.json`; the snapshot installs that Node.js over
 the base image's. Its own libraries are locked in `uv.lock` (exported to
-`guildbotics/environment/requirements.txt` for the snapshot) and
+`guildbotics/templates/environment/requirements.txt` for the snapshot) and
 `package-lock.json`, and the code
 host reports the vulnerable ones as dependency alerts. This workflow updates
 the pins and the locks; it does not establish that the new releases work on a
@@ -57,8 +63,8 @@ real device.
 - Not touched: the Python and TypeScript sources (`guildbotics/`,
   `desktop/src`) beyond what
   [section 2](#2-update-what-depends-on-the-version) allows for a tool
-  (`guildbotics/environment/requirements.txt` is not a source but the lock's
-  export), and the base images (`IMAGE` in `guildbotics/environment/image.py` and the
+  (`guildbotics/templates/environment/requirements.txt` is not a source but the lock's
+  export), and the base images (`image` in `guildbotics/templates/environment/recipe.json` and the
   Dockerfile's `FROM`). The tools and their Node.js are installed inside the
   snapshot by npm or an install script, never through the repository's
   dependency management or a base image; the libraries change only through
@@ -84,7 +90,7 @@ unchanged: those processes can rebuild snapshots from its pins after restart.
 | GitHub Copilot | `npm view @github/copilot dist-tags.latest` | `package="@github/copilot@<v>"` |
 | Grok Build | `curl -fsSL https://x.ai/cli/stable` | `bash -s <v>` in `install` |
 | Antigravity | the two manifests below | versioned URL and both `sha512` in `install` |
-| Node.js | the release index below | `NODE_VERSION` and both `NODE_SHA256` in `snapshot.py` |
+| Node.js | the release index below | `node_version` and both `node_sha256` in `templates/environment/recipe.json` |
 
 Node.js lists its releases newest first. Take the first one of the pinned
 major `<m>`, then the digests of its two Linux archives: `linux-x64`'s goes
@@ -204,16 +210,16 @@ version to exactly its target:
 
 | `manifest_path` | Raise it with |
 | --- | --- |
-| `uv.lock`, `guildbotics/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
+| `uv.lock`, `guildbotics/templates/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
 | `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
-  --no-hashes --prune microsandbox --prune wakepy \
-  -o guildbotics/environment/requirements.txt
+  --no-hashes \
+  -o guildbotics/templates/environment/requirements.txt
 ```
 
-This is the export `tests/guildbotics/environment/test_requirements.py` checks.
+This is the export `tests/test_environment_requirements.py` checks.
 
 Then read every version of the package the lock now holds (`uv tree --frozen
 --universal --package <package>`, `npm ls <package> --all`, or the lock
@@ -265,7 +271,7 @@ uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_d
 When the Node.js pin or `uv.lock` changed, also run the snapshot's tests:
 
 ```bash
-uv run --no-sync python -m pytest tests/guildbotics/environment/test_snapshot.py tests/guildbotics/environment/test_requirements.py -m 'not real_device'
+uv run --no-sync python -m pytest tests/guildbotics/environment/test_snapshot.py tests/test_environment_requirements.py -m 'not real_device'
 ```
 
 When `uv.lock` changed, also run `uv run --no-sync lint-imports` and the whole

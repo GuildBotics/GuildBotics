@@ -1,3 +1,5 @@
+> main no longer contains the Python host or CLI (#122). Python host instructions below describe the frozen `origin/python-host` implementation; the Rust usage guide is updated in #96.
+
 <h1>GuildBotics</h1>
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)

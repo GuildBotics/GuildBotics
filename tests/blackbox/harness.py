@@ -44,7 +44,7 @@ class Stack:
     def cli(self, *arguments: str, content=None, cwd=None, timeout=30):
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "guildbotics.cli", *arguments],
+                [*shlex.split(os.environ["GUILDBOTICS_BLACKBOX_CLI"]), *arguments],
                 cwd=cwd or self.workspace,
                 env=self.env,
                 input=content,
@@ -215,11 +215,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     env = _environment(tmp_path, workspace, home, port) | overrides
-    command = shlex.split(os.environ.get("GUILDBOTICS_BLACKBOX_SERVER", "")) or [
-        sys.executable,
-        "-m",
-        "guildbotics.app_api",
-    ]
+    command = shlex.split(os.environ["GUILDBOTICS_BLACKBOX_SERVER"])
     with (tmp_path / "server.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             command,

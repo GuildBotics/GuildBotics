@@ -5,6 +5,12 @@ description: Verify AI CLI releases on an existing GuildBotics update PR when a 
 
 # Verifying the AI CLI tools on an update PR
 
+Until the Rust switch in #97, verify production updates from the production
+checkout using its own copy of these instructions. The main branch's Python
+host is being removed in #122; its replacement build and verification
+procedures will be rewritten in #87, #95, and #96. Do not apply the Python
+host commands below to main after that removal.
+
 Invoke with `$verify-ai-cli-tools` and an existing update PR, or use the PR
 already identified in the conversation. If the target is unknown, ask which
 PR to verify. This is optional, human-attended verification; the unattended

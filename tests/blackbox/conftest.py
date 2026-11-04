@@ -1,5 +1,6 @@
 """Fresh server and local Git remote fixtures for blackbox journeys."""
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,11 @@ from tests.blackbox.harness import running_stack
 
 @pytest.fixture
 def stack(tmp_path: Path):
+    if not all(
+        os.environ.get(key)
+        for key in ("GUILDBOTICS_BLACKBOX_SERVER", "GUILDBOTICS_BLACKBOX_CLI")
+    ):
+        pytest.skip("Set replaceable server and CLI commands (#91/#92)")
     with running_stack(tmp_path) as instance:
         yield instance
 

@@ -1,681 +1,60 @@
 # AGENTS.md
 
-このファイルは、このリポジトリで作業する AI/自動化エージェント向けの実装ベースの作業ガイドです。
+このファイルはリポジトリで作業するエージェント向けのガイドです。
 
 ## 最重要ルール
 
-- ソースコードを正とする（README / `docs/*.md` は参考情報）
-- `.gitignore` 対象のファイル・ディレクトリは参照しない
-- 挙動変更を行った場合は、関連ドキュメントも必要に応じて更新する
-- コードの修正に際しては「最小限の変更量」ではなく、「変更後のコード量が最小になること」を最優先事項とし、場当たり的対応ではなくあるべき姿の美しいコードとなることを心がける
-- 後方互換性を維持するためのコード（移行フラグ、フォールバック読み込み、旧形式の並行サポート、deprecation 期間の新旧併存パス）を追加しない。互換性のために冗長なコードを残すより、常にあるべき姿のコードを維持することを優先する。破壊的な非互換が起こりうることは README の「重要な注意（免責事項）」で宣言済みであり、利用者は実質的にメンテナ本人のみである。設定形式・実行パス・命名などを変更する際は、互換レイヤーではなく直接切り替えと旧実装の削除を選ぶ
-- 意味判定・分類・採用可否のような自然言語理解が必要な処理を、キーワード列挙や場当たり的な文字列マッチで実装しない。既存の LLM 判定基盤（例: `guildbotics/intelligences/functions.py` と `guildbotics/templates/commands/functions/*`）を優先し、必要なら汎用的な判定関数を追加する。
-- 責務境界を越えた実装をしない。GuildBotics における具体的な責務境界は「重要な実装ポイント」の「責務境界」を参照する。
-
-このリポジトリの `.gitignore` では、少なくとも以下を無視対象にしています（抜粋）:
-
-- `tmp/`
-- `memo/`
-- `.guildbotics/`
-- `dist/`
-- `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`, `.coverage*`, `coverage.xml`
-- `guildbotics/_version.py`
-
-## プロジェクト概要（実装ベース）
-
-- 言語: Python 3.15+（開発環境は `.python-version` で 3.15 に固定する。対応範囲の下限であり
-  CI が検査する版でもあるので、手元だけ新しい版を使うと、その版で入った API を使ったことに
-  CI まで気づけない）。Rust はリポジトリ直下の Cargo workspace（member は `crates/*`）で、
-  toolchain は同じ理由で `rust-toolchain.toml` に CI と同じ版を固定する（CI の image の
-  `docker/agent-environment/Dockerfile` の `RUST_VERSION` と合わせる）。profile は member に
-  置いても使われない（Cargo は警告するだけ）ので、workspace の root の `Cargo.toml` にだけ置く
-- パッケージ: `guildbotics`
-- CLI: Click (`guildbotics.cli:main`)
-- 主用途: AI エージェント協調のための CLI / スケジューラ / カスタムコマンド実行基盤
-- 動作するマシン: GuildBotics は 1 台のマシン（Hub。GuildBotics のサーバーと Branvil が動く）でだけ動く。サーバーは Hub のチェックアウトから動かし（配布物は作らない）、macOS では `scripts/hub-server.sh` が LaunchAgent として動かす。ほかのマシンからはブラウザで、OpenSSH のユーザーサービス（`scripts/hub-forward.sh` / `.ps1`）が転送するポート越しに使う
-
-エントリポイント:
-
-- インストール後 CLI: `guildbotics` (`pyproject.toml` の `project.scripts`)
-- モジュール側: `guildbotics/cli/__init__.py`
-- Local API とその画面: `python -m guildbotics.app_api`（FastAPI。引数を取らず、loopback の固定ポート（`GUILDBOTICS_SERVER_PORT`、既定 8765。サーバーと CLI が同じ値を読む）で待ち受け、API を `/api` 配下に、`desktop/` のビルドした画面を `/` に配る（`app_api/ui.py`）。認証は Branvil と同じ形（`app_api/auth.py`）: `~/.guildbotics/data/server/<port>/owner.token` を読める者がオーナーで、Bearer トークン、または入口リンク（`POST /api/session/links` → `/-/enter#<code>`）で得た `SameSite=Strict` の cookie と CSRF ヘッダ（`X-GuildBotics-CSRF`）。他のマシンは同意画面と PKCE で得たトークン（`guildbotics connect`、OS のキーチェーン）を使う（使うのは `guildbotics open` だけで、このマシンのパスや Secret を渡す `run` の委譲は、このマシンのサーバーだけが知る owner token だけを使う）。全リクエストの `Host` と `Origin` を確かめ、CORS のヘッダは返さない。WebSocket の `/api/events` は cookie と `Origin` で認証する。CLI は `utils/local_api.connect_local_api()` で、トークンの digest を知っている証明（`/api/local-api/proof`）を受けてから Bearer を付ける。サーバーは listen したことを stdout の 1 行（`server.PORT_NOTICE_PREFIX`）で起動元へ通知する。トークンの経路の母集団は `tests/guildbotics/test_local_api_boundary.py`）
-
-### 区分（host・guest・共有）
-
-コマンドは隔離環境（guest）の中で動き、それ以外は host で動く。この信頼境界をパッケージの区分で表す。区分の正本は `pyproject.toml` の `[tool.importlinter]` で、どのパッケージがどの区分か、各区分の責務、guest と共有が読み込まない host 専用ライブラリの一覧はそこに書く（`uv run --no-sync lint-imports` で検査し、CI も実行する）。
-
-```mermaid
-flowchart TB
-    subgraph Host["host（上から下へだけ）"]
-        direction TB
-        H0["app_api"]
-        H1["cli"]
-        H2["drivers ・ setup"]
-        H3["environment"]
-        H4["capabilities（＋ capabilities/decisions）"]
-        H5["integrations（ルート＝種類ごとの選択と受信 port、&lt;provider&gt;/＝実装）"]
-        H6["workspace ・ observability（writer）"]
-        H0 --> H1 --> H2 --> H3 --> H4 --> H5 --> H6
-    end
-    subgraph Guest["guest"]
-        G["guest/"]
-    end
-    subgraph Shared["共有（下へだけ）"]
-        direction TB
-        S1["commands"] --> S2["intelligences"] --> S3["runtime"] --> S4["loader"] --> S5["entities"] --> S6["utils"]
-    end
-    Host --> Shared
-    Guest --> Shared
-```
-
-区分のルール:
-
-- 1 つのパッケージに 2 つの区分を混ぜない。新しいパッケージは import-linter の `zones` 契約に分類する（分類していないパッケージがあると `lint-imports` が落ちる）
-- host と guest は互いに import しない。host は guest の入口をモジュール名で起動し（`/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry`）、両者が読むもの（wire）は共有の `intelligences/agent_runtime/wire.py` に置く
-- 共有は host も guest も import しない。guest と共有は host 専用ライブラリを import せず、`utils` はそれをモジュールの先頭で import しない（OS のキーチェーンを使う関数の中の import だけを契約の `ignore_imports` に挙げる）
-- 共有のパッケージ（サブパッケージを含む）は、guest の入口から使われるものに限る（`tests/guildbotics/test_package_map.py` が grimp でパッケージ単位に確かめる）。host でしか使わないモジュールは host のパッケージへ置く
-- 各区分の中は図の向きにだけ import し、同じ段の兄弟（図の「・」）は互いに import しない（`host-layers` / `shared-layers` 契約）。サーバー（`app_api`）は member CLI をプロセス内で動かすので `cli` の上に置く
-- import-linter が見るのは import 文（関数の中の import を含む）だけなので、名前で読み込まれる brain と同梱コマンドは `tests/guildbotics/test_package_map.py` の実行時の probe が guest の入口から読み込んで確かめる（許可するパッケージとライブラリは import-linter の契約から読む）
-
-provider の置き方:
-
-- provider の実装も、provider ごとの setup（`integrations/<provider>/setup.py`）も `integrations/<provider>/` に置く（descriptor から setup へ届くため。`setup/` は `integrations` より上の層）。`integrations/<provider>/` を import できるのは `integrations/factory.py` だけ（import-linter の `providers-behind-the-factory` 契約）で、それ以外は種類ごとの port（`runtime`）、provider に依らない host の module（`integrations/` 直下）、descriptor 越しに provider へ届く
-- provider を選ぶのは `integrations/factory.py` の 1 か所だけ。factory の表 `PROVIDERS` は provider ごとの descriptor（`integrations/provider.py` の `Provider`。担当する種類（チャットはサービス・listener・接続をまとめる単位 `listener_key` の `Chat`）、member に要る secret 名と `account_info` の鍵、provider の接続の Secret 名 `identity_secret_keys`（member のものではないが、接続先は全ワークスペースのメンバーが使うサービスなので identity の store に置き、provider がそこから読む。使うのは host だけ）、設定の確認 `verify`、provider 自身への読み取り確認 `diagnose`、資格情報を持つ member の判定 `credentialed`、設定画面が頼る `setup`、コードホストの CI ランナーへ image のアーカイブを読み込む `load_ci_image`（任意。`guildbotics environment image load-ci` が使う）、人のメンバー自身の git がこのマシンで使う資格情報 `human_git_credential`（任意。git の credential helper `guildbotics git-credential` が factory の `human_git_credential()` 越しに全 provider へ remote の origin で尋ね、受け持たない provider は `None` を返す。ワークスペースは見ない（git を受け持つ接続は identity のもの）。Branvil はマシンごとのオーナーのトークンを発行して、そのマシンの OS のキーチェーンにだけ置く（`branvil/owner_git.py`）））を持つ。`setup`（`ProviderSetup`）は表示名、種類ごとの `project.services` の項目の model、メンバーのアカウントの model（`MemberAccount`。入力を `account_info` と member 相対の secret 名に分け、読み取りでは値と secret の有無を見せる。保存に provider 側で要るもの（アカウントやトークンの発行）は保存の lock の前に `prepare` で、削除で取り消すものは削除の前に `removed` で行う。`credential` はそのメンバーのその provider のホスト上の資格情報（`HostCredential`）を返し、setup 層がほかの provider のアカウントの `prepare` に渡す。受け取る provider は `credentials_from` で宣言し、そのアカウントの欄はこの provider を使うときにも設定画面に出る）、avatar の URL、チャットのチャンネルの参照の解釈、provider 固有の操作（`Operation`。app_api が `/config/providers/<provider>/<操作>` として登録する）と browser で開くページ（`page_path()`。別のサイトから戻るブラウザが開くので session cookie を持たない。URL は `page_url()`）を持ち、失敗は `SetupError`（code と、locale のキーまたは文言）。`setup` を持たない provider（`local`）は設定画面に出ない。メンバーの secret 名は descriptor の `secret_keys` だけが持ち（`utils/person_id.py` は member のプレフィックス `person_secret_prefix()` だけを決める。メンバーの secret は identity の store（`secret_store.identity_secret_store()`）だけに置くので、プレフィックスの名前空間は全 identity のもので、同じワークスペースにいない `foo-bar` と `foo_bar` も衝突する）、`ProviderCheck` は member の資格情報の確認かどうかを `credential` で宣言する（アラートはこれと provider 名で開く）。画面の verify と診断、設定画面、アラート、Activity の取り込みは、設定された provider の descriptor を列挙するだけで provider の名前で分岐しない。画面側の provider ごとのパネルと翻訳は `desktop/src/setup/providers/<provider>/` に置く
-- 種類（チャット / コード / チケット）の port は `runtime` に置く。コードのホスト（`CodeHostingService`）はリポジトリ（git の接続先・既定ブランチ・push の資格情報と書き込み範囲・コミットの URL）、PR（読み書き・会話コメント・レビュー・インラインコメント・返信・reaction）、CI（readiness・失敗ログ・成果物）、リポジトリ情報、PR 巡回、チケットを参照する PR を、チケット（`TicketService`）はチケットの読み書き（作成時に対話・担当者・レーン・親・依存先を確定し、レーンの既定は親か依存先があれば ready、それ以外は new）・コメント・reaction・本文とコメントが参照する添付（一覧と ID での取得）とボード（巡回の候補・再取得・レーン移動・期間内に閉じた項目）を持つ。GitHub では 1 つの provider が両方を実装する。チケットと PR は URL で、コメント・レビュー・スレッド・CI の job・成果物は項目の URL と組で意味を持つ不透明な文字列の ID で、リポジトリはリポジトリのパス（GitHub `owner/repo`）で指す。読み取りは `read(resource, subject)` で、語彙と結果の形（`WorkTarget` の `kind` / `url` / `title` / `label`、`Ticket`・`PullRequest`・`Review` ほか）は `runtime/resources.py`、書き込みの結果の形はそれぞれの port の module の model が正本。全 port の失敗は `runtime/port.py` の `ServiceError`（利用者に見せられる文言）/ `ServiceNotFound`（対象が無い、そのサービスの URL ではない）/ `ServiceUnsupported`（サービスの仕様上できない）の 1 系統で、任意機能（意味ごとのリアクション、`request_changes`、ボードに載せないチケットの作成、成果物、チケットの添付、失敗ログ、`dependency_alerts`、別サービスのチケットを参照する PR、マージで閉じるリンク）は呼んだ時点で `ServiceUnsupported` を送出する。空の成功を返すのは取得できて 0 件だったときだけ。リアクションの語彙（`ack` / `agree` / `celebrate` / `support`）と、run が終わらなかったことを作業の出どころに残し、作業が人を待って止まったことを告げるメンバーのチャットの通知にも付く `WorkflowStatus` も `runtime/port.py` に置き、全 port が共有する。チャット（`ChatService`）のメッセージは不透明な `message_id` / `thread_id` と時刻 `occurred_at` を持ち、時間窓は `occurred_at` で計算する。順序は `position`（固定幅の UTC 時刻と id の文字列）の比較で、保留キュー・wake cursor・AI CLI のセッションの context cursor はこれを比べる
-- 参照 provider `local`（`integrations/local/`）は PR をリポジトリごとに、チケットとレーンを tracker ごとにワークスペースの `.guildbotics/local/services/code/` と `tickets/` のファイルに、remote を bare repository に、チャットのチャンネルを `.guildbotics/local/services/chat/<channel_id>.jsonl` に持ち、資格情報を要らない。特定のサービスの形をまねず、リポジトリのパスは 3 段（`acme/team/demo`）で、チケットは独自の key（`T-1`）と tracker を持ってリポジトリに属さないものもあり、ID は数値でない文字列（`comment-3`）で、リアクションは意味の語彙だけを受け、レビューは verdict を、CI は job と attempt を持つ。番号やコメント id の振り方のようなサービス固有の事情は、そのサービスの provider の中で扱う。Setup 画面には出さない。port の契約テスト（`tests/guildbotics/integrations/contracts/`）は factory の全 provider で、項目の URL と不透明な ID で話す同じ手順を流し、必須の保証と任意機能の `ServiceUnsupported` を確かめる（provider ごとの skip はしない）。capability・ticket selector・ticket workflow・チャットの受信から返信までのテストは `local` で動かす
-
-### パッケージ全体マップ
-
-- `guildbotics/cli/*` … Click コマンド。`member_client.py` が member の薄い API クライアント、`member.py` がバックエンド側の Click 定義と capability の入口
-- `guildbotics/app_api/*` … 画面（`desktop/`）と CLI 向けの Local API（FastAPI + EventBus + normalizer。trace の表示 `trace_presentations.py` もここ）
-- `guildbotics/drivers/*` … スケジューラ、host の Context の組み立て（`context.py`。「6. Context の組み立て」）、host の Context が使う member 解決（`member_context.py`）、バックエンドの排他（`app_api_lock.py`）、service の lock（`service_lock.py`）、コマンドを始める host の入口（`command_runner.py`。`prepare_command` / `run_main_command` / `run_in_environment`。コマンドを 1 回だけ読み（`PreparedCommand`）、コマンドの隔離環境の中の入口に実行させ、どう終わったかを host の読み方で受け取る。完了まで turn を回す処理（`commands/agent_turn.py`）が窓口越しに読む帳簿の host 側の実装 `HostRunLedger` を grant に渡す）、workflow dispatcher、ticket selector（`ticket_selector.py`。ticket workflow を動かすすべての経路が候補選びと turn の前後の処理をここで行い、作業が人を待って止まった run の通知もここから投稿する（`capabilities/work_stops.py`））
-- `guildbotics/capabilities/*` … member のチケット・コードのホスト（チケット・PR・CI。`member_repository.py`）/ git / chat / memory 操作と domain event 記録
-- `guildbotics/commands/*` … コマンド種別（md/py/sh/yml + inline）とコマンド実行の仕組み（`runner.py` の `CommandRunner`）。コマンドの隔離環境の中で動く（入口は `guest/entry.py`）。共有の区分で、host 専用のパッケージと host 専用のライブラリを読み込まない（「区分（host・guest・共有）」）。`guildbotics/drivers/__init__.py` は再 export を持たない（持つと scheduler まで読み込まれる）
-- `guildbotics/setup/*` … ワークスペースとメンバーの設定の書き込み（`setup_service.py`。provider に依らず、`services` の各種類とメンバーのアカウントは provider の setup の model で検証して書く）。GUI（`app_api`）が使う
-- `guildbotics/integrations/*` … provider の実装（`branvil/` / `github/` / `local/` / `slack/`）と、provider に依らない host の module（PR 巡回 `pull_request_patrol.py`・readiness `readiness.py`・チケットの選択 `ticket_selection.py` の判定はここに置き、provider は読んだ snapshot を渡す）。`factory.py` の `ServiceIntegrationFactory` が host の integration factory で、`project.services` の名前で種類ごとに provider の descriptor（`provider.py`）から実装を選ぶ。受信の port（`event_listener.py` の `EventListener`）もルートに置き、`drivers/event_listener_runner.py` は factory の `listener_key` / `create_event_listener` で接続ごとに 1 つ持つ（共有の `IntegrationFactory` は host の listener を知らない）。チャットの provider は `project.services.chat_service` の名前で選び、記録（`state/chat_state/<provider>/`）もその名前で分ける。書き込みは、各サービスの provider 設定が名指す scope（名前空間。GitHub は `owner`）の直下に限る（公開リポジトリへの Issue・コメント等は token の repository selection では止まらないため）。規則は `repository_scope.py` の `check_path` 1 つ（パスの親が scope と一致する（casefold）。サブグループは含めない）で、各 port の書き込みはその port の scope で確かめる。GitHub はメンバーの client の全リクエストが通る関門（`github/repository_scope.py`。`get_async_client` の request hook）、Branvil も読み取り以外の全リクエストが通る request hook（`branvil/api.py` の `connect`）、`local` は保存の直前、`member git push` は資格情報を git に渡す前にコードのホストの `check_push` で通す。GitHub のメンバーの client は、エラーの応答も通信の失敗も応答フックと `send` で `ServiceError` の系統に変える（`github/async_client.py`。404 は `ServiceNotFound` でもある `GitHubNotFound`）ので、provider はエラーの応答を見ない。Branvil のメンバーの client は、接続できなかった（Branvil に届いていない）要求だけを呼び出し側の残り時間の範囲で送り直し（member broker が渡す `MemberInvocation.deadline`。要求ごとに持ち時間を更新せず、接続中の要求も締切で打ち切る。締切がない巡回や直接の member CLI は要求ごとに 300 秒の持ち時間を設ける（1 回のサービス要求がワーカーや対話 CLI を占有してよい上限で、Branvil の再起動時間の見込みではない）。host の候補取得・再取得・レーン移動・失敗コメント・checks 終了通知にも同じ境界で適用する。接続待ちを使い切った base URL は process で共有し、新しい context や別メンバーの client でも、どの client からでも応答を受けるまで再び待たない（admin/health の失敗では印を付けない）。届いたかもしれない要求は書き込みが二重になるので送り直さない。GuildBotics 自身の client `administer` と `health` は待たない）、`git_credential` も同じ client で Branvil が応答するまで待ってから資格情報を返す（member git はその直後に fetch / push する）。member git は、資格情報の有無にかかわらず、system・global・リポジトリの設定の credential helper（利用者自身の git のための `guildbotics git-credential` を含む）をすべて外す（`capabilities/member_git.py` の `_git_auth_environment`）。GitHub の書き込み・client・owner の渡し方・GraphQL mutation と、git に資格情報を渡す箇所（`git_credential` の呼び出し）の母集団は `tests/guildbotics/integrations/test_github_write_boundary.py` が固定し、scope の外への書き込みの拒否はコードのホストとチケットの契約テストが全 provider で確かめる
-- `guildbotics/intelligences/*` … brains（`agno_agent` / `jev`。メンバーの `brain_mapping.yml` から brain を作る `brains/factory.py` の `ConfiguredBrainFactory` は host と隔離環境の両方が使う。`BrainConfig` は brain の class を class path の文字列で持ち、作るときに読み込むので、host は mapping を読むだけなら AI CLI の brain を読み込まない。brain スロットがどの AI CLI を動かすかは同じ module の `cli_agent_of()` が mapping から読む）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`。メンバーの AI CLI スロット `get_cli_agent_mapping()` もここ）、host と guest の両方が読むもの（`agent_runtime/`。turn のモデルと AI CLI の失敗 `models.py`、`usage_snapshots.py`、host と guest の wire `wire.py`）
-- `guildbotics/environment/*` … コマンドの隔離環境（host 側）。`contract.py` が「何を許すか」のアクセス契約 = データ、`spec.py` が契約 → microVM の mount / network / cwd / env への provider 非依存の変換（env は host の環境変数を継承せず、host の事実だけを `host_environment()` がすべての環境へ渡す。今は IANA 名のタイムゾーン `TZ` と、OS の UI 言語を gettext の形（`ja_JP`）で表した `LANGUAGE`。UI 言語は `utils/os_language.py` が OS ごとに読み、同梱コマンド `functions/get_os_ui_language` も同じ関数を使う。環境の中ではその関数が `LANGUAGE` を読むので、コマンドには host の UI 言語が届く）、`runtime.py` が契約を強制する実体で microsandbox SDK を扱う唯一の module（コマンドの microVM の起動と snapshot の build / 削除の両方。`doctor()` は wheel 同梱の msb と libkrunfw を device の固定パス `~/.guildbotics/data/msb` へ SDK の版ごとに 1 回配置し、`MSB_HOME` / `MSB_PATH` で SDK に指させる。network からは取得しない。Windows ではその固定パスの firewall 規則を昇格 1 回で作る）、`toolchain.py` が共有宣言 `config/intelligences/agent_environment.yml`（`image` / `resources` / `network` / `dns`。`resources` はmicroVM起動時のmemory・vCPU、network は workspace で1つ、省略時 deny。`dns.nameservers` は公開リゾルバの一覧または `host`）、`snapshot.py` が base image と provider CLI と GuildBotics 自身の Python 環境（Python 3.15、`uv.lock` から書き出した `requirements.txt`、WeasyPrint のネイティブライブラリとフォント）の recipe・snapshot 名（ビルド手順の中身から作る）・状態判定（missing / stale / building / failed / ready）・build と service の自動 rebuild（`SnapshotUpkeep`）、`provider_state.py` が device × provider の永続領域 `~/.guildbotics/data/agent_environment/<provider>/` と login、`status.py` が device を 1 度読んだ結果（runtime / 宣言 / snapshot / resources / network / dns / tool ごとの provision と login）と「turn が起動できない理由」の文言の正本で、CLI `environment status`・画面の状態カードと alert・コマンド開始時と turn 開始時の拒否（`environment/command_environment.py` の `_device` / `_ready`）・verify とコマンドの要件判定（`app_api/verify.py` / `app_api/command_catalog.py` の `_RequirementFacts`。ホストの PATH は見ない）・scheduler の見送り判定がすべてこれを使う（同じ状態を別の場所で判定し直さない）。turn に bind するのは sessions と認証情報を含まないアカウント情報だけで、provider ごとの一覧と provider API の domain（`api_domains`。ログインを持つ環境だけが届く）はカタログ `cli_agents.py` の `CliAgentProvision` が持つ。provision された tool は必ずカタログに `credential_broker` を持ち（#459）、auth を turn に置かない: login は `credential_vault.py`（キーチェーンの鍵 + AES-GCM）で device に暗号化保存し、turn には置換用の値だけを渡し（認証ファイル、環境変数、または外部認証コマンド）、`auth_gateway.py`（GuildBotics process 内で microVM と同じだけ動き、一度に 1 つの turn へ貸し出す（`lend` / `revoke`）。許可 route だけを実トークン付きで route ごとの upstream へ転送）経由で API に届かせる。HTTPS でしか話さない tool（カタログの `tls`）には貸し出すたびに作る CA で TLS を話し（コマンド実行が長くても CA は turn より長く生きる必要がない）、turn は system の CA にその CA を加えたファイルを `SSL_CERT_FILE` で信頼する。設定で動かせない URL のホスト（`relayed_hosts`）は、turn 内の `/etc/hosts` と Node の中継でゲートウェイへ向ける。turn が直接届くのは `CliAgentProvision.turn_domains`（brokered なら認証情報を運ばないものだけ）。refresh と usage probe はログインをメモリに持つ専用環境（`provider_state.py` の `refresh_login` / `start_login_environment`。process をまたいで 1 つずつ）で tool 自身に実行させ、環境を止める前に回収して保存する。各 provider の接続契約は任意実行のテスト `test_provider_contracts.py`（`GUILDBOTICS_CONTRACT_PROBE=1`）で確かめる。guest から host へは `spec.GUEST_HOST_ALIAS`（`host.microsandbox.internal`）+ policy が開ける port だけで届き、member broker はその alias を Host header として受け付けて `MemberBrokerEndpoint.guest_url` を返す。`tests/guildbotics/environment/test_member_broker.py` で担保。「sandbox」という語は provider 自身のネイティブ sandbox だけを指す。コマンドとそのサブコマンド、その中の AI CLI の turn は、すべてコマンドの開始時に起動した 1 つの microVM の中で動く。host はコマンドを 1 回だけ読み（`drivers/command_runner.py` の `prepare_command()` / `prepare_host_command()` が返す `PreparedCommand`。ファイルと宣言 `CommandAccess`）、解決したファイルを VM の綴り（ワークスペースは `guest_path()`、同梱テンプレートは `code_path()`。`command_environment.command_path()`）で VM の入口 `/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry` に渡す（`CommandRequest` を標準入力、`CommandReply` を標準出力の最後の 1 行。`_SharedEnvironment.execute()`。標準出力は入口だけが書き、コマンドの `print()` と子プロセスの出力は標準エラーへ行く。入口がそこに書いたものは host のログへ行ごとに流し、返答のあとは長く待たない（コマンドが残したプロセスは microVM と一緒に止まる））。VM はメインコマンドを名前から解決し直さず、子コマンドは VM の中で呼び出し元から解決し、マウントした範囲の外を作業ディレクトリにした子コマンドは拒否する（`CommandSpecFactory._resolve_cwd`。範囲の判定は turn と同じ `agent_runtime/wire.py` の `admits()` で、表は起動時の情報 `CommandFacts.mounts`）。VM の中の `Context` は読み取り専用でマウントした設定ディレクトリと窓口（`WindowIntegrationFactory`・`inference()`・`ClientRunLedger`）から組み立て、実トークンと API キーを持たない。adapter（`guest/*`）は VM の中で `guest/turn.py` の `start_turn()` で turn を始め（窓口の `begin_turn` がログインを貸し出し、member broker の grant を返す）、provider CLI を VM の中の子プロセスとして起動し（provider を起動するのは `turn.py` だけ。guest でほかにプロセスを起動するのは、写す範囲を git に列挙させる `worktree_copy.py` だけ）、turn の終わりに必ず閉じる（`end_turn`。コマンドの turn は一度に 1 つで、閉じていない turn があるあいだ次の turn は拒否される。host が閉じられなかった turn はコマンドの終わりに host が閉じる）。CLI の brain は turn ごとに adapter を作って閉じ、会話の台帳と記録は窓口越し（`ClientConversationStore`。記録はまとめて `record` で送る）で、run・作業（会話のキー）と trace は起動時の情報 `CommandFacts` からだけ取る（テンプレートも turn も名乗らない）。VM で起きた失敗は、コマンドの失敗か、元になった AI CLI の失敗（`CliAgentExecutionError` の category と details）を保ったまま host で組み立て直され（`command_runner._failure`。それ以外は型名を持つ `CommandFailedError`）、結果は呼び出し側が読む型（`PreparedCommand.result_type`）があるときだけ渡り、host がその型で検証する。コマンドを始める host の入口（`drivers/command_runner.py` の `run_in_environment()`。`run_main_command()` と workflow dispatcher が通る）がメインコマンドの宣言（`read_only` / `inspects`。`agent_runtime/wire.py` の `CommandAccess`）とメンバーの全スロットの AI CLI を持って `command_environment()` を開く。アクセス契約（`agent_environment.yml` の `network:` と grants）は `command_environment()` がコマンドの開始時に 1 回だけ読み（設定の誤りはその時点の `CommandError` で、AI CLI を使わないコマンドも失敗する）、turn は契約も tool の一覧も持たない。microVM は動いているプロセス自身の `guildbotics` パッケージを `/opt/guildbotics/code/guildbotics` に読み取り専用で持つ（host と同じパスにしないのは、チェックアウト自身を cwd にした turn の `guildbotics/` を覆わないため）。このコードを見つけるのは snapshot の venv の `guildbotics.pth` だけで、`PYTHONPATH` は使わない（turn がチェックアウトで流すテストが bind されたコードを import しないため）。microVM はコマンドの開始時に（device が起動できなければ `status` の文言の `CommandError`）、メンバーの全スロットの AI CLI の state mount・API domain・ゲートウェイの port と member broker の port、設定ディレクトリとメンバーの identity の `config/team/members`（`inspects` の `config` と同じ表 `_inspected_mounts` で読み取り専用。identity root は `GUILDBOTICS_IDENTITY_ROOT` で VM に伝える）を持って起動し（形はコマンドから決まる: 作業ディレクトリはコマンドの cwd。作業ディレクトリ自体は書き込みを許可せず、書き込むコマンドの cwd は読み書き可の grant に含まれるときだけ読み書き可でマウントし、それ以外は `.git` ごと読み取り専用で `spec.WORKTREE_SOURCE` にマウントして、VM の中で `guest/worktree_copy.py` が同じパスの VM 自身のディスクへ写す（`spec.WorktreeCopy`。読み取り専用の grant にだけ含まれる cwd では書き込むコマンドを拒否する。cwd の `.git` がディレクトリなら、元の `.git` を `--git-dir` で名指しした `git ls-files --others --ignored --exclude-standard --directory` が挙げるもの（リポジトリの ignore 規則 `.gitignore` と `.git/info/exclude` に合う未追跡のもの。VM にはユーザーのグローバル設定が無い）を走査から外して、それ以外をすべて写す（git が中を見ないサブモジュールと入れ子のリポジトリは `.git` を除いて丸ごと。git はディスクから読んだ綴りで挙げるので名前を照合しないが、追跡しているファイル（`--cached`）と Unicode の正規化形式だけが違う項目は ignore の一覧から除き、そのファイルを含むディレクトリが 1 項目で挙がったときは、その中だけを `--directory` 無しで挙げ直す（中の ignore 対象を 1 つずつ外す）。macOS の git は index へ合成した形で書き、VM の Linux 版 git はそれをディスクの分解した形と結び付けないため。git がそのリポジトリを読めなければコマンドは失敗する）。写しには元の `.git` を指す gitfile を置く。そうでなければ（`.git` が無い、または linked worktree のように別の場所を指す gitfile）`.git` 以外のすべてを写す）。うまく終わったコマンドが写しで変えた通常ファイル（写したファイルの変更・削除と、新しいファイル。リポジトリでは、写しに対して同じ一覧が挙げる新しいファイル（ビルドの成果物など）と、元で `.git` を持つディレクトリ（サブモジュール、入れ子のリポジトリ）の中の新しいファイルは書き戻さない。一覧はどちらも元の `.git` から取るので、写しの gitfile をコマンドが書き換えても変わらない）は、host が受け取ったデータとして cwd から no-follow で書き戻す（`environment/worktree.py`。実行中に host で変わったファイルがあれば何も書かない）。画面から渡した入力は `~/.guildbotics/data/command_inputs` のセッションのディレクトリを同じパスに読み取り専用でマウントする（`PreparedCommand.inputs`）。host がパス名で扱う一時ファイルは grant で開かれうる OS の一時ディレクトリではなく `fileio.host_temporary_root()` に置く。書き込むコマンドなら実行中のメンバーの clone `local/clones/<person>` を起動前に host で作って読み書き可でマウントする。clone は grant ではなく cwd と同じ扱いの開いたマウントとして`build_environment_spec(worktrees=...)` に渡す。cwd はすべての host の入口が明示し（host が自分で始める実行は `drivers/command_runner.py` の `host_command_cwd()` = 受け渡しフォルダ）、`CommandRunner` / `prepare_command()` に既定値は無い。母集団は `test_command_environment.py` が固定する）、コマンド実行の終わり（例外・キャンセルを含む）に破棄する。起動後の構成は変えず、起動時の tool と違う turn、起動時にマウントした範囲の外を作業ディレクトリにした turn は拒否する。ログインしていない tool は起動時には失敗させず、その tool の turn で拒否する。ログインの貸し出し（`LentLogin`）と置換用の値の配置・CA の信頼は turn ごと、中継（`relayed_hosts`）は tool の最初の turn で起動して microVM と同じだけ動く。コマンド実行の外では turn を起動しない（窓口が無ければ VM 側の `start_turn()` が拒否する。画面のアシスタント 2 つと診断画面の AI CLI の確認も同梱コマンド `assistants/*` / `diagnostics/cli_agent` として動き、`command_environment()` を開くのと VM の入口を動かす（`execute()`）のが `run_in_environment()` だけで、`commands/*` の外でコマンドを走らせる（`run()` を呼ぶ）のが VM の入口だけであることを `test_command_environment.py` の母集団テストが固定する。`CommandRunner.run()` 自身は環境を開かない）。read-only / inspects はメインコマンドの宣言で、そのコマンドの実行の turn はサブコマンド（`commands:` と `context.invoke`）のものも含めてすべてそれに従う（サブコマンド自身の宣言は見ない。`functions/*` のようなプロンプトは宣言を持たない。host が読んだ宣言だけが microVM の形と grant を決め、turn が自分で名乗ることはできない）。read-only のコマンドは手動コマンドの 1 本だけの実行枠（`AppRuntime._reserve_command` の `exclusive`）も実行の lease（`track_work(exclusive=...)` の `PersonExecutionLease`）も取らない。ただし受け付け（`_reserve_command(..., exclusive=False)`。解決の前に行い、解放まで workspace を切り替えさせない）はすべてのコマンドが通る。コマンドを読むのは `drivers/command_runner.py` の `prepare_command()`（メンバーの解決とコマンドの読み取り）の 1 回だけで、画面（`AppRuntime._execute_command`）は受け付けのあとにそれを呼び、実行枠・`track_work`・入力・cwd・結果の型・実行（`run_main_command()`）をすべて同じ `PreparedCommand` で決める（名前から解決し直さない。VM もしない）。解決できないコマンドは実行が始まっていないので trace を残さず 400 `command_error`。native adapter は turn ごとに VM の中で作られて turn と一緒に閉じ、コマンドはそれぞれの microVM を持つので、同じメンバーの read-only のコマンドと書き込むコマンドが並んで動ける。`inspects` を宣言したコマンドの turn だけは、workspace 自身の状態（記録済みの実行、config とメンバーの identity（`identities`）と同梱テンプレート）を同じ module の `inspected_directories()` の 1 つの表から読み取り専用で mount する（宣言は `read_only` と独立）。read-only ターン（`AccessContract.read_only`）の閉じ込めも契約 → spec の変換だけで決まり、host から mount するものはすべて読み取り専用・cwd は microVM 自身の空のディレクトリ（書き込めるが host のものは無く、microVM と一緒に捨てる。読み取り専用にするとその下へ mount できず microVM が起動しない）・network は provider API と member broker だけ・provider の state は read-only 専用の store（`provider_state.read_only_state_dir()`）から bind し、共有 store と cache は bind しない（書いたものを後の書き込み可能ターンが再開・実行しないため）。provider ごとの read-only 分岐は持たない。契約の翻訳・provider × OS 対応表・PATH の木は無く、provider ネイティブ sandbox は環境の mount（`spec.mounts`）をそのまま写して環境より狭めない（Codex は `codex.py` の `_sandbox_overrides`。追加で守るのは provider 自身の状態だけ）。usage probe は `start_probe_environment()` で環境内、Antigravity の model catalog は turn の中で読む。コマンドの実行ごとに host の入口（`run_in_environment()`）が grant（`environment/host_window.py` の `HostWindow`。実行中のメンバー、記録する run（ワークフローの run、無ければ trace ID。run はすべての host の入口が開く trace の中で始まり、trace の外では `utils/correlation.py` の `require_trace()` が拒否する）と作業（`runtime/member_invocation.py` の `Work`。ticket selector と chat selector がトリガーを選んだ時点で subject ごと固定して `WorkflowInvocation.work` で運び、ワークフローでなければ呼び出し側が名指す `PreparedCommand.work`（画面のアシスタントの会話）、無ければその run の `manual`））を作って `command_environment(host=...)` に渡し、microVM が host にしか無いもの（turn の開始と終了＝ログインの貸し出しと回収、帳簿、会話の台帳、記録、外部 LLM と Jev の呼び出し、メンバーのコマンド）を求める窓口 `POST /host/<call>` を member broker と同じ server・同じ token で受ける。呼び出しはコマンドの context（trace・lease・実行中のコマンド）の複製の中で処理し（コマンドの終わりには新しい呼び出しを断り、受け付け済みの呼び出しが終わるのを待ってから microVM とゲートウェイを閉じる。うまく終わらなかったコマンドでは呼び出しを取り消すが、開始済みの member CLI の worker は終了を待つ。turn を開いたまま終わったコマンドは、grant の `HostWindow.close()` がその turn を閉じ、会話を unhealthy にする）、grant が決めるもの（run・作業）は名乗らせず（member CLI の完了・状態操作も subject を `MemberInvocation.work` から取る）、grant の作業の会話ではないもの・メンバー・tool が grant と合わないもの、VM の綴りのパスが正規形でないもの・マウントの範囲外のものは拒否する。VM 側のクライアントは `guest/host_client.py`、両側が読む wire（`CommandFacts` と起動時の環境変数名、`CommandRequest` / `CommandReply`、記録の entry）は `intelligences/agent_runtime/wire.py`。API キーで外部の推論 API を呼ぶ brain（`brains/agno_agent.py` / `brains/jev.py`）はテンプレートの展開と結果の変換だけを行い、呼び出しはプロセスに 1 つある `brains/inference.py` の `inference()` に渡す。`inference()` は実装を import せず、Context を組み立てる 2 か所が `install_inference()` で差し込む（host の `drivers/context.py` の `create_context()` はその場で呼ぶ `environment/inference_host.py` の `DirectInference`、環境の中の入口 `guest/entry.py` は窓口越しの `guest/window.py` の `WindowInference`）。呼び出しの記録も host のこの 1 か所で、span の終わりに使ったキー（`credential.provider` の `llm` / `jev` と `llm.provider`）と、provider が拒否した理由（`llm_providers.classify_failure` が provider の報告したステータスとエラー type だけで決める `error.category`）と、provider の応答（`error.status_code` / `error.response`）を書く。診断記録は `inspects: diagnostics` のコマンドの環境から読めるので、応答はその呼び出しが使ったキーとワークスペースのシークレットを伏せて長さを切ってから書き（`redact_for_sharing()`）、窓口から環境へは返さない（返すのは種類・ステータス・分類だけ）。agno は失敗した run を例外にせずエラー文を回答として返すので、provider の例外はモデルのインスタンスで受け取り、呼び出しは `InferenceFailure` を送出する。警告（provider のアカウントごと）と設定画面の直近の失敗は、この span から読む。窓口に渡すのは展開後のメッセージ・出力の JSON Schema・session state などのデータだけで、`schema:` のテキストや読み込む class の名前は送らない（host は受け取った JSON Schema を `model_json_schema()` として返す class を作って agno に渡す）。記録は host が書く: turn の `started` の出来事が名乗る作業ディレクトリは host が契約の閉じ込め（`requested_policy`）に置き換え、turn が示したログインの結果（`CredentialEntry`）は host が device の認証状態と `credential.*` として書く。コマンドのコードが使う `ChatService` は、環境の中では窓口の `member` 呼び出しで member CLI を動かす実装（`guest/window.py`。本文は `--content-stdin`）で、`TicketService` は環境の中ではチケットの読み取りだけを窓口越しに行い、書き込みとボードは使えない。host で member を実行する入口は隔離環境の member broker と CLI の API（`app_api/member.py`）（共通の `environment/member_execution.py` が呼び出しごとに専用の worker thread と空の context から始め、作業ディレクトリ・標準入出力・呼び出し情報を `cli/member.py` の `run_in_process()` に渡す。process は起動しない。broker は member CLI を import せずコンストラクタで受け取り、`_SharedEnvironment` がプロセスに 1 つある `environment/member_broker.py` の `member_cli()` から渡す。差し込むのはコマンドを始める host の入口（`cli/run.py`・`app_api/runtime.py` の `AppRuntime`）の `install_member_cli()`。時間切れ・取り消し時に未開始の member CLI worker は実行しない。時間切れの member command は結果を返してその場では待たないが、コマンドを取り消すときは時間切れ済みも含め開始済み worker の終了を待つ。MCP と host の member request は通常の終了処理でも完了まで待つ。member のバックエンドは呼び出し側のファイルを扱わず、CLI の API は guest のない場合にダウンロードをストリームで返す。turn の member command のためには、host はその環境が書けるもの（turn の作業ディレクトリと clone）を開かない。検査と使用の間に link へ差し替えられるため: パス引数は名前として扱って host で stat もせず（`cli/member.py` の `_HostPath`）、`--content-file` は拒否して `--content-stdin` で受け、host で git を動かす `--workspace-mode current` は run の有無によらず拒否し、artifact とチケットの添付は host がダウンロードしてコマンドの microVM の中で展開する・書き込む（`capabilities/artifact_archive.py` を `CommandGuest.python()` で動かす））。その member CLI も、turn が書けるメンバーの clone の git は host で実行しない: broker が呼び出し情報に載せるコマンドの microVM（`environment/command_guest.py` の `EnvironmentGuest`。turn の lock も broker の lock も取らず、broker の時間切れで microVM の中の exec を止める）の中で実行し、トークンを使う fetch / push は host 専用の bare repository（`local/member_git/<person_id>/`。どの環境にも mount しない）だけで行い、両者の間は git bundle で受け渡す（`capabilities/member_git.py`。コマンドの外では member mode を拒否する）
-- `guildbotics/guest/*` … 隔離環境の中だけで動くもの。host が起動する入口 `entry.py`（`/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry`）、作業ディレクトリの写し `worktree_copy.py`、AI CLI の adapter（`acp.py` / `antigravity.py` / `claude.py` / `codex.py` / `copilot.py` / `grok.py`、`jsonrpc.py`、`provider_process.py`、`factory.py`）と turn（`turn.py`）、AI CLI の brain（`cli_agent.py` の `CliAgentBrain`）、窓口のクライアント（`host_client.py`、member の service と推論の呼び出しを窓口越しに行う `window.py`）
-- `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、trace の状態判定（`trace_status.py`）とタイトル解決（`trace_title.py`）、interactive session
-- `guildbotics/runtime/*` … `Context`、`Brain` / `BrainFactory` / `IntegrationFactory` の抽象、種類ごとの port（`chat_service.py` / `code_hosting_service.py` / `ticket_service.py`、両者の読み取りの語彙 `resources.py`、全 port が共有する失敗の型・リアクションの語彙・`WorkflowStatus` の `port.py`）、呼び出し情報（`member_invocation.py` / `workflow_invocation.py` / `person_lease.py`）
-- `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、Config の blob ID compare-and-set（`config_repository.py`）。共有ファイルの書き込み helper は `utils/shared_writes.py`、共有書き込みを直列化する lock は `utils/shared_write_lock.py`（`observability` からも使う必要があるため `utils` にある）
-- `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤。span の相関（trace / span の contextvars）は `utils/correlation.py`
-
-依存方向のハードルール（正本は `pyproject.toml` の `[tool.importlinter]`。`lint-imports` が検査する）:
-
-- 層の順序は上の図のとおり。host は `app_api` → `cli` → `drivers | setup` → `environment` → `capabilities` → `integrations` → `workspace | observability`、共有は `commands` → `intelligences` → `runtime` → `loader` → `entities` → `utils`（`|` は互いに import しない兄弟）
-- `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
-- `workspace`・`observability` は、共有のパッケージのうち `utils` だけを import する（`host-foundations-build-on-utils` 契約）。observability は app_api や capability の都合を知らない記録基盤、workspace は capability / driver / app_api の都合を知らない storage 層
-- microsandbox SDK を import するのは `environment/runtime.py` だけ（`one-sandbox-runtime` 契約）
-
-リポジトリ直下では `desktop/`（サーバーがブラウザへ配る React の画面）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
-
-### Branvil の crate（`crates/branvil`）
-
-- Branvil のリポジトリの main を、そのコミット（`5f2728a840be25f3c54c82b92ee1c064be754949`）のスナップショットとして写したもの。履歴は Branvil のリポジトリに残る。crate の中の規則は `crates/branvil/AGENTS.md` に書く
-- Branvil は GuildBotics を知らない crate で、依存は GuildBotics → Branvil の一方向だけ。Branvil と GuildBotics の両方が使う部品は、どちらも知らない中立の crate に置く（認証のうち保存先に依らない仕組みは `crates/loopback-auth`）。両者を組み合わせて確かめるもの（`integration/branvil/`、`scripts/branvil-integration.sh`）は crate の外に置く
-- 本番の Branvil は、まだ Branvil のリポジトリのチェックアウトから、そのリポジトリの `scripts/serve.sh` / `scripts/update.sh` で動いている（このリポジトリの main へのマージは本番に入らない）。そのため写しには本番の運用のスクリプトを持たない。Branvil のリポジトリに入れるのは本番の Branvil で開発を止める不具合の修正だけにし、同じ修正を `crates/branvil` にも入れる。それ以外の Branvil の変更は `crates/branvil` にだけ入れる
-- 開発用の起動は、Branvil を GuildBotics のサーバーの中で動かすリポジトリの `scripts/dev.sh`（下の「開発用の起動」）
-- Branvil はライブラリでもある。Rust 版の GuildBotics の実行ファイル（`crates/guildbotics`。#73 で移している途中）は、`guildbotics server start` で GuildBotics のポート（`crates/gb-server`）と、`guildbotics branvil init` 済みなら Branvil（`branvil::serve`。標準出力には何も書かない）を同じプロセスで動かし、Branvil の CLI を `guildbotics branvil ...` として動かす。`guildbotics open [--print]` は Python 版と同じく、ポートで待ち受けるものが owner token の digest を知っていることを proof で確かめてから入口リンクを求め、画面を開く（または表示する）。GuildBotics のポートは Python 版のサーバーと同じファイル（`~/.guildbotics/data/run/app-api.lock`、`server/<port>/auth.json`・`owner.token`）を同じ形で読み書きし、ポートの通知と認証も同じ契約にする。ワークスペースの選択（明示の `GUILDBOTICS_WORKSPACE_ROOT` / `GUILDBOTICS_CONFIG_DIR`、なければ `data/active-workspace.json`。開いたものは `data/workspaces.json` に登録する）と identity（ワークスペースの `state/workspace.json`、マシンの `data/device.json`）は `crates/gb-workspace`、trace と diagnostics の記録（ワークスペースの `local/run/diagnostics.jsonl` と `sessions/<trace>.jsonl`）は `crates/gb-observability` が、やはり Python 版と同じ形で読み書きする（両方の言語が読む例は `records/golden/`）。run は開いた trace（`gb_observability::Trace`）から始めるので、trace の外では始められない。host と guest の wire の型は `crates/gb-wire` が build のときに `wire/schema` から `typify` で作る（Python の型が正本）。コマンドを実行するのに要る設定（チームのメンバー、名前からファイルへの解決、`read_only`・`inspects` の宣言。`.py` の `COMMAND_METADATA` はモジュールを実行せずにリテラルとして読む）は `crates/gb-config` が Python 版と同じ答えで読む。ただし Python 版が「宣言なし」として書き込みのできるコマンドに倒す読めない宣言は、Rust 版は理由を示して断る（両方の答えは `records/golden/commands.json`）。コマンドは `POST /api/commands/run` で、trace（source `manual`、`run.entry: command`）の中で、コマンドごとの microVM で動く（`crates/gb-environment`。microsandbox の crate を使うのはその `runtime.rs` だけで、msb とその home は Python 版が置いた `~/.guildbotics/data/msb`。crate の `prebuilt` は、crate が埋め込む guest の agentd をビルド時に release から取るためのもので、microVM を動かすのは msb 自身）。今は read-only のコマンドだけを、ワークスペースにある snapshot が 1 つで build 中でも失敗でもないときだけ動かし（そうでなければ Python 版と同じ文言で断る）、作業ディレクトリは microVM 自身の空のディレクトリ、コードと設定と identity は読み取り専用で、host の窓口・member broker・ゲートウェイはまだ無いので network を開かない。host の UI 言語は Python 版と同じ `LANGUAGE` を渡すか、確信が持てなければ渡さない（`records/golden/environment.json`）。停止は Python 版と同じく、1 回目の SIGINT は実行中のコマンドの終わりを待ち、SIGTERM か 2 回目の SIGINT はそれを取り消す（trace は取り消しで終わり、microVM も止まる）。実機の microVM を起動するテストは `crates/guildbotics/tests/server.rs` の `#[ignore]` のもので、Python 版の実機テストと同じ規則（オーナーの承認と立ち会い、1 つずつ）で `GUILDBOTICS_E2E_ENVIRONMENT_FROM=<ready なワークスペース> cargo test -p guildbotics --test server -- --ignored --test-threads 1` として流す。GuildBotics の crate の依存は Python 版の区分の層の向き（`gb-base` → `gb-workspace`・`gb-observability`（兄弟は互いに依存しない）→ `gb-server` → `guildbotics`。`gb-wire` は何にも依存せず、`gb-config` は `gb-base` と `gb-wire` に、`gb-environment` は `gb-base`・`gb-config`・`gb-wire` に依存する）にし、`tests/test_cargo_workspace.py` が固定する。機械の root は `GUILDBOTICS_HOME`（既定 `~/.guildbotics`）で差し替えられるので、開発中は `GUILDBOTICS_HOME`・`GUILDBOTICS_SERVER_PORT`・`BRANVIL_DATA_DIR` を本番と別にして動かす。利用者に見せる文言は Python 版と同じロケールの YAML（`guildbotics/templates/locales`）をビルド時に埋め込んで読む。Branvil が自分の実行ファイルで起動し直すもの（git の hook、自動のランナー）は、起動した実行ファイルが `branvil::Invocation` で渡した接頭辞で起動する。git の `GIT_ASKPASS` は引数を付けられないので、どちらの実行ファイルも最初に `branvil::askpass_main` を呼ぶ
-
-Rust の共有書き込みは `gb_base::shared_writes` の `SharedWrites::at`（単一ファイル）か
-`transaction`（複数ファイル）で行う。`Writer` を下位の保存処理へ渡して同じ lock を使う。
-`IdentityLock` からしか `WorkspaceLock` を取得できず、取得順は identity → workspace。
-`local/` と未選択 workspace の単一ファイル操作は lock を取らない。同期 I/O なので API
-からは blocking worker で呼ぶ。config の保存は `gb_config::repository::ConfigRepository::write`
-で expected revisions の比較・closure の保存・report の観測をまとめる。競合の
-`SharedWriteBusyError` は I/O エラーと別の型（503 用）、`StaleConfigWriteError` は
-現在の revisions を持つ。Rust API の追加は `gb-server/src/api.rs` の `routes!` に登録し、
-全変更系 endpoint の分類テストに、書く対象と config CAS の検証を追加する。
-
-## 重要な実装ポイント
-
-### 1. 責務境界
-
-Host の共有元は `utils/safe_paths.py` の要素ごとの no-follow 検査を通す。利用者指定の cwd と grant は保護対象の配下も拒否し、clone・provider 状態などの内部共有だけが明示的な子を開ける。登録済みワークスペースは `utils/workspace_state.py` の device-local 登録簿で管理し、選択していない場所の `.guildbotics` も保護する。
-
-
-GuildBotics では、実装場所を「その処理を知ってよい層」で決める。近い場所に場当たり的に置かず、以下の境界に従う。
-
-#### CLI (`guildbotics/cli/*`)
-
-責務:
-
-- Click の引数・オプション定義、入力ファイル/stdin 読み取り、出力形式の選択
-- workspace / member 解決、capability 呼び出し、CLI 用エラー変換
-- interactive session の開始・touch、member command の開始/終了/failure という CLI 実行イベントの記録
-
-禁止:
-
-- GitHub / Slack / Git など provider 固有 payload の組み立て
-- PR / Issue / commit など domain event の構造決定
-- provider URL の生成・分類
-- activity history 表示用の title / label / link kind 正規化
-
-例: `guildbotics member git push` は push capability の結果を受けて記録関数を呼ぶだけにし、`repository.push` payload の構造は `guildbotics/capabilities/*` 側へ置く。
-
-#### Capability (`guildbotics/capabilities/*`)
-
-責務:
-
-- チケット / コードのホスト / Git / チャット / memory など外部サービスや domain 操作の実行
-- provider に依らない規則: 人の承認が要る書き込み、会話の未読を確かめてからの書き込み（`ensure_chat_current`）、完了時に検査する PR の決め方、レビューの入力の検査
-- capability の結果 payload と、必要な domain event payload の組み立て
-- 失敗の扱い: port の失敗（`ServiceError` の系統）はそのまま通し、文言を書き換えたりキーワードで伏せたりしない（文言は provider が利用者に見せられる形で作る）。`capabilities/errors.py` の `MemberCapabilityError` は capability 自身の失敗（入力の検証、member の git）だけに使う
-
-禁止:
-
-- チケット・コードのホスト・チャットの provider 固有知識（API・URL・payload・credential・secret 名・`account_info` の鍵）を持つこと。それは `integrations/<provider>/` が持ち、capability は port 越しに使う。例: commit の URL は port の `commit_url` が、項目の短い参照は `WorkTarget.label` が返す
-- desktop / activity history の画面都合に合わせた表示文言の決定
-- FastAPI response model や React component の都合を直接知ること
-
-#### Observability (`guildbotics/observability/*`)
-
-責務:
-
-- diagnostics record の統一スキーマでの記録・永続化（`diagnostics_store.py`、`run/diagnostics.jsonl`）
-- trace / span の相関（`correlation_fields`）と correlated event の記録（`diagnostics_events.py`）
-- 1 つの実行（trace）の状態判定（`trace_status.py`）。アクティビティ画面と診断画面は同じ record に同じ問いを立てるので、判定は 1 つだけ置く。trace が成功になるのは **trace を開いた層が記録した完了イベント**（`event_types.py` の `TRACE_COMPLETED_EVENT_TYPES`）によるときだけで、`span.finished` は provider の 1 回の呼び出しが返ったことしか言わない（chat workflow は agent turn の前に LLM 判定を 1 回行うため、これを成功と読むと実行中が「成功」になる）。したがって `trace_scope` を開く経路はすべて自分の完了イベントを記録する。母集団は `tests/guildbotics/test_trace_boundaries.py` が列挙し、新しい trace root はどのイベントで終わるかを宣言しないと落ちる。境界は run の終わり方を問わず終端する（cancellation も含む）。`asyncio.CancelledError` と `KeyboardInterrupt` は `Exception` ではないので、`except Exception` だけの境界は service stop / Ctrl-C のあとに `command.started` だけを残し、実行が永久に「進行中」になる。同じテストが境界の母集団も列挙して `BaseException` の捕捉を課す。失敗の分類は `capabilities/command_failures.command_failure_payload()` の 1 か所（`code` が画面の alert 規則と対になっている）
-- 1 つの実行（trace）のタイトル解決（`trace_title.py`）。状態と同じ理由で 1 つだけ置き、実行一覧（`TraceSummary.title`）と Activity 画面が同じ関数を呼ぶ。規則は「trace は、その中で最初に記録された PR / Issue（`target.title`）を作業対象として名乗る」で、workflow 名では分岐しない。ticket workflow は host の ticket selector が turn の前に行う `set_attributes` で、chat workflow は member CLI が `target.recorded` を記録した時点で対象が決まる。読み取り（`inspect`）は `target.action: inspected` 付きで対象を宣言し、診断には出るが Activity のリンクにはならない（memory の read-only と同じ扱い。`is_read_only_record`）。run の完了サマリは trace に無い記録なので、呼び出し側が `CompletionSummary` callback で渡す（`app_api/traces.py` の `_completion_summary_lookup`）
-- 開いている trace への参加（`join_trace`）。member broker が実行する member CLI は呼び出し情報（`runtime/member_invocation.py`）で親 trace を受け取り、その中に記録する。`trace_scope` と違って境界イベントを記録しない（`member.command.finished` は `TRACE_COMPLETED_EVENT_TYPES` なので、記録すると実行中の workflow が「成功」に見える）
-- interactive session の管理（`interactive_sessions.py`）
-
-禁止:
-
-- `guildbotics.utils` 以外の guildbotics package への依存
-- 表示用の label / link kind の決定（それは app_api の normalizer の仕事。trace のタイトルだけは上記の理由で例外）
-- provider 固有 payload の解釈
-
-#### App API (`guildbotics/app_api/*`)
-
-責務:
-
-- 画面向け runtime API（FastAPI）と event bus の集約
-- observability store の読み出しと、trace, log, event, memory audit, prompt trace など複数 source の統合
-- API response model への変換
-- provider payload を activity history 用の provider-neutral な event/link/title/detail に変換する normalizer / translator
-
-禁止:
-
-- 他の guildbotics package から import される API を持つこと（依存方向は「パッケージ全体マップ」参照）
-- CLI と同じ domain event payload を別途組み立てること
-- GitHub URL の `/pull/` や `/issues/` のような path 文字列だけで PR/Issue を分類すること
-- provider API 呼び出しや credential 処理を持つこと
-
-例: activity history では raw diagnostics record を直接 UI 向けに解釈せず、`activity_events.py` / `activity_links.py` のような専用 normalizer に寄せる。
-
-#### Frontend (`desktop/src/*`)
-
-責務:
-
-- API response の表示、ユーザー操作、画面状態管理
-- 表示密度、hover/click、responsive layout など UI 固有の振る舞い
-
-禁止:
-
-- provider raw payload を独自に再分類すること
-- GitHub URL path から PR/Issue/commit 種別を推測すること
-- backend と同じ title / label / link kind 正規化を再実装すること
-
-#### 共通判断ルール
-
-- 同じ判断が CLI と API、または API と frontend に重複しそうな場合は、より domain に近い backend module へ寄せる
-- provider 固有知識は `integrations/<provider>/` か provider normalizer に閉じ込める
-- activity history / diagnostics 表示に必要な変換は、raw payload を保存する層ではなく表示用 normalizer に置く
-- 新しい event/link 種別を追加するときは、記録 payload（capability → observability）、normalizer / API model（app_api）、frontend 表示（desktop）の責務を分けて実装する
-
-### 2. CLI コマンド
-
-`guildbotics/cli/__init__.py` がルート group で、サブコマンドは名前 → モジュールの表（`_options.LazyGroup`）から
-実行するときにだけ import する（CLI は呼び出しごとに新しいプロセスなので、1 つの `member` 操作に service の
-import を払わせない）。`server`（start / stop）と `service`（start / stop）は `cli/service.py`、`run` は `cli/run.py`。コマンド・オプションの完全な一覧は
-Click 定義から生成される `docs/cli_reference.md` を参照する（`scripts/generate-cli-reference.py`
-で再生成。drift は CI の `generate-cli-reference.py --check` ステップと
-`tests/guildbotics/cli/test_cli_reference.py` が検出する）。CLI の説明文は Click 定義の
-help / docstring が正であり、member コマンドの一行説明は
-`guildbotics/capabilities/member_reference.py` のカタログから注入される。
-
-補足（実装ポイント）:
-
-- `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace のサーバー（Local API）が動いていれば実行を委譲し、それ以外は手元で実行する。委譲先は `app-api.lock` を持つサーバーで、lock に記録されたポートへ届く（呼ぶ側の環境の `GUILDBOTICS_SERVER_PORT` によらない）。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
-- `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
-- `member` の CLI（`cli/member_client.py`）は `--workspace <dir>` だけを解釈してワークスペース ID にし、残りの引数を API に送る。`--help`・エラー・手元で扱う入力の分類はバックエンドの Click 定義が返す。CLI は provider・keyring・`cli/member.py` を読み込まない。サーバー（`guildbotics server start` または OS のサービス）が必要で、版の不一致は実行前に拒否する。API は予約中に選択中の ID を照合し、実行が終わるまで切替を拒否する。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（show/prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
-- `server start` はこのチェックアウトのサーバー（`python -m guildbotics.app_api`）を同じプロセスグループの
-  子として起動し、その終了コードで終わる（頼まれた終了は 0）。引数は渡さず、環境変数で
-  親 PID（`GUILDBOTICS_APP_API_PARENT_PID`。サーバーはこのプロセスが消えたら終わる）と、`--services`
-  のときだけ `GUILDBOTICS_START_SERVICES=1` を渡す（`drivers/app_api_lock.py`）。ワークスペースは
-  `server start` では解決せず、サーバーが選択中のもの（無ければ未選択のまま、画面で選ばせる）を開く。サーバーは listen してから、
-  `GUILDBOTICS_START_SERVICES` か、サービスの設定の `start_with_server`（既定 false。サービス画面の
-  「サーバーの起動時にサービスも開始する」）のときだけサービスを開始する（`app_api/server.py` の `_Server`）。
-  サービスの開始（`POST /api/scheduler/start`）は本文を持たず、どの開始も、サービスの設定（経路・
-  巡回間隔・連続失敗の回数・スリープ抑止。`drivers/service_settings.py`、ワークスペースの
-  `local/service.yml`）をサーバーが読んで開始する。開始に失敗してもサーバーは動き続け、
-  失敗は画面とログに出る。画面は `PATCH /api/service/settings`
-  で変えた項目だけを送る。巡回・受信を組み立てるのはサーバーだけ。
-- `service start` / `service stop [--force]` は動いているサーバーの `POST /api/scheduler/start` /
-  `stop` を呼ぶだけで、サービス画面の実行・停止と同じ。サーバーは動き続ける。サーバーが無ければ失敗する。
-- サーバーは全生存期間で `~/.guildbotics/data/run/app-api.lock` を保持し、PID と待ち受けるポートを記録する。
-  lock を取れない 2 つ目のサーバーは起動しない。
-- `service.lock` はサービスの稼働中だけ保持する（PID / workspace などを記録する）。
-  スリープ抑止もこの期間だけ。どちらの lock もファイルの存在自体は稼働判定に使わない。
-- サーバーが終わるのは `guildbotics server stop [--force]`（`POST /api/shutdown` の `force`）とシグナルだけ。
-  サービスの停止（`POST /api/scheduler/stop`）は巡回・受信だけを止め、サーバーは画面を配り続ける。
-  1 回目の SIGINT は実行中の作業の完了を待って終わり、2 回目でキャンセルする。SIGTERM（OS が
-  サービスを止めるときに送る）はすぐキャンセルする（`app_api/server.py` の `_Server`）。Ctrl-C は
-  プロセスグループのサーバーにも届き、`server start` は自分が受けた SIGTERM をサーバーへ渡す。
-  `server stop` と `service start|stop` は（`run` の委譲と同じく）、`app-api.lock` に記録されたポートへこのマシンの owner token で API を呼ぶ
-  （呼ぶ側の環境の `GUILDBOTICS_SERVER_PORT` によらず、動いているサーバーに届く）。`server stop` は lock の PID の終了を時間の上限なく待つ
-  （2 秒を過ぎたら待っていることを表示する）。`server stop --force` は実行中の作業をすぐキャンセルし、
-  `KILL_AFTER_SECONDS`（`drivers/app_api_lock.py`。後片付けの上限 `TEARDOWN_BUDGET_SECONDS` に余裕を足した値）
-  のうちに終わらなければ PID を強制終了する。
-- macOS では `scripts/hub-server.sh`（install / update / restart / status / uninstall）が、
-  チェックアウトの `.venv/bin/guildbotics server start` を LaunchAgent（`local.guildbotics`）として動かす
-  （サービスを開始するのは `start_with_server` のときだけ）。
-  サーバーの Secret は OS のキーチェーンにあるので、ログインしたユーザーのセッションで動かす。
-  install 時の `PATH` と `GUILDBOTICS_SERVER_PORT` を引き継ぎ、`KeepAlive` の `SuccessfulExit=false`
-  で非 0 の終了（強制終了を含む。`server stop --force` はキャンセルのあと 0 で終わるので含まない）だけ
-  起動し直す（`ExitTimeOut` は `KILL_AFTER_SECONDS` と同じ 90 秒）。restart / update / uninstall
-  は `guildbotics server stop` で作業の完了を待って止め、install はサーバーが動いている間は断る。
-  出力は `~/Library/Logs/guildbotics.log` に追記する。`update` は依存の入れ直し
-  （`uv sync --locked`、ルートで `npm ci`）、画面の build（`npm run build --workspace desktop`）、CLI とスキルの導入を
-  やり直してからサーバーを起動し直す。Python の実行ファイルが変わったときは、キーチェーンの確認に
-  答えるため、手で一度 `guildbotics server start` するよう案内して止まる
-- `scripts/install_cli_assets.py` は、チェックアウトの CLI を呼ぶ `~/.guildbotics/bin/guildbotics`
-  （人の git の credential helper がこのパスを指す。`utils/managed_cli.py`）と `~/.local/bin/guildbotics`
-  を置き、`skills/guildbotics/SKILL.md` を、このマシンにある AI CLI ごとのユーザースキルの置き場所
-  （`CliAgentProvision.user_skills`）へ写す。置いた内容のハッシュを `.guildbotics-managed.json` に
-  記録し、利用者が編集した写しは上書きしない
-
-### 3. コマンド実行基盤（最重要）
-
-中心実装:
-
-- `guildbotics/drivers/command_runner.py`（host の入口）
-- `guildbotics/guest/entry.py`（隔離環境の中の入口）
-- `guildbotics/commands/runner.py`（`CommandRunner`）
-- `guildbotics/commands/*`
-
-流れ:
-
-1. `prepare_command()`（host）が対象メンバーとメインコマンドを 1 回だけ解決する（`PreparedCommand`）
-2. host の入口が実行の境界を開く。手動実行は画面（`AppRuntime._execute_command`）も `guildbotics run` の手元実行（`cli/run.py` の `_run_custom_command`）も同じ形で、`trace_scope("manual")` と `TaskRunCoordinator.track_work(source="manual", exclusive=not read_only)`（TaskRun の start/finish と、read-only でなければメンバーの lease）と `command.started` / `command.finished` を残す。scheduler は `task_scheduler.py` の `track_work` と `drivers/utils.run_command` の `command_boundary`。lease は clone を使う read-only でない run どうしを直列化するために `track_work` の 1 か所だけで取る（`tests/guildbotics/runtime/test_person_lease.py` が固定する）。対話の member CLI は lease を取らず、共有 state と git 操作はそれぞれの専用 lock で守る。workflow 内の member 書き込みは委任された lease と run の検査を残す
-3. `run_main_command()`（host）が ticket workflow なら ticket selector を通し、`run_in_environment()` がコマンドの隔離環境を起動し、その中の入口が `CommandRunner` で解決済みのファイルを実行する
-4. `CommandSpecFactory` が `CommandSpec` を構築
-5. 子コマンド（`commands:`）を先に実行
-6. 結果を `Context.shared_state` と `Context.pipe` に反映
-
-`Context.pipe` はコマンド間の標準入力/標準出力的な受け渡し文字列として使われます。
-
-#### サポートされるコマンド種別（`guildbotics/commands/registry.py`）
-
-- `.md` (`MarkdownCommand`)
-- `.py` (`PythonCommand`)
-- `.sh` (`ShellScriptCommand`)
-- `.yml` / `.yaml` (`YamlCommand`, 定義用)
-
-インライン専用コマンド:
-
-- `print`
-- `to_html`
-- `to_pdf`
-
-### 4. 設定ファイル解決（実装依存）
-
-設定ファイル解決は `guildbotics/utils/fileio.py` が担当します。
-
-重要事項:
-
-- 優先順は「一次設定 (`GUILDBOTICS_CONFIG_DIR` or cwd の `.guildbotics/config`) → パッケージテンプレート (`guildbotics/templates`)」の2段（`fileio._get_config_path`）。`~/.guildbotics/config` のような home 設定階層は無い（`fileio.py` の `Path.home()` 参照は `~/.guildbotics/data` のデータ用のみ）
-- `guildbotics member ...` は `cli/member_client.py` が手元の `--workspace`、`GUILDBOTICS_CONFIG_DIR`（または明示の `GUILDBOTICS_WORKSPACE_ROOT`）、cwd の `.guildbotics/config`、active workspace の順に選び、その ID を送る。バックエンドは現在選択中の ID とだけ照合し、パスや環境変数でワークスペースを変更しない。手元の Secret 名は index だけから登録し、memory の本文と引数を送る前に手元の環境の Secret を伏せる
-- サーバー（`AppRuntime`）は workspace 選択時に active workspace を保存し、workspace の `.guildbotics/config` から `GUILDBOTICS_CONFIG_DIR` を設定する
-- ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
-- メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
-- メンバーは 2 つのファイルに分かれる。どのワークスペースでも同じ identity（`person_id`・`name`・`person_type`・`account_info`・`profile.character`・`speaking_style`・`relationships`。avatar も同じディレクトリ）は、マシンに 1 つの identity root（`fileio.get_identity_root()`。既定 `~/.guildbotics/identity`、workspace root と同じ形）の `.guildbotics/config/team/members/<person_id>/identity.yml` に、ワークスペースへの参加（`is_active`・`profile.roles`・`message_channels`・`routine_commands`・`task_schedules`）は workspace の `team/members/<person_id>/member.yml` に置く（`entities/team.py` の `IDENTITY_FIELDS` / `PARTICIPATION_FIELDS`）。メンバー別の `intelligences/` と `commands/` は workspace 側に置く。`YamlTeamLoader` は `member.yml` を持つメンバーだけを読み、相手側のファイルの field と identity の無いメンバーを拒否する。`person_id` は変更できない（rename は無い）。identity とその workspace のファイルを一緒に変える操作は `shared_write_lock.py` の `member_write_operation` で両方の lock を取る
-- シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。バックエンドは OS キーチェーンだけで、平文への fallback は無い（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）。store は 2 つあり、メンバーの資格情報と provider の接続の Secret（`identity_secret_keys`）は identity root の store（`identity_secret_store()`。全ワークスペースで共有）に、それ以外（LLM の API キーなど）は workspace の store に置く。`guildbotics secrets --identities` が identity の store を扱い、CLI は workspace の store へメンバーの key を書くことを拒否する。環境変数への読み込み（`env_loader.read_workspace_secrets()`）は identity の store、次に workspace の store の順で読み、両方にある key は identity の値を使う。キーチェーンが使えなければ `SecretStoreError`。解決優先順位は実環境変数 > キーチェーンの 2 段で、ワークスペースの `.env` は読まない（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは `tests/conftest.py` の autouse fixture `fake_keyring` が in-memory キーチェーンを入れるため、実 OS キーチェーンには触れない
-- 環境変数が認証情報を運ぶかの判定は `secret_store.is_secret_env_key()` が正本。名前パターン（`TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含むか）と、SecretStore に保存されたキー名の provenance レジストリ（`register_secret_env_keys()`。`env_loader.read_workspace_secrets()` が skip 判定・値取得より前に登録し、プロセス生存中は単調増加）の和集合で判定する。member memory の redaction（`capabilities/member_memory.py`）はここから導出する（AI CLI は隔離環境の中で動き host の環境変数を一切継承しないので、子プロセス側の除去は無い）。除去対象を名前の列挙で持たない（列挙は「追加を忘れた秘密」だけを残す）し、非規約名の secret（例: `DATABASE_URL`）を断片リストへの追加で塞がない（provenance が塞ぐ）
-
-### 4.1 共有 state の書き込み
-
-`<workspace>/.guildbotics/config` と `state` は、互いを知らない複数の writer（スケジューラのメンバーごとのスレッド、API handler、バックエンドがプロセス内で動かす member コマンド、別プロセスの手元の `guildbotics run` や `guildbotics secrets`）が書く共有領域、`local` はこのマシン自身の状態。identity root の `.guildbotics/` も同じ形の 2 つ目の共有 root で、lock も identity root 自身の `shared_write_lock(get_identity_root())` を取る。**マシンの形をしたものは `local` へ置く**（絶対パスを持つ `clones/` など）。共有領域への書き込みは
-`guildbotics/utils/shared_writes.py` の helper（`write_shared_*` / `append_shared_text` / `delete_shared_path` / `update_shared_text` / `update_shared_json`）を通す。
-
-- `local/` 配下の path は helper が lock を取らずに書くため、呼び出し側で共有・非共有を判定しない（判定は `shared_relative_path` の 1 か所）
-- 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する
-- device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）で構造的に守る
-- 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
-- **directory 全体を reconcile する画面（intelligences）は、読んだファイルの revision だけでなく path 集合そのものも申告する**（`tree_revisions()` が返す `<dir>/` の entry）。読んだ時点で存在しなかったファイルには名前が無く、file 単位の比較では表せないため、別の画面やタブが足したファイルを黙って prune できてしまう。空 mapping を渡すと `ConfigRepository.write()` は何も比較しない点にも注意する（team defaults を継承中の member がこれに当たる）
-- **書き込み API は「書き込み後の revision」を応答に載せる**（`ConfigWriteResponse.revisions`）。画面は保存後も開いたままで次の保存をしうるので、refetch を待たせず応答で cache を更新する。refetch 頼みだと保存が refetch を追い越したときに偽 409 になる
-- **共有ファイルへの書き込みは helper が `guildbotics/utils/shared_write_lock.py` の `shared_write_lock()` を取る。** lock はプロセスをまたぐ OS の advisory lock で、比較を通った保存が、その最中に別の writer が書いた内容の上に着地して、失われたことがどこにも残らない、という喪失を塞ぐ
-- **「この writer は lock が要るか」を writer ごとに判断しない。** 共有 path への変更は全部 helper を通り、helper が lock を**取る**。読まずに書く writer は宣言すべき span を持たないので、writer の分類テーブルは存在しない。`local/` と Workspace 未選択では取らない（待たせても何とも順序づかない）
-- **rename や自前の unlink をする writer は、その操作を `shared_write_lock()` の中に置く**
-- **read-modify-write は `update_shared_text(path, apply)` / `update_shared_json(path, apply)` を使う。** helper が lock を取り、読み、`apply` に渡し、返ってきた内容を書く（`None` を返すと削除、同一内容なら書かない）。**完成した文字列を渡す形にしない**——渡す時点で呼び出し側は既に読み終わっており、その読みが span に入っていたかは `with` の置き場所次第になる。`ConfigRepository.write(apply, expected, report)` と同じ形であり、同じ理由（並べ損ねる場所を作らない）
-- **これは config に限らない。** Conversation 制御状態（`state/chat_state`）と member memory（`state/documents`）も同じ喪失をする側で、失われるのは Slack の応答1回分と memory 文書まるごとである。process 内の `threading.Lock` / `RLock` は同じ runtime の thread しか並べないので、別 process の writer には効かない
-- **lock で塞ぐのは「無記録の喪失」だけ。** memory / Conversation へ CAS（revision 引数）を広げない（「楽観ロックは Config だけ」と同じ理由）
-- **1つの書き込みより span が広い操作だけが、自分で `shared_write_lock()` を取る。** 該当するのは、追記か全書き換えかを大きさで決める journal（`MemoryAuditStore.record`。closure 形にすると毎回 8MB を読み書きすることになる）、書いてよいかを別ファイルから決める操作（`RunStore.complete_run` の evidence 検査）、directory 走査で決める操作（`MemberMemoryService.record(kind="policy")` の一意性判定）、複数ファイルや rename がひとまとまりの操作（memory の各公開操作、setup service、`KeyringSecretStore`）。**理由を docstring に書く**
-- **`shared_write_lock` は同一 thread 内で再入する。** 「呼び出し元がすでに持っているか」を writer ごとに答えるのをやめるため。config 保存は複数ファイルの比較と書き込みにまたがって保持し、その内側の writer は test・CLI・将来の呼び出し元からも直接呼ばれる。外側の span が内側を包含する。別 thread は従来どおり待つ
-- **Workspace が選択されていないときは lock を取らない**（`shared_write_lock` が素通りする）。共有ファイルが無い状態であり、`shared_relative_path` が共有 path ではないと答えるのと同じ判断。ここで例外にすると、ambient に Workspace を解決する writer の数だけ同じ try/except が増える
-- **2つの lock を取る順序を writer ごとに変えない。** 共有 lock が外側、module 内の `threading.Lock` / `RLock` が内側で統一する。identity root と workspace の共有 lock を両方取るときは identity root が外側、workspace が内側（`member_write_operation`。逆順は `shared_write_lock` が `RuntimeError` で拒否する）。片方の writer だけ逆順にすると、そこが deadlock になる（`FileConversationStateStore.append_thread_message` は device-local な cache の span と共有 state の span を分けてこれを避けている）
-- **raw に `open()` / `write_text()` で共有ファイルへ書かない。** journal の追記も `append_shared_text` を通す。通さないと lock が掛からない
-- **Config の書き込みは `ConfigRepository.write(apply, expected, report)` 1本に通す。** lock の取得・比較・書き込み・応答用 revision の観測を、呼び出し側が組み立てない。**部品にすると、並べ損ねる場所が writer の数だけできる**（実際に、比較を省略した writer・lock の外で revision を読む writer・応答が実在しない状態を述べる writer が同時に生まれた）。app_api 側は `config_revisions.py` の `apply_config_write()` だけを使い、**config を書く経路は1つ残らずそこを通す**。比較する対象が無い（`expected=None`）ことは、mutex が要らないことを意味しない
-- **writer の母集団を URL の prefix で決めない。** config は `/config` 配下からだけ書かれるわけではない（`/commands/files*` と `/commands/author/apply` は `config/commands`、`/transcripts/settings` は `config/transcripts.yml`、`guildbotics secrets` CLI は `config/secrets.yml` を書く）。`tests/guildbotics/app_api/test_config_write_boundary.py` は **routing table の POST/PUT/DELETE 全部**を「共有 config を書く」「書かない」へ分類させるので、新しい endpoint は分類しないと落ちる。「書く」側は `ConfigRepository.write` を通ることと、lock 競合時に 503 を返すことの両方を検査する（lock 保持そのものは helper が保証するので、この検査の対象は比較の方である）
-- **broad な `except Exception` を挟む経路では、`SharedWriteBusyError` を先に再送出する。** そうしないとその経路だけ 500 になり、症状はその1本にしか出ない
-- **1つの操作が2つの保存へ連鎖する画面では、前段が失敗したら後段を走らせない。** 前段が「保存しませんでした」と言ったのに後段だけ適用されるのは、部分適用であり、利用者に見せた文言とも矛盾する（frontend は前段の戻り値を `ConfigRevisions | null` にして表現する）
-- **lock 競合は `SharedWriteBusyError`（`OSError` 系譜の外）**。`LockTimeoutError` は `TimeoutError` → `OSError` なので、そのままだと I/O エラーを捕まえる網に吸われて環境障害として扱われる。呼び出し側ごとに変換して回らず、型で網から外し、API 側は exception handler 1個で 503 にする
-- 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
-- **世代の正本は `guildbotics/utils/shared_writes.py` の `SHARED_RECORD_SCHEMA_VERSION` 1つだけ。** 種別ごとに定数を持たせない。`utils` に置くのは、writer が層をまたぐため（`observability` は `utils` にしか依存できない）
-- **`state/` 配下の構造化 record は全部 `schema_version` を持つ。** 母集団は `tests/guildbotics/workspace/test_shared_schema_version.py` が実際の writer を走らせて `state/` を走査することで決まる。record ではない拡張子（`.md` / `.txt`）だけが理由つきで除外され、新しい record 種別は分類しないと落ちる。付与は書き込みの choke point で行い（chat state なら `_write_json`、memory meta なら `_write_doc`）、呼び出し側に持たせない
-- **`config/secrets.yml` は `schema_version` を持たない。** 中身は `keys`（キー名の一覧）だけで、Secret 値の入る余地を構造的に無くしている（`read_secret_index` は、読めない・壊れた・別の形の索引を、空として扱わず `SecretStoreError` で拒否する。空として読むと、次の書き込みが既存のキー名を消す。`local/secrets.json` の `store_id` も同じで、新しい名前空間を作るのはファイルが無いときだけ）
-- 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
-- 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名以外の field を持たないため、Secret 値の混入を内容検査なしに防げる
-- 1つの文書が複数ファイルに分かれる場合（memory の `meta.yml` と `body.md`）は、**どちらも書く前に両方を測る**。片方が着地して片方が拒否された文書は、古い文書でも新しい文書でもない
-
-### 5. スケジューラ
-
-中心実装:
-
-- `guildbotics/drivers/task_scheduler.py`
-- `guildbotics/drivers/utils.py`
-
-実装上のポイント:
-
-- アクティブなメンバーごとにスレッドを起動
-- 各スレッド内で asyncio イベントループを使用
-- 定期コマンドと routine コマンドを実行
-- 連続エラー数でワーカーループ停止（`consecutive_error_limit`）
-- 実行記録の境界（`track_work`）は実行する coroutine の内側に置き、失敗も強制停止も境界まで届けて `failed` / `cancelled` で閉じる（外側に置くと、例外を受け止めた後の正常終了として `succeeded` で閉じる）。失敗を連続エラー数に数えるのは境界の外
-- ticket workflow は、patrol・scheduled・手動実行（`guildbotics run` / 画面）のどの経路でも `drivers/ticket_selector.py` の `TicketSelector` で候補を選び、`TicketSelector.run` の中で動かす。レーンの移動（`READY` → `IN_PROGRESS`）、run_id と完了の試行回数（`GUILDBOTICS_TICKET_MAX_ATTEMPTS`）、trace の属性、失敗とレート制限のステータスコメント、`workflow.rate_limited` の記録、作業が人を待って止まったとき（`asking` / `blocked` の完了、項目に書いた失敗。手動実行を除く）にメンバーが `chat.notify_work_stops: true` に指定したチャット有効なチャンネルへ投稿する通知（未指定なら投稿しない）はここが持ち、ワークフローは turn を 1 回頼むだけ。レート制限は chat と違って再送出せず、ステータスコメントがリセットまで候補から外すので、連続エラー数に数えない
-- この device の隔離環境が使えない間（runtime 無し / 宣言不正 / snapshot が ready でない。`status.device_status().refusal`）は、コマンドはすべて隔離環境の中で動くので、ticket patrol・routine・scheduled command・chat dispatch を**見送る**（失敗として数えない）。build 中に worker が止まるのを防ぐためで、理由が変わったときだけ 1 回 warning を出す。scheduled command は実行済みにせず、使えるようになってから動く
-
-既定 routine コマンド:
-
-- `workflows/ticket_driven_workflow`（`runtime/workflow_invocation.py` の `TICKET_WORKFLOW_COMMAND`。新しいメンバーの既定（`setup/setup_service.py`）と、巡回候補が複数あるときの既定の選択（`app_api/command_catalog.py`）が直接使う）
-
-サービス未接続が確定した `ServiceUnavailable` は、自動実行の共通終了分類で `deferred` とし、失敗コメント・command.failed・ERROR ログを残さない。開始済み TaskRun は再試行可能な見送りとして終端し、Activity は情報表示。巡回と定期実行の連続エラー数は増減させず、他の作業を続ける。見送った定期実行の予定は実行待ちのまま保つ。対話の manual と、送信後の曖昧な失敗は従来の失敗扱いを保つ。
-
-### 6. Context の組み立て
-
-`Context` を組み立てるのは次の 2 か所だけ（`tests/guildbotics/drivers/test_context_builders.py` が固定する）。
-
-- host: `drivers/context.py` の `create_context()`。integration は `integrations/factory.py` の `ServiceIntegrationFactory`、brain は `intelligences/brains/factory.py` の `ConfiguredBrainFactory`、推論の呼び出しは `DirectInference`。host の入口（`cli/run.py` / `app_api/runtime.py`、member CLI の `resolve_member_context()`）はすべてこれを呼ぶ
-- guest: コマンドの隔離環境の中の入口 `guest/entry.py`。brain は host と同じ `ConfiguredBrainFactory`、integration は窓口越しの `WindowIntegrationFactory`、推論の呼び出しは窓口越しの `WindowInference`
-
-`Context` はチームを `YamlTeamLoader` で設定から直接読み、`clone_for()` のたびに読み直す（clone の `team` は clone した時点の設定。渡した person はそのまま使う）。`runtime/context.py` は `integrations` と `intelligences` を import せず、`runtime/` にある抽象と port だけを知る。
-
-### 7. member プロンプト層モデル
-
-member 向けエージェント指示（SKILL / workflow プロンプト）は層モデルで管理する。
-
-- 全体共通（コマンドカタログ、標準作業手順、memory / communication style などの横断契約）は `guildbotics/capabilities/member_reference.py` に置き、`member context` / `member help` で runtime 配信する
-- workflow 共通の封筒（実行モードマーカー、isolated workspace、complete 必須、AgentResponse 規定）は `guildbotics/templates/locales/commands/workflows/common.{en,ja}.yml` の `workflow_contract` に置き、各 workflow が `{workflow_contract}` としてテンプレートへ注入する
-- trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_ticket` / `functions/handle_chat_event` に書く
-- 対話封筒（共有ワークスペース、`--workspace-mode current`、対話 DOD）だけを `skills/guildbotics/SKILL.md` に書く
-- 単発委任の封筒（現在の cwd、依頼範囲内だけの作業、stdout での結果返却）は `guildbotics/templates/commands/ask.{en,ja}.md` に置く。host から委任を起動する案内は対話スキルに置き、workflow や member 共通カタログには置かない
-- エージェントに見える契約（member CLI のグループ名、上の各層の文面）は provider 名（`integrations/factory.py` の `PROVIDERS` の名前）ではなく種類と対象の語（ticket / pr / repo-info / chat）で書く。provider 固有の知識は `integrations/<provider>/` に置く
-- 同じ文が 2 ファイル以上に現れたら、より深い層へ移す。層境界と en/ja 整合と provider 名が現れないことは `tests/guildbotics/templates/commands/functions/test_prompt_layer_boundaries.py` が担保する
-
-## 開発時の基本コマンド（CI 準拠）
-
-Branvil の CI の [`test` ジョブ](.branvil/ci.toml)で使われている手順:
+- ソースコードを正とし、変更後のコード量が最小になる設計を選ぶ。
+- `.gitignore` 対象は参照しない。互換用フォールバックや旧形式の並行サポートを追加しない。
+- 自然言語の意味判定は既存のLLM判定基盤を使う。キーワード列挙で代替しない。
+- コメントとdocstringは英語で書く。
+
+## 現在の実装と境界
+
+Python は guest の入口 `guildbotics.guest.entry` とコマンド実行・共有型を持つ。
+Python の host・CLI・HTTP サーバーは削除済み。host の実装と知見は凍結ブランチ
+`origin/python-host`（`fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`）の
+`git show origin/python-host:<path>` で読む（当時のガイドは AGENTS.md）。
+Rust の host は `crates/*` の Cargo workspace。Python は3.15、Rustは
+`rust-toolchain.toml` に固定した版を使い、CI imageの版と合わせる。
+共有は `commands`・`intelligences`・`runtime`・`loader`・`entities`・`utils`。
+共有はguestの実装をimportせず、全共有パッケージはguestから使われる。
+`lint-imports` と `tests/guildbotics/test_package_map.py` で検査する。
+`templates/` はRustも読むデータなので保持する。
+
+wire の正本は `intelligences/agent_runtime/wire.py`。変更時は
+`uv run --no-sync python scripts/generate-wire-schema.py` で生成し `--check` で確認する。
+Rust の `gb-wire` はこのschemaから型を生成する。詳細は [wire](wire/README.md)。
+member の手順は [参照カタログ](guildbotics/templates/member/reference.md)、
+provider/CLI名の検査データは同じディレクトリの catalog.json。
+CLIの実物との照合は #92 で戻す。
+snapshotの固定値・requirementsは `guildbotics/templates/environment/`、
+AI CLIの固定版は `guildbotics/intelligences/cli_agents.py`。
+変更時は `.agents/skills/update-dependencies/SKILL.md` に従う。
+
+## 開発時の基本コマンド
 
 ```bash
-uv sync --extra test --extra dev
-uv run --no-sync python scripts/generate-cli-reference.py --check
+uv sync --extra dev --extra test
 uv run --no-sync ruff format --check guildbotics tests
 uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-uv run --no-sync python -m pytest tests/ -n auto --durations=30
-```
-
-Cargo workspace の手順（`rust-fmt` / `rust-clippy` / `rust-test` / `rust-duplicates` /
-`branvil-web` ジョブ）:
-
-```bash
+uv run --no-sync python scripts/generate-wire-schema.py --check
+uv run --no-sync pytest tests/ --ignore=tests/blackbox -n auto
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
-npx --yes jscpd@5.0.14 --config jscpd.rust.json
-npm ci && (cd crates/branvil/web && npm run lint && npm run typecheck && npm run test)
-```
-
-テストは cargo-nextest でテストごとにプロセスを分けて動かす（開発用ベースイメージには入っている。手元では `cargo install --locked cargo-nextest`）。
-
-CI の `rust-clippy` / `rust-test` のキャッシュキーは `rust-toolchain.toml`、
-`branvil-integration` は `uv.lock` と `rust-toolchain.toml` を使う（#121）。
-`Cargo.lock` が変わっても PR とゲートで直近の registry と `target` を復元できるようにし、
-Cargo は `--locked` で依存を確定する。復元後の `find crates -exec touch -c {} +` は保ち、
-ワークスペースの crate は再ビルドする。現在のランナーは保護ブランチの保存から24時間を過ぎると
-キャッシュを更新し、ツールチェーン更新で世代が変わる。#120 で直近世代の復元とゲートの保存の
-引き継ぎを導入したら、キーを lockfile 基準に戻す。
-
-HTTP と CLI の外側から確かめる黒箱テスト（通常の `test` ジョブにも含まれる）:
-
-```bash
-uv run --no-sync python -m pytest tests/blackbox -n auto
-# 起動コマンドを差し替え、同じテストを別のサーバー実装へ向ける
-GUILDBOTICS_BLACKBOX_SERVER='/absolute/path/to/server' \
-  uv run --no-sync python -m pytest tests/blackbox -n auto
-```
-
-既定の起動コマンドはテストと同じ Python の `-m guildbotics.app_api`。
-`GUILDBOTICS_BLACKBOX_SERVER` は shell を通さず引数へ分割するので、引数や引用符は使えるが
-shell の展開・リダイレクトは使えない。差し替え先も `GUILDBOTICS_SERVER_PORT` の loopback ポートと
-`GUILDBOTICS_APP_API_PORT=<port>` の stdout 通知、`/api/health`、一時 HOME の owner token、
-ワークスペースの YAML 設定という同じ契約を使う。fixture がテストごとにサーバーを起動し、終了時に止める。
-GuildBotics のモジュールは import せず、HTTP と CLI の子プロセスだけで検査する。
-HOME・一時ファイル・設定・keyring はテストの一時 directory に隔離する。
-`GUILDBOTICS_BLACKBOX_PROVIDER` で provider を選ぶ（現在は既定の `local`。CI も明示的に `local`）。
-`tests/blackbox/providers.py` のアダプターが provider の設定、remote の用意、人のマージ、CI の完了を受け持ち、
-チケットと関係、push・PR・マージ、head と base に応じた readiness の3経路は member CLI だけで同じ筋書きを流す。
-local のマージ API は無いため、fixture が bare remote とホストの状態ファイルへ人のマージ結果を記録し、
-メンバーから merged・チケットの closed/done を読めることを確かめる。local 自体のマージ処理を検証するものではない。
-一時 checkout からの push にだけ `member git push --workspace-mode current` を使う。
-サービスは空の schedule だけを動かし、runtime の配置を一時 HOME 内で拒否して image の取得を防ぐ。
-Python の子プロセスは loopback 以外の socket 接続・名前解決も拒否する。
-ネイティブの差し替え先にはこの Python 用の制限は及ばないため、同じ local 設定と外部 HTTP 通信を拒む proxy を渡す。
-
-同梱コマンドを `guildbotics run` で実際の microVM に実行させる黒箱テストは、通常の CI では
-`GUILDBOTICS_E2E_ENVIRONMENT_FROM` が未指定である理由を示して skip する。
-実機では、オーナーの明示的な承認を得て立ち会ってもらい、隔離環境が ready なワークスペースを指定して
-次を個別に実行する（環境変数の設定だけでは承認・立ち会いの代わりにならない）:
-
-```bash
-GUILDBOTICS_E2E_ENVIRONMENT_FROM=/absolute/path/to/ready-workspace \
-  uv run --no-sync python -m pytest tests/blackbox/test_run.py -p no:xdist -v -rs
-```
-
-desktop E2E と同じ環境変数を使い、その端末の runtime とワークスペースの snapshot を一時 HOME・
-ワークスペースへリンクし、宣言だけをコピーする。設定・メンバー・keyring は一時のもので、
-実機の資格情報を引き継がず、build・service start・LLM 実行はしない。
-一時 directory は Windows の mount 制約に合わせて実機の HOME の `.gbb/` に作り、
-終了時にリンクごと削除する。その directory がサーバーの HOME になり、runtime はその下の
-`.guildbotics/data/msb` に Unix ソケットを開く。macOS のパスの上限（103 バイト）に収まるのはユーザー名が
-8 バイトまでで、超えるとテストの失敗に runtime の理由（パスが長すぎる）がサーバーのログとして出る。元の runtime・snapshot は削除しない。
-`repository/issue_inspect`・`repository/pr_inspect`・`repository/pr_checks` の結果で、
-CLI → サーバー → 隔離環境 → member broker を貫く読み取りを確認する。
-実機テストの opt-in として扱い、CI 内や pytest-xdist での並列実行は拒否する。
-
-本番のワークスペースが積み重ねたファイルを別の実装が同じように読めるかは、本番の写しを読んだ応答
-（golden）と比べて確かめる（`tests/blackbox/test_golden.py`）。写しは
-`uv run --no-sync python -m tests.blackbox.golden <workspace> <identity root> <dir>` で作る。
-キーチェーンの名前空間（両方の store の `local/secrets.json`。写すと、OS のキーチェーンを使うサーバーが
-本番の値を読める）と、読み取りが使わない machine の状態（clones・member_git・snapshot・アップロードされた
-入力）は写さない（合成データで `test_copy_leaves_production_behind` が確かめる）。写しはサービスを開始せず、transcript を期限切れで消さず、Branvil の接続先を使えない
-ポートにする。写しと golden は本番の内容を含むので、リポジトリではなく
-Hub の `~/Documents/GuildBotics/blackbox-golden/<日付>/` に置く。テストは実行ごとに写しを一時
-directory へ複製し、別の HOME・ポートのサーバーに読ませる（loopback を含めて、サーバーからの HTTP は
-使えない proxy に向ける）:
-
-```bash
-# Python 版で golden を記録する（golden/ が既にあれば失敗する）
-GUILDBOTICS_BLACKBOX_GOLDEN=$HOME/Documents/GuildBotics/blackbox-golden/<日付> \
-  GUILDBOTICS_BLACKBOX_GOLDEN_RECORD=1 \
-  uv run --no-sync python -m pytest tests/blackbox/test_golden.py -p no:xdist
-# 別のサーバー実装の応答を golden と比べる（違った read の名前と、応答の置き場所を表示する）
-GUILDBOTICS_BLACKBOX_GOLDEN=$HOME/Documents/GuildBotics/blackbox-golden/<日付> \
-  GUILDBOTICS_BLACKBOX_SERVER='/absolute/path/to/server' \
-  uv run --no-sync python -m pytest tests/blackbox/test_golden.py -p no:xdist
-```
-
-golden を記録し直したら、トークンの形の値が入っていないことを確かめる。
-
-Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、これらに加えて
-`markdown-links`（下記の lychee）と `desktop-quality`（ルートで `npm ci` →
-`npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
-`guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
-ジョブの環境には CI メタデータしか無いため、uv/npm/Cargo のキャッシュは
-`/work/.ci/uv`・`/work/.ci/npm`・`/work/.ci/cargo-home` に置く。キーはジョブごとに
-[`.branvil/ci.toml`](.branvil/ci.toml) で指定する。Rust のジョブのキーとその理由は上記の Cargo workspace の節を参照。
-`.venv`・`node_modules` はキャッシュしない。Rust の `target` は Cargo を build するジョブがキャッシュし、
-復元した `target` より新しくなるよう `crates` に touch してから build する（workspace の crate だけを build し直す）。
-Rust の重複コードは desktop と同じ jscpd で検出する（`jscpd.rust.json`）。
-`test` は `UV_LOCKED=1` を指定する。
-ジョブは履歴とタグを持つ Git のチェックアウトで、root でない
-ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
-権限エラーのテストに CI 用の手当ては要らない。
-
-GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テストと、
-macOS でしかコンパイルされないコード（`#[cfg(target_os = "macos")]`）の Cargo workspace 全体の
-clippy（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。clippy は Rust に関わる変更の
-ときだけ動く）と、下記の Desktop E2E および
-[Branvil E2E](.github/workflows/branvil-e2e.yml)（PR・手動・定期、push には含めない）。
-Branvil の CI で実行できる検査は `.branvil/ci.toml` に置き、GitHub Actions へ足さない。
-
-`branvil-integration` は、本番の `branvil` provider をこのコミットの Branvil の crate の
-`branvil serve` に対して動かす `scripts/branvil-integration.sh`（`integration/branvil/test_smoke.py`）を
-実行する。確かめるのはチケットと関係、push・PR・マージ、チェックによる readiness の
-3 経路だけで、それ以外は契約テストが受け持つ。`integrations/branvil/` か Branvil の HTTP API を
-変えたら、手元でも `scripts/branvil-integration.sh` を実行する（`uv sync --extra test --extra dev`
-済みであること）。
-
-全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
-host の OS 境界の契約テストだけを実行する。共有書き込みの lock の規則・状態遷移、validator、
-API の入出力の組み合わせなど、OS に依存しない網羅は Linux に集約する。
-Windows では `tests/conftest.py` が
-`--basetemp` 未指定時に `%USERPROFILE%\tmp` の下へ実行ごとの短い一時 directory を作り、
-終了時に削除する。関連範囲だけの pytest 実行にも同じ設定が適用される。
-PowerShell で複数の確認コマンドを続けて実行する場合は、ネイティブコマンドの非ゼロ終了を
-既定では terminating error にしないので、`uv` ごとに `$LASTEXITCODE` を検査する:
-
-```powershell
-uv run --no-sync mypy guildbotics
-if ($LASTEXITCODE -ne 0) { throw "mypy failed ($LASTEXITCODE)" }
-uv run --no-sync python -m pytest tests/ -m windows --strict-markers -n 4 --durations=30
-if ($LASTEXITCODE -ne 0) { throw "Windows contracts failed ($LASTEXITCODE)" }
-```
-
-`$PSNativeCommandUseErrorActionPreference` は PowerShell 7.3 以降にしか無く、
-Windows PowerShell 5.1 では黙って無視されるので使わない。失敗したテストの一時ファイルを
-調べたいときは `--basetemp` を明示して再実行する（明示した directory は自動削除しない）。
-
-CI が付ける `--junitxml` / `--phase-durations-json` は artifact として契約テストの所要時間を
-残すためのもので、手元では `--durations=30` の出力で足りる。
-
-CI の Windows check は `test-windows` の 1 つで、Windows 向け `mypy` もここで実行する。
-OS で結果が変わらない検査（ruff / pylint / CLI reference / Markdown リンク）は Linux のみ。
-Windows の契約は、実ファイルの大小文字・Unicode・長いパス・symlink / junction、
-ファイルの置換とプロセス間 lock、host のプロセス起動・終了、Git for Windows の
-askpass・hook・改行・バイナリを対象とする。これらの境界を変更したときは、実 OS の動作を
-使う代表テストに `windows` を付ける。本体に Windows 専用の分岐（`os.name == "nt"` /
-`sys.platform == "win32"` など）を追加・変更したときは、その分岐と、それが渡す値を
-使う呼び出し側まで、実 Windows で通る代表テストが選択されているか確認する。
-Windows 以外では skip するテストにも必ず付ける。直接の `skipif(os.name != "nt")` /
-`skipif(sys.platform != "win32")` の選択漏れは `tests/test_windows_contracts.py` が検出する。
-OS API を mock した分岐テストやソースの文字列検査は
-Linux で足り、Linux の microVM 内だけで動く guest のコードも Windows の対象にしない。
-marker は Windows 限定の skip ではないので、選んだ契約も Linux の全件実行に含まれる。
-手元の Windows で CI と同じ結果にするには、次の 2 つが要る:
-
-- **開発者モードを有効にする**（設定 → システム → 開発者向け）。symlink を作る
-  テストは、昇格していないセッションでは作成権限が無く skip される（`tests/conftest.py`
-  の `symlinks` fixture）。CI の Windows runner は管理者で動くので実行される
-- **WeasyPrint の GTK ランタイム**は必須ではない。無い場合、PDF を描画するテストは
-  `weasyprint_libraries` fixture が skip する（`to_pdf` コマンド自体は、native 依存が
-  無いことを伝える `CommandError` を返す）
-
-POSIX のパーミッションビットを検証するテストは Windows では意味を持たないため、
-`posix_permissions` fixture が skip する。`.sh` コマンドは隔離環境の Linux の中で動き、
-Windows では同じように実行できないため、それを実行するテストは `shell_commands` fixture が
-skip する。隔離環境の代役を手元で動かし、そこで `sh` を使うテストは、`posix_sh` fixture
-（Windows では Git for Windows の同梱 `sh`）を使う。OS の能力差はこれらの fixture
-（`posix_permissions` / `symlinks` / `weasyprint_libraries` / `shell_commands` / `posix_sh`）に
-集約し、テストの中で `os.name` を見て分岐しない。
-
-別の OS を装うときは `fake_platform` fixture を使い、`sys.platform` を直接差し替えない
-（`module.sys` も共有の `sys` そのものなので同じ）。差し替え中に初めて import された
-ライブラリが別 OS の分岐に入り（Windows で `mcp.server.stdio` が `fcntl` を読む）、
-同じ worker が先に何を import したかで成否が変わる。`tests/test_platform_fake_boundary.py`
-が全テストファイルを検査する。
-
-Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ
-[`lychee` v0.24.2](https://github.com/lycheeverse/lychee/releases/tag/lychee-v0.24.2)
-をインストールする。Rust toolchain がある場合は
-`cargo install lychee --version 0.24.2 --locked` で導入できる）:
-
-```shell
 lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates
 ```
 
-`--scheme file` により外部 URL は検査せず、CI の `markdown-links` job と同じく
-相対パスと GitHub 形式の見出しアンカーだけを検査する。
-ディレクトリを入力にすることで `.gitignore` に従って走査し、`--extensions md` で
-Markdown だけを検査する。PowerShell では実行後に `$LASTEXITCODE` が 0 であることを確認する。
+黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
+Rustの入口へ向ける形で残す。CIへの復帰は #91・#92。
+desktop journey は #91 まで停止し、Desktop E2E gateは成功を返す。
+Branvilの画面E2Eは継続する。
 
-必要に応じて:
-
-```bash
-uv sync --extra dev
-```
-
-メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.15・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。後から足したパッケージの依存で入ったら、最後の手順で build が失敗する）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる。Rust は `rust-toolchain.toml` も同じ版を名指しする（ジョブは別の版を入れられないので、`RUST_VERSION` と一緒に上げる。`tests/test_cargo_workspace.py` が一致を確かめる）
-
-desktop frontend (`desktop/`) の品質確認:
-
-画面の依存はルートの npm workspaces（`desktop`、`crates/branvil/web`、`packages/ui`）と
-`package-lock.json` で管理する。`npm ci` はルートで行い、共通依存の範囲をそろえる。
-Playwright の lock の版は開発イメージの `PLAYWRIGHT_VERSION` と一致させる
-（`tests/test_npm_workspace.py` が検査する）。
-
-```bash
-npm ci
-cd desktop
-npm run format:check
-npm run lint
-npm run typecheck
-npm run duplicates
-npm run test
-```
-
-まとめて実行する場合:
-
-```bash
-cd desktop
-npm run quality
-```
-
-Playwright E2E（実ブラウザ + 実 Local API backend。`npm run quality` / 通常 push CI には含めない）:
-
-```bash
-npm ci
-cd desktop
-npm run e2e:install   # 初回のみ: chromium を取得
-npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
-```
-
-- harness（`desktop/e2e/start-stack.mjs`）が backend を `uv run python -m guildbotics.app_api` で temp workspace 起動するため、事前にリポジトリルートで `uv sync --extra test --extra dev` 済みであること。画面は `npm run e2e` が最初に `vite build` し、backend が配る。各テストは harness の owner token で `POST /api/session/links` から得た入口リンクを開いて入る（`desktop/e2e/stack-context.ts` の `test`）。
-- コマンドはすべて隔離環境の中で動くので、コマンドの実行と `/events` のストリームの journey（`e2e/environment.spec.ts`）は、隔離環境が ready なワークスペースを `GUILDBOTICS_E2E_ENVIRONMENT_FROM` で指定したときだけ走る（harness がその端末の runtime とそのワークスペースの snapshot をリンクして使う）。指定しなければ理由つきで skip し、CI の E2E もこの形で通る。
-- 詳細・journey 一覧は `desktop/README.md` の「テスト」節を参照。
-
-開発用の起動（Rust のサーバー）:
-
-- `scripts/dev.sh` は、2 つの画面（`desktop` と `crates/branvil/web`。ルートの `node_modules` が共通 lock より古ければルートで `npm ci`）と `guildbotics` の debug ビルド（開発用ベースイメージの `cargo` のラッパー `docker/agent-environment/cargo-wrapper.sh` を通す）を作り、本番と別のデータで `guildbotics server start` を動かして、`guildbotics open` と `guildbotics branvil open` で 2 つの画面を開く。データディレクトリ（`--data-dir`、既定 `~/.gbb/dev`）の `home/` が `GUILDBOTICS_HOME`（identity も `home/identity`。呼び出し側の `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` は渡さない）、`branvil/` が `BRANVIL_DATA_DIR` で、Branvil は初回だけ `--listen 127.0.0.1:7879` で初期化する。GuildBotics のポートは `GUILDBOTICS_SERVER_PORT`（既定 8866）、ワークスペースは `GUILDBOTICS_WORKSPACE_ROOT` で選び、サーバーはそのワークスペースに実行を記録する。Rust のサーバーはまだ runtime を置かないので、Python 版が置いたこの端末の runtime（`~/.guildbotics/data/msb`）を `home/data/msb` にリンクする（コマンドの microVM はワークスペースの snapshot から起動する）。準備が済むとスクリプトはサーバーそのものになる（`exec`）ので、Ctrl-C と TERM はサーバーに直接届き、`guildbotics server start` と同じく 1 回目の Ctrl-C は実行中のコマンドの終わりを待ち、2 回目と TERM はそれを取り消す。画面は裏の補助が、サーバーが stdout とログ（データディレクトリの `server.log`。最後の起動の分）で GuildBotics と Branvil の待ち受けを告げてから開く。チェックアウトの `desktop/dist` を作り直すので、Hub のサーバーが動くチェックアウトでは動かさない（worktree で動かす）。サーバーのページ（`/`・`/index.html`・`/-/enter`・`/-/authorize`・`/assets`）は、Python 版と同じくチェックアウトの `desktop/dist` を配る
-- 変更したら `tests/scripts/test_dev.py` を実行する
-
-Hub のサーバーのスクリプト変更時の確認:
-
-- `scripts/hub-server.sh` と `scripts/install_cli_assets.py` の役割は「2. CLI コマンド」の補足を参照する。Python のサーバーで画面を開発するときは、画面とバックエンドを別々に動かす（`scripts/desktop-dev-backend.sh` / `scripts/desktop-dev-frontend.sh`。Vite が `/api` をバックエンドへ中継する。画面の API が Rust に移る #91 までの手順）
-- 変更したら `sh -n scripts/hub-server.sh` と、関連テスト（`tests/scripts/test_hub_server.py` / `tests/scripts/test_install_cli_assets.py`）を実行する。LaunchAgent の実際の登録・起動は、実機で利用者の承認を得たときだけ行う
+## 品質とテスト
 
 エージェント作業時の品質確認:
 
@@ -712,7 +91,7 @@ desktop TypeScript 開発時の品質確認:
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
 - どのテストも既定で 120 秒で時間切れになり、止まらずに失敗する（`pyproject.toml` の `[tool.pytest.ini_options]` の `timeout`。pytest-timeout）。実機の隔離環境と provider CLI を使う任意実行のテストは、module の `pytestmark` に `pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE")` のように opt-in 環境変数を渡す。このマーカーのテストは 30 分で時間切れになる
 - テストは決定論的かつ hermetic に保つ。時間・乱数・環境変数・cwd・HOME・I/O は `monkeypatch` / `tmp_path` で制御し、実 home ディレクトリや外部サービスに触れない
-- `tests/conftest.py` の autouse fixture が、通常テストの `HOME`・`USERPROFILE` を `tmp_path / "home"`、`GUILDBOTICS_WORKSPACE_ROOT` を `tmp_path` に設定し、`GUILDBOTICS_CONFIG_DIR` を削除する。個別のテストや fixture では、これと違う値が必要なときだけ設定する
+- `tests/conftest.py` が通常テストの HOME・USERPROFILE と workspace を一時ディレクトリへ隔離する。
 - 通常の pytest は収集時から loopback（`127.0.0.1` / `::1` / `localhost`）以外の Python socket 接続と名前解決を失敗させる。子プロセスには到達不能な HTTP proxy と `GIT_ALLOW_PROTOCOL=file` を渡す。これらを無視する CLI（直接起動した `ssh` など）はテスト側で stub にする。接続試行の調査には `--network-audit` を使う。この監査で記録できるのは Python プロセス内の接続試行で、子プロセスの通信は含まない。`real_device` を付けたテストは opt-in が有効なときだけ実行し、その実行だけをネットワーク制限から除外する。opt-in は通常、指定した環境変数の値が `1` のとき有効になる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` は空でないワークスペースのパスを指定したとき有効になる
 - `real_device` を付けた実機・provider 接続テストは、通常の CI、定期ジョブ、エージェントによる一括テストに含めず、pytest-xdist で並列実行しない。個別に実行する前に、対象と外部通信・実機の認証状態への影響を示してユーザーの明示的な承認を得る。ユーザーが実行に立ち会い、進行と結果を確認できる状態でのみ実行する。opt-in 環境変数の設定は承認や立ち会いの代わりにならない
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
@@ -747,48 +126,17 @@ desktop TypeScript 開発時の品質確認:
 - 今回の変更に含めるか、別 issue にするか、見送るかはユーザーが決める。判断材料として、その失敗が今回の変更と性質・完了条件を共有するかどうかを示す
 - ユーザーの応答を待てない実行（workflow など）でも先に検索する。既存の開いたチケットにコメントした場合はその URL を報告し、下書きが必要な場合は完了報告や ticket / thread のコメントへ全文を載せ、登録はせずに判断を委ねる。「無関係なので無視した」で終わらせない
 
+
 ## レビュー指摘への対応
 
-手順の正本は [member_reference.py](guildbotics/capabilities/member_reference.py) の
-「Handling review feedback / レビュー指摘への対応」。`member context` / `member help` で配信する。
-このリポジトリで指摘に対応するときは、`.agents/skills/handle-review-feedback/SKILL.md` または
-`.claude/skills/handle-review-feedback/SKILL.md` を読み、その時点の正本に従う。
+手順の正本の節は「Handling review feedback / レビュー指摘への対応」。
 
-このリポジトリの実例と固定方法:
+`.agents/skills/handle-review-feedback/SKILL.md` または `.claude/skills/handle-review-feedback/SKILL.md` を読み、
+[手順の正本](guildbotics/templates/member/reference.md) に従う。
+失敗した検査は原因を特定し、今回の変更なら直す。無関係ならtrackerを検索し、
+既存のopenチケットへ証拠を追記する。起票は人の明示的な依頼を必要とする。
 
-- #432: 名指しされた config 書き込みだけを直し、同じ形の別 endpoint を取りこぼした。
-  母集団を列挙して固定する実例は `tests/guildbotics/app_api/test_config_write_boundary.py`。
-  母集団は「書く対象」で定義し、URL prefix のような入口の形で定義しない。
-- #615: 先行レビューが指摘した入力・cwd の先行評価と宣言の二度読みのうち、入力だけを直して再指摘を受けた。
-  解決を 1 回にまとめた後も、直接 runner を実行する変更で close の失敗が実行境界の外へ出た。
-  実行境界の固定は `tests/guildbotics/test_trace_boundaries.py`。
+## 参照優先度
 
-指摘を受け入れるかどうかの判定基準（単一利用者前提でどこまで守るか）は別の問題で、team memory の
-「レビュー対応の判断基準（単一利用者前提のバランス）」を参照する。
-
-## 変更時の実務ルール
-
-- ソースコード内のコメントと docstring は英語で書く。docstring は Google スタイルを使う
-- host と guest の wire の型を変更したら、`uv run --no-sync python scripts/generate-wire-schema.py` で `wire/schema/` を再生成してコミットする。host 窓口の呼び出しを追加したら、生成スクリプトの `HOST_RESULTS` に結果の型も登録する（CI の `--check` と `tests/guildbotics/test_wire_schema.py` が差分・登録漏れを検出する）。
-- 挙動変更時は、対応テストを `tests/guildbotics/...` に追加・更新する
-- コマンド仕様変更時は、`docs/custom_command_guide.en.md` / `docs/custom_command_guide.ja.md` の整合性も確認する
-- CLI のオプションやコマンド変更時は、新しいオプションに help を書き、`uv run --no-sync python scripts/generate-cli-reference.py` で `docs/cli_reference.md` を再生成して commit する（忘れると CI の `--check` ステップと `tests/guildbotics/cli/test_cli_reference.py` が fail する）。あわせて `README.md` / `README.ja.md` の使用例も確認する
-- ユーザー向け文言を Python にハードコードしない。既存実装に合わせて `guildbotics.utils.i18n_tool.t()` を使い、翻訳キーを `guildbotics/templates/locales/...`（必要なら `*.ja.yml` / `*.en.yml`）へ追加する
-- i18n 文言を変更・追加した場合は、既存テストに合わせて翻訳キー経由で検証する（文言直書き前提のテストにしない）
-- `Context.pipe` / `shared_state` の更新順序はワークフロー互換性に直結するため、変更時は特に注意する
-- コマンド解決順 (`get_person_config_path`, `get_config_path`) を壊さない
-- AI CLI ツールの固定版（`guildbotics/intelligences/cli_agents.py` の `CliAgentProvision`）と、それが動く Node.js の固定版（`guildbotics/environment/snapshot.py` の `NODE_VERSION` と `NODE_SHA256`）を上げるときと、リポジトリの依存アラート（Dependabot）を依存の更新で解消するときは、`.agents/skills/update-dependencies/SKILL.md`（`.claude/skills/update-dependencies/SKILL.md` は同じ正本を指す）に従う
-
-## 参照優先度（このリポジトリでの推奨）
-
-実装確認の優先順:
-
-1. `guildbotics/cli/__init__.py`
-2. `guildbotics/drivers/command_runner.py` と `guildbotics/commands/runner.py`
-3. `guildbotics/commands/*`
-4. `guildbotics/runtime/context.py`
-5. `guildbotics/utils/fileio.py`
-6. desktop / diagnostics まわりは `guildbotics/app_api/runtime.py`、`guildbotics/observability/*`、`desktop/src/*`
-7. `tests/guildbotics/...`
-
-ドキュメントは補助として利用し、矛盾があればソースに合わせて修正すること。`docs/ARCHITECTURE.md` はアーキテクチャ概観と中心コンセプトの説明で、実装より古い場合がある。実装計画は文書としてリポジトリへ残さない: 未実装の将来計画は GitHub issue で管理し、実装が完了した計画書は中心的なコンセプトを `docs/ARCHITECTURE.md` などの恒久ドキュメントへ移した上で削除する。
+実装とテストを先に読む。hostの凍結点、wire/recordsのREADME、チケットの順で補う。
+未実装の計画はリポジトリに残さずチケットで管理する。

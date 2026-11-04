@@ -9,7 +9,6 @@ from guildbotics.entities.team import (
     Service,
 )
 
-EXPECTED_SCHEDULE_COUNT = 2
 
 # -----------------------------
 # Project tests
@@ -83,21 +82,6 @@ def test_project_accepts_description():
 # -----------------------------
 
 
-def test_person_get_scheduled_tasks_expands_all_schedules():
-    schedules = ["0 9 ? ? ?", "15 10 ? ? ?"]
-    person = Person(
-        person_id="u1",
-        name="Alice",
-        task_schedules=[CommandSchedule(command="demo", schedules=schedules)],
-    )
-
-    scheduled = person.get_scheduled_commands()
-
-    assert len(scheduled) == EXPECTED_SCHEDULE_COUNT
-    assert all(s.command == "demo" for s in scheduled)
-    assert sorted(s.schedule for s in scheduled) == sorted(schedules)
-
-
 def test_person_secret_helpers(monkeypatch):
     person = Person(person_id="u2", name="Bob")
     key = "slack_bot_token"
@@ -112,3 +96,16 @@ def test_person_secret_helpers(monkeypatch):
     monkeypatch.setenv(env_key, "secret-value")
     assert person.has_secret(key) is True
     assert person.get_secret(key) == "secret-value"
+
+
+def test_person_retains_schedule_configuration_for_the_host():
+    person = Person(
+        person_id="u1",
+        name="Alice",
+        task_schedules=[
+            CommandSchedule(command="demo", schedules=["0 9 * * *", "15 10 * * *"])
+        ],
+    )
+    assert person.model_dump()["task_schedules"] == [
+        {"command": "demo", "schedules": ["0 9 * * *", "15 10 * * *"]}
+    ]
