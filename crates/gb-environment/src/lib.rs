@@ -12,6 +12,7 @@
 //! answer.
 
 pub mod language;
+pub mod recipe;
 mod runtime;
 pub mod snapshot;
 
@@ -116,7 +117,19 @@ pub async fn run(host: &Host, workspace: &Path, command: Command) -> Result<Comm
         &host.package.join("templates"),
     )
     .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-    let snapshot = snapshot::ready(workspace).map_err(Failure::Command)?;
+    let templates = host.package.join("templates");
+    let recipe = recipe::Recipe::load(&templates)
+        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+    let image = gb_config::agent_environment::image(&config_dir(workspace), &templates)
+        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+    let held = match image {
+        Some(image) => Some(
+            runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image).await?,
+        ),
+        None => None,
+    };
+    let snapshot =
+        snapshot::ready(workspace, &recipe.name(held.as_deref())).map_err(Failure::Command)?;
     let shape = shape(host, workspace, &command, language::ui_language().await)?;
     let stdin = serde_json::to_vec(&shape.request).expect("JSON");
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "codex",
+    "package": "@openai/codex@0.166.0",
+    "install": ""
+  },
+  {
+    "name": "claude",
+    "package": "@anthropic-ai/claude-code@2.1.316",
+    "install": ""
+  },
+  {
+    "name": "grok",
+    "package": "",
+    "install": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.70\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version"
+  },
+  {
+    "name": "copilot",
+    "package": "@github/copilot@1.0.105",
+    "install": ""
+  },
+  {
+    "name": "antigravity",
+    "package": "",
+    "install": "case \"$(uname -m)\" in\n  x86_64) platform=linux-x64 archive=cli_linux_x64 sha512=ea01c73b772187bca928852cf96235f0d846d6da5ebdac188b9ae719597465737f325540d483ee5f3f62d151029001713344972a187ddfb98cc7b97f7204b7f4 ;;\n  aarch64) platform=linux-arm archive=cli_linux_arm64 sha512=7cae317fb6a02eb387982f06bfb234b366879cf9a80ad8969b571e5a55d1e37a6a5a49cd6b703c0443bb417937cf5e3b14a8c80cb26917ad79eef723a9f374c7 ;;\n  *) echo \"unsupported architecture: $(uname -m)\" >&2; exit 1 ;;\nesac\ncurl -fsSL \"https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/$platform/$archive.tar.gz\" -o /tmp/agy.tar.gz\necho \"$sha512  /tmp/agy.tar.gz\" | sha512sum -c -\ntar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\nmv /usr/local/bin/antigravity /usr/local/bin/agy\nchmod +x /usr/local/bin/agy\nrm /tmp/agy.tar.gz\nagy --version"
+  }
+]

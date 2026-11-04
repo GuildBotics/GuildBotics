@@ -122,6 +122,68 @@ async fn backend(home: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Read a custom reference without pulling it or booting a microVM.
+pub async fn held_image(home: &Path, reference: &str, default: &str) -> Result<String, Failure> {
+    backend(home).await?;
+    let detail = microsandbox::Image::inspect(reference).await.map_err(|e| {
+        Failure::Command(Sentence::Text(format!(
+            "The local base image '{reference}' cannot be read: {e}"
+        )))
+    })?;
+    let device = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    if !eligible_image(reference, default, detail.handle.architecture(), device) {
+        return Err(Failure::Command(Sentence::Text(format!(
+            "'{reference}' is not a custom base image for this device ({device})."
+        ))));
+    }
+    detail
+        .config
+        .map(|c| c.digest)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Failure::Command(Sentence::Text(format!(
+                "The local base image '{reference}' has no content digest."
+            )))
+        })
+}
+
+fn eligible_image(
+    reference: &str,
+    default: &str,
+    architecture: Option<&str>,
+    device: &str,
+) -> bool {
+    reference != default && !reference.contains("@sha256:") && architecture == Some(device)
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::eligible_image;
+
+    #[test]
+    fn only_named_custom_images_for_this_cpu_are_candidates() {
+        let default = "node:24.22.1-bookworm";
+        assert!(eligible_image(
+            "local/agent:1",
+            default,
+            Some("arm64"),
+            "arm64"
+        ));
+        for (reference, architecture) in [
+            (default, Some("arm64")),
+            ("local/agent@sha256:abcd", Some("arm64")),
+            ("local/agent:1", Some("amd64")),
+            ("local/agent:1", None),
+        ] {
+            assert!(!eligible_image(reference, default, architecture, "arm64"));
+        }
+    }
+}
+
 /// How a process ended: what it wrote on standard output up to its first
 /// line's end, and its exit code when it was seen to end (-1 otherwise).
 pub struct Ended {

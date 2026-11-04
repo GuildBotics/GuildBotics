@@ -1,80 +1,98 @@
-//! The snapshot a command's microVM boots from: the one the Python version
-//! built for the workspace (`guildbotics/environment/snapshot.py`), under
-//! `<workspace>/.guildbotics/local/agent_environment/snapshots`.
-//!
-//! Which snapshot the workspace's declaration asks for is the Python
-//! version's recipe, not carried over yet. Until it is, the workspace's only
-//! snapshot is the one, and only while no build runs and none failed: any
-//! other state is refused, in the words the Python version refuses it with.
-
-use std::path::{Path, PathBuf};
-
-use gb_base::files::FileLock;
+//! Compare the current recipe with the device's snapshots, without booting.
 
 use crate::Sentence;
+use gb_base::files::FileLock;
+use std::path::{Path, PathBuf};
 
-/// What a snapshot's name starts with.
 const PREFIX: &str = "guildbotics-";
-/// What a build holds while it runs.
 const LOCK_FILE: &str = "build.lock";
-/// What a failed build leaves beside its snapshot's name, saying why.
 const FAILED_SUFFIX: &str = ".failed";
 
-/// Where the workspace's snapshots are on this device.
+#[derive(Debug, Clone, PartialEq)]
+pub enum State {
+    Missing,
+    Stale,
+    Building,
+    Failed(String),
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Status {
+    pub path: PathBuf,
+    pub state: State,
+}
+
 pub fn snapshots_dir(workspace: &Path) -> PathBuf {
     workspace.join(".guildbotics/local/agent_environment/snapshots")
 }
 
-/// The snapshot a command boots from, or why there is none to boot from.
-pub fn ready(workspace: &Path) -> Result<PathBuf, Sentence> {
+/// Only the current recipe's failure and directory affect readiness.
+/// A running build takes precedence; filesystem errors are never "missing".
+pub fn status(workspace: &Path, name: &str) -> std::io::Result<Status> {
+    if !name.strip_prefix(PREFIX).is_some_and(|digest| {
+        digest.len() == 16
+            && digest
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid snapshot recipe name",
+        ));
+    }
     let directory = snapshots_dir(workspace);
-    let refused = |state: &str, params| {
-        Sentence::Key(
-            match state {
-                "building" => "intelligences.agent_environment.snapshot.building",
-                "failed" => "intelligences.agent_environment.snapshot.failed",
-                "stale" => "intelligences.agent_environment.snapshot.stale",
-                _ => "intelligences.agent_environment.snapshot.missing",
-            },
-            params,
-        )
+    let path = directory.join(name);
+    let lock = directory.join(LOCK_FILE);
+    if lock.try_exists()? && FileLock::try_hold(&lock)?.is_none() {
+        return Ok(Status {
+            path,
+            state: State::Building,
+        });
+    }
+    let failed = directory.join(format!("{name}{FAILED_SUFFIX}"));
+    let state = match std::fs::read_to_string(&failed) {
+        Ok(detail) => State::Failed(detail.trim().to_owned()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if path.try_exists()? && std::fs::symlink_metadata(&path)?.file_type().is_dir() {
+                State::Ready
+            } else {
+                let mut stale = false;
+                match std::fs::read_dir(&directory) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            let entry = entry?;
+                            if entry.file_name().to_string_lossy().starts_with(PREFIX)
+                                && entry.file_type()?.is_dir()
+                            {
+                                stale = true;
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+                if stale { State::Stale } else { State::Missing }
+            }
+        }
+        Err(e) => return Err(e),
     };
-    if building(&directory) {
-        return Err(refused("building", vec![]));
-    }
-    let mut snapshots = Vec::new();
-    for entry in std::fs::read_dir(&directory)
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if !name.starts_with(PREFIX) {
-            continue;
-        }
-        if name.ends_with(FAILED_SUFFIX) && path.is_file() {
-            let detail = std::fs::read_to_string(&path).unwrap_or_default();
-            return Err(refused(
-                "failed",
-                vec![("detail", detail.trim().to_owned())],
-            ));
-        }
-        if path.is_dir() {
-            snapshots.push(path);
-        }
-    }
-    match <[PathBuf; 1]>::try_from(snapshots) {
-        Ok([snapshot]) => Ok(snapshot),
-        Err(snapshots) if snapshots.is_empty() => Err(refused("missing", vec![])),
-        // Which one the declaration asks for is the recipe's to say; a build
-        // of a newer declaration leaves the older one behind.
-        Err(_) => Err(refused("stale", vec![])),
-    }
+    Ok(Status { path, state })
 }
 
-/// Whether a build holds the directory's lock, in this process or another.
-fn building(directory: &Path) -> bool {
-    let lock = directory.join(LOCK_FILE);
-    lock.exists() && matches!(FileLock::try_hold(&lock), Ok(None))
+pub fn ready(workspace: &Path, name: &str) -> Result<PathBuf, Sentence> {
+    let status = status(workspace, name).map_err(|e| Sentence::Text(e.to_string()))?;
+    let key = match status.state {
+        State::Ready => return Ok(status.path),
+        State::Missing => "intelligences.agent_environment.snapshot.missing",
+        State::Stale => "intelligences.agent_environment.snapshot.stale",
+        State::Building => "intelligences.agent_environment.snapshot.building",
+        State::Failed(detail) => {
+            return Err(Sentence::Key(
+                "intelligences.agent_environment.snapshot.failed",
+                vec![("detail", detail)],
+            ));
+        }
+    };
+    Err(Sentence::key(key))
 }

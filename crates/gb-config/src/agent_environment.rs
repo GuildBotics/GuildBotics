@@ -37,11 +37,56 @@ impl Default for Resources {
 #[derive(Debug, PartialEq)]
 pub struct DeclarationProblem(pub PathBuf);
 
+/// The custom base image, whose actual local contents identify a snapshot.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaseImage {
+    pub reference: String,
+    pub digests: std::collections::BTreeMap<String, String>,
+}
+
+pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, DeclarationProblem> {
+    let own = config.join(PATH);
+    let path = if own.exists() {
+        own
+    } else {
+        templates.join(PATH)
+    };
+    let problem = || DeclarationProblem(path.clone());
+    let text = std::fs::read_to_string(&path).map_err(|_| problem())?;
+    let declaration = yaml::value(&text).map_err(|_| problem())?;
+    let declaration = declaration.as_object().ok_or_else(problem)?;
+    let Some(value) = declaration.get("image").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let image: BaseImage = serde_json::from_value(value.clone()).map_err(|_| problem())?;
+    if image.reference.is_empty()
+        || image.reference.starts_with('-')
+        || image.reference.chars().any(char::is_whitespace)
+        || image.digests.is_empty()
+        || image.digests.iter().any(|(arch, digest)| {
+            arch.is_empty()
+                || !arch
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+                || !digest.strip_prefix("sha256:").is_some_and(|hex| {
+                    hex.len() == 64
+                        && hex
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                })
+        })
+    {
+        return Err(problem());
+    }
+    Ok(Some(image))
+}
+
 impl std::fmt::Display for DeclarationProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "The resources in {} must be positive integers: memory_mib and cpus.",
+            "The agent environment declaration in {} is invalid.",
             self.0.display()
         )
     }
