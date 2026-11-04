@@ -238,9 +238,11 @@ async fn start(
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let work = api.work.spawn(async move {
         let run = trace.run_command(&name, &person_id, async {
-            let reply = gb_environment::run(&host, &workspace, command)
-                .await
-                .map_err(|failure| failed(failure, language))?;
+            let reply = gb_environment::run(&host, &workspace, command, |warning| {
+                tracing::warn!("{}", say(warning, language));
+            })
+            .await
+            .map_err(|failure| failed(failure, language))?;
             trace.command_output(&name, &person_id, &reply.text_output);
             match reply.failure {
                 None => Ok(reply.text_output),
@@ -337,14 +339,17 @@ fn person<'a>(
 
 /// A run its environment did not let end: refused or failed as a command,
 /// or failed otherwise, which the caller is not told the words of.
-fn failed(failure: Failure, language: &str) -> Ended {
-    let say = |sentence: Sentence, language: &str| match sentence {
+fn say(sentence: Sentence, language: &str) -> String {
+    match sentence {
         Sentence::Text(text) => text,
         Sentence::Key(key, params) => {
             let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
             i18n::t(language, key, &params)
         }
-    };
+    }
+}
+
+fn failed(failure: Failure, language: &str) -> Ended {
     match failure {
         Failure::Command(sentence) => Ended {
             error_type: "CommandError".into(),
@@ -412,6 +417,65 @@ fn internal(what: &str, error_type: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_status_diagnostics_are_rendered_in_the_requested_language() {
+        use gb_config::agent_environment::{BaseImage, DeclarationProblem, ImageIssue};
+        let image = BaseImage {
+            reference: "local/agent:1".into(),
+            digests: [("arm64".into(), format!("sha256:{}", "a".repeat(64)))].into(),
+        };
+        let mismatch = gb_environment::image::status(
+            &image,
+            "arm64",
+            Some(format!("sha256:{}", "b".repeat(64))),
+            "load archive",
+        );
+        let missing = gb_environment::image::status(&image, "arm64", None, "load archive");
+        let undeclared = gb_environment::image::status(
+            &image,
+            "amd64",
+            Some("sha256:bbbb".into()),
+            "load archive",
+        );
+        let mut sentences = vec![
+            missing.refusal.unwrap(),
+            mismatch.warning.unwrap(),
+            undeclared.warning.unwrap(),
+        ];
+        for issue in [
+            ImageIssue::Reference("-bad-reference".into()),
+            ImageIssue::Digest("bad-digest".into()),
+            ImageIssue::Architecture("ARM".into()),
+            ImageIssue::NoDigests,
+        ] {
+            sentences.push(gb_environment::image::declaration_problem(
+                DeclarationProblem::ImageField(issue),
+            ));
+        }
+        sentences.push(gb_environment::image::declaration_problem(
+            DeclarationProblem::Image("/config/file.yml".into()),
+        ));
+        for sentence in sentences {
+            let en = super::say(sentence.clone(), "en");
+            let ja = super::say(sentence, "ja");
+            assert_ne!(en, ja);
+            for text in [&en, &ja] {
+                assert!(!text.contains("%{"), "{text}");
+                assert!(!text.starts_with("intelligences."), "{text}");
+            }
+        }
+        let sentence = gb_environment::image::status(&image, "arm64", None, "load archive")
+            .refusal
+            .unwrap();
+        for language in ["ja", "en"] {
+            let text = super::say(sentence.clone(), language);
+            assert!(
+                text.contains("load archive")
+                    && text.contains("local/agent:1")
+                    && text.contains("arm64")
+            );
+        }
+    }
     use super::*;
 
     fn failure(command: bool, type_: &str, result: Option<serde_json::Value>) -> CommandFailure {

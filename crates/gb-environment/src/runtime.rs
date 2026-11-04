@@ -123,32 +123,45 @@ async fn backend(home: &Path) -> Result<(), Failure> {
 }
 
 /// Read a custom reference without pulling it or booting a microVM.
-pub async fn held_image(home: &Path, reference: &str, default: &str) -> Result<String, Failure> {
+pub async fn held_image(
+    home: &Path,
+    reference: &str,
+    default: &str,
+) -> Result<Option<String>, Failure> {
     backend(home).await?;
-    let detail = microsandbox::Image::inspect(reference).await.map_err(|e| {
-        Failure::Command(Sentence::Text(format!(
-            "The local base image '{reference}' cannot be read: {e}"
-        )))
-    })?;
-    let device = match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        other => other,
+    let failed = |error: String| {
+        Failure::Command(Sentence::Key(
+            "intelligences.agent_environment.runtime.images_failed",
+            vec![("error", error)],
+        ))
     };
-    if !eligible_image(reference, default, detail.handle.architecture(), device) {
-        return Err(Failure::Command(Sentence::Text(format!(
-            "'{reference}' is not a custom base image for this device ({device})."
-        ))));
+    let images = microsandbox::Image::list()
+        .await
+        .map_err(|e| failed(e.to_string()))?;
+    if !images.iter().any(|image| {
+        image.reference() == reference
+            && eligible_image(
+                reference,
+                default,
+                image.architecture(),
+                crate::image::device_architecture(),
+            )
+    }) {
+        return Ok(None);
     }
-    detail
-        .config
-        .map(|c| c.digest)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            Failure::Command(Sentence::Text(format!(
-                "The local base image '{reference}' has no content digest."
-            )))
-        })
+    let detail = microsandbox::Image::inspect(reference)
+        .await
+        .map_err(|e| failed(e.to_string()))?;
+    // Recheck the inspected metadata: a local reference may have moved since listing.
+    if !eligible_image(
+        reference,
+        default,
+        detail.handle.architecture(),
+        crate::image::device_architecture(),
+    ) {
+        return Ok(None);
+    }
+    Ok(detail.config.map(|c| c.digest).filter(|s| !s.is_empty()))
 }
 
 fn eligible_image(

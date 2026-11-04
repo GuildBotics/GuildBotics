@@ -34,6 +34,7 @@ ja:
     launching_app: "（いまは %{app}）"
     permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:
+    invalid_image: "%{path} の image 宣言を読み取れません。reference と digests のマッピングを確認してください。"
     not_an_image: "'%{reference}' は image の参照名ではありません"
     not_a_digest: "'%{digest}' は image の digest（sha256:<16進 64 桁>）ではありません"
     no_digests: "image にはアーキテクチャごとの digest を 1 つ以上書いてください"

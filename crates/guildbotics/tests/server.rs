@@ -1286,6 +1286,26 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
         assert_eq!(last["payload"]["error_type"], "CommandError");
     }
 
+    // Image validation reaches the API as a localized, value-specific refusal
+    // before any real image store or microVM is opened.
+    std::fs::write(
+        &declaration,
+        "image:\n  reference: local/agent:1\n  digests:\n    arm64: bad-digest\n",
+    )
+    .unwrap();
+    for (language, phrase) in [("ja", "image の digest"), ("en", "image digest")] {
+        let (status, failed) = server
+            .run(json!({"command": "look", "cwd": "~/somewhere"}), language)
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let message = failed["message"].as_str().unwrap();
+        assert!(
+            message.contains("bad-digest") && message.contains(phrase),
+            "{message}"
+        );
+    }
+    std::fs::remove_file(&declaration).unwrap();
+
     // A command that may write needs what is not served yet.
     let (status, failed) = server.run(json!({"command": "write"}), "en").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");

@@ -11,6 +11,7 @@
 //! microVM opens no network: a call of it fails as one the host did not
 //! answer.
 
+pub mod image;
 pub mod language;
 pub mod recipe;
 mod runtime;
@@ -102,7 +103,12 @@ pub struct Shape {
 
 /// Runs `command` of the workspace `workspace` in a microVM of its own, which
 /// is gone when this returns, and says how the command ended.
-pub async fn run(host: &Host, workspace: &Path, command: Command) -> Result<CommandReply, Failure> {
+pub async fn run(
+    host: &Host,
+    workspace: &Path,
+    command: Command,
+    on_warning: impl Fn(Sentence),
+) -> Result<CommandReply, Failure> {
     if !command.access.read_only {
         return Err(Failure::Command(Sentence::Text(format!(
             "'{}' is not declared read-only, and only read-only commands run here so far.",
@@ -121,11 +127,25 @@ pub async fn run(host: &Host, workspace: &Path, command: Command) -> Result<Comm
     let recipe = recipe::Recipe::load(&templates)
         .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
     let image = gb_config::agent_environment::image(&config_dir(workspace), &templates)
-        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+        .map_err(|e| Failure::Command(image::declaration_problem(e)))?;
     let held = match image {
-        Some(image) => Some(
-            runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image).await?,
-        ),
+        Some(image) => {
+            let held = runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image)
+                .await?;
+            let status = image::status(
+                &image,
+                image::device_architecture(),
+                held,
+                "guildbotics environment image load <archive.tar>",
+            );
+            if let Some(refusal) = status.refusal {
+                return Err(Failure::Command(refusal));
+            }
+            if let Some(warning) = status.warning {
+                on_warning(warning);
+            }
+            status.held
+        }
         None => None,
     };
     let snapshot =

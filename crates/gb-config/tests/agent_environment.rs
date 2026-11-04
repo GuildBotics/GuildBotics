@@ -43,13 +43,7 @@ fn invalid_declarations_name_the_component_and_the_selected_file() {
             "{declaration}"
         );
     }
-    for declaration in [
-        "image: {}",
-        "image: {reference: local/agent:1, digests: {}}",
-        "image: []",
-        "[",
-        "[]",
-    ] {
+    for declaration in ["image: {}", "image: []", "[", "[]"] {
         std::fs::write(&path, declaration).unwrap();
         assert_eq!(
             image(config.path(), templates.path())
