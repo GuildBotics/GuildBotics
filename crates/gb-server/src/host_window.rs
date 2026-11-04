@@ -1,0 +1,1683 @@
+//! A command's ephemeral host and member endpoints, separate from owner API auth.
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{DefaultBodyLimit, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::post,
+};
+use gb_environment::{
+    broker::{Broker, Request as MemberRequest},
+    gateway::{Lease, Leases, Mask, Policy},
+};
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use tokio::task::JoinHandle;
+
+type Answer = Pin<Box<dyn Future<Output = Result<Value, HostError>> + Send>>;
+pub type HostCalls = Arc<dyn Fn(String, Value) -> Answer + Send + Sync>;
+pub type TokenSource = Arc<
+    dyn Fn(Option<String>) -> Pin<Box<dyn Future<Output = Result<String, ()>> + Send>>
+        + Send
+        + Sync,
+>;
+
+pub struct HostError {
+    pub category: &'static str,
+    pub message: String,
+}
+impl HostError {
+    pub fn refused(message: impl Into<String>) -> Self {
+        Self {
+            category: "refused",
+            message: message.into(),
+        }
+    }
+}
+impl IntoResponse for HostError {
+    fn into_response(self) -> Response {
+        let status = if self.category == "refused" {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::UNPROCESSABLE_ENTITY
+        };
+        (
+            status,
+            Json(json!({"error":{"category":self.category,"message":self.message,"details":{}}})),
+        )
+            .into_response()
+    }
+}
+
+pub struct HttpHost {
+    pub port: u16,
+    pub token: String,
+    task: JoinHandle<()>,
+    alive: Arc<std::sync::atomic::AtomicBool>,
+    broker: Broker,
+}
+impl Drop for HttpHost {
+    fn drop(&mut self) {
+        self.alive.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.broker.close();
+        self.task.abort();
+    }
+}
+#[derive(Clone)]
+struct HostState {
+    token: String,
+    alive: Arc<std::sync::atomic::AtomicBool>,
+    calls: HostCalls,
+    broker: Broker,
+}
+impl HttpHost {
+    pub async fn start(calls: HostCalls, broker: Broker) -> std::io::Result<Self> {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        let token = uuid_token();
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let state = HostState {
+            token: token.clone(),
+            alive: alive.clone(),
+            calls,
+            broker: broker.clone(),
+        };
+        let router = Router::new()
+            .route("/host/{call}", post(call_host))
+            .route("/mcp", post(mcp))
+            .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+            .with_state(state);
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Ok(Self {
+            port,
+            token,
+            task,
+            alive,
+            broker,
+        })
+    }
+    pub fn guest_url(&self) -> String {
+        format!("http://host.microsandbox.internal:{}/host", self.port)
+    }
+    pub fn mcp_url(&self) -> String {
+        format!("http://host.microsandbox.internal:{}/mcp", self.port)
+    }
+}
+fn uuid_token() -> String {
+    gb_environment::gateway::Leases::default()
+        .lend()
+        .stand_in
+        .clone()
+}
+fn admitted(headers: &HeaderMap, token: &str) -> bool {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let expected = format!("Bearer {token}");
+    let mut difference = authorization.len() ^ expected.len();
+    for (a, b) in authorization.bytes().zip(expected.bytes()) {
+        difference |= usize::from(a ^ b);
+    }
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let host = host
+        .rsplit_once(':')
+        .filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit()))
+        .map(|(host, _)| host)
+        .unwrap_or(host);
+    difference == 0
+        && matches!(
+            host,
+            "127.0.0.1" | "localhost" | "[::1]" | "host.microsandbox.internal"
+        )
+}
+async fn call_host(
+    State(state): State<HostState>,
+    Path(call): Path<String>,
+    headers: HeaderMap,
+    Json(args): Json<Value>,
+) -> Response {
+    if !state.alive.load(std::sync::atomic::Ordering::SeqCst) || !admitted(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !args.is_object() {
+        return HostError::refused("A call takes a JSON object.").into_response();
+    }
+    match (state.calls)(call, args).await {
+        Ok(result) => Json(json!({"result":result})).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+async fn mcp(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> Response {
+    if !state.alive.load(std::sync::atomic::Ordering::SeqCst) || !admitted(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let result = match request["method"].as_str() {
+        Some("initialize") => {
+            json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"guildbotics-member","version":"1"}})
+        }
+        Some("notifications/initialized") => return StatusCode::ACCEPTED.into_response(),
+        Some("tools/list") => {
+            json!({"tools":[{"name":"guildbotics_member","description":"Run a trusted member capability.","inputSchema":{"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string"}},"stdin":{"type":"string"},"turn_grant":{"type":"string"}},"required":["arguments","turn_grant"],"additionalProperties":false}}]})
+        }
+        Some("tools/call") if request["params"]["name"] == "guildbotics_member" => {
+            let arguments:MemberRequest=match serde_json::from_value(request["params"]["arguments"].clone()){Ok(args)=>args,Err(_)=>return Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":"Invalid tool arguments."}})).into_response()};
+            let result = state.broker.execute(arguments).await;
+            json!({"content":[{"type":"text","text":serde_json::to_string(&result).expect("member result JSON")}],"isError":false})
+        }
+        _ => return Json(
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Unknown method."}}),
+        )
+        .into_response(),
+    };
+    Json(json!({"jsonrpc":"2.0","id":id,"result":result})).into_response()
+}
+
+#[derive(Clone)]
+struct GatewayState {
+    policy: Policy,
+    source: TokenSource,
+    leases: Leases,
+    client: reqwest::Client,
+}
+/// Owns a command-level lease; dropping the listener revokes it. Turn-level
+/// borrowers may instead create one gateway for each turn.
+pub struct Gateway {
+    pub port: u16,
+    pub lease: Lease,
+    pub ca_pem: Vec<u8>,
+    tls: bool,
+    leases: Leases,
+    task: JoinHandle<()>,
+}
+impl Drop for Gateway {
+    fn drop(&mut self) {
+        self.leases.revoke();
+        self.task.abort();
+    }
+}
+impl Gateway {
+    pub fn revoke(&self) {
+        self.leases.revoke();
+    }
+    pub fn lend(&self, token: String) -> Lease {
+        self.leases.lend_token(token)
+    }
+    pub async fn start(
+        policy: Policy,
+        source: TokenSource,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        let leases = Leases::default();
+        let lease = leases.lend();
+        let state = GatewayState {
+            policy,
+            source,
+            leases: leases.clone(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(600))
+                .build()?,
+        };
+        let router = Router::new()
+            .fallback(forward)
+            .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+            .with_state(state);
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Ok(Self {
+            port,
+            lease,
+            ca_pem: vec![],
+            tls: false,
+            leases,
+            task,
+        })
+    }
+    pub fn guest_url(&self) -> String {
+        format!(
+            "{}://host.microsandbox.internal:{}",
+            if self.tls { "https" } else { "http" },
+            self.port
+        )
+    }
+
+    pub async fn start_tls(
+        policy: Policy,
+        source: TokenSource,
+        names: Vec<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let key = rcgen::KeyPair::generate()?;
+        let mut parameters = rcgen::CertificateParams::new(names)?;
+        parameters.not_before = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
+        parameters.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(2);
+        let certificate = parameters.self_signed(&key)?;
+        let ca_pem = certificate.pem().into_bytes();
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![certificate.der().clone()],
+                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der())
+                    .into(),
+            )?;
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        let leases = Leases::default();
+        let lease = leases.lend();
+        let state = GatewayState {
+            policy,
+            source,
+            leases: leases.clone(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(600))
+                .build()?,
+        };
+        let router = Router::new()
+            .fallback(forward)
+            .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+            .with_state(state);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let acceptor = acceptor.clone();
+                let router = router.clone();
+                tokio::spawn(async move {
+                    let Ok(stream) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let io = hyper_util::rt::TokioIo::new(stream);
+                    let service = hyper_util::service::TowerToHyperService::new(router);
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, service)
+                        .await;
+                });
+            }
+        });
+        Ok(Self {
+            port,
+            lease,
+            ca_pem,
+            tls: true,
+            leases,
+            task,
+        })
+    }
+}
+async fn forward(State(state): State<GatewayState>, request: axum::extract::Request) -> Response {
+    let incoming = state.policy.provider.credential_header();
+    let presented = request
+        .headers()
+        .get(incoming)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|value| {
+            if incoming == "authorization" {
+                value.strip_prefix("Bearer ")
+            } else {
+                Some(value)
+            }
+        })
+        .unwrap_or("");
+    let Some(generation) = state.leases.authorize(presented) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let stand_in = presented.to_owned();
+    let target = match state.policy.target(
+        request.method().as_str(),
+        request
+            .uri()
+            .path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or("/"),
+    ) {
+        Ok(target) => target,
+        Err(_) => return StatusCode::FORBIDDEN.into_response(),
+    };
+    let supplied: BTreeMap<String, String> = request
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_owned())))
+        .collect();
+    let method = request.method().clone();
+    let body = match axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let mut refused = None;
+    let (response, token) = loop {
+        let token = match (state.source)(refused.clone()).await {
+            Ok(token) if !token.is_empty() => token,
+            _ => return StatusCode::UNAUTHORIZED.into_response(),
+        };
+        if !state.leases.accepts(generation, &stand_in) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let mut upstream = state
+            .client
+            .request(method.clone(), &target)
+            .body(body.clone());
+        for (k, v) in state.policy.headers(&supplied, &token) {
+            upstream = upstream.header(k, v);
+        }
+        let answer = match upstream.send().await {
+            Ok(answer) => answer,
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        };
+        if answer.status() == StatusCode::UNAUTHORIZED && refused.is_none() {
+            refused = Some(token);
+            continue;
+        }
+        break (answer, token);
+    };
+    if response
+        .headers()
+        .get("content-encoding")
+        .is_some_and(|v| v != "identity")
+    {
+        return StatusCode::BAD_GATEWAY.into_response();
+    }
+    let status = response.status();
+    let mut headers = HeaderMap::new();
+    let connection_names = response
+        .headers()
+        .get_all("connection")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|v| v.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    for (name, value) in response.headers() {
+        if !matches!(
+            name.as_str(),
+            "content-length"
+                | "connection"
+                | "transfer-encoding"
+                | "keep-alive"
+                | "upgrade"
+                | "trailer"
+                | "te"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+        ) && !connection_names.iter().any(|n| n == name.as_str())
+        {
+            let mut mask = Mask::new(&token);
+            let safe = mask.feed(value.as_bytes(), true);
+            if let Ok(value) = axum::http::HeaderValue::from_bytes(&safe) {
+                headers.append(name, value);
+            }
+        }
+    }
+    let mask = Mask::new(&token);
+    let stream = futures_util::stream::unfold(
+        (response, mask, state.leases, generation, stand_in, false),
+        |(mut response, mut mask, leases, generation, stand_in, finished)| async move {
+            if finished || !leases.accepts(generation, &stand_in) {
+                return None;
+            }
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if !leases.accepts(generation, &stand_in) {
+                        return None;
+                    }
+                    let bytes = mask.feed(&chunk, false);
+                    Some((
+                        Ok::<_, std::io::Error>(bytes),
+                        (response, mask, leases, generation, stand_in, false),
+                    ))
+                }
+                Ok(None) => {
+                    let bytes = mask.feed(&[], true);
+                    if bytes.is_empty() {
+                        None
+                    } else {
+                        Some((
+                            Ok(bytes),
+                            (response, mask, leases, generation, stand_in, true),
+                        ))
+                    }
+                }
+                Err(_) => Some((
+                    Err(std::io::Error::other("Provider response interrupted.")),
+                    (response, mask, leases, generation, stand_in, true),
+                )),
+            }
+        },
+    );
+    let mut answer = Response::new(Body::from_stream(stream));
+    *answer.status_mut() = status;
+    *answer.headers_mut() = headers;
+    answer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn work_admission_and_turn_readonly_access_are_distinct_contracts() {
+        let mounts = vec![
+            gb_environment::Mount {
+                guest: "/code".into(),
+                host: Some("/host/code".into()),
+                readonly: true,
+            },
+            gb_environment::Mount {
+                guest: "/work/config".into(),
+                host: Some("/host/config".into()),
+                readonly: true,
+            },
+            gb_environment::Mount {
+                guest: "/exchange".into(),
+                host: Some("/host/exchange".into()),
+                readonly: false,
+            },
+            gb_environment::Mount {
+                guest: "/member/clone".into(),
+                host: Some("/host/clone".into()),
+                readonly: false,
+            },
+            gb_environment::Mount {
+                guest: "/readonly-grant".into(),
+                host: Some("/host/grant".into()),
+                readonly: true,
+            },
+        ];
+        let extra = vec![gb_environment::Mount {
+            guest: "/home/stand-in".into(),
+            host: Some("/host/stub".into()),
+            readonly: false,
+        }];
+        let directories = turn_directories(&mounts, &extra, Some("/copied-cwd"));
+        assert!(directories["/code"]);
+        assert!(directories["/work/config"]);
+        assert!(!directories["/exchange"]);
+        assert!(!directories["/member/clone"]);
+        assert!(directories["/readonly-grant"]);
+        assert!(!directories["/copied-cwd"]);
+        assert!(!directories["/home/stand-in"]);
+        let facts = BTreeMap::from([
+            ("/code".into(), false),
+            ("/work/config".into(), false),
+            ("/exchange".into(), true),
+            ("/member/clone".into(), true),
+            ("/readonly-grant".into(), true),
+            ("/copied-cwd".into(), true),
+            ("/exchange/closed".into(), false),
+        ]);
+        assert!(admits(&facts, std::path::Path::new("/exchange/file")));
+        assert!(admits(&facts, std::path::Path::new("/readonly-grant")));
+        assert!(admits(&facts, std::path::Path::new("/copied-cwd")));
+        assert!(!admits(&facts, std::path::Path::new("/code")));
+        assert!(!admits(
+            &facts,
+            std::path::Path::new("/exchange/closed/file")
+        ));
+        assert!(!admits(&facts, std::path::Path::new("/unknown")));
+    }
+    #[test]
+    fn recorded_io_retains_local_detail_and_span_summary_keeps_its_schema() {
+        let text = "synthetic-private-key".repeat(60);
+        let io=record_entry(json!({"type":"io","io_type":"llm.request","span":{"span_id":"span","call_id":"call","parent_id":null,"name":"writer"},"payload":{"prompt":text,"messages":["hello"]}}),"trace","run","aiko","write").unwrap();
+        assert_eq!(io["kind"], "io");
+        assert_eq!(io["type"], "llm.request");
+        assert_eq!(io["span_id"], "span");
+        let redactor = gb_observability::redaction::Redactor::new(["synthetic-private-key".into()]);
+        let safe = redactor.local(io);
+        assert_eq!(safe["payload"]["prompt"], "***".repeat(60));
+        assert_eq!(safe["payload"]["messages"][0], "hello");
+        let summary=record_entry(json!({"type":"summary","span":null,"slot":"writer","tool":"openai","model_specified":true,"status":"finished","model":"model","effort":"low","duration_ms":20,"usage":{"input_tokens":4}}),"trace","run","aiko","write").unwrap();
+        assert_eq!(summary["type"], "span.finished");
+        assert_eq!(summary["attributes"]["agent.kind"], "llm");
+        assert_eq!(summary["payload"]["usage"]["input_tokens"], 4);
+    }
+    #[test]
+    fn recorded_provider_event_uses_kind_and_never_impersonates_a_command_boundary() {
+        let entry = json!({"type":"event","span":null,"conversation":{"person_id":"aiko","adapter":"codex","work_kind":"ticket","work_identity":"87"},"generation":2,"context_cursor":"cursor","event":{"kind":"assistant","name":"completed","message":"reply","command":"","path":"","approval":"","usage":{},"details":{},"provider_session_id":"session","provider_turn_id":"turn"}});
+        let record = record_entry(entry.clone(), "trace", "run", "aiko", "write").unwrap();
+        assert_eq!(record["type"], "agent_runtime.assistant");
+        assert_eq!(record["payload"]["name"], "completed");
+        assert_eq!(record["attributes"]["agent.conversation_generation"], 2);
+        let mut delta = entry;
+        delta["event"]["name"] = "delta".into();
+        assert!(record_entry(delta, "trace", "run", "aiko", "write").is_none());
+    }
+    #[tokio::test]
+    async fn host_calls_require_the_command_token_and_preserve_the_wire_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Broker::new(
+            dir.path().join("unused-cli"),
+            gb_environment::broker::Invocation {
+                person_id: "aiko".into(),
+                run_id: "run".into(),
+                trace_id: "trace".into(),
+                work_kind: "ticket".into(),
+                work_identity: "87".into(),
+                cwd: dir.path().into(),
+                access: gb_wire::CommandAccess {
+                    read_only: true,
+                    inspects: vec![],
+                },
+            },
+        );
+        let calls: HostCalls = Arc::new(|name, args| {
+            Box::pin(async move {
+                if name == "record" {
+                    Ok(args)
+                } else {
+                    Err(HostError::refused("unknown call"))
+                }
+            })
+        });
+        let host = HttpHost::start(calls, broker).await.unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("http://127.0.0.1:{}/host/record", host.port);
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let response = client
+            .post(&url)
+            .bearer_auth(&host.token)
+            .json(&json!({"entries":[]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"result":{"entries":[]}})
+        );
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth(&host.token)
+                .header("Host", "evil.test")
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let denied = client
+            .post(format!("http://127.0.0.1:{}/host/unknown", host.port))
+            .bearer_auth(&host.token)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            denied.json::<Value>().await.unwrap()["error"]["category"],
+            "refused"
+        );
+    }
+}
+
+/// Authority resolved by the host once for the entire command. Guest calls
+/// may supply data, but cannot change this member, work, or mounted paths.
+#[derive(Clone)]
+pub struct Context {
+    pub invocation: gb_environment::broker::Invocation,
+    pub workspace: std::path::PathBuf,
+    pub home: String,
+    /// Work admission, from CommandFacts: true admits a turn cwd.
+    pub mounts: BTreeMap<String, bool>,
+    /// Actual guest mount access, from Shape: true means read-only.
+    pub turn_mounts: BTreeMap<String, bool>,
+    pub tools: std::collections::BTreeSet<String>,
+    pub summary_tools: std::collections::BTreeSet<String>,
+    pub broker: Broker,
+    pub loans: BTreeMap<String, Arc<crate::tool_login::ToolLogin>>,
+    pub rate_limits: BTreeMap<String, usize>,
+    pub record: Arc<dyn Fn(Value) + Send + Sync>,
+}
+impl HttpHost {
+    pub async fn start_context(context: Context) -> std::io::Result<Self> {
+        let endpoint = Arc::new(tokio::sync::OnceCell::<(String, String)>::new());
+        let current = Arc::new(tokio::sync::Mutex::new(None::<String>));
+        let serial = Arc::new(tokio::sync::Mutex::new(()));
+        let broker = context.broker.clone();
+        let stored = endpoint.clone();
+        let calls: HostCalls = Arc::new(move |name, args| {
+            let context = context.clone();
+            let endpoint = endpoint.clone();
+            let current = current.clone();
+            let serial = serial.clone();
+            Box::pin(async move {
+                let _serial = serial.lock().await;
+                match name.as_str() {
+                    "begin_turn" => {
+                        let tool = args["tool"]
+                            .as_str()
+                            .ok_or_else(|| HostError::refused("Tool required."))?;
+                        if !context.tools.contains(tool) {
+                            return Err(HostError::refused("The command does not run that tool."));
+                        }
+                        let cwd = args["cwd"]
+                            .as_str()
+                            .ok_or_else(|| HostError::refused("Working directory required."))?;
+                        let path = std::path::Path::new(cwd);
+                        if !path.is_absolute()
+                            || path
+                                .components()
+                                .any(|c| matches!(c, std::path::Component::ParentDir))
+                            || !admits(&context.mounts, path)
+                        {
+                            return Err(HostError::refused("Working directory is not mounted."));
+                        }
+                        let mut active = current.lock().await;
+                        if active.is_some() {
+                            return Err(HostError::refused("A turn of this command is running."));
+                        }
+                        let env = if let Some(loan) = context.loans.get(tool) {
+                            loan.begin().await.map_err(HostError::refused)?
+                        } else {
+                            return Err(HostError::refused("The tool has no credential broker."));
+                        };
+                        let grant = context.broker.activate().await;
+                        *active = Some(grant.clone());
+                        let (url, token) =
+                            endpoint.get().expect("endpoint installed before serving");
+                        Ok(
+                            json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":context.home,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
+                        )
+                    }
+                    "end_turn" => {
+                        let mut active = current.lock().await;
+                        if active.as_deref() != args["turn_grant"].as_str() {
+                            return Err(HostError::refused(
+                                "The turn grant is invalid or expired.",
+                            ));
+                        }
+                        context.broker.deactivate().await;
+                        for loan in context.loans.values() {
+                            loan.end().await;
+                        }
+                        *active = None;
+                        Ok(json!({"refusal":""}))
+                    }
+                    "member" => {
+                        let existing = current.lock().await.clone();
+                        let temporary = existing.is_none();
+                        let grant = match existing {
+                            Some(grant) => grant,
+                            None => context.broker.activate().await,
+                        };
+                        let result = context
+                            .broker
+                            .execute(MemberRequest {
+                                arguments: serde_json::from_value(args["arguments"].clone())
+                                    .map_err(|_| HostError::refused("Invalid member arguments."))?,
+                                stdin: args["stdin"].as_str().unwrap_or("").into(),
+                                turn_grant: grant,
+                            })
+                            .await;
+                        if temporary {
+                            context.broker.deactivate().await;
+                        }
+                        serde_json::to_value(result)
+                            .map_err(|_| HostError::refused("Invalid member result."))
+                    }
+                    "acquire_inference" => {
+                        let name = args["model_name"]
+                            .as_str()
+                            .ok_or_else(|| HostError::refused("Model name required."))?;
+                        let limit = *context.rate_limits.get(name).ok_or_else(|| {
+                            HostError::refused("The command does not use that model.")
+                        })?;
+                        acquire_inference(name, limit).await;
+                        Ok(Value::Null)
+                    }
+                    "require_completion" | "evidence" => {
+                        let run = gb_observability::runs::RunStore::open(&context.workspace)
+                            .read(&context.invocation.run_id)
+                            .map_err(|_| HostError::refused("Run record unavailable."))?;
+                        if name == "evidence" {
+                            return Ok(json!(run.map(|r| r.provider_evidence).unwrap_or_default()));
+                        }
+                        if run.and_then(|r| r.result).is_none() {
+                            return Err(HostError::refused(
+                                "Run completion has not been recorded.",
+                            ));
+                        }
+                        Ok(Value::Null)
+                    }
+                    "record_completed" | "record_completion_missing" => {
+                        (context.record)(json!({"type":name,"payload":args}));
+                        Ok(Value::Null)
+                    }
+                    "record" => {
+                        let entries = args["entries"]
+                            .as_array()
+                            .ok_or_else(|| HostError::refused("Entries must be an array."))?;
+                        for entry in entries {
+                            serde_json::from_value::<gb_wire::Entry>(entry.clone())
+                                .map_err(|_| HostError::refused("Invalid record entry."))?;
+                            match entry["type"].as_str() {
+                                Some("event") => check_key(&context, &entry["conversation"])?,
+                                Some("credential") | Some("summary") => {
+                                    let allowed = if entry["type"] == "summary" {
+                                        &context.summary_tools
+                                    } else {
+                                        &context.tools
+                                    };
+                                    if !allowed.contains(entry["tool"].as_str().unwrap_or("")) {
+                                        return Err(HostError::refused(
+                                            "The command does not run that tool.",
+                                        ));
+                                    }
+                                }
+                                Some("io")
+                                    if matches!(
+                                        entry["io_type"].as_str(),
+                                        Some(
+                                            "cli_agent.request"
+                                                | "cli_agent.response"
+                                                | "llm.request"
+                                                | "llm.response"
+                                                | "jev.request"
+                                                | "jev.response"
+                                        )
+                                    ) => {}
+                                _ => return Err(HostError::refused("Invalid record entry.")),
+                            }
+                        }
+                        for entry in entries {
+                            if entry["type"] == "credential"
+                                && let Some(loan) =
+                                    context.loans.get(entry["tool"].as_str().unwrap_or(""))
+                            {
+                                loan.authentication_outcome(entry["failed"] == true)
+                                    .map_err(HostError::refused)?;
+                            }
+                            (context.record)(entry.clone());
+                        }
+                        Ok(Value::Null)
+                    }
+                    "resolve" | "save" | "mark_unhealthy" => conversation(&context, &name, &args),
+                    _ => Err(HostError::refused("Unknown host call.")),
+                }
+            })
+        });
+        let host = Self::start(calls, broker).await?;
+        // The listener is unpublished until this function returns.
+        let _ = stored.set((host.mcp_url(), host.token.clone()));
+        Ok(host)
+    }
+}
+fn admits(mounts: &BTreeMap<String, bool>, cwd: &std::path::Path) -> bool {
+    mounts
+        .iter()
+        .filter(|(root, _)| cwd.starts_with(root))
+        .max_by_key(|(root, _)| std::path::Path::new(root).components().count())
+        .is_some_and(|(_, open)| *open)
+}
+fn turn_directories(
+    mounts: &[gb_environment::Mount],
+    tool_mounts: &[gb_environment::Mount],
+    copy: Option<&str>,
+) -> BTreeMap<String, bool> {
+    let mut directories = mounts
+        .iter()
+        .chain(tool_mounts)
+        .map(|mount| (mount.guest.clone(), mount.readonly))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(copy) = copy {
+        directories.insert(copy.to_owned(), false);
+    }
+    directories
+}
+
+fn check_key(context: &Context, key: &Value) -> Result<(), HostError> {
+    if key["person_id"] != context.invocation.person_id
+        || key["work_kind"] != context.invocation.work_kind
+        || key["work_identity"] != context.invocation.work_identity
+        || !context
+            .tools
+            .contains(key["adapter"].as_str().unwrap_or(""))
+    {
+        return Err(HostError::refused("The conversation is not this work's."));
+    }
+    Ok(())
+}
+fn conversation(context: &Context, name: &str, args: &Value) -> Result<Value, HostError> {
+    use sha2::{Digest, Sha256};
+    let key = if name == "resolve" {
+        &args["key"]
+    } else {
+        &args["record"]["key"]
+    };
+    check_key(context, key)?;
+    let source = ["person_id", "adapter", "work_kind", "work_identity"]
+        .map(|name| key[name].as_str().unwrap_or(""))
+        .join("\0");
+    let digest = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    // All untrusted names are hashed; no path component comes from the guest.
+    let path = context
+        .workspace
+        .join(".guildbotics/local/agent-runtime/conversations")
+        .join(&context.invocation.person_id)
+        .join(key["adapter"].as_str().unwrap_or(""))
+        .join(format!("{digest}.json"));
+    let _lock = gb_base::files::FileLock::hold(
+        &path.with_extension("lock"),
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|_| HostError::refused("Conversation is busy."))?;
+    let stored = gb_base::files::read_if_present(&path)
+        .map_err(|_| HostError::refused("Conversation unavailable."))?;
+    let previous = stored
+        .map(|v| serde_json::from_slice::<Value>(&v))
+        .transpose()
+        .map_err(|_| HostError::refused("Conversation corrupt."))?;
+    let mut record = if name == "resolve" {
+        let policy = args["policy"].as_str().unwrap_or("auto");
+        let usable = previous.as_ref().is_some_and(|r| {
+            r["healthy"] == true
+                && r["provider_session_id"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+        });
+        if policy == "resume" && !usable {
+            return Err(HostError::refused(
+                "The conversation has no healthy provider session to resume.",
+            ));
+        }
+        if !matches!(policy, "auto" | "fresh" | "resume") {
+            return Err(HostError::refused("Invalid resume policy."));
+        }
+        let reason = if policy == "fresh" {
+            "fresh"
+        } else if policy == "auto" {
+            previous.as_ref().map(rotation_reason).unwrap_or("")
+        } else {
+            ""
+        }
+        .to_owned();
+        let generation = previous
+            .as_ref()
+            .and_then(|r| r["generation"].as_u64())
+            .map(|g| g + u64::from(!reason.is_empty()))
+            .unwrap_or(0);
+        match previous {
+            Some(record) if reason.is_empty() => record,
+            _ => {
+                json!({"key":key,"generation":generation,"healthy":true,"provider_session_id":"","provider_turn_id":"","context_cursor":"","last_event_id":"","last_run_id":"","provider":"","model":args["model"].as_str().unwrap_or(""),"effective_model":"","effective_effort":"","turn_count":0,"input_tokens":0,"output_tokens":0,"context_used_tokens":0,"context_size_tokens":0,"rotation_reason":reason})
+            }
+        }
+    } else {
+        args["record"].clone()
+    };
+    if name == "mark_unhealthy" {
+        record["healthy"] = false.into();
+        record["rotation_reason"] = args["reason"].clone();
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    if record["created_at"].as_str().unwrap_or("").is_empty() {
+        record["created_at"] = now.clone().into();
+    }
+    record["updated_at"] = now.into();
+    if name == "resolve" && args["model"].as_str().is_some_and(|s| !s.is_empty()) {
+        record["model"] = args["model"].clone();
+    }
+    let mut persisted = record.clone();
+    persisted["version"] = 1.into();
+    if let Some(object) = record.as_object_mut() {
+        object.remove("version");
+    }
+    gb_base::files::atomic_write(
+        &path,
+        &serde_json::to_vec(&persisted).map_err(|_| HostError::refused("Invalid conversation."))?,
+    )
+    .map_err(|_| HostError::refused("Conversation unavailable."))?;
+    Ok(record)
+}
+
+/// Read the same sealed login a turn would use. The UI never receives the
+/// login contents, upstream token, or OS keychain's error text.
+pub fn tool_status(data: &std::path::Path, home: &std::path::Path, catalog: &Value) -> Value {
+    let keychain = gb_config::secrets::SystemKeychain;
+    let device = gb_config::secrets::DeviceKey {
+        machine_root: data.parent().unwrap_or(data).into(),
+        keychain: &keychain,
+    };
+    let tools=catalog.as_array().into_iter().flatten().filter_map(|tool|{
+  let name=tool["name"].as_str()?;let provision=&tool["provision"];let broker=&provision["credential_broker"];
+  let path=data.join("agent_environment").join(name).join("login.sealed");
+  let label=format!("{name}:default:{}",broker["format"].as_str().unwrap_or(""));
+  let cli=home.join(".guildbotics/bin/guildbotics").to_string_lossy().replace('\'',"'\"'\"'");
+  let command=format!("'{cli}' environment login {name}");
+  let mut status=gb_config::credential_vault::status(&device,&path,&label,command.clone());
+  if status.saved {
+    let valid=gb_config::credential_vault::unseal(&device,&path,&label).ok().flatten().and_then(|files| files.get(provision["auth"].as_str().unwrap_or("")).and_then(|raw|serde_json::from_slice::<Value>(raw).ok())).and_then(|document|crate::tool_login::at(&document,&broker["access_token"]).and_then(Value::as_str).map(|s|!s.is_empty())).unwrap_or(false);
+    if !valid {status.saved=false;status.state="corrupt";}
+  }
+  Some(json!({"name":name,"provisioned":!provision["package"].as_str().unwrap_or("").is_empty()||!provision["install"].as_str().unwrap_or("").is_empty(),"saved":status.saved,"credentials":status.state,"authentication_failed":data.join("agent_environment").join(name).join("authentication-failed").is_file(),"login_command":command,"usage":{"state":"unchecked"}}))
+ }).collect::<Vec<_>>();
+    json!(tools)
+}
+
+/// The listeners live exactly as long as the command, including all turns.
+pub struct CommandServices {
+    pub session: gb_environment::Session,
+    _host: HttpHost,
+    _gateways: Vec<Gateway>,
+}
+pub async fn prepare_command(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    command: &gb_environment::Command,
+    roots: &gb_config::commands::CommandRoots,
+    preflight: &gb_environment::device::Device,
+) -> Result<CommandServices, String> {
+    let mut resolved =
+        gb_config::resolved_guest::resolve(roots, &host.identity_root, &command.person_id)
+            .map_err(|e| e.to_string())?;
+    if let Some(commands) = resolved["commands"].as_object_mut() {
+        for value in commands.values_mut() {
+            if let Some(path) = value.as_str()
+                && let Ok(relative) = std::path::Path::new(path).strip_prefix(&host.package)
+            {
+                *value = format!("{}/{}", gb_environment::CODE_ROOT, relative.display()).into();
+            }
+        }
+    }
+    let shape = gb_environment::shape(
+        host,
+        workspace,
+        command,
+        Some(resolved["language"].as_str().unwrap_or("en").into()),
+    )
+    .map_err(|_| "The command access contract cannot be resolved.".to_owned())?;
+    let invocation = gb_environment::broker::Invocation {
+        person_id: command.person_id.clone(),
+        run_id: command.run_id.clone(),
+        trace_id: command.trace_id.clone(),
+        work_kind: command.work_kind.clone(),
+        work_identity: command.work_identity.clone(),
+        cwd: command.cwd.clone(),
+        access: command.access.clone(),
+    };
+    let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| host.home.join(".guildbotics/bin/guildbotics"));
+    let broker = Broker::new(program, invocation.clone());
+    let tools: std::collections::BTreeSet<String> = resolved["brains"]
+        .as_object()
+        .into_iter()
+        .flat_map(|v| v.values())
+        .filter_map(|brain| brain["definition"]["adapter"].as_str())
+        .map(str::to_owned)
+        .collect();
+    let redactor = gb_observability::redaction::Redactor::from_environment(
+        [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "JEV_API_KEY",
+            "TYPESAFE_API_KEY",
+        ]
+        .map(str::to_owned),
+    );
+    let diagnostics = gb_observability::Diagnostics::open(workspace);
+    let trace_id = command.trace_id.clone();
+    let person_id = command.person_id.clone();
+    let command_name = command.name.clone();
+    let run_id = command.run_id.clone();
+    let full_transcript = std::fs::read_to_string(roots.config.join("transcripts.yml"))
+        .ok()
+        .and_then(|text| gb_config::yaml_value(&text).ok())
+        .is_some_and(|v| {
+            v["detail"]
+                .as_str()
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("full"))
+        });
+    let record = Arc::new(move |entry: Value| {
+        if let Some(value) = record_entry_detail(
+            entry,
+            &trace_id,
+            &run_id,
+            &person_id,
+            &command_name,
+            full_transcript,
+        ) && let Value::Object(value) = redactor.local(value)
+        {
+            diagnostics.record(value);
+        }
+    });
+    let catalog: Value = serde_json::from_slice(
+        &std::fs::read(
+            host.package
+                .join("templates/environment/cli_provision.json"),
+        )
+        .map_err(|_| "Tool catalog unavailable.")?,
+    )
+    .map_err(|_| "Tool catalog invalid.")?;
+    let mut loans = BTreeMap::new();
+    let mut tool_mounts = vec![];
+    let mut tool_ports = vec![];
+    let mut relays = vec![];
+    let mut turn_domains = vec![];
+    for tool in catalog.as_array().into_iter().flatten() {
+        let name = tool["name"].as_str().unwrap_or("");
+        if !tools.contains(name) {
+            continue;
+        }
+        let loan = crate::tool_login::ToolLogin::prepare(
+            &host.data,
+            &host.home,
+            tool.clone(),
+            crate::tool_login::LoginVm {
+                data: host.data.clone(),
+                home: host.home.clone(),
+                package: host.package.clone(),
+                snapshot: preflight
+                    .snapshot
+                    .clone()
+                    .ok_or("The snapshot is unavailable.")?,
+                memory_mib: preflight.resources.memory_mib,
+                cpus: preflight.resources.cpus,
+                nameservers: preflight.view["dns"]["nameservers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+            },
+        )
+        .await?;
+        tool_mounts.push(gb_environment::Mount {
+            guest: loan.guest_root.clone(),
+            host: Some(loan.host_root.path().into()),
+            readonly: false,
+        });
+        tool_mounts.extend(loan.persisted_mounts(command.access.read_only)?);
+        tool_ports.push(loan.gateway.port);
+        let hosts = loan.relayed_hosts();
+        if !hosts.is_empty() {
+            relays.push(json!({"hosts":hosts,"port":loan.gateway.port}));
+        }
+        turn_domains.extend(loan.turn_domains());
+        loans.insert(name.to_owned(), loan);
+    }
+    let providers = resolved["brains"]
+        .as_object()
+        .into_iter()
+        .flat_map(|brains| brains.values())
+        .filter_map(|brain| {
+            if brain["kind"] == "jev" {
+                return Some("jev".to_owned());
+            }
+            let class = brain["definition"]["model_class"]
+                .as_str()?
+                .to_ascii_lowercase();
+            ["openai", "anthropic", "gemini"]
+                .into_iter()
+                .find(|name| class.contains(name))
+                .map(str::to_owned)
+        })
+        .collect::<std::collections::BTreeSet<String>>();
+    let context = Context {
+        invocation,
+        workspace: workspace.into(),
+        home: host.home.to_string_lossy().into(),
+        mounts: serde_json::from_str::<gb_wire::CommandFacts>(
+            &shape
+                .env
+                .iter()
+                .find(|(key, _)| key == "GUILDBOTICS_COMMAND")
+                .ok_or("Command facts are missing.")?
+                .1,
+        )
+        .map_err(|_| "Command facts are invalid.")?
+        .mounts
+        .into_iter()
+        .collect(),
+        turn_mounts: turn_directories(
+            &shape.mounts,
+            &tool_mounts,
+            shape.copy.as_ref().map(|copy| copy.guest.as_str()),
+        ),
+        summary_tools: tools
+            .iter()
+            .cloned()
+            .chain(providers.iter().cloned())
+            .collect(),
+        tools,
+        broker,
+        loans,
+        rate_limits: resolved["brains"]
+            .as_object()
+            .into_iter()
+            .flat_map(|brains| brains.values())
+            .filter(|brain| brain["kind"] == "model")
+            .filter_map(|brain| {
+                Some((
+                    brain["definition"]["name"].as_str()?.to_owned(),
+                    brain["definition"]["rate_limit"]["max_requests_per_minute"]
+                        .as_u64()
+                        .unwrap_or(0) as usize,
+                ))
+            })
+            .collect(),
+        record,
+    };
+    let window = HttpHost::start_context(context)
+        .await
+        .map_err(|_| "The command host window cannot start.".to_owned())?;
+    let mut gateways = vec![];
+    let mut urls = serde_json::Map::new();
+    let mut keys = serde_json::Map::new();
+    for (name, provider, origin, key, route) in [
+        (
+            "openai",
+            gb_environment::gateway::Provider::OpenAi,
+            "https://api.openai.com",
+            "OPENAI_API_KEY",
+            "/v1/*",
+        ),
+        (
+            "anthropic",
+            gb_environment::gateway::Provider::Anthropic,
+            "https://api.anthropic.com",
+            "ANTHROPIC_API_KEY",
+            "/v1/*",
+        ),
+        (
+            "gemini",
+            gb_environment::gateway::Provider::Gemini,
+            "https://generativelanguage.googleapis.com",
+            "GOOGLE_API_KEY",
+            "/v1beta/*",
+        ),
+    ] {
+        if !providers.contains(name) {
+            continue;
+        }
+        let key = resolved["brains"]
+            .as_object()
+            .into_iter()
+            .flat_map(|brains| brains.values())
+            .map(|brain| &brain["definition"])
+            .find(|definition| {
+                definition["model_class"]
+                    .as_str()
+                    .is_some_and(|class| class.to_ascii_lowercase().contains(name))
+            })
+            .and_then(|definition| definition["api_key_env"].as_str())
+            .unwrap_or(key);
+        let value = host_secret(host, workspace, key)?;
+        let source: TokenSource = Arc::new(move |_| {
+            let value = value.clone();
+            Box::pin(async move { value.ok_or(()) })
+        });
+        let gateway = Gateway::start(
+            Policy {
+                provider,
+                origin: origin.into(),
+                routes: vec![("POST".into(), route.into()), ("GET".into(), route.into())],
+            },
+            source,
+        )
+        .await
+        .map_err(|_| "The inference gateway cannot start.".to_owned())?;
+        let base = if name == "openai" {
+            format!("{}/v1", gateway.guest_url())
+        } else {
+            gateway.guest_url()
+        };
+        urls.insert(name.into(), base.into());
+        keys.insert(name.into(), gateway.lease.stand_in.clone().into());
+        gateways.push(gateway);
+    }
+    if let Some(definition) = resolved["brains"]
+        .as_object()
+        .into_iter()
+        .flat_map(|brains| brains.values())
+        .find(|brain| brain["kind"] == "jev")
+        .map(|brain| &brain["definition"])
+    {
+        let base = definition["base_url"]
+            .as_str()
+            .ok_or("Jev base_url is missing.")?;
+        let parsed = url::Url::parse(base).map_err(|_| "Jev base_url is invalid.")?;
+        let route = format!("{}/systemone", parsed.path().trim_end_matches('/'));
+        let value = host_secret(
+            host,
+            workspace,
+            definition["api_key_env"]
+                .as_str()
+                .unwrap_or("TYPESAFE_API_KEY"),
+        )?;
+        let source: TokenSource = Arc::new(move |_| {
+            let value = value.clone();
+            Box::pin(async move { value.ok_or(()) })
+        });
+        let gateway = Gateway::start(
+            Policy {
+                provider: gb_environment::gateway::Provider::Jev,
+                origin: parsed.origin().ascii_serialization(),
+                routes: vec![("POST".into(), route)],
+            },
+            source,
+        )
+        .await
+        .map_err(|_| "The Jev gateway cannot start.".to_owned())?;
+        urls.insert(
+            "jev".into(),
+            format!(
+                "{}{}",
+                gateway.guest_url(),
+                parsed.path().trim_end_matches('/')
+            )
+            .into(),
+        );
+        keys.insert("jev".into(), gateway.lease.stand_in.clone().into());
+        gateways.push(gateway);
+    }
+    resolved["inference_urls"] = urls.into();
+    resolved["inference_keys"] = keys.into();
+    let session = gb_environment::Session {
+        window_url: window.guest_url(),
+        window_token: window.token.clone(),
+        resolved,
+        mounts: tool_mounts,
+        env: vec![
+            (
+                "GUILDBOTICS_GATEWAY_RELAYS".into(),
+                serde_json::to_string(&relays).map_err(|_| "Invalid gateway relays.")?,
+            ),
+            (
+                "GUILDBOTICS_TURN_DOMAINS".into(),
+                serde_json::to_string(&turn_domains).map_err(|_| "Invalid tool domains.")?,
+            ),
+        ],
+        ports: std::iter::once(window.port)
+            .chain(tool_ports)
+            .chain(gateways.iter().map(|g| g.port))
+            .collect(),
+    };
+    Ok(CommandServices {
+        session,
+        _host: window,
+        _gateways: gateways,
+    })
+}
+
+fn host_secret(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    name: &str,
+) -> Result<Option<String>, String> {
+    if let Ok(value) = std::env::var(name)
+        && !value.is_empty()
+    {
+        return Ok(Some(value));
+    }
+    let writes = gb_base::shared_writes::SharedWrites::new(
+        host.identity_root.clone(),
+        Some(workspace.into()),
+    );
+    let keychain = gb_config::secrets::SystemKeychain;
+    let mut value = None;
+    for scope in [
+        gb_config::secrets::Scope::Identity,
+        gb_config::secrets::Scope::Workspace,
+    ] {
+        let store = gb_config::secrets::SecretStore::new(
+            &writes,
+            scope,
+            gb_config::secrets::DeviceKey {
+                machine_root: host.data.parent().unwrap_or(&host.data).into(),
+                keychain: &keychain,
+            },
+        )
+        .map_err(|_| "The host secret store is unavailable.".to_owned())?;
+        if let Some(found) = store
+            .get(name)
+            .map_err(|_| "The host secret store could not open.".to_owned())?
+        {
+            value = Some(found);
+        }
+    }
+    Ok(value)
+}
+
+async fn acquire_inference(name: &str, limit: usize) {
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Mutex, OnceLock};
+    static WINDOWS: OnceLock<Mutex<HashMap<String, VecDeque<std::time::Instant>>>> =
+        OnceLock::new();
+    if limit == 0 {
+        return;
+    }
+    loop {
+        let wait = {
+            let mut windows = WINDOWS
+                .get_or_init(Default::default)
+                .lock()
+                .expect("rate limit mutex poisoned");
+            let queue = windows.entry(name.to_owned()).or_default();
+            let now = std::time::Instant::now();
+            while queue.front().is_some_and(|instant| {
+                now.duration_since(*instant) >= std::time::Duration::from_secs(60)
+            }) {
+                queue.pop_front();
+            }
+            if queue.len() < limit {
+                queue.push_back(now);
+                return;
+            }
+            std::time::Duration::from_secs(60)
+                .saturating_sub(now.duration_since(*queue.front().unwrap()))
+        };
+        tokio::time::sleep(wait).await;
+    }
+}
+
+#[cfg(test)]
+mod provider_http_tests {
+    use super::*;
+    #[tokio::test]
+    async fn every_sdk_auth_header_reaches_only_its_pinned_upstream_and_masks_echoes() {
+        for provider in [
+            gb_environment::gateway::Provider::OpenAi,
+            gb_environment::gateway::Provider::Anthropic,
+            gb_environment::gateway::Provider::Gemini,
+        ] {
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let expected = provider.credential_header();
+            let upstream = Router::new().route(
+                "/v1/messages",
+                post(move |headers: HeaderMap| async move {
+                    let token = headers.get(expected).unwrap().to_str().unwrap();
+                    assert!(token.contains("synthetic-private"));
+                    assert_eq!(headers["anthropic-beta"], "test-beta");
+                    (
+                        StatusCode::OK,
+                        [("x-echo", "synthetic-private")],
+                        "echo synthetic-private",
+                    )
+                }),
+            );
+            let task = tokio::spawn(async move {
+                axum::serve(listener, upstream).await.unwrap();
+            });
+            let source: TokenSource =
+                Arc::new(|_| Box::pin(async { Ok("synthetic-private".into()) }));
+            let gateway = Gateway::start(
+                Policy {
+                    provider,
+                    origin: format!("http://127.0.0.1:{port}"),
+                    routes: vec![("POST".into(), "/v1/messages".into())],
+                },
+                source,
+            )
+            .await
+            .unwrap();
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let stand_in = if expected == "authorization" {
+                format!("Bearer {}", gateway.lease.stand_in)
+            } else {
+                gateway.lease.stand_in.clone()
+            };
+            let response = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/messages?beta=true",
+                    gateway.port
+                ))
+                .header(expected, stand_in)
+                .header("anthropic-beta", "test-beta")
+                .header("cookie", "ignored")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                !response.headers()["x-echo"]
+                    .to_str()
+                    .unwrap()
+                    .contains("synthetic-private")
+            );
+            assert!(!response.text().await.unwrap().contains("synthetic-private"));
+            task.abort();
+        }
+    }
+}
+
+/// Keep the canonical transcript envelope: IO remains local IO, summaries
+/// close spans, and provider events retain their attribution and span IDs.
+#[cfg(test)]
+fn record_entry(
+    entry: Value,
+    trace: &str,
+    run: &str,
+    person: &str,
+    command: &str,
+) -> Option<Value> {
+    record_entry_detail(entry, trace, run, person, command, false)
+}
+fn record_entry_detail(
+    entry: Value,
+    trace: &str,
+    run: &str,
+    person: &str,
+    command: &str,
+    full: bool,
+) -> Option<Value> {
+    use sha2::{Digest, Sha256};
+    let span = &entry["span"];
+    let mut attributes = json!({});
+    let mut kind = "event";
+    let (event_type, source, mut payload) = match entry["type"].as_str()? {
+        "io" => {
+            kind = "io";
+            (
+                entry["io_type"].as_str()?.to_owned(),
+                "intelligence",
+                entry["payload"].clone(),
+            )
+        }
+        "event" => {
+            let event = &entry["event"];
+            let event_kind = event["kind"].as_str()?;
+            let name = event["name"].as_str().unwrap_or("");
+            // The standard transcript omits deltas/thinking; completed text
+            // and interrupted partial text remain available to readers.
+            let lower = format!("{event_kind} {name}").to_lowercase();
+            if !full
+                && ["delta", "thinking", "reasoning"]
+                    .iter()
+                    .any(|part| lower.contains(part))
+            {
+                return None;
+            }
+            let key = &entry["conversation"];
+            let source = ["person_id", "adapter", "work_kind", "work_identity"]
+                .map(|k| key[k].as_str().unwrap_or(""))
+                .join("\0");
+            let stable = Sha256::digest(source.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            attributes = json!({"agent.adapter":key["adapter"],"agent.run_id":run,"agent.conversation_id":stable,"agent.conversation_generation":entry["generation"],"agent.provider_session_id":event["provider_session_id"],"agent.provider_turn_id":event["provider_turn_id"],"agent.context_cursor":entry["context_cursor"]});
+            let mut payload = event.clone();
+            if let Some(map) = payload.as_object_mut() {
+                for key in ["kind", "provider_session_id", "provider_turn_id", "item_id"] {
+                    map.remove(key);
+                }
+            }
+            (
+                format!("agent_runtime.{event_kind}"),
+                "agent_runtime",
+                event_redact(payload),
+            )
+        }
+        "credential" => {
+            let failed = entry["failed"] == true;
+            attributes =
+                json!({"credential.provider":"cli_agent","credential.cli_agent":entry["tool"]});
+            let mut payload =
+                json!({"provider":"cli_agent","cli_agent":entry["tool"],"person_id":person});
+            if failed {
+                payload["code"] = "authentication".into();
+                attributes["error.category"] = "authentication".into();
+            }
+            (
+                if failed {
+                    "credential.failed"
+                } else {
+                    "credential.verified"
+                }
+                .into(),
+                "cli_agent",
+                payload,
+            )
+        }
+        "summary" => {
+            let tool = entry["tool"].as_str().unwrap_or("");
+            let agent_kind = if matches!(tool, "openai" | "anthropic" | "gemini") {
+                "llm"
+            } else if tool == "jev" {
+                "jev"
+            } else {
+                "cli_agent"
+            };
+            attributes =
+                json!({"agent.kind":agent_kind,"agent.slot":entry["slot"],"agent.adapter":tool});
+            let mut payload = json!({"model":entry["model"],"model_specified":entry["model_specified"],"effort":entry["effort"],"usage":entry.get("usage").filter(|v|!v.is_null()).cloned().unwrap_or(json!({}))});
+            if !entry["duration_ms"].is_null() {
+                payload["duration_ms"] = entry["duration_ms"].clone();
+            }
+            (
+                format!("span.{}", entry["status"].as_str().unwrap_or("finished")),
+                "intelligence",
+                payload,
+            )
+        }
+        "record_completed" => (
+            "workflow.completed".into(),
+            "workflow",
+            entry["payload"].clone(),
+        ),
+        "record_completion_missing" => (
+            "workflow.completion_missing".into(),
+            "workflow",
+            entry["payload"].clone(),
+        ),
+        _ => return None,
+    };
+    if !full && event_type == "cli_agent.response" {
+        let stderr = payload["stderr"].as_str().unwrap_or("");
+        let start = stderr.len().saturating_sub(8192);
+        let mut boundary = start;
+        while !stderr.is_char_boundary(boundary) {
+            boundary += 1;
+        }
+        let kept = stderr[boundary..].to_owned();
+        payload["stderr_truncated"] = (boundary > 0).into();
+        payload["stderr"] = kept.into();
+    }
+    Some(
+        json!({"kind":kind,"type":event_type,"trace_id":trace,"span_id":span["span_id"],"call_id":span["call_id"],"parent_id":span["parent_id"],"span":span["name"].as_str().unwrap_or(""),"source":source,"person_id":person,"command":command,"workflow":"","timestamp":chrono::Utc::now().to_rfc3339(),"attributes":attributes,"payload":payload}),
+    )
+}
+
+fn event_redact(value: Value) -> Value {
+    static INLINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(?P<label>(?:--)?(?:access[-_]?token|api[-_]?key|token|password|secret|authorization))(?P<separator>\s*(?:=|:)\s*|\s+)(?P<value>(?:bearer\s+)?[^\s,;]+)").expect("constant secret pattern")
+    });
+    match value {
+        Value::String(text) => INLINE
+            .replace_all(
+                &text.chars().take(8192).collect::<String>(),
+                "${label}${separator}***",
+            )
+            .into_owned()
+            .into(),
+        Value::Array(items) => items.into_iter().take(100).map(event_redact).collect(),
+        Value::Object(items) => Value::Object(
+            items
+                .into_iter()
+                .map(|(key, value)| {
+                    let lower = key.to_ascii_lowercase();
+                    let value = if ["token", "secret", "password", "credential", "authorization"]
+                        .iter()
+                        .any(|part| lower.contains(part))
+                    {
+                        json!("***")
+                    } else {
+                        event_redact(value)
+                    };
+                    (key, value)
+                })
+                .collect(),
+        ),
+        scalar => scalar,
+    }
+}
+
+fn rotation_reason(record: &Value) -> &str {
+    if record["healthy"] == false {
+        return record["rotation_reason"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unhealthy_session");
+    }
+    if record["turn_count"].as_u64().unwrap_or(0) >= 100 {
+        return "turn_limit";
+    }
+    if record["input_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_add(record["output_tokens"].as_u64().unwrap_or(0))
+        >= 1_000_000
+    {
+        return "usage_limit";
+    }
+    let size = record["context_size_tokens"].as_u64().unwrap_or(0);
+    if size > 0 && record["context_used_tokens"].as_u64().unwrap_or(0) as f64 / size as f64 >= 0.9 {
+        return "context_limit";
+    }
+    if record["updated_at"]
+        .as_str()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .is_some_and(|time| {
+            chrono::Utc::now().signed_duration_since(time) > chrono::Duration::days(7)
+        })
+    {
+        return "ttl_expired";
+    }
+    ""
+}

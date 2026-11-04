@@ -28,6 +28,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import SpanContext
+from guildbotics.utils.fileio import RESOLVED_GUEST_ENV as RESOLVED_GUEST_ENV
 
 #: The command's window to the host, and the token every call carries.
 HOST_URL_ENV = "GUILDBOTICS_HOST_URL"
@@ -132,6 +133,29 @@ class CommandRequest(BaseModel):
     wants_result: bool = False
 
 
+class ResolvedBrain(BaseModel):
+    """A brain slot whose settings were resolved once by the host."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["model", "ai_cli", "jev"]
+    slot: str
+    definition: dict[str, Any] = {}
+
+
+class ResolvedGuest(BaseModel):
+    """Non-secret command data mounted read-only; no guest configuration lookup."""
+
+    model_config = ConfigDict(extra="forbid")
+    language: str
+    project: dict[str, Any]
+    member: dict[str, Any]
+    brains: dict[str, ResolvedBrain]
+    clone_paths: dict[str, str] = {}
+    commands: dict[str, str]
+    inference_urls: dict[str, str] = {}
+    inference_keys: dict[str, str] = {}
+
+
 class CommandFailure(BaseModel):
     """How the command failed: ``command`` for a command's own failure (a
     ``CommandError``), and the AI CLI tool's failure the error came from, if
@@ -170,7 +194,14 @@ class IoEntry(BaseModel):
 
     type: Literal["io"] = "io"
     span: SpanContext | None
-    io_type: Literal["cli_agent.request", "cli_agent.response"]
+    io_type: Literal[
+        "cli_agent.request",
+        "cli_agent.response",
+        "llm.request",
+        "llm.response",
+        "jev.request",
+        "jev.response",
+    ]
     payload: dict[str, Any]
 
 
@@ -370,6 +401,12 @@ class MemberArguments(BaseModel):
     stdin: str = ""
 
 
+class AcquireInferenceArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str
+
+
 class AgnoArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -385,6 +422,7 @@ class JevArguments(BaseModel):
 
 
 HOST_ARGUMENTS = {
+    "acquire_inference": AcquireInferenceArguments,
     "begin_turn": BeginTurnArguments,
     "end_turn": EndTurnArguments,
     "require_completion": RequireCompletionArguments,

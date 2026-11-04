@@ -90,7 +90,14 @@ class HostClient:
             cwd=cwd,
             participant_labels=participant_labels,
         )
-        return HostTurn(**answer)
+        from guildbotics.guest.gateway_relays import trust_turn
+
+        try:
+            trusted = trust_turn(answer)
+        except BaseException:
+            await self.acall("end_turn", turn_grant=answer["turn_grant"])
+            raise
+        return HostTurn(**trusted)
 
     async def end_turn(self, turn_grant: str) -> str:
         """End the turn; why the login it was lent could not be used, if so."""

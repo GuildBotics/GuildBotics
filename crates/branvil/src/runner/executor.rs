@@ -13,6 +13,26 @@ use tokio::sync::{mpsc, watch};
 
 use crate::ci::pipeline::JobDef;
 
+static HOST_RUNTIME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// An embedding application's runtime default. The runner's own cache home
+/// stays independent, and an explicit CI setting still takes precedence.
+pub fn set_runtime_binary(path: PathBuf) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("The runtime binary must have an absolute path".into());
+    }
+    if let Some(current) = HOST_RUNTIME.get() {
+        return if current == &path {
+            Ok(())
+        } else {
+            Err("The runtime binary was already configured".into())
+        };
+    }
+    HOST_RUNTIME
+        .set(path)
+        .map_err(|_| "The runtime binary was already configured".into())
+}
+
 /// The `msb` version this runner accepts (the CLI flags and behaviour it was
 /// verified against).
 pub const MSB_VERSION: &str = "0.6.17";
@@ -160,16 +180,16 @@ pub fn branvil_home() -> PathBuf {
         .join(".branvil")
 }
 
-/// The candidates in order: the configured binary, GuildBotics' deployed
-/// copy, Branvil's own copy. The first that reports exactly the pinned
+/// The candidates in order: the configured binary, the embedding host's
+/// default, Branvil's own copy. The first that reports exactly the pinned
 /// version wins; nothing is ever downloaded.
 pub fn resolve_msb(configured: Option<&Path>) -> Msb {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(c) = configured {
         candidates.push(c.to_path_buf());
     }
-    if let Some(home) = home_dir() {
-        candidates.push(home.join(".guildbotics/data/msb/bin").join(msb_file()));
+    if let Some(path) = HOST_RUNTIME.get() {
+        candidates.push(path.clone());
     }
     candidates.push(branvil_home().join("msb/bin").join(msb_file()));
     let mut notes = Vec::new();
@@ -902,6 +922,17 @@ fn tail(bytes: &[u8], n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_embedding_host_supplies_its_runtime_explicitly() {
+        use super::{HOST_RUNTIME, set_runtime_binary};
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("host-msb");
+        assert!(set_runtime_binary("relative/msb".into()).is_err());
+        set_runtime_binary(binary.clone()).unwrap();
+        assert_eq!(HOST_RUNTIME.get(), Some(&binary));
+        set_runtime_binary(binary).unwrap();
+        assert!(set_runtime_binary(dir.path().join("other-msb")).is_err());
+    }
     use super::*;
 
     #[tokio::test]

@@ -3,20 +3,21 @@
 //! command and says how it ended, as the Python version has them
 //! (`guildbotics/environment/command_environment.py`, `spec.py`).
 //!
-//! So far a read-only command runs here, which works on nothing of the
-//! host's: its working directory is an empty directory of the microVM's own,
-//! and what it reads -- the code, the workspace's configuration, the members'
-//! identities -- is mounted read-only. Nothing it asks of the host is served
-//! yet (the host window, the member broker, the providers' gateways), so its
-//! microVM opens no network: a call of it fails as one the host did not
-//! answer.
+//! The host resolves configuration and serves scoped host, member and
+//! provider endpoints. Read-only commands use a private working directory;
+//! writing commands use an authorized mount or a checked copy with write-back.
 
+pub mod broker;
+pub mod contract;
+pub mod device;
+pub mod gateway;
 pub mod image;
 pub mod image_archive;
 pub mod language;
 pub mod recipe;
-mod runtime;
+pub mod runtime;
 pub mod snapshot;
+pub mod worktree;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,11 +36,6 @@ pub const ENTRY: &[&str] = &[
     "-m",
     "guildbotics.guest.entry",
 ];
-/// Where the entry asks the host for what only the host holds. The window is
-/// not served yet, and the microVM reaches no host: every call fails as
-/// unavailable.
-const UNSERVED_WINDOW: &str = "http://host.microsandbox.internal:1/host";
-
 /// A sentence a person reads: one of the locale files' (`a.b.c`, with its
 /// parameters), or one given as it is.
 #[derive(Debug, Clone, PartialEq)]
@@ -97,10 +93,21 @@ pub struct Command {
 /// What a command's microVM is made of, and what its entry is given.
 #[derive(Debug, PartialEq)]
 pub struct Shape {
+    pub copy: Option<worktree::Copy>,
     pub mounts: Vec<Mount>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
     pub request: CommandRequest,
+}
+
+/// Per-command host windows and non-secret data, owned until the VM stops.
+pub struct Session {
+    pub window_url: String,
+    pub window_token: String,
+    pub resolved: serde_json::Value,
+    pub mounts: Vec<Mount>,
+    pub env: Vec<(String, String)>,
+    pub ports: Vec<u16>,
 }
 
 /// Runs `command` of the workspace `workspace` in a microVM of its own, which
@@ -110,46 +117,80 @@ pub async fn run(
     workspace: &Path,
     command: Command,
     on_warning: impl Fn(Sentence),
+    session: &Session,
 ) -> Result<CommandReply, Failure> {
-    if !command.access.read_only {
-        return Err(Failure::Command(Sentence::Text(format!(
-            "'{}' is not declared read-only, and only read-only commands run here so far.",
-            command.name
-        ))));
+    let device = device::read(host, workspace).await;
+    if let Some(refusal) = device.refusal {
+        return Err(Failure::Command(refusal));
     }
-    // As the device's status refuses: the runtime, the declaration, then the
-    // snapshot.
-    runtime::ready(&host.data.join("msb"))?;
-    let resources = gb_config::agent_environment::resources(
+    if let Some(warning) = device.warning {
+        on_warning(warning);
+    }
+    let snapshot = device
+        .snapshot
+        .ok_or_else(|| Failure::Command(Sentence::Text("No ready snapshot".into())))?;
+    let resources = device.resources;
+    let mut shape = shape(host, workspace, &command, language::ui_language().await)?;
+    let resolved_dir =
+        tempfile::tempdir().map_err(|e| Failure::Runtime(Sentence::Text(e.to_string())))?;
+    let resolved_path = resolved_dir.path().join("resolved.json");
+    std::fs::write(
+        &resolved_path,
+        serde_json::to_vec(&session.resolved).expect("resolved JSON"),
+    )
+    .map_err(|e| Failure::Runtime(Sentence::Text(e.to_string())))?;
+    shape.mounts.push(Mount {
+        guest: "/run/guildbotics/resolved".into(),
+        host: Some(resolved_dir.path().into()),
+        readonly: true,
+    });
+    shape.mounts.extend(session.mounts.clone());
+    shape.env.extend(session.env.clone());
+    shape.env.extend([
+        ("GUILDBOTICS_HOST_URL".into(), session.window_url.clone()),
+        (
+            "GUILDBOTICS_HOST_TOKEN".into(),
+            session.window_token.clone(),
+        ),
+        (
+            "GUILDBOTICS_RESOLVED_GUEST".into(),
+            "/run/guildbotics/resolved/resolved.json".into(),
+        ),
+        ("AGNO_TELEMETRY".into(), "false".into()),
+    ]);
+    let mut network = contract::network(
         &config_dir(workspace),
         &host.package.join("templates"),
+        command.access.read_only,
     )
-    .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-    let templates = host.package.join("templates");
-    let recipe = recipe::Recipe::load(&templates)
-        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-    let image = gb_config::agent_environment::image(&config_dir(workspace), &templates)
-        .map_err(|e| Failure::Command(image::declaration_problem(e)))?;
-    let held = match image {
-        Some(image) => {
-            let held = runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image)
-                .await?;
-            let command =
-                image::load_command(&host.home).map_err(|e| Failure::Command(Sentence::Text(e)))?;
-            let status = image::status(&image, image::device_architecture(), held, &command);
-            if let Some(refusal) = status.refusal {
-                return Err(Failure::Command(refusal));
-            }
-            if let Some(warning) = status.warning {
-                on_warning(warning);
-            }
-            status.held
+    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    network.host_ports.extend(session.ports.iter().copied());
+    for (key, value) in &session.env {
+        if key == "GUILDBOTICS_TURN_DOMAINS" {
+            let domains: Vec<String> = serde_json::from_str(value).map_err(|e| {
+                Failure::Command(Sentence::Text(format!(
+                    "Invalid host-resolved turn domains: {e}"
+                )))
+            })?;
+            network.domains.extend(domains);
         }
-        None => None,
-    };
-    let snapshot =
-        snapshot::ready(workspace, &recipe.name(held.as_deref())).map_err(Failure::Command)?;
-    let shape = shape(host, workspace, &command, language::ui_language().await)?;
+    }
+    let registered = device::registered_workspaces(&host.data)
+        .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    let access = contract::resolve(
+        workspace,
+        &host.home,
+        &registered,
+        command.access.read_only,
+        false,
+    )
+    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    for mount in &shape.mounts {
+        if let Some(source) = &mount.host {
+            contract::validate_mount_source(source, &access)
+                .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+        }
+    }
     let stdin = serde_json::to_vec(&shape.request).expect("JSON");
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();
     let ended = runtime::run_once(
@@ -159,6 +200,8 @@ pub async fn run(
             memory_mib: resources.memory_mib,
             cpus: resources.cpus,
             mounts: &shape.mounts,
+            network: &network,
+            worktree: shape.copy.as_ref(),
         },
         &runtime::Process {
             argv: &argv,
@@ -201,18 +244,29 @@ pub fn shape(
     // The working directory is the microVM's own, and work happens only
     // there. The command reads the workspace's configuration, as it would on
     // the host; it is told of it only when it inspects it.
-    let mut mounts = vec![
-        Mount {
+    let mut mounts = vec![Mount {
+        guest: CODE_ROOT.into(),
+        host: Some(checked_directory(&host.package)?),
+        readonly: true,
+    }];
+    if command.access.read_only {
+        mounts.push(Mount {
             guest: cwd.clone(),
             host: None,
             readonly: false,
-        },
-        Mount {
-            guest: CODE_ROOT.into(),
-            host: Some(checked_directory(&host.package)?),
-            readonly: true,
-        },
-    ];
+        });
+    }
+    let registered = device::registered_workspaces(&host.data)
+        .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    let access = contract::resolve(
+        workspace,
+        &host.home,
+        &registered,
+        command.access.read_only,
+        true,
+    )
+    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    mounts.extend(access.grants.clone());
     let mut read = vec![InspectsItem::Config];
     read.extend(command.access.inspects.iter().copied());
     for (_, mount) in inspected_mounts(host, workspace, &read)? {
@@ -233,15 +287,34 @@ pub fn shape(
             code_path(host, &host.package.join("templates"))?,
         );
     }
+    let planned = contract::plan(
+        workspace,
+        &command.person_id,
+        &command.cwd,
+        &access,
+        mounts,
+        host.data.join("run/worktree-write-back.lock"),
+        command.access.read_only,
+    )
+    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    let mounts = planned.mounts;
+    let cwd = planned.cwd;
+    let copy = planned.copy;
+    let clone_parent = workspace
+        .join(".guildbotics/local/clones")
+        .join(&command.person_id);
     let facts = CommandFacts {
         access: command.access.clone(),
         inspected,
         mounts: mounts
             .iter()
             .map(|mount| {
-                let open = mount.host.is_none() && mount.guest == cwd;
+                let open = (mount.host.is_none() && mount.guest == cwd)
+                    || access.grants.iter().any(|g| g.guest == mount.guest)
+                    || Path::new(&mount.guest) == clone_parent;
                 (mount.guest.clone(), open)
             })
+            .chain(copy.iter().map(|working| (working.guest.clone(), true)))
             .collect(),
         person_id: command.person_id.clone(),
         run_id: command.run_id.clone(),
@@ -249,16 +322,18 @@ pub fn shape(
         work_identity: command.work_identity.clone(),
         work_kind: command.work_kind.clone(),
     };
-    let mut env = vec![("HOME".to_string(), guest_path(&host.home)?)];
+    let mut env = vec![
+        ("HOME".to_string(), guest_path(&host.home)?),
+        (
+            "TZ".into(),
+            std::env::var("TZ").unwrap_or_else(|_| "UTC".into()),
+        ),
+        ("AGNO_TELEMETRY".into(), "false".into()),
+    ];
     if let Some(language) = language {
         env.push(("LANGUAGE".into(), language));
     }
     env.extend([
-        ("GUILDBOTICS_HOST_URL".into(), UNSERVED_WINDOW.into()),
-        (
-            "GUILDBOTICS_HOST_TOKEN".into(),
-            uuid::Uuid::new_v4().simple().to_string(),
-        ),
         (
             "GUILDBOTICS_COMMAND".into(),
             serde_json::to_string(&facts).expect("JSON"),
@@ -283,6 +358,7 @@ pub fn shape(
         wants_result: false,
     };
     Ok(Shape {
+        copy,
         mounts,
         cwd,
         env,

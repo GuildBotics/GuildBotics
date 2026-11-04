@@ -9,6 +9,14 @@ repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
+base64 = "0.22"
+libc = "0.2"
+url = "2.5.8"
+unicode-normalization = "0.1"
+cap-std = "4.0.3"
+cap-fs-ext = "4.0"
+same-file = "1.0"
+unicase = "2.10"
 gb-base = { path = "../gb-base" }
 gb-config = { path = "../gb-config" }
 gb-wire = { path = "../gb-wire" }

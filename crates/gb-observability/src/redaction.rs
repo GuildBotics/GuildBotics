@@ -35,6 +35,24 @@ impl Redactor {
         masked.chars().take(MAX_SHARED_TEXT_CHARS).collect()
     }
 
+    /// Mask a local transcript without dropping its request/response detail.
+    /// The shared projection remains governed by `redact` and `text`.
+    pub fn local(&self, value: Value) -> Value {
+        match value {
+            Value::String(mut text) => {
+                for secret in &self.0 {
+                    text = text.replace(secret, "***");
+                }
+                text.into()
+            }
+            Value::Array(items) => items.into_iter().map(|v| self.local(v)).collect(),
+            Value::Object(items) => {
+                Value::Object(items.into_iter().map(|(k, v)| (k, self.local(v))).collect())
+            }
+            scalar => scalar,
+        }
+    }
+
     pub fn redact(&self, value: Value) -> Value {
         match value {
             Value::String(s) => self.text(&s).into(),

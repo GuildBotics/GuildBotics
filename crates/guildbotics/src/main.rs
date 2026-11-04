@@ -24,6 +24,8 @@ struct Cli {
 enum Command {
     /// Manage this device's isolated environment
     Environment {
+        #[arg(long, global = true)]
+        workspace: Option<std::path::PathBuf>,
         #[command(subcommand)]
         command: EnvironmentCommand,
     },
@@ -48,41 +50,8 @@ enum Command {
     },
 }
 
-#[derive(Subcommand)]
-enum EnvironmentCommand {
-    /// Load a base image into this device's runtime
-    Image {
-        #[command(subcommand)]
-        command: ImageCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum ImageCommand {
-    /// Load a Docker save or OCI archive built for this device's CPU
-    Load {
-        archive: std::path::PathBuf,
-        /// Add a reference to the first loaded image, keeping its own tags
-        #[arg(long)]
-        tag: Option<String>,
-    },
-}
-
-fn environment(command: EnvironmentCommand) -> anyhow::Result<()> {
-    let EnvironmentCommand::Image {
-        command: ImageCommand::Load { archive, tag },
-    } = command;
-    let home = gb_base::home::data()?.join("msb");
-    let loaded = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(gb_environment::load_image(&home, &archive, tag))
-        .map_err(anyhow::Error::msg)?;
-    for (reference, digest) in loaded {
-        println!("loaded {reference} {digest}");
-    }
-    Ok(())
-}
+mod environment_cli;
+use environment_cli::EnvironmentCommand;
 
 #[derive(Subcommand)]
 enum ServerCommand {
@@ -101,14 +70,25 @@ fn main() -> ExitCode {
     if let Some(code) = branvil::askpass_main() {
         return code;
     }
+    if let Ok(data) = gb_base::home::data() {
+        let binary = gb_environment::placed_files(&data.join("msb"))[0].clone();
+        if let Err(error) =
+            branvil::set_runtime_binary(std::path::absolute(binary).unwrap_or_default())
+        {
+            eprintln!("guildbotics: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
     match Cli::parse().command {
-        Command::Environment { command } => match environment(command) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("guildbotics: {e:#}");
-                ExitCode::FAILURE
+        Command::Environment { command, workspace } => {
+            match environment_cli::run(command, workspace) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("guildbotics: {e:#}");
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
         Command::Branvil { args } => {
             branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
         }

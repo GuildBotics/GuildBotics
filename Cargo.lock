@@ -624,6 +624,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -868,6 +869,18 @@ checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "cap-fs-ext"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56ff379b70af8e08307a8f65e7040c7301cb4a572538ade16b4984f0da77847f"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1854,7 +1867,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2016,12 +2029,17 @@ dependencies = [
 name = "gb-environment"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-std",
  "flate2",
  "gb-base",
  "gb-config",
  "gb-wire",
+ "libc",
  "microsandbox",
  "microsandbox-utils",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2029,6 +2047,9 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicase",
+ "unicode-normalization",
+ "url",
  "uuid",
 ]
 
@@ -2055,22 +2076,31 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
+ "futures-util",
  "gb-base",
  "gb-config",
  "gb-environment",
  "gb-observability",
  "gb-wire",
  "gb-workspace",
+ "hyper",
+ "hyper-util",
  "libc",
  "loopback-auth",
  "mime_guess",
+ "rcgen",
+ "regex",
  "reqwest",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
+ "time",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tower",
  "tracing",
@@ -2739,7 +2769,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f"
 dependencies = [
  "io-lifetimes 3.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3749,6 +3779,23 @@ dependencies = [
  "nix 0.30.1",
  "windows-sys 0.61.2",
  "zstd 0.13.4",
+]
+
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
 ]
 
 [[package]]
@@ -6324,7 +6371,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7027,7 +7074,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.13.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

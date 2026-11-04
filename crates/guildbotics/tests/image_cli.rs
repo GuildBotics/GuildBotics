@@ -24,7 +24,12 @@ fn image_load_help_and_validation_reach_the_real_entry() {
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8(output.stderr).unwrap();
-    assert!(error.contains("not an image.tar"), "{error}");
+    assert!(
+        error.contains("Could not read image archive")
+            && error.contains("not an image.tar")
+            && error.contains("failed to read entire block"),
+        "{error}"
+    );
     assert!(!error.contains("unrecognized"), "{error}");
     assert!(!dir.path().join("data/msb").exists());
 }

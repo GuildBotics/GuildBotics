@@ -119,7 +119,7 @@ impl DeviceKey<'_> {
             })
             .transpose()
     }
-    fn key(&self, create: bool) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    pub(crate) fn key(&self, create: bool) -> anyhow::Result<Zeroizing<Vec<u8>>> {
         if let Some(key) = self.read()? {
             return Ok(key);
         }

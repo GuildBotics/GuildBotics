@@ -122,10 +122,20 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
 
 
 class AgnoAgentDefaultBrain(Brain):
-    def __init__(self, *args: Any, model: str = "default", **kwargs: Any):
+    def __init__(
+        self,
+        *args: Any,
+        model: str = "default",
+        resolved_model: ModelConfig | None = None,
+        **kwargs: Any,
+    ):
         """Take the :class:`Brain` arguments, and the model slot to run."""
         super().__init__(*args, **kwargs)
-        self.model_config = get_model_mapping(self.person_id)[model]
+        self.model_config = (
+            resolved_model
+            if resolved_model is not None
+            else get_model_mapping(self.person_id)[model]
+        )
         self.model_slot = model
 
     @property

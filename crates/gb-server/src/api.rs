@@ -33,6 +33,7 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
+    pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
     pub instance_id: String,
@@ -148,9 +149,9 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
 // Register routes and expose the very same routing table to boundary tests.
 // New API endpoints belong here, including ones outside /config.
 macro_rules! routes {
-    ($builder:ident, $table:ident, $(($method:ident, $path:literal, $handler:path)),* $(,)?) => {
+    ($builder:ident, $table:ident, $(($method:ident, $path:literal, $handler:path $(, $limit:expr)?)),* $(,)?) => {
         fn $builder() -> Router<Shared> {
-            Router::new()$(.route($path, $method($handler)))*
+            Router::new()$(.route($path, $method($handler) $(.layer(axum::extract::DefaultBodyLimit::max($limit)))?))*
         }
         #[cfg(test)]
         const $table: &[(&str, &str)] = &[$((stringify!($method), $path)),*];
@@ -163,6 +164,27 @@ routes!(
     (post, "/session/links", entry_link),
     (get, "/session", session),
     (post, "/commands/run", crate::commands::run),
+    (
+        post,
+        "/commands/input-files",
+        crate::input_files::upload,
+        crate::input_files::REQUEST_LIMIT
+    ),
+    (
+        post,
+        "/intelligences/agent-environment/build",
+        crate::environment::build_route
+    ),
+    (
+        get,
+        "/intelligences/agent-environment",
+        crate::environment::get
+    ),
+    (
+        get,
+        "/intelligences/agent-environment/images",
+        crate::environment::images
+    ),
     (get, "/config/status", crate::screens::config_status),
     (get, "/team", crate::screens::team),
     (get, "/commands/files", crate::screens::files),
@@ -388,6 +410,14 @@ mod tests {
             (
                 ("post", "/commands/run"),
                 "starts a run, no edited config snapshot",
+            ),
+            (
+                ("post", "/commands/input-files"),
+                "writes session-owned read-only command inputs",
+            ),
+            (
+                ("post", "/intelligences/agent-environment/build"),
+                "builds machine-local snapshots without editing shared config",
             ),
         ];
         let actual: BTreeSet<_> = OWNER_ROUTES

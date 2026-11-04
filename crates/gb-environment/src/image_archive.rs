@@ -47,7 +47,8 @@ pub fn architecture(path: &Path) -> Result<String, Error> {
 }
 
 pub fn validate(path: &Path, device: &str) -> Result<(), Error> {
-    let architecture = architecture(path)?;
+    let architecture = architecture(path)
+        .map_err(|error| format!("Could not read image archive {}: {error}", path.display()))?;
     if !architecture.is_empty() && architecture != device {
         return Err(format!(
             "The archive {} holds an image built for {architecture}, which this device ({device}) cannot run.",

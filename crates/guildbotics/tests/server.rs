@@ -1236,34 +1236,34 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
     let port = free_port();
     let mut command = server_command(dir.path(), port);
     command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
-    let server = Server::spawn(command, dir.path(), port);
-
-    // As the device's status refuses: the runtime, the declaration, then
-    // the snapshot.
+    // Doctor repairs missing/outdated runtimes. An unplaceable runtime is
+    // still refused before an invalid declaration, then a missing snapshot.
     let msb = dir.path().join("home/data/msb");
     let declaration = workspace.join(".guildbotics/config/intelligences/agent_environment.yml");
+    // Keep startup upkeep outside the real runtime boundary as well.
+    std::fs::create_dir_all(declaration.parent().unwrap()).unwrap();
+    std::fs::write(&declaration, "resources:\n  cpus: 0\n").unwrap();
+    std::fs::create_dir_all(msb.parent().unwrap()).unwrap();
+    std::fs::write(&msb, "not a directory").unwrap();
+    let server = Server::spawn(command, dir.path(), port);
     let refusals = [
-        "microsandbox ランタイム（msb と libkrunfw）がインストールされていません。",
-        "The microVM runtime under",
+        "Cannot place microVM runtime at",
         "The resources in",
         "この端末にはエージェント実行環境がありません。",
     ];
     for (step, refusal) in refusals.iter().enumerate() {
         match step {
             // What a later step refuses is wrong from the start.
-            0 => {
-                std::fs::create_dir_all(declaration.parent().unwrap()).unwrap();
-                std::fs::write(&declaration, "resources:\n  cpus: 0\n").unwrap();
-            }
+            0 => {}
             1 => {
+                std::fs::remove_file(&msb).unwrap();
                 for file in gb_environment::placed_files(&msb) {
                     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
                     std::fs::write(file, "").unwrap();
                 }
                 std::fs::write(msb.join("version"), "0.6.16\n").unwrap();
             }
-            2 => std::fs::write(msb.join("version"), "0.6.17\n").unwrap(),
-            3 => std::fs::remove_file(&declaration).unwrap(),
+            2 => std::fs::remove_file(&declaration).unwrap(),
             _ => {}
         }
         let (status, failed) = server
@@ -1275,6 +1275,14 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
             failed["message"].as_str().unwrap().starts_with(refusal),
             "{failed}"
         );
+        if step == 1 {
+            gb_environment::runtime::ready(&msb)
+                .expect("doctor must repair the outdated bundle before validating resources");
+            assert_eq!(
+                std::fs::read_to_string(msb.join("version")).unwrap(),
+                gb_environment::runtime::RUNTIME_VERSION
+            );
+        }
         let trace_id = failed["context"]["trace_id"].as_str().unwrap();
         let (types, last) = trace_records(&workspace, trace_id);
         assert_eq!(types, ["command.started", "command.failed"]);
@@ -1308,12 +1316,12 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
     }
     std::fs::remove_file(&declaration).unwrap();
 
-    // A command that may write needs what is not served yet.
+    // Writable commands use the same environment preflight and failure trace.
     let (status, failed) = server.run(json!({"command": "write"}), "en").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
     assert_eq!(
         failed["message"],
-        "'write' is not declared read-only, and only read-only commands run here so far."
+        "The agent environment is missing on this device."
     );
     let trace_id = failed["context"]["trace_id"].as_str().unwrap();
     assert_eq!(

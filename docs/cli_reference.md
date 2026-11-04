@@ -33,6 +33,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
+| [`guildbotics environment usage`](#guildbotics-environment-usage) | Probe saved provider credentials for usage. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
@@ -246,6 +247,7 @@ guildbotics environment [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
+| [`guildbotics environment usage`](#guildbotics-environment-usage) | Probe saved provider credentials for usage. |
 
 ## `guildbotics environment build`
 
@@ -310,9 +312,8 @@ guildbotics environment image declare [OPTIONS] [REFERENCE]
 
 List the images this device's declaration may name as its base.
 
-Those loaded here, by the name they were loaded under, and whether the
-declaration names each for this device's architecture; the same list the
-Agent execution environment screen picks from.
+Print each eligible image's reference and configuration digest on one line.
+The Agent execution environment screen uses the same eligible image list.
 
 ```text
 guildbotics environment image list [OPTIONS]
@@ -320,7 +321,6 @@ guildbotics environment image list [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics environment image load`
@@ -379,6 +379,15 @@ guildbotics environment login [OPTIONS] {codex|claude|grok|copilot|antigravity}
 | --- | --- |
 | `--help` | Show this message and exit. |
 
+## `guildbotics environment usage`
+
+Probe an AI CLI tool's usage with the credentials saved on this device.
+The probe runs in a private environment and prints its result as JSON.
+
+```text
+guildbotics environment usage {codex|claude|grok|copilot|antigravity}
+```
+
 ## `guildbotics environment remove`
 
 Remove the workspace's snapshots from this device (logins are kept).
@@ -393,7 +402,7 @@ guildbotics environment remove [OPTIONS]
 
 ## `guildbotics environment status`
 
-Show the environment's runtime, snapshot, and logins on this device.
+Show the environment's runtime, snapshot, and logins on this device as JSON.
 
 ```text
 guildbotics environment status [OPTIONS]
@@ -401,7 +410,6 @@ guildbotics environment status [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics git-credential`

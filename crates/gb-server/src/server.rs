@@ -101,6 +101,7 @@ impl Server {
                 None
             });
         let api = Arc::new(Api {
+            inputs: crate::input_files::InputFileStore::new(&data.join("command_inputs"))?,
             auth,
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
@@ -143,11 +144,15 @@ impl Server {
             .workspace
             .as_ref()
             .map(|w| gb_observability::Diagnostics::open(w));
+        let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(stop)
             .await;
+        upkeep.abort();
+        let _ = upkeep.await;
         work.close();
         work.wait().await;
+        crate::tool_login::drain_private().await;
         cancelling.abort();
         if let Some(diagnostics) = diagnostics {
             match tokio::task::spawn_blocking(move || diagnostics.finish_system_session()).await {

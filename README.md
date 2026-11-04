@@ -108,7 +108,9 @@ Before you run it:
 
 On Linux, run the server in a terminal with `.venv/bin/guildbotics server start`, and place the CLI and the skill with `.venv/bin/python scripts/install_cli_assets.py`.
 
-The isolated agent environment's runtime is placed under `~/.guildbotics/data/msb` the first time it is needed (from the copy that ships with GuildBotics, without downloading). On Windows, the firewall rule for that fixed path is created once with an elevation prompt.
+Environment operations use the native Rust `guildbotics` executable. From a source checkout, run `cargo run -p guildbotics -- environment ...`; the managed `~/.guildbotics/bin/guildbotics` path must point to that executable to use the same commands.
+
+The isolated agent environment's runtime is embedded in that executable and placed under `~/.guildbotics/data/msb` on first use, without a runtime download. Windows builds supply the pinned `msb.exe` and `libkrunfw.dll` under `MSB_HOME` during the native build. Windows may ask for firewall permission for that fixed runtime binary.
 
 ### Initial Setup
 

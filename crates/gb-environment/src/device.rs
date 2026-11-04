@@ -1,0 +1,197 @@
+//! One preflight reading shared by the command runner, CLI and screens.
+use crate::{Failure, Host, Sentence, image, recipe::Recipe, runtime, snapshot};
+use gb_config::agent_environment::{self, Resources};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+pub struct Device {
+    pub view: Value,
+    pub resources: Resources,
+    pub snapshot: Option<PathBuf>,
+    pub refusal: Option<Sentence>,
+    pub warning: Option<Sentence>,
+}
+
+fn sentence(failure: Failure) -> Sentence {
+    match failure {
+        Failure::Command(s) | Failure::Runtime(s) => s,
+    }
+}
+
+impl Device {
+    pub fn rendered(mut self, say: impl Fn(Sentence) -> String) -> Value {
+        let refusal = self.refusal.map(&say).unwrap_or_default();
+        let warning = self.warning.map(&say).unwrap_or_default();
+        self.view["problem"] = json!(refusal);
+        if self.view["problem_setting"] == "runtime" {
+            self.view["runtime"]["reason"] = json!(refusal);
+        }
+        self.view["warning"] = json!(warning);
+        self.view["image"]["warning"] = json!(warning);
+        if self.view["problem_setting"] == "image" {
+            self.view["image"]["problem"] = json!(refusal);
+        }
+        self.view
+    }
+}
+
+pub async fn read(host: &Host, workspace: &Path) -> Device {
+    let home = host.data.join("msb");
+    let health = runtime::ensure(&home).err().map(sentence);
+    let templates = host.package.join("templates");
+    let config = workspace.join(".guildbotics/config");
+    let mut device = Device {
+        view: json!({"platform":std::env::consts::OS,
+            "runtime":{"available":health.is_none(),"reason":"","version":runtime::RUNTIME_VERSION,"home":home},
+            "resources":null,"snapshot":{"state":"missing","name":"","detail":"","output":[]},
+            "image":{"default":"","architecture":image::device_architecture(),"reference":"","digest":"","digests":{},"present":true,"held":"","problem":"","warning":"","load_command":""},
+            "network":null,"dns":{"declared":"","nameservers":[],"problem":""},
+            "tools":[],"problem":"","problem_setting":"","warning":"",
+            "access":{"documents":[],"paths":[],"denied":[],"problem":""},"members":[]}),
+        resources: Resources::default(),
+        snapshot: None,
+        refusal: health,
+        warning: None,
+    };
+    if device.refusal.is_some() {
+        device.view["problem_setting"] = json!("runtime");
+    }
+    let declaration = (|| {
+        device.resources = agent_environment::resources(&config, &templates)
+            .map_err(|e| Sentence::Text(e.to_string()))?;
+        device.view["resources"] =
+            json!({"memory_mib":device.resources.memory_mib,"cpus":device.resources.cpus});
+        let recipe = Recipe::load(&templates).map_err(|e| Sentence::Text(e.to_string()))?;
+        device.view["image"]["default"] = json!(recipe.image);
+        let image =
+            agent_environment::image(&config, &templates).map_err(image::declaration_problem)?;
+        Ok::<_, Sentence>((recipe, image))
+    })();
+    let (recipe, declared) = match declaration {
+        Ok(value) => value,
+        Err(problem) => {
+            if device.refusal.is_none() {
+                device.refusal = Some(problem);
+                device.view["problem_setting"] = json!("declaration");
+            }
+            return device;
+        }
+    };
+    match crate::contract::network(&config, &templates, false) {
+        Ok(network) => {
+            device.view["network"] = json!({"unrestricted":network.unrestricted,"domains":network.domains,"local_network":network.local_network});
+            device.view["dns"] = json!({"declared":network.nameservers.join(", "),"nameservers":network.nameservers,"problem":""});
+        }
+        Err(error) => {
+            device.view["dns"]["problem"] = json!(error);
+            if device.refusal.is_none() {
+                device.refusal = Some(Sentence::Text(error));
+                device.view["problem_setting"] = json!("declaration");
+            }
+        }
+    }
+    let mut held = None;
+    let custom = declared.is_some();
+    if let Some(declared) = declared {
+        device.view["image"]["reference"] = json!(declared.reference);
+        device.view["image"]["digests"] = json!(declared.digests);
+        device.view["image"]["digest"] = json!(
+            declared
+                .digests
+                .get(image::device_architecture())
+                .cloned()
+                .unwrap_or_default()
+        );
+        let command = image::load_command(&host.home).unwrap_or_default();
+        device.view["image"]["load_command"] = json!(command);
+        if device.refusal.is_none() {
+            match runtime::held_image(&home, &declared.reference, &recipe.image).await {
+                Ok(value) => held = value,
+                Err(error) => {
+                    device.refusal = Some(sentence(error));
+                    device.view["problem_setting"] = json!("image");
+                }
+            }
+        }
+        device.view["image"]["held"] = json!(held.clone().unwrap_or_default());
+        let status = image::status(
+            &declared,
+            image::device_architecture(),
+            held.clone(),
+            &command,
+        );
+        device.view["image"]["present"] =
+            json!(status.refusal.is_none() && status.warning.is_none());
+        device.warning = status.warning;
+        if device.refusal.is_none() && status.refusal.is_some() {
+            device.refusal = status.refusal;
+            device.view["problem_setting"] = json!("image");
+        }
+    }
+    let name = recipe.name(if custom {
+        Some(held.as_deref().unwrap_or(""))
+    } else {
+        None
+    });
+    match snapshot::status(workspace, &name) {
+        Ok(snapshot) => {
+            let (state, detail) = match snapshot.state {
+                snapshot::State::Ready => ("ready", String::new()),
+                snapshot::State::Missing => ("missing", String::new()),
+                snapshot::State::Stale => ("stale", String::new()),
+                snapshot::State::Building => ("building", String::new()),
+                snapshot::State::Failed(detail) => ("failed", detail),
+            };
+            device.view["snapshot"] =
+                json!({"state":state,"name":name,"detail":detail,"output":[]});
+            if state == "ready" {
+                device.snapshot = Some(snapshot.path);
+            } else if device.refusal.is_none() {
+                device.refusal = snapshot::ready(workspace, &name).err();
+                device.view["problem_setting"] = json!(if state == "building" {
+                    "building"
+                } else {
+                    "snapshot"
+                });
+            }
+        }
+        Err(error) => {
+            if device.refusal.is_none() {
+                device.refusal = Some(Sentence::Text(error.to_string()));
+                device.view["problem_setting"] = json!("snapshot");
+            }
+        }
+    }
+    let registered = match registered_workspaces(&host.data) {
+        Ok(value) => value,
+        Err(error) => {
+            if device.refusal.is_none() {
+                device.refusal = Some(Sentence::Text(error));
+                device.view["problem_setting"] = json!("filesystem");
+            }
+            return device;
+        }
+    };
+    match crate::contract::resolve(workspace, &host.home, &registered, false, false) {
+        Ok(access) => {
+            device.view["access"] = access.view;
+        }
+        Err(error) => {
+            device.view["access"]["problem"] = json!(error);
+            if device.refusal.is_none() {
+                device.refusal = Some(Sentence::Text(error));
+                device.view["problem_setting"] = json!("filesystem");
+            }
+        }
+    }
+    device
+}
+
+pub fn registered_workspaces(data: &Path) -> Result<Vec<PathBuf>, String> {
+    match std::fs::read(data.join("workspaces.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Cannot read workspace registry: {e}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(error) => Err(error.to_string()),
+    }
+}

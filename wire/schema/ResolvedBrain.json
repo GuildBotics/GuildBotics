@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A brain slot whose settings were resolved once by the host.",
+  "properties": {
+    "definition": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Definition",
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "model",
+        "ai_cli",
+        "jev"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "slot": {
+      "title": "Slot",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "slot"
+  ],
+  "title": "ResolvedBrain",
+  "type": "object"
+}

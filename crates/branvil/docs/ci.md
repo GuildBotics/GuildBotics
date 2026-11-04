@@ -606,8 +606,9 @@ binary at build time, which Branvil's build does not do; the CLI needs no
 build-time download and no SDK dependency.
 
 `msb` is looked up in this order, each accepted only with the pinned version:
-`ci.microsandbox.msb_path`, GuildBotics' copy
-`~/.guildbotics/data/msb/bin/msb`, Branvil's copy `~/.branvil/msb/bin/msb`
+`ci.microsandbox.msb_path`, the embedding application's configured runtime
+binary (GuildBotics supplies its deployed runtime), Branvil's copy
+`~/.branvil/msb/bin/msb`
 (created only by `branvil runner install-msb --from <msb>`). Nothing is
 downloaded. Branvil's microsandbox state (`MSB_HOME`: image cache, sandbox
 records) is `~/.branvil/msb-home` (`ci.microsandbox.home`), separate from

@@ -9,8 +9,18 @@ repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
+base64 = "0.22"
+tempfile = "3.27.0"
+sha2 = "0.11.1"
+futures-util = "0.3"
+rcgen = "0.14"
+regex = "1"
+tokio-rustls = "0.26"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+time = "0.3"
 anyhow = "1"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 gb-base = { path = "../gb-base" }
 gb-config = { path = "../gb-config" }
@@ -33,5 +43,4 @@ url = "2.5.8"
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }

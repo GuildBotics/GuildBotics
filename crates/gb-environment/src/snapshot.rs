@@ -96,3 +96,107 @@ pub fn ready(workspace: &Path, name: &str) -> Result<PathBuf, Sentence> {
     };
     Err(Sentence::key(key))
 }
+
+/// Whether automatic upkeep may build: never retry the current failed recipe.
+pub fn needs_build(state: &State) -> bool {
+    matches!(state, State::Missing | State::Stale)
+}
+
+/// Remove only environment snapshots and their failure markers under the build
+/// lock. The caller removes each snapshot through its runtime's metadata API.
+pub async fn remove<F, Fut>(workspace: &Path, mut perform: F) -> Result<(), String>
+where
+    F: FnMut(PathBuf) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    let directory = snapshots_dir(workspace);
+    let _held = FileLock::try_hold(&directory.join(LOCK_FILE))
+        .map_err(|e| e.to_string())?
+        .ok_or("An environment build is already running")?;
+    for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(PREFIX) {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_dir() {
+            perform(entry.path()).await?;
+        } else if kind.is_file() && name.ends_with(FAILED_SUFFIX) {
+            std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Serialize builds across processes, remember failure only for this recipe,
+/// and prune old artifacts only after a successful replacement.
+pub async fn build<F, Fut>(workspace: &Path, name: &str, perform: F) -> Result<Status, String>
+where
+    F: FnOnce(PathBuf) -> Fut,
+    Fut: Future<Output = Result<PathBuf, String>>,
+{
+    status(workspace, name).map_err(|e| e.to_string())?;
+    let directory = snapshots_dir(workspace);
+    let _held = FileLock::try_hold(&directory.join(LOCK_FILE))
+        .map_err(|e| e.to_string())?
+        .ok_or("An environment build is already running")?;
+    let marker = directory.join(format!("{name}{FAILED_SUFFIX}"));
+    match std::fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let built = tokio::time::timeout(
+        std::time::Duration::from_secs(30 * 60),
+        perform(directory.clone()),
+    )
+    .await
+    .unwrap_or_else(|_| Err("Environment build exceeded 30 minutes".into()));
+    match built {
+        Err(reason) => {
+            gb_base::files::atomic_write(&marker, format!("{reason}\n").as_bytes())
+                .map_err(|e| e.to_string())?;
+            Err(reason)
+        }
+        Ok(path) => {
+            if path.parent() != Some(directory.as_path())
+                || !std::fs::symlink_metadata(&path)
+                    .map_err(|e| e.to_string())?
+                    .is_dir()
+            {
+                return Err("Build returned an invalid snapshot".into());
+            }
+            for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let other = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if other != path && name.starts_with(PREFIX) {
+                    let kind = entry.file_type().map_err(|e| e.to_string())?;
+                    if kind.is_dir() {
+                        std::fs::remove_dir_all(other).map_err(|e| e.to_string())?;
+                    } else if name.ends_with(FAILED_SUFFIX) {
+                        std::fs::remove_file(other).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            Ok(Status {
+                path,
+                state: State::Ready,
+            })
+        }
+    }
+}
+
+/// One interval loop owned by the server; aborting the task stops upkeep.
+pub async fn upkeep<F, Fut>(mut once: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    loop {
+        interval.tick().await;
+        once().await;
+    }
+}

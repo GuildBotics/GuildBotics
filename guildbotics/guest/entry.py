@@ -33,18 +33,21 @@ from guildbotics.guest.host_client import (
     HostClient,
     command_window,
 )
-from guildbotics.guest.window import WindowInference, WindowIntegrationFactory
+from guildbotics.guest.inference import GuestInference
+from guildbotics.guest.resolved import ResolvedBrainFactory, team
+from guildbotics.guest.window import WindowIntegrationFactory
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
 )
 from guildbotics.intelligences.agent_runtime.wire import (
+    RESOLVED_GUEST_ENV,
     CommandFacts,
     CommandFailure,
     CommandReply,
     CommandRequest,
+    ResolvedGuest,
     admits,
 )
-from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.brains.inference import install_inference
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.runtime.context import Context
@@ -62,11 +65,20 @@ async def run(
     """Run ``request`` as the command ``facts`` describe, reaching the host
     through ``client``, and say how it ended."""
     try:
-        install_inference(WindowInference(client))
+        resolved = ResolvedGuest.model_validate_json(
+            Path(os.environ[RESOLVED_GUEST_ENV]).read_bytes()
+        )
+        if resolved.member.get("person_id") != facts.person_id:
+            raise CommandError("The resolved guest member does not match this command.")
+        os.environ["AGNO_TELEMETRY"] = "false"
+        install_inference(GuestInference(resolved, client))
         context = Context(
             WindowIntegrationFactory(client),
-            ConfiguredBrainFactory(),
+            ResolvedBrainFactory(resolved),
             message=request.pipe,
+            team=team(resolved),
+            resolved_commands=resolved.commands,
+            clone_paths=resolved.clone_paths,
         )
         person = next(
             (m for m in context.team.members if m.person_id == facts.person_id),
@@ -129,6 +141,15 @@ def _failure(exc: Exception) -> CommandFailure:
     return failure
 
 
+async def _run_with_relays(
+    request: CommandRequest, facts: CommandFacts, client: HostClient
+) -> CommandReply:
+    from guildbotics.guest.gateway_relays import relays
+
+    async with relays():
+        return await run(request, facts, client)
+
+
 def main() -> None:
     """Run the command the host asks for, as the host started this process.
 
@@ -161,7 +182,9 @@ def main() -> None:
     request = CommandRequest.model_validate_json(sys.stdin.buffer.read())
     client = command_window()
     assert client is not None
-    reply = asyncio.run(run(request, CommandFacts.read(os.environ), client))
+    reply = asyncio.run(
+        _run_with_relays(request, CommandFacts.read(os.environ), client)
+    )
     with replies:
         replies.write(reply.model_dump_json() + "\n")
 

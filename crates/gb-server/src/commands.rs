@@ -236,11 +236,34 @@ async fn start(
     // goes with it.
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
+    let inputs = api
+        .inputs
+        .mount()
+        .map_err(|error| internal(&error.to_string(), "InputFileStoreError"))?;
     let work = api.work.spawn(async move {
         let run = trace.run_command(&name, &person_id, async {
-            let reply = gb_environment::run(&host, &workspace, command, |warning| {
-                tracing::warn!("{}", say(warning, language));
-            })
+            let roots = gb_config::commands::CommandRoots {
+                config: workspace.join(".guildbotics/config"),
+                templates: host.package.join("templates"),
+            };
+            let device = gb_environment::device::read(&host, &workspace).await;
+            if let Some(refusal) = device.refusal.clone() {
+                return Err(failed(Failure::Command(refusal), language));
+            }
+            let mut services =
+                crate::host_window::prepare_command(&host, &workspace, &command, &roots, &device)
+                    .await
+                    .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
+            services.session.mounts.push(inputs);
+            let reply = gb_environment::run(
+                &host,
+                &workspace,
+                command,
+                |warning| {
+                    tracing::warn!("{}", say(warning, language));
+                },
+                &services.session,
+            )
             .await
             .map_err(|failure| failed(failure, language))?;
             trace.command_output(&name, &person_id, &reply.text_output);
@@ -339,7 +362,7 @@ fn person<'a>(
 
 /// A run its environment did not let end: refused or failed as a command,
 /// or failed otherwise, which the caller is not told the words of.
-fn say(sentence: Sentence, language: &str) -> String {
+pub(crate) fn say(sentence: Sentence, language: &str) -> String {
     match sentence {
         Sentence::Text(text) => text,
         Sentence::AtPath(path, reason) => format!("{}: {}", path.display(), say(*reason, language)),

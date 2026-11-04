@@ -107,3 +107,87 @@ fn a_link_is_not_a_built_snapshot() {
         State::Missing
     );
 }
+
+#[tokio::test]
+async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
+    let root = tempfile::tempdir().unwrap();
+    let name = "guildbotics-0123456789abcdef";
+    let old =
+        gb_environment::snapshot::snapshots_dir(root.path()).join("guildbotics-1111111111111111");
+    std::fs::create_dir_all(&old).unwrap();
+    assert!(
+        gb_environment::snapshot::build(root.path(), name, |_| async { Err("broken".into()) })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        gb_environment::snapshot::status(root.path(), name)
+            .unwrap()
+            .state,
+        gb_environment::snapshot::State::Failed("broken".into())
+    );
+    assert!(old.exists());
+    assert!(!gb_environment::snapshot::needs_build(
+        &gb_environment::snapshot::State::Failed("broken".into())
+    ));
+    let result = gb_environment::snapshot::build(root.path(), name, |directory| async move {
+        let path = directory.join(name);
+        std::fs::create_dir(&path).unwrap();
+        Ok(path)
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.state, gb_environment::snapshot::State::Ready);
+    assert!(!old.exists());
+}
+
+#[test]
+fn doctor_places_the_pinned_bundle_and_repairs_missing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path().join("bundle");
+    let home = dir.path().join("home");
+    for file in gb_environment::placed_files(&bundle) {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, b"runtime").unwrap();
+    }
+    gb_environment::runtime::doctor(&home, &bundle).unwrap();
+    gb_environment::runtime::ready(&home).unwrap();
+    std::fs::remove_file(&gb_environment::placed_files(&home)[1]).unwrap();
+    gb_environment::runtime::doctor(&home, &bundle).unwrap();
+    gb_environment::runtime::ready(&home).unwrap();
+}
+
+#[tokio::test]
+async fn removing_snapshots_uses_metadata_callback_and_keeps_login_files() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = snapshots_dir(root.path());
+    std::fs::create_dir_all(directory.join(NAME)).unwrap();
+    std::fs::write(directory.join(format!("{NAME}.failed")), "broken").unwrap();
+    let login = root
+        .path()
+        .join(".guildbotics/local/agent_environment/logins");
+    std::fs::create_dir_all(&login).unwrap();
+    std::fs::write(login.join("fixture"), b"fake-login-state").unwrap();
+    let mut removed = Vec::new();
+    gb_environment::snapshot::remove(root.path(), |path| {
+        removed.push(path.clone());
+        async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(removed, vec![directory.join(NAME)]);
+    assert_eq!(
+        std::fs::read(login.join("fixture")).unwrap(),
+        b"fake-login-state"
+    );
+    assert!(!directory.join(format!("{NAME}.failed")).exists());
+    let held = gb_base::files::FileLock::try_hold(&directory.join("build.lock"))
+        .unwrap()
+        .unwrap();
+    assert!(
+        gb_environment::snapshot::remove(root.path(), |_| async { panic!("locked") })
+            .await
+            .is_err()
+    );
+    drop(held);
+}
