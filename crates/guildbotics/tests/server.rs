@@ -1300,7 +1300,9 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let message = failed["message"].as_str().unwrap();
         assert!(
-            message.contains("bad-digest") && message.contains(phrase),
+            message.contains("bad-digest")
+                && message.contains(phrase)
+                && message.contains("agent_environment.yml"),
             "{message}"
         );
     }

@@ -44,6 +44,7 @@ const UNSERVED_WINDOW: &str = "http://host.microsandbox.internal:1/host";
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sentence {
     Key(&'static str, Vec<(&'static str, String)>),
+    AtPath(PathBuf, Box<Sentence>),
     Text(String),
 }
 
@@ -132,12 +133,7 @@ pub async fn run(
         Some(image) => {
             let held = runtime::held_image(&host.data.join("msb"), &image.reference, &recipe.image)
                 .await?;
-            let status = image::status(
-                &image,
-                image::device_architecture(),
-                held,
-                "guildbotics environment image load <archive.tar>",
-            );
+            let status = image::status(&image, image::device_architecture(), held);
             if let Some(refusal) = status.refusal {
                 return Err(Failure::Command(refusal));
             }

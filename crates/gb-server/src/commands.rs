@@ -342,6 +342,7 @@ fn person<'a>(
 fn say(sentence: Sentence, language: &str) -> String {
     match sentence {
         Sentence::Text(text) => text,
+        Sentence::AtPath(path, reason) => format!("{}: {}", path.display(), say(*reason, language)),
         Sentence::Key(key, params) => {
             let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
             i18n::t(language, key, &params)
@@ -428,15 +429,9 @@ mod tests {
             &image,
             "arm64",
             Some(format!("sha256:{}", "b".repeat(64))),
-            "load archive",
         );
-        let missing = gb_environment::image::status(&image, "arm64", None, "load archive");
-        let undeclared = gb_environment::image::status(
-            &image,
-            "amd64",
-            Some("sha256:bbbb".into()),
-            "load archive",
-        );
+        let missing = gb_environment::image::status(&image, "arm64", None);
+        let undeclared = gb_environment::image::status(&image, "amd64", Some("sha256:bbbb".into()));
         let mut sentences = vec![
             missing.refusal.unwrap(),
             mismatch.warning.unwrap(),
@@ -449,30 +444,41 @@ mod tests {
             ImageIssue::NoDigests,
         ] {
             sentences.push(gb_environment::image::declaration_problem(
-                DeclarationProblem::ImageField(issue),
+                DeclarationProblem::ImageField("/config/agent_environment.yml".into(), issue),
             ));
         }
         sentences.push(gb_environment::image::declaration_problem(
             DeclarationProblem::Image("/config/file.yml".into()),
         ));
         for sentence in sentences {
+            let source = match &sentence {
+                Sentence::AtPath(path, _) => Some(path.display().to_string()),
+                _ => None,
+            };
             let en = super::say(sentence.clone(), "en");
             let ja = super::say(sentence, "ja");
             assert_ne!(en, ja);
             for text in [&en, &ja] {
+                assert!(
+                    !text.contains("environment image load") && !text.contains("load archive"),
+                    "unavailable CLI guidance: {text}"
+                );
+                if let Some(path) = &source {
+                    assert!(text.starts_with(&format!("{path}: ")), "{text}");
+                }
                 assert!(!text.contains("%{"), "{text}");
                 assert!(!text.starts_with("intelligences."), "{text}");
             }
         }
-        let sentence = gb_environment::image::status(&image, "arm64", None, "load archive")
+        let sentence = gb_environment::image::status(&image, "arm64", None)
             .refusal
             .unwrap();
         for language in ["ja", "en"] {
             let text = super::say(sentence.clone(), language);
+            assert!(text.contains("local/agent:1") && text.contains("arm64"));
             assert!(
-                text.contains("load archive")
-                    && text.contains("local/agent:1")
-                    && text.contains("arm64")
+                !text.contains("load archive"),
+                "unavailable CLI guidance: {text}"
             );
         }
     }

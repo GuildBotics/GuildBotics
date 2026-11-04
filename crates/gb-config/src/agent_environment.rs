@@ -38,7 +38,7 @@ impl Default for Resources {
 pub enum DeclarationProblem {
     Resources(PathBuf),
     Image(PathBuf),
-    ImageField(ImageIssue),
+    ImageField(PathBuf, ImageIssue),
 }
 
 #[derive(Debug, PartialEq)]
@@ -47,6 +47,22 @@ pub enum ImageIssue {
     NoDigests,
     Architecture(String),
     Digest(String),
+}
+
+impl std::fmt::Display for ImageIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reference(value) => write!(f, "'{value}' is not an image reference"),
+            Self::NoDigests => write!(f, "an image names at least one digest, by architecture"),
+            Self::Architecture(value) => {
+                write!(f, "'{value}' is not an architecture name (amd64, arm64)")
+            }
+            Self::Digest(value) => write!(
+                f,
+                "'{value}' is not an image digest (sha256:<64 hex digits>)"
+            ),
+        }
+    }
 }
 
 /// The custom base image, whose actual local contents identify a snapshot.
@@ -76,12 +92,16 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
         || image.reference.starts_with('-')
         || image.reference.chars().any(char::is_whitespace)
     {
-        return Err(DeclarationProblem::ImageField(ImageIssue::Reference(
-            image.reference,
-        )));
+        return Err(DeclarationProblem::ImageField(
+            path.clone(),
+            ImageIssue::Reference(image.reference),
+        ));
     }
     if image.digests.is_empty() {
-        return Err(DeclarationProblem::ImageField(ImageIssue::NoDigests));
+        return Err(DeclarationProblem::ImageField(
+            path.clone(),
+            ImageIssue::NoDigests,
+        ));
     }
     for (arch, digest) in &image.digests {
         if arch.is_empty()
@@ -89,9 +109,10 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         {
-            return Err(DeclarationProblem::ImageField(ImageIssue::Architecture(
-                arch.clone(),
-            )));
+            return Err(DeclarationProblem::ImageField(
+                path.clone(),
+                ImageIssue::Architecture(arch.clone()),
+            ));
         }
         if !digest.strip_prefix("sha256:").is_some_and(|hex| {
             hex.len() == 64
@@ -99,9 +120,10 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
                     .bytes()
                     .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         }) {
-            return Err(DeclarationProblem::ImageField(ImageIssue::Digest(
-                digest.clone(),
-            )));
+            return Err(DeclarationProblem::ImageField(
+                path.clone(),
+                ImageIssue::Digest(digest.clone()),
+            ));
         }
     }
     Ok(Some(image))
@@ -110,7 +132,7 @@ pub fn image(config: &Path, templates: &Path) -> Result<Option<BaseImage>, Decla
 impl std::fmt::Display for DeclarationProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ImageField(issue) => write!(f, "Invalid base image declaration: {issue:?}"),
+            Self::ImageField(path, issue) => write!(f, "{}: {issue}", path.display()),
             Self::Resources(path) => write!(
                 f,
                 "The resources in {} must be positive integers: memory_mib and cpus.",

@@ -20,16 +20,10 @@ pub struct Status {
 
 /// Only eligible local content is passed as `held`; an inventory error is
 /// propagated by the caller, never treated as an absent image.
-pub fn status(
-    image: &BaseImage,
-    architecture: &str,
-    held: Option<String>,
-    load_command: &str,
-) -> Status {
+pub fn status(image: &BaseImage, architecture: &str, held: Option<String>) -> Status {
     let mut params = vec![
         ("reference", image.reference.clone()),
         ("architecture", architecture.into()),
-        ("command", load_command.into()),
     ];
     let Some(digest) = held.as_ref() else {
         return Status {
@@ -74,28 +68,32 @@ fn short_digest(digest: &str) -> String {
 }
 
 pub fn declaration_problem(problem: DeclarationProblem) -> Sentence {
-    let (key, params) = match problem {
-        DeclarationProblem::ImageField(ImageIssue::Reference(value)) => (
-            "intelligences.agent_environment.declaration.not_an_image",
-            vec![("reference", value)],
-        ),
-        DeclarationProblem::ImageField(ImageIssue::NoDigests) => (
-            "intelligences.agent_environment.declaration.no_digests",
-            vec![],
-        ),
-        DeclarationProblem::ImageField(ImageIssue::Architecture(value)) => (
-            "intelligences.agent_environment.declaration.not_an_architecture",
-            vec![("architecture", value)],
-        ),
-        DeclarationProblem::ImageField(ImageIssue::Digest(value)) => (
-            "intelligences.agent_environment.declaration.not_a_digest",
-            vec![("digest", value)],
-        ),
-        DeclarationProblem::Image(path) => (
+    if let DeclarationProblem::ImageField(path, issue) = problem {
+        let (key, params) = match issue {
+            ImageIssue::Reference(value) => (
+                "intelligences.agent_environment.declaration.not_an_image",
+                vec![("reference", value)],
+            ),
+            ImageIssue::NoDigests => (
+                "intelligences.agent_environment.declaration.no_digests",
+                vec![],
+            ),
+            ImageIssue::Architecture(value) => (
+                "intelligences.agent_environment.declaration.not_an_architecture",
+                vec![("architecture", value)],
+            ),
+            ImageIssue::Digest(value) => (
+                "intelligences.agent_environment.declaration.not_a_digest",
+                vec![("digest", value)],
+            ),
+        };
+        return Sentence::AtPath(path, Box::new(Sentence::Key(key, params)));
+    }
+    match problem {
+        DeclarationProblem::Image(path) => Sentence::Key(
             "intelligences.agent_environment.declaration.invalid_image",
             vec![("path", path.display().to_string())],
         ),
-        other => return Sentence::Text(other.to_string()),
-    };
-    Sentence::Key(key, params)
+        other => Sentence::Text(other.to_string()),
+    }
 }
