@@ -1,7 +1,8 @@
 # The checks of every push and pull request. GitHub Actions runs only what
 # this runner cannot: the Windows contracts and the macOS Clippy
 # (.github/workflows/ci.yml), and the Desktop E2E
-# (.github/workflows/desktop-e2e.yml).
+# (.github/workflows/desktop-e2e.yml) and Branvil E2E
+# (.github/workflows/branvil-e2e.yml).
 # The runner supplies the image version, CPUs, memory and network access.
 # Commands start in /work, a Git checkout of the commit with its history and
 # tags, as a user that is not root, with CI metadata only; each array entry has
@@ -53,7 +54,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
-paths = ["packages/ui/**", "docs/screenshots/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
+paths = ["packages/ui/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",
@@ -61,7 +62,6 @@ commands = [
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
-artifacts = [{ name = "desktop-visual", paths = ["docs/screenshots"] }]
 
 [[jobs]]
 name = "rust-fmt"

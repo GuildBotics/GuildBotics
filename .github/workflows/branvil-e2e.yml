@@ -1,0 +1,48 @@
+name: Branvil E2E
+
+on:
+  pull_request:
+    paths:
+      - "crates/branvil/**"
+      - "crates/loopback-auth/**"
+      - "packages/ui/**"
+      - "package*.json"
+      - "Cargo.*"
+      - "rust-toolchain.toml"
+      - ".github/workflows/branvil-e2e.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "37 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branvil-e2e-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: rustup show
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e --workspace branvil-web
+      - name: Verify shared status text contrast
+        run: BRANVIL_E2E_VISUAL=1 npm exec --workspace branvil-web -- playwright test token-contrast-layout
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: branvil-playwright
+          path: crates/branvil/web/test-results
+          if-no-files-found: ignore
+          retention-days: 14

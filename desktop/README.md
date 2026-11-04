@@ -7,13 +7,15 @@ provider ごとの設定は各アプリ側が持ちます。CSS は Mantine、�
 共有部品の順に読み込みます。`npm run quality` は共有パッケージの検査も実行します。
 
 PR の目視確認用画像は `GUILDBOTICS_SCREENSHOT_PHASE=before npm run e2e -- visual.spec.ts`
-（変更後は `after`）で `docs/screenshots/desktop/` に保存します。保存先の親ディレクトリは
+（変更後は `after`）で `~/Documents/GuildBotics/screenshots/desktop/` に保存します。
+画像は一時的なレビュー資料として扱い、ソースへコミットしません。保存先の親ディレクトリは
 `GUILDBOTICS_SCREENSHOT_DIR`（desktop からの相対パス、または絶対パス）で指定できます。
-たとえば `GUILDBOTICS_SCREENSHOT_DIR=../docs/screenshots/117` とすると、この PR の確認画像と同じ配置になります。
-実 backend の一時ワークスペースを
-使い、サービス・コマンド・診断・設定を light / dark で撮ります。撮影時は一時環境の System health alerts を非表示にし、Workspace 欄をマスクします。
-診断は動的なログを避けてメモリータブを撮ります。画像は desktop-quality の
-`desktop-visual` artifact でも取得できます。通常の E2E では画像保存だけをスキップします。
+実 backend の一時ワークスペースを使い、サービス・コマンド・診断・設定を light / dark で撮ります。
+撮影時は一時環境の System health alerts を非表示にし、Workspace 欄をマスクします。
+診断は動的なログを避けてメモリータブを撮ります。通常の E2E は撮影をスキップします。
+CI で画像を artifact にする場合は、撮影を明示的に有効化した実行で
+`GUILDBOTICS_SCREENSHOT_DIR=test-results/visual` とし、そのディレクトリを収集します。
+既存の Desktop E2E workflow は撮影を有効化せず、desktop-quality も画像を生成しません。
 
 GuildBotics の画面（React + TypeScript）です。Vite でビルドした `desktop/dist` を、GuildBotics のサーバー（`python -m guildbotics.app_api`）がブラウザへ配ります（`guildbotics/app_api/ui.py`）。サーバーの導入・起動・更新は、リポジトリの [README](../README.ja.md#インストール) を参照してください。
 

@@ -71,7 +71,7 @@ export function Sidebar({
     );
   };
   return (
-    <aside className="sidebar">
+    <>
       <Stack gap={6}>
         <Text component="label" htmlFor="workspace-switch" className="sidebar-field-label">
           {t("workspace.label")}
@@ -126,6 +126,6 @@ export function Sidebar({
         />
       </Stack>
       <NewWorkspaceModal opened={creating} onClose={() => setCreating(false)} />
-    </aside>
+    </>
   );
 }

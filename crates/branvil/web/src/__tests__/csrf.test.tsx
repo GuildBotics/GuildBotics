@@ -5,7 +5,7 @@ import { request } from "../api/client";
 import { ErrorMessage, errorText } from "../components/common";
 import { dictionaries, I18nProvider, type Translate } from "../i18n";
 import { apiError, fakeApi, json } from "../test/fakeApi";
-import { theme } from "../theme";
+import { theme } from "@guildbotics/ui/theme";
 import { moveRefusal } from "../views/board/CardView";
 import { card } from "./fixtures";
 

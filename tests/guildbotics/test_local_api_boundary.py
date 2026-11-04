@@ -22,13 +22,18 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 import guildbotics
 from guildbotics.app_api import auth, server
 from guildbotics.utils import local_api
 
 PACKAGE = Path(guildbotics.__file__).parent
 REPOSITORY = PACKAGE.parent
-FRONTEND = REPOSITORY / "desktop" / "src"
+FRONTENDS = {
+    "desktop": REPOSITORY / "desktop" / "src",
+    "ui": REPOSITORY / "packages" / "ui" / "src",
+}
 
 #: ``module -> names`` imported from ``guildbotics.utils.local_api``.
 LOCAL_API_IMPORTS = {
@@ -69,12 +74,10 @@ CLIENT_CALLERS = {
 }
 
 #: ``(file, function) -> route`` in the frontend.
-FRONTEND_ROUTES = {
-    ("api/client.ts", ""): "the CSRF value, module-private, and its header name",
+DESKTOP_ROUTES = {
+    ("api/client.ts", ""): "configures the shared transport and its CSRF header name",
     ("api/client.ts", "enterSession"): "exchanges the entry code, keeps the value",
     ("api/client.ts", "resumeSession"): "reads the value of the cookie's session",
-    ("api/client.ts", "send"): "refreshes a refused value once",
-    ("api/client.ts", "attempt"): "header, on writes only",
     ("api/client.ts", "authorizeApp"): "consent, through request",
     ("api/client.ts", "onConnectionLost"): "a 401 ends the session's screens",
     ("main.tsx", ""): "import",
@@ -86,9 +89,17 @@ FRONTEND_ROUTES = {
     ("session/AuthorizeView.tsx", ""): "import",
     ("session/AuthorizeView.tsx", "AuthorizeView"): "consent with the session",
 }
+FRONTEND_ROUTES = {
+    "desktop": DESKTOP_ROUTES,
+    "ui": {
+        ("api.ts", "createApiClient"): (
+            "per-instance closure owns the CSRF value, write header and one refresh"
+        ),
+    },
+}
 _FRONTEND_CARRIERS = re.compile(
     r"X-GuildBotics-CSRF|\bcsrf\b|enterSession|resumeSession|authorizeApp"
-    r"|/session\b|SESSION_QUERY|onConnectionLost"
+    r"|/session\b|SESSION_QUERY|onConnectionLost|\b(?:get|set)Csrf\b"
 )
 _FRONTEND_FUNCTION = re.compile(
     r"^(?:export )?(?:default )?(?:async )?function\*? ?(\w+)"
@@ -191,8 +202,32 @@ def _routes(
     return found
 
 
+def _frontend_routes() -> set[tuple[str, str, str]]:
+    return {
+        (name, path, enclosing)
+        for name, root in FRONTENDS.items()
+        for path, enclosing in _routes(
+            root, ("*.ts", "*.tsx"), {"": _FRONTEND_CARRIERS}, _FRONTEND_FUNCTION
+        )
+    }
+
+
 def test_every_frontend_route_of_the_session_is_classified():
-    found = _routes(
-        FRONTEND, ("*.ts", "*.tsx"), {"": _FRONTEND_CARRIERS}, _FRONTEND_FUNCTION
+    assert _frontend_routes() == {
+        (name, path, enclosing)
+        for name, routes in FRONTEND_ROUTES.items()
+        for path, enclosing in routes
+    }
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ['request("/session")', "transport.getCsrf()", "transport.setCsrf(value)"],
+)
+def test_shared_frontend_routes_are_discovered(tmp_path, monkeypatch, expression):
+    (tmp_path / "extra.ts").write_text(
+        f"export function extraSession() {{ return {expression}; }}\n",
+        encoding="utf-8",
     )
-    assert found == set(FRONTEND_ROUTES)
+    monkeypatch.setitem(FRONTENDS, "ui", tmp_path)
+    assert ("ui", "extra.ts", "extraSession") in _frontend_routes()

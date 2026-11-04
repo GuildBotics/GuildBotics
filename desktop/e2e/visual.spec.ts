@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import { expect } from "@playwright/test";
 import { test } from "./stack-context";
 
@@ -8,7 +9,8 @@ const phase = process.env.GUILDBOTICS_SCREENSHOT_PHASE;
 test("capture the desktop presentation for review", async ({ page }) => {
   test.skip(!phase, "Set GUILDBOTICS_SCREENSHOT_PHASE to capture review evidence");
   const directory = resolve(
-    process.env.GUILDBOTICS_SCREENSHOT_DIR ?? "../docs/screenshots/desktop",
+    process.env.GUILDBOTICS_SCREENSHOT_DIR ??
+      resolve(homedir(), "Documents/GuildBotics/screenshots/desktop"),
     phase!,
   );
   mkdirSync(directory, { recursive: true });

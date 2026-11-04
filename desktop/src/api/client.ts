@@ -1,10 +1,17 @@
+import { createApiClient } from "@guildbotics/ui/api";
 // Every request goes to the server that served this page, under `/api`. The
 // HttpOnly session cookie authenticates it; the session's CSRF value is kept
 // only in this module's memory (never in storage) and goes with every write.
 
 const API_PREFIX = "/api";
 
-let csrf = "";
+const transport = createApiClient({
+  prefix: API_PREFIX,
+  csrfHeader: "X-GuildBotics-CSRF",
+  headers: () => ({ "X-GuildBotics-Language": apiLanguage }),
+  readError: async (response) => new ApiRequestError(await readError(response)),
+  onConnectionLost: (loss) => lossListeners.forEach((listener) => listener(loss)),
+});
 let apiLanguage = "en";
 
 /** Why the screens can no longer talk to the server. */
@@ -28,13 +35,15 @@ export function onConnectionLost(listener: (loss: ConnectionLoss) => void): () =
 
 /** Start this browser's session with an entry link's single-use code. */
 export async function enterSession(code: string): Promise<void> {
-  csrf = (await request<{ csrf: string }>("/session", { method: "POST", body: { code } })).csrf;
+  transport.setCsrf(
+    (await request<{ csrf: string }>("/session", { method: "POST", body: { code } })).csrf,
+  );
 }
 
 /** Take up this browser's session, if it has one. */
 export async function resumeSession(): Promise<boolean> {
   try {
-    csrf = (await request<{ csrf: string }>("/session")).csrf;
+    transport.setCsrf((await request<{ csrf: string }>("/session")).csrf);
     return true;
   } catch (error) {
     if (error instanceof ApiRequestError && error.code === "unauthorized") {
@@ -1603,40 +1612,8 @@ export async function request<T>(
 
 type Outgoing = { method: string; headers?: Record<string, string>; body?: BodyInit };
 
-async function send(path: string, outgoing: Outgoing): Promise<Response> {
-  let response = await attempt(path, outgoing);
-  let error = response.ok ? null : await readError(response);
-  if (error?.code === "csrf_mismatch") {
-    // Another tab entered again and replaced the shared session cookie. The
-    // refusal came before anything ran, so the request goes once more.
-    csrf = (await request<{ csrf: string }>("/session")).csrf;
-    response = await attempt(path, outgoing);
-    error = response.ok ? null : await readError(response);
-  }
-  if (!error) {
-    return response;
-  }
-  if (response.status === 401) {
-    lossListeners.forEach((listener) => listener("signed_out"));
-  }
-  throw new ApiRequestError(error);
-}
-
-async function attempt(path: string, { headers, ...outgoing }: Outgoing): Promise<Response> {
-  const write = outgoing.method !== "GET";
-  try {
-    return await fetch(`${API_PREFIX}${path}`, {
-      ...outgoing,
-      headers: {
-        ...headers,
-        "X-GuildBotics-Language": apiLanguage,
-        ...(write && csrf ? { "X-GuildBotics-CSRF": csrf } : {}),
-      },
-    });
-  } catch (error) {
-    lossListeners.forEach((listener) => listener("unreachable"));
-    throw error;
-  }
+function send(path: string, outgoing: Outgoing): Promise<Response> {
+  return transport.send(path, outgoing);
 }
 
 async function readError(response: Response): Promise<ApiErrorPayload> {

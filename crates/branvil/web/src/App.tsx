@@ -13,7 +13,8 @@ import { useSession } from "./query/hooks";
 import { Link, navigate, usePathname } from "./router/Router";
 import { href, parseRoute, type Route } from "./router/routes";
 import { useStored } from "./storage";
-import { theme } from "./theme";
+import { theme } from "@guildbotics/ui/theme";
+import { AppShell } from "@guildbotics/ui/AppShell";
 import { AuthorizeView } from "./views/AuthorizeView";
 import { BoardView } from "./views/BoardView";
 import { CommitView } from "./views/CommitView";
@@ -70,19 +71,16 @@ function SignedIn({ route }: { route: AppRoute }) {
   const [storedBoard, setStoredBoard] = useStored("branvil.sidebar.showBoard");
   const showBoard = storedBoard !== "false";
   return (
-    <main className="shell">
-      <Sidebar route={route} workspace={current.name} workspaces={current.names} onWorkspaceChange={current.select} showBoard={showBoard} />
-      <section className="workspace">
-        <AlertBand streamLost={streamLost} />
-        <RouteView
-          route={route}
-          workspace={current.name}
-          workspaces={current.names}
-          showBoard={showBoard}
-          setShowBoard={(value) => setStoredBoard(String(value))}
-        />
-      </section>
-    </main>
+    <AppShell sidebar={<Sidebar route={route} workspace={current.name} workspaces={current.names} onWorkspaceChange={current.select} showBoard={showBoard} />}>
+      <AlertBand streamLost={streamLost} />
+      <RouteView
+        route={route}
+        workspace={current.name}
+        workspaces={current.names}
+        showBoard={showBoard}
+        setShowBoard={(value) => setStoredBoard(String(value))}
+      />
+    </AppShell>
   );
 }
 
