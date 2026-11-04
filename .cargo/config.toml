@@ -1,0 +1,6 @@
+# x86_64 Linux links with the toolchain's rust-lld by default; aarch64 Linux
+# (the CI runner and the agent environment on Apple silicon) does too through
+# this linker. GNU ld needs about twice the memory: the workspace's parallel
+# test links outgrew the CI job's 6 GiB with it.
+[target.aarch64-unknown-linux-gnu]
+linker = ".cargo/cc-lld.sh"
