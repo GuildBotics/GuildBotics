@@ -61,15 +61,23 @@ impl BranvilService {
     }
     async fn member(&self) -> Result<MemberApi, ServiceError> {
         if self.token.is_empty() {
-            return Err(ServiceError::BranvilTokenMissing {
-                name: format!(
-                    "{}_BRANVIL_TOKEN",
-                    self.person_id.replace('-', "_").to_uppercase()
-                ),
+            return Err(ServiceError::Diagnostic {
+                key: "integrations.branvil.api.token_missing",
+                args: [(
+                    "name".into(),
+                    format!(
+                        "{}_BRANVIL_TOKEN",
+                        self.person_id.replace('-', "_").to_uppercase()
+                    ),
+                )]
+                .into(),
             });
         }
         if self.username.is_empty() {
-            return Err(ServiceError::BranvilUsernameMissing);
+            return Err(ServiceError::Diagnostic {
+                key: "integrations.branvil.api.username_missing",
+                args: Default::default(),
+            });
         }
         let m = self
             .api
@@ -274,3 +282,10 @@ fn reaction(r: SemanticReaction) -> &'static str {
 }
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ticket_parity;
+
+#[cfg(test)]
+mod code_parity;
+#[cfg(test)]
+mod readiness_parity;

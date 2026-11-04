@@ -529,17 +529,6 @@ impl BranvilService {
         let (repo, key) = self.item(url, "pulls")?;
         let m = self.member().await?;
         let report = m.pulls_checks(&repo, number(&key)?).await.map_err(error)?;
-        let checks = report
-            .checks
-            .iter()
-            .map(|c| Check {
-                name: c.name.clone(),
-                status: c.status.clone(),
-                conclusion: c.conclusion.clone(),
-                details_url: c.details_url.clone().unwrap_or_default(),
-                details: Some(c.details.clone().unwrap_or_default()),
-            })
-            .collect::<Vec<_>>();
         let mut failed = Vec::new();
         if logs {
             let failed_checks = report
@@ -588,30 +577,50 @@ impl BranvilService {
             }
         }
         let current = m.pulls_get(&repo, number(&key)?).await.map_err(error)?;
-        let freshness = if current.state == "open" {
+        self.readiness_result(report, value(&current)?, logs.then_some(failed))
+    }
+
+    pub(super) fn readiness_result(
+        &self,
+        report: pulls::ChecksView,
+        current: Value,
+        failed: Option<Vec<FailedLog>>,
+    ) -> Result<Readiness, ServiceError> {
+        let checks = report
+            .checks
+            .iter()
+            .map(|c| Check {
+                name: c.name.clone(),
+                status: c.status.clone(),
+                conclusion: c.conclusion.clone(),
+                details_url: c.details_url.clone().unwrap_or_default(),
+                details: Some(c.details.clone().unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        let freshness = if text(&current, "state") == "open" {
             if report.head_sha.is_empty()
                 || report.base_sha.is_empty()
-                || current.base_sha.is_empty()
+                || text(&current, "base_sha").is_empty()
             {
                 return Err(ServiceError::InvalidResult);
             }
             Some(crate::Freshness {
                 base_sha: report.base_sha.clone(),
                 behind_by: report.behind_by.ok_or(ServiceError::InvalidResult)? as i64,
-                current_base_sha: current.base_sha.clone(),
+                current_base_sha: text(&current, "base_sha").into(),
                 requires_up_to_date: false,
             })
         } else {
             None
         };
         crate::readiness_of(
-            self.target(&value(&current)?, WorkKind::PullRequest),
+            self.target(&current, WorkKind::PullRequest),
             report.head_sha,
-            current.head_sha,
+            text(&current, "head_sha").into(),
             checks,
             report.checks_expected,
             freshness,
-            logs.then_some(failed),
+            failed,
         )
     }
 }

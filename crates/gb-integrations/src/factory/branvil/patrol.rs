@@ -511,24 +511,52 @@ impl BranvilService {
     pub(super) async fn pull_draft(&self, url: &str) -> Result<bool, ServiceError> {
         let (r, k) = self.item(url, "pulls")?;
         self.writable(&r)?;
-        loop {
-            let p = self.pull(url).await?;
-            if text(&p, "state") != "open" || p["draft"].as_bool() == Some(true) {
-                return Ok(false);
-            }
-            let patch: pulls::PullPatch =
-                serde_json::from_value(json!({"draft":true,"revision":p["revision"]}))
-                    .map_err(|_| ServiceError::InvalidParameters)?;
-            match self
-                .member()
-                .await?
-                .pulls_update(&r, number(&k)?, patch)
-                .await
-            {
-                Ok(_) => return Ok(true),
-                Err(e) if e.code == "conflict" => continue,
-                Err(e) => return Err(error(e)),
-            }
+        draft_transition(
+            || {
+                Box::pin(async {
+                    let p = self.pull(url).await?;
+                    if text(&p, "state") != "open" || p["draft"].as_bool() == Some(true) {
+                        return Ok(None);
+                    }
+                    Ok(Some(
+                        p["revision"].as_u64().ok_or(ServiceError::InvalidResult)?,
+                    ))
+                })
+            },
+            |revision| {
+                let r = &r;
+                let k = &k;
+                Box::pin(async move {
+                    let patch: pulls::PullPatch =
+                        decode(json!({"draft":true,"revision":revision}))?;
+                    match self
+                        .member()
+                        .await?
+                        .pulls_update(r, number(k)?, patch)
+                        .await
+                    {
+                        Ok(_) => Ok(true),
+                        Err(e) if e.code == "conflict" => Ok(false),
+                        Err(e) => Err(error(e)),
+                    }
+                })
+            },
+        )
+        .await
+    }
+}
+
+// A revision conflict restarts with a fresh read; all other failures terminate.
+pub(super) async fn draft_transition<'a>(
+    mut read: impl FnMut() -> ServiceFuture<'a, Option<u64>> + Send,
+    mut write: impl FnMut(u64) -> ServiceFuture<'a, bool> + Send,
+) -> Result<bool, ServiceError> {
+    loop {
+        let Some(revision) = read().await? else {
+            return Ok(false);
+        };
+        if write(revision).await? {
+            return Ok(true);
         }
     }
 }

@@ -156,14 +156,18 @@ async fn write(base: &str, token: &str, path: &str, body: Option<Value>) {
         response.text().await.unwrap()
     );
 }
+fn expected_alert(number: u64, state: &str, patched: Option<&str>) -> Value {
+    json!({"id":number.to_string(),"state":state,"url":format!("https://example.invalid/alerts/{number}"),"package":"fixture","ecosystem":"pip","manifest_path":"requirements.txt","severity":"high","identifiers":[{"type":"GHSA","value":format!("GHSA-{number}")}],"summary":"Fixture advisory","description":"Fixture description","affected_versions":"< 2.0","patched_version":patched,"created_at":"2026-01-01T00:00:00.000Z","updated_at":"2026-01-02T00:00:00.000Z"})
+}
 async fn state_pages(host: &Host, c: &dyn CodeHostingService) {
-    host.answers.lock().unwrap().alerts = [(1,"open"),(2,"fixed"),(3,"open"),(4,"auto_dismissed"),(5,"open")].into_iter().map(|(number,state)| json!({"number":number,"state":state,"dependency":{"package":{"name":"fixture","ecosystem":"pip"},"manifest_path":"requirements.txt"},"security_vulnerability":{"first_patched_version":if number==5 {Value::Null}else{json!({"identifier":"2.0"})}}})).collect();
+    host.answers.lock().unwrap().alerts = [(1,"open"),(2,"fixed"),(3,"open"),(4,"auto_dismissed"),(5,"open")].into_iter().map(|(number,state)| json!({"number":number,"state":state,"html_url":format!("https://example.invalid/alerts/{number}"),"dependency":{"package":{"name":"fixture","ecosystem":"pip"},"manifest_path":"requirements.txt"},"security_advisory":{"identifiers":[{"type":"GHSA","value":format!("GHSA-{number}")}],"summary":"Fixture advisory","description":"Fixture description"},"security_vulnerability":{"severity":"high","vulnerable_version_range":"< 2.0","first_patched_version":if number==5 {Value::Null}else{json!({"identifier":"2.0"})}},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"})).collect();
     let p = json!({"state":"open","page_size":2});
     let first = read(c, p.clone(), "").await.unwrap();
     assert_eq!(
         first.items().iter().map(|v| &v["id"]).collect::<Vec<_>>(),
         [&json!("1"), &json!("3")]
     );
+    assert_eq!(first.items()[0], expected_alert(1, "open", Some("2.0")));
     assert_eq!(first.items()[0]["package"], "fixture");
     assert_eq!(first.items()[0]["patched_version"], "2.0");
     let rest = read(c, p, first.continuation().unwrap()).await.unwrap();
@@ -189,6 +193,7 @@ async fn state_pages(host: &Host, c: &dyn CodeHostingService) {
 async fn single_id(c: &dyn CodeHostingService) {
     let page = read(c, json!({"id":"4"}), "").await.unwrap();
     assert_eq!(page.items().len(), 1);
+    assert_eq!(page.items()[0], expected_alert(4, "dismissed", Some("2.0")));
     assert_eq!(page.items()[0]["id"], "4");
     assert_eq!(page.items()[0]["state"], "dismissed");
     assert_eq!(page.continuation(), None);

@@ -37,20 +37,17 @@ pub enum SemanticReaction {
 pub enum ServiceError {
     Failed,
     OutOfScope,
-    BranvilTokenMissing {
-        name: String,
+    /// The provider owns the localized diagnosis and supplies only safe arguments.
+    Diagnostic {
+        key: &'static str,
+        args: std::collections::BTreeMap<String, String>,
     },
-    BranvilUsernameMissing,
     MissingCredential {
         name: String,
     },
     CredentialPrefixConflict {
         member: String,
         conflicting_member: String,
-    },
-    MissingScope {
-        needed: String,
-        provided: String,
     },
     NotFound,
     /// Only when the operation never reached the service.
@@ -67,13 +64,11 @@ impl ServiceError {
         match self {
             Self::Failed => "integrations.resources.service_failed",
             Self::OutOfScope => "integrations.resources.out_of_scope",
-            Self::BranvilTokenMissing { .. } => "integrations.branvil.api.token_missing",
-            Self::BranvilUsernameMissing => "integrations.branvil.api.username_missing",
+            Self::Diagnostic { key, .. } => key,
             Self::MissingCredential { .. } => "integrations.resources.missing_credential",
             Self::CredentialPrefixConflict { .. } => {
                 "integrations.resources.credential_prefix_conflict"
             }
-            Self::MissingScope { .. } => "integrations.slack.chat_service.missing_scope",
             Self::NotFound => "integrations.resources.not_found",
             Self::Unavailable => "integrations.resources.unavailable",
             Self::Unsupported => "integrations.resources.operation_unsupported",
@@ -93,14 +88,8 @@ impl ServiceError {
                 ("conflicting_member".into(), conflicting_member.clone()),
             ]
             .into(),
-            Self::MissingScope { needed, provided } => [
-                ("needed".into(), needed.clone()),
-                ("provided".into(), provided.clone()),
-            ]
-            .into(),
-            Self::MissingCredential { name } | Self::BranvilTokenMissing { name } => {
-                [("name".into(), name.clone())].into()
-            }
+            Self::Diagnostic { args, .. } => args.clone(),
+            Self::MissingCredential { name } => [("name".into(), name.clone())].into(),
             _ => Default::default(),
         }
     }

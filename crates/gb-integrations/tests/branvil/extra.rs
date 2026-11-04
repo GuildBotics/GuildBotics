@@ -175,6 +175,19 @@ pub(super) async fn reused_and_gates(
                     .iter()
                     .any(|c| c.name == name && c.conclusion.is_none())
             );
+            assert_eq!(pending.readiness, ReadinessReadiness::Blocked);
+            assert!(
+                pending
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "checks_pending")
+            );
+            assert!(
+                !pending
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "base_behind")
+            );
             finish(base, runner, gate["gate"].as_str().unwrap(), conclusion).await;
             landing(
                 owner,
@@ -205,5 +218,44 @@ pub(super) async fn reused_and_gates(
                 "failure"
             })
         );
+        if conclusion != "success" {
+            assert_eq!(result.readiness, ReadinessReadiness::Blocked);
+            assert!(
+                result
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "checks_failed")
+            );
+            assert!(
+                !result
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "base_behind")
+            );
+            if conclusion == "conflict" {
+                assert!(gate.details.as_deref().unwrap().contains("a.py"));
+                let page = c
+                    .read(
+                        Resource::PullRequestReadiness,
+                        &feature.target.url,
+                        Some(&json!({"failed_logs":true})),
+                        "",
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(page.items()[0]["failed_logs"], json!([]));
+                assert!(
+                    page.items()[0]["checks"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|check| check["name"] == "gate"
+                            && check["details"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .contains("a.py"))
+                );
+            }
+        }
     }
 }

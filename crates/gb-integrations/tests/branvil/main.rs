@@ -1,9 +1,11 @@
 //! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
 mod alerts;
+mod code_parity;
 #[path = "../support/contracts.rs"]
 mod contracts;
 mod driver;
 mod extra;
+mod readiness;
 use gb_base::shared_writes::SharedWrites;
 use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
 use gb_integrations::factory::*;
@@ -771,6 +773,23 @@ async fn scenario() {
         &base,
         owner_token.trim(),
         &runner.token,
+    )
+    .await;
+    readiness::contract(
+        temp.path(),
+        &owner,
+        c.as_ref(),
+        &base,
+        owner_token.trim(),
+        &runner.token,
+    )
+    .await;
+    code_parity::contract(
+        temp.path(),
+        &owner,
+        c.as_ref(),
+        t.as_ref(),
+        owner_token.trim(),
     )
     .await;
     c.aclose().await.unwrap();

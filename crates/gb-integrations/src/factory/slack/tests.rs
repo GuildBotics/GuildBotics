@@ -482,9 +482,13 @@ async fn missing_scope_preserves_only_safe_scope_arguments() {
     assert_eq!(
         chat.list_channel_events("C", ChannelEventsQuery::default())
             .await,
-        Err(ServiceError::MissingScope {
-            needed: "channels:history,groups:history".into(),
-            provided: "chat:write".into()
+        Err(ServiceError::Diagnostic {
+            key: "integrations.slack.chat_service.missing_scope",
+            args: [
+                ("needed".into(), "channels:history,groups:history".into()),
+                ("provided".into(), "chat:write".into())
+            ]
+            .into(),
         })
     );
     let checks = chat.check_credentials().await.unwrap();

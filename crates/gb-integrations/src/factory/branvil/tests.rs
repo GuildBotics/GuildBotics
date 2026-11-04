@@ -174,8 +174,9 @@ async fn member_identity_scope_and_resource_boundaries() {
     );
     assert_eq!(
         missing.member().await.err(),
-        Some(ServiceError::BranvilTokenMissing {
-            name: "AGENT_ONE_BRANVIL_TOKEN".into()
+        Some(ServiceError::Diagnostic {
+            key: "integrations.branvil.api.token_missing",
+            args: [("name".into(), "AGENT_ONE_BRANVIL_TOKEN".into())].into(),
         })
     );
     assert_eq!(
