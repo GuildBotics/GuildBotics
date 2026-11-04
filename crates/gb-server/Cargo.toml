@@ -47,3 +47,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
+x509-parser = "0.18"

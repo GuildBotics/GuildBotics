@@ -835,9 +835,11 @@ mod frozen_tests {
     #[test]
     fn preflight_enumerates_open_grants_and_existing_parents_before_creating_anything() {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
+        // The probe sees resolved paths; macOS temporary directories sit behind a link.
+        let root = dir.path().canonicalize().unwrap();
+        let home = root.join("home");
         std::fs::create_dir(&home).unwrap();
-        let workspace = dir.path().join("workspace");
+        let workspace = root.join("workspace");
         std::fs::create_dir(home.join("Documents")).unwrap();
         let error = resolve_with_probe(&workspace, &home, &[], false, true, |path| {
             if path == home.join("Documents") {

@@ -379,19 +379,38 @@ async fn tls_gateways_trust_only_their_own_certificate_names_and_lease() {
     assert_ne!(first.ca_pem, second.ca_pem);
     let trusted = reqwest::Client::builder()
         .no_proxy()
+        .tls_info(true)
         .add_root_certificate(reqwest::Certificate::from_pem(&first.ca_pem).unwrap())
         .build()
         .unwrap();
     let url = format!("https://localhost:{}/v1/messages", first.port);
-    assert_eq!(
-        trusted
-            .post(&url)
-            .bearer_auth(&first.lease.stand_in)
-            .send()
-            .await
+    let answered = trusted
+        .post(&url)
+        .bearer_auth(&first.lease.stand_in)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answered.status(), StatusCode::OK);
+    // The turn trusts a CA only; the gateway answers with a server certificate
+    // that CA signed, as clients that check key usage require.
+    let (_, ca) = x509_parser::pem::parse_x509_pem(&first.ca_pem).unwrap();
+    let ca = ca.parse_x509().unwrap();
+    assert!(ca.is_ca());
+    let served = answered
+        .extensions()
+        .get::<reqwest::tls::TlsInfo>()
+        .and_then(|info| info.peer_certificate())
+        .unwrap();
+    let (_, served) = x509_parser::parse_x509_certificate(served).unwrap();
+    assert!(!served.is_ca());
+    assert_eq!(served.issuer(), ca.subject());
+    assert!(
+        served
+            .extended_key_usage()
             .unwrap()
-            .status(),
-        StatusCode::OK
+            .unwrap()
+            .value
+            .server_auth
     );
     assert_eq!(
         trusted

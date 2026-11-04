@@ -6,6 +6,13 @@ fn write(root: &Path, path: &str, text: &str) {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(p, text).unwrap();
 }
+/// A temporary root as host paths name it: macOS reaches its temporary
+/// directory through a link, and host paths are compared resolved.
+fn temporary() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    (dir, root)
+}
 #[test]
 fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
     let dir = tempfile::tempdir().unwrap();
@@ -84,8 +91,8 @@ fn network_is_closed_for_readonly_and_rejects_inconsistent_declarations() {
 
 #[test]
 fn only_managed_member_clones_are_precise_host_owned_working_directories() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().join("workspace");
+    let (_dir, root) = temporary();
+    let workspace = root.join("workspace");
     let hash = "a".repeat(64);
     let clone = workspace.join(".guildbotics/local/clones/aiko").join(hash);
     std::fs::create_dir_all(&clone).unwrap();
@@ -105,9 +112,9 @@ fn only_managed_member_clones_are_precise_host_owned_working_directories() {
 
 #[test]
 fn worktree_planning_preserves_covering_readonly_and_nested_mount_boundaries() {
-    let d = tempfile::tempdir().unwrap();
-    let workspace = d.path().join("workspace");
-    let home = d.path().join("home");
+    let (_d, root) = temporary();
+    let workspace = root.join("workspace");
+    let home = root.join("home");
     std::fs::create_dir_all(home.join("Documents/project/nested")).unwrap();
     write(
         &workspace,
@@ -117,15 +124,7 @@ fn worktree_planning_preserves_covering_readonly_and_nested_mount_boundaries() {
     let access = contract::resolve(&workspace, &home, &[], false, false).unwrap();
     let cwd = home.join("Documents/project");
     assert!(
-        contract::copy_plan(
-            &workspace,
-            "aiko",
-            &cwd,
-            &access,
-            &[],
-            d.path().join("lock")
-        )
-        .is_err()
+        contract::copy_plan(&workspace, "aiko", &cwd, &access, &[], root.join("lock")).is_err()
     );
     write(
         &workspace,
@@ -144,7 +143,7 @@ fn worktree_planning_preserves_covering_readonly_and_nested_mount_boundaries() {
         &cwd,
         &access,
         &mounts,
-        d.path().join("lock"),
+        root.join("lock"),
     )
     .unwrap();
     assert!(plan.excluded.contains(&"nested".into()));
@@ -154,9 +153,9 @@ fn worktree_planning_preserves_covering_readonly_and_nested_mount_boundaries() {
 
 #[test]
 fn managed_clones_remain_open_under_denied_ancestors() {
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
+    let (_dir, root) = temporary();
+    let home = root.join("home");
+    let workspace = root.join("workspace");
     let clone = workspace
         .join(".guildbotics/local/clones/aiko")
         .join("a".repeat(64));
@@ -169,7 +168,7 @@ fn managed_clones_remain_open_under_denied_ancestors() {
         &clone,
         &access,
         vec![],
-        root.path().join("lock"),
+        root.join("lock"),
         false,
     )
     .unwrap();
@@ -192,7 +191,7 @@ fn managed_clones_remain_open_under_denied_ancestors() {
                 &clone,
                 &access,
                 vec![],
-                root.path().join("lock"),
+                root.join("lock"),
                 false
             )
             .is_ok(),
@@ -204,9 +203,9 @@ fn managed_clones_remain_open_under_denied_ancestors() {
 
 #[test]
 fn runtime_mounts_accept_precise_files_under_denied_ancestors_but_never_links() {
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
+    let (_dir, root) = temporary();
+    let home = root.join("home");
+    let workspace = root.join("workspace");
     std::fs::create_dir_all(&home).unwrap();
     let state = workspace.join(".guildbotics/local/tool-state");
     std::fs::create_dir_all(&state).unwrap();
@@ -225,9 +224,9 @@ fn runtime_mounts_accept_precise_files_under_denied_ancestors_but_never_links() 
     {
         std::os::unix::fs::symlink(&file, state.join("file-link")).unwrap();
         assert!(contract::validate_mount_source(&state.join("file-link"), &access).is_err());
-        std::os::unix::fs::symlink(&state, root.path().join("parent-link")).unwrap();
+        std::os::unix::fs::symlink(&state, root.join("parent-link")).unwrap();
         assert!(
-            contract::validate_mount_source(&root.path().join("parent-link/.claude.json"), &access)
+            contract::validate_mount_source(&root.join("parent-link/.claude.json"), &access)
                 .is_err()
         );
     }

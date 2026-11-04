@@ -2431,7 +2431,9 @@ mod private_files_tests {
     #[test]
     fn credential_transport_is_stdin_stdout_only_and_refuses_links() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("tool/auth.json");
+        // The transport refuses any linked ancestor; macOS temporary directories have one.
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("tool/auth.json");
         let request = serde_json::json!({path.to_str().unwrap():"Zml4dHVyZQ=="});
         let invoke = |operation: &str, request: serde_json::Value| {
             let mut child = std::process::Command::new("python3")
@@ -2458,7 +2460,7 @@ mod private_files_tests {
         #[cfg(unix)]
         {
             std::fs::remove_file(&path).unwrap();
-            std::os::unix::fs::symlink(dir.path(), &path).unwrap();
+            std::os::unix::fs::symlink(&root, &path).unwrap();
             assert!(!invoke("get", serde_json::json!([path])).status.success());
         }
     }

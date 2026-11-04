@@ -262,12 +262,30 @@ impl Gateway {
         source: TokenSource,
         names: Vec<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // A CA of the gateway's own signs a server certificate for `names`; only
+        // the CA is handed to the turn, as its trust anchor.
+        let now = time::OffsetDateTime::now_utc();
+        let lifetime = |parameters: &mut rcgen::CertificateParams| {
+            parameters.not_before = now - time::Duration::minutes(5);
+            parameters.not_after = now + time::Duration::days(2);
+        };
+        let ca_key = rcgen::KeyPair::generate()?;
+        let mut ca = rcgen::CertificateParams::default();
+        ca.distinguished_name
+            .push(rcgen::DnType::CommonName, "GuildBotics turn gateway");
+        ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        ca.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        lifetime(&mut ca);
+        let ca_pem = ca.self_signed(&ca_key)?.pem().into_bytes();
         let key = rcgen::KeyPair::generate()?;
         let mut parameters = rcgen::CertificateParams::new(names)?;
-        parameters.not_before = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
-        parameters.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(2);
-        let certificate = parameters.self_signed(&key)?;
-        let ca_pem = certificate.pem().into_bytes();
+        parameters.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        parameters.use_authority_key_identifier_extension = true;
+        lifetime(&mut parameters);
+        let certificate = parameters.signed_by(&key, &rcgen::Issuer::new(ca, ca_key))?;
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
         let config = tokio_rustls::rustls::ServerConfig::builder()
             .with_no_client_auth()
