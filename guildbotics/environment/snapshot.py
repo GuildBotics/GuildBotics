@@ -59,51 +59,21 @@ from guildbotics.utils.advisory_lock import (
     open_lock_file,
     unlock_file,
 )
-from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.fileio import get_template_path, get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 
-#: uv, available to agents as the default image's Python toolchain; installed
-#: from its release archive because that image has no Python of its own.
-UV_VERSION = "0.13.5"
-#: The Node.js the provider CLIs from npm are installed and run with,
-#: installed from its release archive over whatever Node.js the base image
-#: has, so a Node.js release is a recipe change and not a new base image.
-#: The digests are those ``SHASUMS256.txt`` gives each archive, by the
-#: architecture ``uname -m`` names.
-NODE_VERSION = "24.22.2"
-NODE_SHA256 = {
-    "x86_64": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
-    "aarch64": "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2",
-}
-_NODE_PLATFORMS = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
-#: The Python GuildBotics' own code runs with inside the microVM, and where
-#: its environment is. uv keeps the interpreters it installs under
-#: ``/opt/uv/python`` (not the home, which turns bind over); an image that
-#: already has this version on its PATH is used as it is.
-PYTHON_VERSION = "3.15"
-VENV = "/opt/guildbotics/venv"
-#: Where every microVM has the running process's own ``guildbotics`` package
-#: (the checkout run from, or this build's own bundle), read-only. Only
-#: :data:`VENV` finds it there, through a ``.pth`` the build writes: nothing
-#: in a process's environment points at it, so a project a turn works on --
-#: GuildBotics' own checkout among them -- imports its own code. A place of
-#: GuildBotics' own rather than the host's path, so it never lands inside a
-#: directory of the user's that a turn works in.
-CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
-#: The dependencies of GuildBotics installed into :data:`VENV`: ``uv.lock``
-#: exported without what only the host uses (see the test that regenerates
-#: it). Its content is part of the build step, so a change rebuilds.
-REQUIREMENTS = Path(__file__).with_name("requirements.txt")
-#: What WeasyPrint loads to draw a PDF (``to_pdf``), and fonts for Latin and
-#: CJK text: without them Japanese renders as empty boxes.
-PDF_PACKAGES = (
-    "libpango-1.0-0",
-    "libpangoft2-1.0-0",
-    "libharfbuzz-subset0",
-    "fontconfig",
-    "fonts-dejavu-core",
-    "fonts-noto-cjk",
-)
+# The recipe is data so the Rust host can read it after the Python host is removed.
+_RECIPE_DIR = get_template_path() / "environment"
+_RECIPE = json.loads((_RECIPE_DIR / "recipe.json").read_text(encoding="utf-8"))
+UV_VERSION = _RECIPE["uv_version"]
+NODE_VERSION = _RECIPE["node_version"]
+NODE_SHA256 = _RECIPE["node_sha256"]
+_NODE_PLATFORMS = _RECIPE["node_platforms"]
+PYTHON_VERSION = _RECIPE["python_version"]
+VENV = _RECIPE["venv"]
+CODE_ROOT = PurePosixPath(_RECIPE["code_root"])
+REQUIREMENTS = _RECIPE_DIR / "requirements.txt"
+PDF_PACKAGES = tuple(_RECIPE["pdf_packages"])
 
 SNAPSHOT_PREFIX = "guildbotics-"
 _LOCK_FILE = "build.lock"

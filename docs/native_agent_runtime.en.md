@@ -101,9 +101,9 @@ when it has one, otherwise installed by uv under `/opt/uv/python`) and the
 pinned dependencies, and `apt-get` installs WeasyPrint's native libraries
 (Pango) for `to_pdf` with fonts for Latin and Japanese text
 (`fonts-dejavu-core`, `fonts-noto-cjk`). The dependency list is
-`guildbotics/environment/requirements.txt`, exported
+`guildbotics/templates/environment/requirements.txt`, exported
 from `uv.lock` without `microsandbox`, which only the host uses (export it
-again after changing `uv.lock`; the drift test `test_requirements.py`
+again after changing `uv.lock`; the drift test `tests/test_environment_requirements.py`
 prints the command when it fails). The snapshot is named after the content
 of every build step, so a changed list makes it stale and it is rebuilt;
 commands cannot start during the rebuild (tens of seconds to minutes). The code

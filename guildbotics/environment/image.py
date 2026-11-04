@@ -12,6 +12,7 @@ service's upkeep -- so every place lists and refuses the same images.
 
 from __future__ import annotations
 
+import json
 import platform
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 from guildbotics.environment import runtime
 from guildbotics.environment.runtime import ImageInfo
 from guildbotics.environment.toolchain import ToolchainDeclaration
+from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.managed_cli import managed_cli_command
 
@@ -30,7 +32,9 @@ from guildbotics.utils.managed_cli import managed_cli_command
 #: :data:`.snapshot.PYTHON_VERSION`; and git, which member git runs a member's
 #: clones with. The Node.js the provider CLIs run with is the recipe's own
 #: (:data:`.snapshot.NODE_VERSION`), installed over the image's.
-IMAGE = "node:24.22.1-bookworm"
+IMAGE: str = json.loads(
+    (get_template_path() / "environment" / "recipe.json").read_text(encoding="utf-8")
+)["image"]
 #: How much of a digest a person is shown: enough to tell two apart.
 _SHORT_DIGEST = len("sha256:") + 12
 #: The runtime's own name for what it pulled, beside the tag it was asked

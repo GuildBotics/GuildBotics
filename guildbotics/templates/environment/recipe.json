@@ -1,0 +1,24 @@
+{
+  "image": "node:24.22.1-bookworm",
+  "uv_version": "0.13.5",
+  "node_version": "24.22.2",
+  "node_sha256": {
+    "x86_64": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
+    "aarch64": "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2"
+  },
+  "node_platforms": {
+    "x86_64": "linux-x64",
+    "aarch64": "linux-arm64"
+  },
+  "python_version": "3.15",
+  "venv": "/opt/guildbotics/venv",
+  "code_root": "/opt/guildbotics/code",
+  "pdf_packages": [
+    "libpango-1.0-0",
+    "libpangoft2-1.0-0",
+    "libharfbuzz-subset0",
+    "fontconfig",
+    "fonts-dejavu-core",
+    "fonts-noto-cjk"
+  ]
+}

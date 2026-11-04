@@ -1,6 +1,6 @@
 """Guard against drift between ``uv.lock`` and the microVM's dependency list.
 
-``environment/requirements.txt`` is what the snapshot installs for
+``templates/environment/requirements.txt`` is what the snapshot installs for
 GuildBotics' own code inside the microVM. It is exported from ``uv.lock``
 without what only the host uses -- ``microsandbox``, which drives the microVMs,
 and ``wakepy``, which keeps the host awake -- and this test exports it again
@@ -14,9 +14,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from guildbotics.environment.snapshot import REQUIREMENTS
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+REQUIREMENTS = REPO_ROOT / "guildbotics/templates/environment/requirements.txt"
 EXPORT = [
     "uv",
     "export",
