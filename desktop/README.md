@@ -7,7 +7,10 @@ provider ごとの設定は各アプリ側が持ちます。CSS は Mantine、�
 共有部品の順に読み込みます。`npm run quality` は共有パッケージの検査も実行します。
 
 PR の目視確認用画像は `GUILDBOTICS_SCREENSHOT_PHASE=before npm run e2e -- visual.spec.ts`
-（変更後は `after`）で `docs/screenshots/117/` に保存します。実 backend の一時ワークスペースを
+（変更後は `after`）で `docs/screenshots/desktop/` に保存します。保存先の親ディレクトリは
+`GUILDBOTICS_SCREENSHOT_DIR`（desktop からの相対パス、または絶対パス）で指定できます。
+たとえば `GUILDBOTICS_SCREENSHOT_DIR=../docs/screenshots/117` とすると、この PR の確認画像と同じ配置になります。
+実 backend の一時ワークスペースを
 使い、サービス・コマンド・診断・設定を light / dark で撮ります。撮影時は一時環境の System health alerts を非表示にし、Workspace 欄をマスクします。
 診断は動的なログを避けてメモリータブを撮ります。画像は desktop-quality の
 `desktop-visual` artifact でも取得できます。通常の E2E では画像保存だけをスキップします。

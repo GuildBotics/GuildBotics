@@ -7,7 +7,10 @@ import { test } from "./stack-context";
 const phase = process.env.GUILDBOTICS_SCREENSHOT_PHASE;
 test("capture the desktop presentation for review", async ({ page }) => {
   test.skip(!phase, "Set GUILDBOTICS_SCREENSHOT_PHASE to capture review evidence");
-  const directory = resolve("../docs/screenshots/117", phase!);
+  const directory = resolve(
+    process.env.GUILDBOTICS_SCREENSHOT_DIR ?? "../docs/screenshots/desktop",
+    phase!,
+  );
   mkdirSync(directory, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   for (const scheme of ["light", "dark"] as const) {

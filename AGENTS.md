@@ -631,7 +631,7 @@ uv sync --extra dev
 
 desktop frontend (`desktop/`) の品質確認:
 
-画面の依存はルートの npm workspaces（`desktop` と `crates/branvil/web`）と
+画面の依存はルートの npm workspaces（`desktop`、`crates/branvil/web`、`packages/ui`）と
 `package-lock.json` で管理する。`npm ci` はルートで行い、共通依存の範囲をそろえる。
 Playwright の lock の版は開発イメージの `PLAYWRIGHT_VERSION` と一致させる
 （`tests/test_npm_workspace.py` が検査する）。
