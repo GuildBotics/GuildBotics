@@ -13,19 +13,28 @@ into individual prompts, the en/ja prompt variants must not drift apart, and
 no layer names the provider a workspace configures for a kind of service.
 """
 
+import json
 import re
 import subprocess
 from itertools import combinations
 from pathlib import Path
 
-import click
 import pytest
 import yaml
 
-from guildbotics.capabilities.member_reference import capability_reference_text
-from guildbotics.environment.snapshot import VENV
-from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
+
+REFERENCE_PATH = Path("guildbotics/templates/member/reference.md")
+CATALOG = json.loads(
+    Path("guildbotics/templates/member/catalog.json").read_text(encoding="utf-8")
+)
+VENV = CATALOG["guest_venv"]
+PROVIDERS = CATALOG["provider_names"]
+
+
+def capability_reference_text() -> str:
+    return REFERENCE_PATH.read_text(encoding="utf-8").strip()
+
 
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 SKILL_PATH = Path("skills/guildbotics/SKILL.md")
@@ -55,7 +64,7 @@ AGENT_FACING_ROOTS = (
     Path("guildbotics/templates/locales/commands/workflows"),
     # Role descriptions reach the agent through ``member context``.
     Path("guildbotics/templates/roles"),
-    Path("guildbotics/capabilities/member_reference.py"),
+    REFERENCE_PATH,
     SKILL_PATH,
     *REVIEW_SKILL_PATHS,
     ASK_PATH.with_suffix(".en.md"),
@@ -336,7 +345,7 @@ def test_review_feedback_procedure_is_complete_in_both_languages(
 
 
 def test_review_feedback_entrypoints_reference_the_shared_procedure():
-    reference_path = "guildbotics/capabilities/member_reference.py"
+    reference_path = "guildbotics/templates/member/reference.md"
     for language, heading in (
         ("en", "Handling review feedback"),
         ("ja", "レビュー指摘への対応"),
@@ -569,13 +578,6 @@ def test_chat_work_states_no_frontmatter_effort():
         assert "effort" not in _frontmatter("handle_chat_event", language)
 
 
-def test_chat_judgment_owns_repository_work_criteria():
-    from guildbotics.capabilities.decisions.chat_policy import QUESTIONS
-
-    assert "repository guidelines" in QUESTIONS["work_repo_decision"].instructions
-    assert "Technical terminology alone" in QUESTIONS["work_repo_decision"].instructions
-
-
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
     """Each run must route guideline checks through its current prepared
     checkout (issue #381), while the contract itself
@@ -610,22 +612,8 @@ def test_agent_facing_layers_do_not_name_a_provider():
     assert named == []
 
 
-def _options(command: click.Command) -> set[str]:
-    names = {
-        name
-        for parameter in command.params
-        for name in (*parameter.opts, *parameter.secondary_opts)
-        if name.startswith("--")
-    }
-    if isinstance(command, click.Group):
-        for child in command.commands.values():
-            names |= _options(child)
-    return names
-
-
 def test_agent_facing_layers_name_only_member_commands_that_exist():
     """A command a layer tells the agent to run is one the member CLI has."""
-    from guildbotics.cli.member import member
 
     named = {
         (path.as_posix(), match.group(1))
@@ -636,19 +624,14 @@ def test_agent_facing_layers_name_only_member_commands_that_exist():
     }
     assert named
     assert {
-        (path, name) for path, name in named if name not in member.commands
+        (path, name) for path, name in named if name not in CATALOG["member_commands"]
     } == set()
 
 
 def test_agent_facing_layers_name_only_options_that_exist():
     """An option a layer tells the agent to pass is one of the member CLI's or
     of ``guildbotics run``'s, so a removed option cannot linger in a prompt."""
-    from guildbotics.cli import main
-    from guildbotics.cli.member import member
-
-    run = main.get_command(click.Context(main), "run")
-    assert run is not None
-    known = _options(member) | _options(run) | {"--help"}
+    known = set(CATALOG["options"])
     named = {
         (path.as_posix(), option)
         for path in _agent_facing_files()

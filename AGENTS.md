@@ -235,7 +235,7 @@ Click 定義から生成される `docs/cli_reference.md` を参照する（`scr
 で再生成。drift は CI の `generate-cli-reference.py --check` ステップと
 `tests/guildbotics/cli/test_cli_reference.py` が検出する）。CLI の説明文は Click 定義の
 help / docstring が正であり、member コマンドの一行説明は
-`guildbotics/capabilities/member_reference.py` のカタログから注入される。
+`guildbotics/templates/member/reference.md` のカタログから注入される。
 
 補足（実装ポイント）:
 
@@ -407,7 +407,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 member 向けエージェント指示（SKILL / workflow プロンプト）は層モデルで管理する。
 
-- 全体共通（コマンドカタログ、標準作業手順、memory / communication style などの横断契約）は `guildbotics/capabilities/member_reference.py` に置き、`member context` / `member help` で runtime 配信する
+- 全体共通（コマンドカタログ、標準作業手順、memory / communication style などの横断契約）は `guildbotics/templates/member/reference.md` に置き、`member context` / `member help` で runtime 配信する
 - workflow 共通の封筒（実行モードマーカー、isolated workspace、complete 必須、AgentResponse 規定）は `guildbotics/templates/locales/commands/workflows/common.{en,ja}.yml` の `workflow_contract` に置き、各 workflow が `{workflow_contract}` としてテンプレートへ注入する
 - trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_ticket` / `functions/handle_chat_event` に書く
 - 対話封筒（共有ワークスペース、`--workspace-mode current`、対話 DOD）だけを `skills/guildbotics/SKILL.md` に書く
@@ -751,7 +751,7 @@ desktop TypeScript 開発時の品質確認:
 
 ## レビュー指摘への対応
 
-手順の正本は [member_reference.py](guildbotics/capabilities/member_reference.py) の
+手順の正本は [reference.md](guildbotics/templates/member/reference.md) の
 「Handling review feedback / レビュー指摘への対応」。`member context` / `member help` で配信する。
 このリポジトリで指摘に対応するときは、`.agents/skills/handle-review-feedback/SKILL.md` または
 `.claude/skills/handle-review-feedback/SKILL.md` を読み、その時点の正本に従う。
