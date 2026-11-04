@@ -13,16 +13,12 @@ pub struct Freshness {
     pub requires_up_to_date: bool,
 }
 
+/// Conclusions whose jobs provide failure logs. A provider's synthetic
+/// `error` affects rollup, but does not identify a job whose log can be read.
 pub fn failed_conclusion(conclusion: &str) -> bool {
     matches!(
         conclusion,
-        "action_required"
-            | "cancelled"
-            | "failure"
-            | "startup_failure"
-            | "stale"
-            | "timed_out"
-            | "error"
+        "action_required" | "cancelled" | "failure" | "startup_failure" | "stale" | "timed_out"
     )
 }
 
@@ -47,10 +43,11 @@ pub fn inspected(checks: &[Check]) -> Vec<&Check> {
 pub fn check_rollup(checks: &[Check]) -> ReadinessRollup {
     if checks.is_empty() {
         ReadinessRollup::NoChecks
-    } else if checks
-        .iter()
-        .any(|c| c.conclusion.as_deref().is_some_and(failed_conclusion))
-    {
+    } else if checks.iter().any(|c| {
+        c.conclusion
+            .as_deref()
+            .is_some_and(|s| failed_conclusion(s) || s == "error")
+    }) {
         ReadinessRollup::Failure
     } else if checks.iter().all(|c| {
         c.status == "completed"

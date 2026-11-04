@@ -11,3 +11,4 @@ publish = false
 [dependencies]
 gb-ports = { path = "../gb-ports" }
 serde_json = "1.0.154"
+unicode-casefold = "0.2"
