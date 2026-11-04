@@ -324,6 +324,13 @@ impl Gateway {
         })
     }
 }
+fn authentication_refusal(reason: String) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"type":"error","error":{"type":"authentication_error","message":reason}})),
+    )
+        .into_response()
+}
 async fn forward(State(state): State<GatewayState>, request: axum::extract::Request) -> Response {
     let incoming = state.policy.provider.credential_header();
     let presented = request
@@ -339,7 +346,7 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
         })
         .unwrap_or("");
     let Some(generation) = state.leases.authorize(presented) else {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return authentication_refusal("The login is invalid or expired.".into());
     };
     let stand_in = presented.to_owned();
     let target = match state.policy.target(
@@ -379,11 +386,11 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
     let (response, token) = loop {
         let token = match (state.source)(refused.clone()).await {
             Ok(token) if !token.is_empty() => token,
-            Ok(_) => return StatusCode::UNAUTHORIZED.into_response(),
-            Err(reason) => return (StatusCode::UNAUTHORIZED, reason).into_response(),
+            Ok(_) => return authentication_refusal("The login is invalid or expired.".into()),
+            Err(reason) => return authentication_refusal(reason),
         };
         if !state.leases.accepts(generation, &stand_in) {
-            return StatusCode::UNAUTHORIZED.into_response();
+            return authentication_refusal("The login is invalid or expired.".into());
         }
         let mut upstream = state
             .client
@@ -403,7 +410,7 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
         if answer.status() == StatusCode::UNAUTHORIZED
             && let Err(reason) = (state.source)(Some(token.clone())).await
         {
-            return (StatusCode::UNAUTHORIZED, reason).into_response();
+            return authentication_refusal(reason);
         }
         break (answer, token);
     };
@@ -492,6 +499,27 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
 mod tests {
     use super::*;
     #[test]
+    fn guest_work_admission_uses_posix_boundaries_on_every_host() {
+        let mounts = BTreeMap::from([("/c/work".into(), true), ("/c/work/config".into(), false)]);
+        for cwd in ["/c/work", "/c/work/src", "/c/work/with space"] {
+            assert!(admits(&mounts, cwd), "{cwd}");
+        }
+        for cwd in [
+            "C:\\work",
+            "c/work",
+            "/c/work/../secret",
+            "/c/work/config",
+            "/c/work/config/token",
+            "/c/work/./config/token",
+            "/c/work//config/token",
+            "/c/work-other",
+            "//c/work",
+            "/c/work\0",
+        ] {
+            assert!(!admits(&mounts, cwd), "{cwd}");
+        }
+    }
+    #[test]
     fn work_admission_and_turn_readonly_access_are_distinct_contracts() {
         let mounts = vec![
             gb_environment::Mount {
@@ -542,31 +570,28 @@ mod tests {
             ("/copied-cwd".into(), true),
             ("/exchange/closed".into(), false),
         ]);
-        assert!(admits(&facts, std::path::Path::new("/exchange/file")));
-        assert!(admits(&facts, std::path::Path::new("/readonly-grant")));
-        assert!(admits(&facts, std::path::Path::new("/copied-cwd")));
-        assert!(!admits(&facts, std::path::Path::new("/code")));
-        assert!(!admits(
-            &facts,
-            std::path::Path::new("/exchange/closed/file")
-        ));
-        assert!(!admits(&facts, std::path::Path::new("/unknown")));
+        assert!(admits(&facts, "/exchange/file"));
+        assert!(admits(&facts, "/readonly-grant"));
+        assert!(admits(&facts, "/copied-cwd"));
+        assert!(!admits(&facts, "/code"));
+        assert!(!admits(&facts, "/exchange/closed/file"));
+        assert!(!admits(&facts, "/unknown"));
+    }
+    struct RecordingKeychain;
+    impl gb_config::secrets::Keychain for RecordingKeychain {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            use base64::Engine;
+            Ok(Some(
+                base64::engine::general_purpose::STANDARD.encode([19; 32]),
+            ))
+        }
+        fn create(&self, _: &str) -> anyhow::Result<()> {
+            panic!("key exists")
+        }
     }
     #[test]
     fn stored_secrets_are_masked_in_activity_even_when_names_overlap() {
-        use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
-        struct Fake;
-        impl Keychain for Fake {
-            fn read(&self) -> anyhow::Result<Option<String>> {
-                use base64::Engine;
-                Ok(Some(
-                    base64::engine::general_purpose::STANDARD.encode([19; 32]),
-                ))
-            }
-            fn create(&self, _: &str) -> anyhow::Result<()> {
-                panic!("key exists")
-            }
-        }
+        use gb_config::secrets::{DeviceKey, Scope, SecretStore};
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");
         let host = gb_environment::Host {
@@ -588,14 +613,14 @@ mod tests {
                 scope,
                 DeviceKey {
                     machine_root: dir.path().into(),
-                    keychain: &Fake,
+                    keychain: &RecordingKeychain,
                 },
             )
             .unwrap()
             .set("STORE_ONLY_TEST_KEY", value)
             .unwrap();
         }
-        let redactor = command_redactor(&host, &workspace, &Fake).unwrap();
+        let redactor = command_redactor(&host, &workspace, &RecordingKeychain).unwrap();
         let value = redactor.local(record_entry(json!({"type":"event", "span":null, "event":{"kind":"failed", "name":"failed", "message":"synthetic-identity-value / synthetic-workspace-value"}}), "trace", "run", "aiko", "test").unwrap());
         let encoded = serde_json::to_string(&value).unwrap();
         assert!(!encoded.contains("synthetic-identity-value"));
@@ -608,6 +633,56 @@ mod tests {
         assert!(saved.contains("*** / ***"));
         assert!(!saved.contains("synthetic-identity-value"));
         assert!(!saved.contains("synthetic-workspace-value"));
+    }
+    #[test]
+    fn locked_recording_store_keeps_environment_masks_without_blocking_commands() {
+        const CHILD: &str = "GUILDBOTICS_REDACTOR_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "host_window::tests::locked_recording_store_keeps_environment_masks_without_blocking_commands", "--nocapture"])
+                .env(CHILD,"1").env("STORE_ONLY_TEST_KEY","synthetic-env-value").status().unwrap();
+            assert!(result.success());
+            return;
+        }
+        struct Locked;
+        impl gb_config::secrets::Keychain for Locked {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                Err(gb_config::secrets::KeychainFailure::Locked.into())
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("recording must not create keys")
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let host = gb_environment::Host {
+            data: dir.path().join("data"),
+            home: dir.path().join("home"),
+            package: dir.path().join("package"),
+            identity_root: dir.path().join("identity"),
+        };
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            host.identity_root.clone(),
+            Some(workspace.clone()),
+        );
+        for scope in [
+            gb_config::secrets::Scope::Identity,
+            gb_config::secrets::Scope::Workspace,
+        ] {
+            gb_config::secrets::SecretStore::new(
+                &writes,
+                scope,
+                gb_config::secrets::DeviceKey {
+                    machine_root: dir.path().into(),
+                    keychain: &RecordingKeychain,
+                },
+            )
+            .unwrap()
+            .set("STORE_ONLY_TEST_KEY", "synthetic-store-value")
+            .unwrap();
+        }
+        let redactor = command_redactor(&host, &workspace, &Locked).unwrap();
+        assert_eq!(redactor.text("output synthetic-env-value"), "output ***");
     }
     #[test]
     fn recorded_io_retains_local_detail_and_span_summary_keeps_its_schema() {
@@ -952,13 +1027,7 @@ impl HttpHost {
                         let cwd = args["cwd"]
                             .as_str()
                             .ok_or_else(|| HostError::refused("Working directory required."))?;
-                        let path = std::path::Path::new(cwd);
-                        if !path.is_absolute()
-                            || path
-                                .components()
-                                .any(|c| matches!(c, std::path::Component::ParentDir))
-                            || !admits(&context.mounts, path)
-                        {
+                        if !admits(&context.mounts, cwd) {
                             return Err(HostError::refused("Working directory is not mounted."));
                         }
                         let mut active = current.lock().await;
@@ -1106,13 +1175,33 @@ impl HttpHost {
         Ok(host)
     }
 }
-fn admits(mounts: &BTreeMap<String, bool>, cwd: &std::path::Path) -> bool {
+fn admits(mounts: &BTreeMap<String, bool>, cwd: &str) -> bool {
+    if !cwd.starts_with('/')
+        || cwd.starts_with("//")
+        || cwd.contains('\0')
+        || cwd.split('/').any(|part| part == "..")
+    {
+        return false;
+    }
+    let cwd = format!(
+        "/{}",
+        cwd.split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>()
+            .join("/")
+    );
     mounts
         .iter()
-        .filter(|(root, _)| cwd.starts_with(root))
-        .max_by_key(|(root, _)| std::path::Path::new(root).components().count())
+        .filter(|(root, _)| {
+            root.as_str() == "/"
+                || cwd
+                    .strip_prefix(root.as_str())
+                    .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+        })
+        .max_by_key(|(root, _)| root.split('/').filter(|part| !part.is_empty()).count())
         .is_some_and(|(_, open)| *open)
 }
+
 fn turn_directories(
     mounts: &[gb_environment::Mount],
     tool_mounts: &[gb_environment::Mount],
@@ -1279,10 +1368,10 @@ pub async fn prepare_command(
             .map_err(|e| e.to_string())?;
     if let Some(commands) = resolved["commands"].as_object_mut() {
         for value in commands.values_mut() {
-            if let Some(path) = value.as_str()
-                && let Ok(relative) = std::path::Path::new(path).strip_prefix(&host.package)
-            {
-                *value = format!("{}/{}", gb_environment::CODE_ROOT, relative.display()).into();
+            if let Some(path) = value.as_str() {
+                *value = gb_environment::command_path(host, std::path::Path::new(path))
+                    .map_err(|_| "Invalid command guest path.")?
+                    .into();
             }
         }
     }
@@ -1417,7 +1506,7 @@ pub async fn prepare_command(
     let context = Context {
         invocation,
         workspace: workspace.into(),
-        home: host.home.to_string_lossy().into(),
+        home: gb_environment::guest_path(&host.home).map_err(|_| "Invalid guest home.")?,
         mounts: serde_json::from_str::<gb_wire::CommandFacts>(
             &shape
                 .env
@@ -1630,7 +1719,15 @@ fn command_redactor(
         gb_config::secrets::Scope::Identity,
         gb_config::secrets::Scope::Workspace,
     ] {
-        let store = gb_config::secrets::SecretStore::new(
+        let root = match scope {
+            gb_config::secrets::Scope::Identity => &host.identity_root,
+            gb_config::secrets::Scope::Workspace => workspace,
+        };
+        match gb_config::secrets::read_secret_index(&root.join(".guildbotics/config")) {
+            Ok(index) => names.extend(index),
+            Err(_) => tracing::warn!("The recording secret index could not be read."),
+        }
+        match gb_config::secrets::SecretStore::new(
             &writes,
             scope,
             gb_config::secrets::DeviceKey {
@@ -1638,13 +1735,17 @@ fn command_redactor(
                 keychain,
             },
         )
-        .map_err(|_| "The host secret store is unavailable.".to_owned())?;
-        for (name, value) in store
-            .values()
-            .map_err(|_| "The host secret store could not open.".to_owned())?
+        .and_then(|store| store.values())
         {
-            names.insert(name);
-            values.push(value);
+            Ok(found) => {
+                for (name, value) in found {
+                    names.insert(name);
+                    values.push(value);
+                }
+            }
+            Err(_) => tracing::warn!(
+                "The recording secret store could not be opened; retaining available masks."
+            ),
         }
     }
     values.extend(

@@ -569,6 +569,16 @@ pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
     })
 }
 
+fn build_timeout(language: &str) -> String {
+    crate::commands::say(
+        gb_environment::Sentence::Key(
+            "intelligences.agent_environment.snapshot.build_timeout",
+            vec![("minutes", "30".into())],
+        ),
+        language,
+    )
+}
+
 /// Build from one declaration reading; only a completed replacement prunes old snapshots.
 pub async fn build(
     workspace: &std::path::Path,
@@ -608,17 +618,23 @@ pub async fn build(
     if !force && current.state == snapshot::State::Ready {
         return Ok(current.path);
     }
-    let network = contract::network(&config, &templates, false).map_err(anyhow::Error::msg)?;
+    let network = contract::network(&config, &templates, false)
+        .map_err(|reason| anyhow::anyhow!(crate::commands::say(reason, language)))?;
     let base = declared
         .as_ref()
         .map(|i| i.reference.as_str())
         .unwrap_or(&recipe.image)
         .to_owned();
     let pull = declared.is_none();
-    let guest_home = home.to_string_lossy().into_owned();
+    let guest_home = gb_environment::guest_path(home).map_err(|reason| match reason {
+        gb_environment::Failure::Command(sentence) | gb_environment::Failure::Runtime(sentence) => {
+            anyhow::anyhow!(crate::commands::say(sentence, language))
+        }
+    })?;
     let result = snapshot::build(
         workspace,
         &name,
+        build_timeout(language),
         move |directory, cancelled| async move {
             runtime::build_snapshot(
                 runtime::Build {
@@ -671,25 +687,43 @@ pub(crate) async fn build_route(
     begin_output(&workspace);
     let data = api.data.clone();
     let language = language.to_owned();
+    let cancelled = api.cancelled.clone();
     api.work.spawn(async move {
         let output_workspace = workspace.clone();
-        if let Err(error) = build(
+        build_task(
             &workspace,
-            &data,
-            &home,
-            input.force,
-            &language,
-            move |line| {
-                tracing::info!("{line}");
-                output(&output_workspace, line);
-            },
+            cancelled,
+            build(
+                &workspace,
+                &data,
+                &home,
+                input.force,
+                &language,
+                move |line| {
+                    tracing::info!("{line}");
+                    output(&output_workspace, line);
+                },
+            ),
         )
-        .await
-        {
-            output(&workspace, &format!("Build failed: {error}"));
-        }
+        .await;
     });
     Json(json!({"state":"building","output":[]})).into_response()
+}
+
+async fn build_task(
+    workspace: &std::path::Path,
+    cancelled: tokio_util::sync::CancellationToken,
+    build: impl Future<Output = anyhow::Result<PathBuf>>,
+) {
+    tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => {},
+        result = build => {
+            if let Err(error) = result {
+                output(workspace, &format!("Build failed: {error}"));
+            }
+        }
+    }
 }
 
 /// A CI archive belongs to the code host's runner store, not this device's store.
@@ -850,6 +884,50 @@ fn ci_result(operation: &Value, path: &std::path::Path) -> anyhow::Result<Option
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn server_shutdown_cancels_build_work_without_publishing_a_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().to_owned();
+        super::begin_output(&workspace);
+        let work = tokio_util::task::TaskTracker::new();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let cancellation = cancelled.clone();
+        let dropped = tokio_util::sync::CancellationToken::new();
+        let dropped_guard = dropped.clone().drop_guard();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let task_workspace = workspace.clone();
+        work.spawn(async move {
+            super::build_task(&task_workspace, cancellation, async move {
+                let _held = dropped_guard;
+                let _ = started.send(());
+                std::future::pending().await
+            })
+            .await;
+        });
+        running.await.unwrap();
+        cancelled.cancel();
+        work.close();
+        tokio::time::timeout(std::time::Duration::from_millis(100), work.wait())
+            .await
+            .unwrap();
+        assert!(dropped.is_cancelled());
+        let mut view = serde_json::json!({"snapshot":{}});
+        super::attach_output(&workspace, &mut view);
+        assert_eq!(view["snapshot"]["output"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn build_timeout_uses_the_locale_key_in_both_languages() {
+        assert_eq!(
+            super::build_timeout("en"),
+            "The build did not finish within 30 minutes."
+        );
+        assert_eq!(
+            super::build_timeout("ja"),
+            "ビルドが 30 分以内に終わりませんでした。"
+        );
+    }
+
     #[tokio::test]
     async fn usage_route_is_owner_only_validates_tools_and_answers_without_a_login() {
         use axum::{

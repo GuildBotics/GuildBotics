@@ -1,5 +1,5 @@
 //! Resolve the shared/local filesystem contract before creating any directory.
-use crate::Mount;
+use crate::{Mount, Sentence};
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
@@ -281,7 +281,7 @@ fn resolve_with_probe(
         }
         let checked = validate_source(&path, &denied, true, false)?;
         grants.push(Mount {
-            guest: checked.to_str().ok_or("Path is not UTF-8")?.into(),
+            guest: crate::guest_path(&checked).map_err(|_| "Invalid guest path")?,
             host: Some(checked),
             readonly: read_only || matches!(access, Access::Read),
         });
@@ -330,7 +330,7 @@ pub fn network(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<crate::runtime::Network, String> {
+) -> Result<crate::runtime::Network, Sentence> {
     network_reading(config, templates, read_only).map(|(network, _)| network)
 }
 
@@ -338,7 +338,7 @@ pub fn network_reading(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<(crate::runtime::Network, serde_json::Value), String> {
+) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
     network_with_resolvers(config, templates, read_only, device_nameservers)
 }
 
@@ -347,58 +347,81 @@ fn network_with_resolvers(
     templates: &Path,
     read_only: bool,
     resolvers: impl FnOnce() -> Vec<String>,
-) -> Result<(crate::runtime::Network, serde_json::Value), String> {
+) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
     let own = config.join(gb_config::agent_environment::PATH);
     let path = if own.exists() {
         own
     } else {
         templates.join(gb_config::agent_environment::PATH)
     };
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let value = gb_config::yaml_value(&text).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&path).map_err(|e| Sentence::Text(e.to_string()))?;
+    let value = gb_config::yaml_value(&text).map_err(|e| Sentence::Text(e.to_string()))?;
     let object = value
         .as_object()
-        .ok_or("Environment declaration must be an object")?;
+        .ok_or_else(|| Sentence::Text("Environment declaration must be an object".into()))?;
     if object
         .keys()
         .any(|key| !["image", "resources", "network", "dns"].contains(&key.as_str()))
     {
-        return Err("Unknown environment declaration field".into());
+        return Err(Sentence::Text(
+            "Unknown environment declaration field".into(),
+        ));
     }
-    gb_config::agent_environment::resources(config, templates).map_err(|e| e.to_string())?;
-    gb_config::agent_environment::image(config, templates).map_err(|e| e.to_string())?;
+    gb_config::agent_environment::resources(config, templates)
+        .map_err(|e| Sentence::Text(e.to_string()))?;
+    gb_config::agent_environment::image(config, templates)
+        .map_err(|e| Sentence::Text(e.to_string()))?;
     let dns = object
         .get("dns")
         .and_then(serde_json::Value::as_object)
-        .ok_or("DNS declaration is required")?;
+        .ok_or_else(|| Sentence::Text("DNS declaration is required".into()))?;
     if dns.keys().any(|key| key != "nameservers") {
-        return Err("Unknown DNS declaration field".into());
+        return Err(Sentence::Text("Unknown DNS declaration field".into()));
     }
     let policy: Network = match value.get("network") {
         None => Network::default(),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| Sentence::Text(e.to_string()))?,
     };
-    policy.validate()?;
+    policy.validate().map_err(Sentence::Text)?;
     let mut nameservers = Vec::new();
     match value.pointer("/dns/nameservers") {
-        None => return Err("DNS nameservers are required".into()),
+        None => return Err(Sentence::Text("DNS nameservers are required".into())),
         Some(serde_json::Value::String(host)) if host == "host" => {
             nameservers = resolvers();
+            if nameservers.is_empty() {
+                return Err(Sentence::Key(
+                    "intelligences.agent_environment.declaration.no_device_resolver",
+                    vec![
+                        ("where", path.display().to_string()),
+                        ("host", host.clone()),
+                    ],
+                ));
+            }
         }
         Some(serde_json::Value::Array(list)) => {
             for entry in list {
                 let ip: std::net::Ipv4Addr = entry
                     .as_str()
-                    .ok_or("DNS must name IPv4 resolvers")?
+                    .ok_or_else(|| Sentence::Text("DNS must name IPv4 resolvers".into()))?
                     .parse()
-                    .map_err(|_| "DNS must name IPv4 resolvers")?;
+                    .map_err(|_| Sentence::Text("DNS must name IPv4 resolvers".into()))?;
                 nameservers.push(ip.to_string());
             }
         }
-        _ => return Err("DNS must name IPv4 resolvers or host".into()),
+        _ => {
+            return Err(Sentence::Text(
+                "DNS must name IPv4 resolvers or host".into(),
+            ));
+        }
     }
     if nameservers.is_empty() {
-        return Err("No IPv4 DNS resolver is available".into());
+        return Err(Sentence::AtPath(
+            path,
+            Box::new(Sentence::Key(
+                "intelligences.agent_environment.declaration.no_nameservers",
+                vec![("host", "host".into())],
+            )),
+        ));
     }
     let declared = match value
         .pointer("/dns/nameservers")
@@ -419,7 +442,7 @@ fn network_with_resolvers(
         host_ports: vec![],
         nameservers,
     };
-    network.policy()?;
+    network.policy().map_err(Sentence::Text)?;
     Ok((network, view))
 }
 
@@ -636,30 +659,18 @@ pub fn copy_plan(
     {
         return Err("The working directory is inside a read-only grant".into());
     }
+    let guest = crate::guest_path(&source).map_err(|_| "Invalid working directory guest path")?;
     let mut excluded = vec![".git".into(), ".guildbotics".into()];
     for mount in mounts.iter().chain(&access.grants) {
-        if let Ok(relative) = Path::new(&mount.guest).strip_prefix(&source)
-            && !relative.as_os_str().is_empty()
+        if let Some(relative) = mount.guest.strip_prefix(&format!("{guest}/"))
+            && !relative.is_empty()
         {
-            excluded.push(
-                relative
-                    .to_str()
-                    .ok_or("Mount path is not UTF-8")?
-                    .to_owned(),
-            );
+            excluded.push(relative.to_owned());
         }
     }
     excluded.sort();
     excluded.dedup();
-    crate::worktree::Copy::new(
-        source.clone(),
-        source
-            .to_str()
-            .ok_or("Working directory is not UTF-8")?
-            .into(),
-        excluded,
-        lock,
-    )
+    crate::worktree::Copy::new(source, guest, excluded, lock)
 }
 
 pub struct Plan {
@@ -678,7 +689,8 @@ pub fn plan(
     read_only: bool,
 ) -> Result<Plan, String> {
     let cwd = gb_base::host_path::directory(cwd, read_only).map_err(|e| e.to_string())?;
-    mounts.retain(|m| m.guest != cwd.to_string_lossy() || m.host.is_some());
+    let guest = crate::guest_path(&cwd).map_err(|_| "Invalid working directory guest path")?;
+    mounts.retain(|m| m.guest != guest || m.host.is_some());
     let clones = workspace.join(".guildbotics/local/clones").join(person);
     let managed = cwd
         .strip_prefix(&clones)
@@ -693,7 +705,7 @@ pub fn plan(
     if clones.exists() {
         let checked = validate_source(&clones, &access.denied, false, false)?;
         let mount = Mount {
-            guest: checked.to_str().ok_or("Clone path is not UTF-8")?.into(),
+            guest: crate::guest_path(&checked).map_err(|_| "Invalid clone guest path")?,
             host: Some(checked),
             readonly: read_only,
         };
@@ -710,9 +722,9 @@ pub fn plan(
         return Err("The working directory is inside a read-only grant".into());
     }
     let copy = if read_only {
-        if !mounts.iter().any(|m| m.guest == cwd.to_string_lossy()) {
+        if !mounts.iter().any(|m| m.guest == guest) {
             mounts.push(Mount {
-                guest: cwd.to_str().ok_or("cwd is not UTF-8")?.into(),
+                guest: guest.clone(),
                 host: None,
                 readonly: false,
             });
@@ -725,7 +737,7 @@ pub fn plan(
     };
     mounts.sort_by_key(|mount| Path::new(&mount.guest).components().count());
     Ok(Plan {
-        cwd: cwd.to_str().ok_or("cwd is not UTF-8")?.into(),
+        cwd: guest,
         mounts,
         copy,
     })
@@ -968,11 +980,48 @@ mod frozen_tests {
             gb_config::agent_environment::PATH,
             "dns: {nameservers: host}",
         );
-        assert!(
-            network_with_resolvers(&config, &templates, false, Vec::new)
-                .unwrap_err()
-                .contains("No IPv4 DNS resolver")
+        for declaration in [&templates, &config] {
+            put(
+                declaration,
+                gb_config::agent_environment::PATH,
+                "dns: {nameservers: host}",
+            );
+            assert_eq!(
+                network_with_resolvers(&config, &templates, false, Vec::new).unwrap_err(),
+                Sentence::Key(
+                    "intelligences.agent_environment.declaration.no_device_resolver",
+                    vec![
+                        (
+                            "where",
+                            declaration
+                                .join(gb_config::agent_environment::PATH)
+                                .display()
+                                .to_string()
+                        ),
+                        ("host", "host".into()),
+                    ],
+                )
+            );
+        }
+        put(
+            &config,
+            gb_config::agent_environment::PATH,
+            "dns: {nameservers: []}",
         );
+        assert_eq!(
+            network_with_resolvers(&config, &templates, false, || panic!(
+                "explicit DNS must not read host"
+            ))
+            .unwrap_err(),
+            Sentence::AtPath(
+                config.join(gb_config::agent_environment::PATH),
+                Box::new(Sentence::Key(
+                    "intelligences.agent_environment.declaration.no_nameservers",
+                    vec![("host", "host".into())],
+                )),
+            )
+        );
+        std::fs::remove_file(config.join(gb_config::agent_environment::PATH)).unwrap();
         assert_eq!(
             network_with_resolvers(&config, &templates, false, || vec!["192.168.3.1".into()])
                 .unwrap()

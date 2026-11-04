@@ -25,13 +25,20 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Session ownership uses held directories so replacing an ancestor redirects no IO.
 pub struct InputFileStore {
+    root_path: PathBuf,
+    directory: PathBuf,
+    name: String,
+    session: std::sync::OnceLock<Session>,
+    initializing: std::sync::Mutex<()>,
+}
+struct Session {
+    directory: PathBuf,
     lock: Option<FileLock>,
     root: Dir,
     session: Dir,
     name: String,
-    directory: PathBuf,
 }
-impl Drop for InputFileStore {
+impl Drop for Session {
     fn drop(&mut self) {
         drop(self.lock.take());
         let _ = self.root.remove_dir_all(&self.name);
@@ -97,8 +104,35 @@ impl Drop for Pending {
 }
 
 impl InputFileStore {
+    #[cfg(test)]
     pub fn new(root: &Path) -> anyhow::Result<Self> {
-        let root_path = gb_base::host_path::normalize(root)?;
+        let store = Self::deferred(root);
+        store.ensure()?;
+        Ok(store)
+    }
+    /// Upload storage is optional at startup and retried on demand.
+    pub fn deferred(root: &Path) -> Self {
+        let name = format!("session-{}", uuid::Uuid::new_v4().simple());
+        Self {
+            root_path: root.into(),
+            directory: root.join(&name),
+            name,
+            session: std::sync::OnceLock::new(),
+            initializing: std::sync::Mutex::new(()),
+        }
+    }
+    fn ensure(&self) -> anyhow::Result<&Session> {
+        if let Some(session) = self.session.get() {
+            return Ok(session);
+        }
+        let _held = self
+            .initializing
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Input session initialization failed"))?;
+        if let Some(session) = self.session.get() {
+            return Ok(session);
+        }
+        let root_path = gb_base::host_path::normalize(&self.root_path)?;
         let root = gb_base::host_path::open_directory(&root_path, true)?;
         let _cleanup = hold_lock(&root, ".cleanup.lock")?;
         for entry in root.entries()? {
@@ -117,7 +151,7 @@ impl InputFileStore {
                 root.remove_dir_all(entry.file_name())?;
             }
         }
-        let name = format!("session-{}", uuid::Uuid::new_v4().simple());
+        let name = self.name.clone();
         let mut options = cap_std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
@@ -127,34 +161,52 @@ impl InputFileStore {
         root.create_dir_with(&name, &options)?;
         let session = root.open_dir_nofollow(&name)?;
         let lock = hold_lock(&session, ".session.lock")?;
-        let directory = root_path.join(&name);
-        Ok(Self {
+        let _ = self.session.set(Session {
+            directory: root_path.join(&name),
             lock: Some(lock),
             root,
             session,
             name,
-            directory,
-        })
+        });
+        Ok(self
+            .session
+            .get()
+            .expect("input session initialized under lock"))
     }
 
     pub fn directory(&self) -> &Path {
-        &self.directory
+        self.session
+            .get()
+            .map(|session| session.directory.as_path())
+            .unwrap_or(&self.directory)
     }
 
     /// Never accepts a caller's source directory or guest destination.
+    pub fn mount_if_available(&self) -> Option<gb_environment::Mount> {
+        self.session.get()?;
+        match self.mount() {
+            Ok(mount) => Some(mount),
+            Err(_) => {
+                tracing::warn!(
+                    "Input upload storage is unavailable; commands continue without its mount."
+                );
+                None
+            }
+        }
+    }
     pub fn mount(&self) -> anyhow::Result<gb_environment::Mount> {
+        self.ensure()?;
         let directory = gb_base::host_path::directory(self.directory(), false)?;
         Ok(gb_environment::Mount {
-            guest: directory
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("Input directory is not UTF-8"))?
-                .into(),
+            guest: gb_environment::guest_path(&directory)
+                .map_err(|_| anyhow::anyhow!("Input directory has no guest path"))?,
             host: Some(directory),
             readonly: true,
         })
     }
 
     fn pending(&self, filename: Option<&str>) -> anyhow::Result<(Pending, PathBuf)> {
+        let session = self.ensure()?;
         gb_base::host_path::directory(self.directory(), false)?;
         let name = filename
             .unwrap_or("")
@@ -188,12 +240,12 @@ impl InputFileStore {
             use cap_std::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let file = self.session.open_with(&temporary, &options)?.into_std();
+        let file = session.session.open_with(&temporary, &options)?.into_std();
         let destination = self.directory().join(format!("{random}-{name}"));
         Ok((
             Pending {
                 file: Some(file),
-                directory: self.session.try_clone()?,
+                directory: session.session.try_clone()?,
                 temporary,
             },
             destination,
@@ -282,13 +334,47 @@ pub(crate) async fn upload(
             tracing::error!("Cannot save command input file: {error}");
             return failed();
         }
-        return Json(json!({"path":destination,"guest_path":destination})).into_response();
+        let guest = match gb_environment::guest_path(&destination) {
+            Ok(path) => path,
+            Err(_) => return failed(),
+        };
+        return Json(json!({"path":destination,"guest_path":guest})).into_response();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deferred_upload_destinations_use_the_held_normalized_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let alias = temp.path().join("parent");
+        std::fs::create_dir(&alias).unwrap();
+        let store = InputFileStore::deferred(&alias.join("./inputs"));
+        let (_, destination) = store.pending(Some("file.txt")).unwrap();
+        let mount = store.mount().unwrap();
+        assert_eq!(destination.parent(), mount.host.as_deref());
+        assert!(
+            gb_environment::guest_path(&destination)
+                .unwrap()
+                .starts_with(&format!("{}/", mount.guest))
+        );
+    }
+    #[test]
+    fn input_store_problem_clears_after_successful_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("inputs");
+        std::fs::write(&root, b"blocked").unwrap();
+        let store = InputFileStore::deferred(&root);
+        assert!(store.pending(Some("first.txt")).is_err());
+        assert!(store.mount_if_available().is_none());
+        std::fs::remove_file(&root).unwrap();
+        let (mut pending, path) = store.pending(Some("retry.txt")).unwrap();
+        pending.write_all(b"retained").unwrap();
+        pending.persist(&path).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"retained");
+        assert!(store.mount().unwrap().readonly);
+    }
     #[test]
     fn session_files_are_private_and_the_mount_cannot_be_caller_selected() {
         let root = tempfile::tempdir().unwrap();
@@ -474,7 +560,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let result = value(response).await;
         let path = Path::new(result["path"].as_str().unwrap());
-        assert_eq!(result["path"], result["guest_path"]);
+        assert_eq!(
+            result["guest_path"],
+            gb_environment::guest_path(path).unwrap()
+        );
         assert_eq!(path.parent(), Some(api.inputs.directory()));
         assert!(
             path.file_name()

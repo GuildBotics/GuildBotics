@@ -236,10 +236,7 @@ async fn start(
     // goes with it.
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
-    let inputs = api
-        .inputs
-        .mount()
-        .map_err(|error| internal(&error.to_string(), "InputFileStoreError"))?;
+    let inputs = api.inputs.mount_if_available();
     let work = api.work.spawn(async move {
         let run = trace.run_command(&name, &person_id, async {
             let roots = gb_config::commands::CommandRoots {
@@ -254,7 +251,9 @@ async fn start(
                 crate::host_window::prepare_command(&host, &workspace, &command, &roots, &device)
                     .await
                     .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
-            services.session.mounts.push(inputs);
+            if let Some(inputs) = inputs {
+                services.session.mounts.push(inputs);
+            }
             let reply = gb_environment::run(
                 &host,
                 &workspace,

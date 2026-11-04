@@ -101,7 +101,7 @@ impl Server {
                 None
             });
         let api = Arc::new(Api {
-            inputs: crate::input_files::InputFileStore::new(&data.join("command_inputs"))?,
+            inputs: crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,

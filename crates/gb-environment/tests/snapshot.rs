@@ -119,6 +119,7 @@ async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
         gb_environment::snapshot::build(
             root.path(),
             name,
+            "timeout".into(),
             |_, _| async { Err("broken".into()) },
             |_| async { panic!("failed build must not prune") }
         )
@@ -140,6 +141,7 @@ async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
     let result = gb_environment::snapshot::build(
         root.path(),
         name,
+        "timeout".into(),
         move |directory, _| async move {
             let path = directory.join(name);
             std::fs::create_dir(&path).unwrap();
@@ -168,6 +170,7 @@ async fn cleanup_runs_under_build_lock_and_propagates_runtime_failure() {
     let result = gb_environment::snapshot::build(
         root.path(),
         NAME,
+        "timeout".into(),
         move |directory, _| async move {
             let path = directory.join(NAME);
             std::fs::create_dir(&path).unwrap();
@@ -199,6 +202,7 @@ async fn a_second_build_is_refused_without_running_or_pruning() {
     let result = gb_environment::snapshot::build(
         root.path(),
         NAME,
+        "timeout".into(),
         |_, _| async { panic!("locked build must not run") },
         |_| async { panic!("locked build must not prune") },
     )

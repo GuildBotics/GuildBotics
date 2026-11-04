@@ -163,7 +163,7 @@ pub async fn run(
         &host.package.join("templates"),
         command.access.read_only,
     )
-    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    .map_err(Failure::Command)?;
     network.host_ports.extend(session.ports.iter().copied());
     for (key, value) in &session.env {
         if key == "GUILDBOTICS_TURN_DOMAINS" {
@@ -300,9 +300,11 @@ pub fn shape(
     let mounts = planned.mounts;
     let cwd = planned.cwd;
     let copy = planned.copy;
-    let clone_parent = workspace
-        .join(".guildbotics/local/clones")
-        .join(&command.person_id);
+    let clone_parent = guest_path(
+        &workspace
+            .join(".guildbotics/local/clones")
+            .join(&command.person_id),
+    )?;
     let facts = CommandFacts {
         access: command.access.clone(),
         inspected,
@@ -311,7 +313,7 @@ pub fn shape(
             .map(|mount| {
                 let open = (mount.host.is_none() && mount.guest == cwd)
                     || access.grants.iter().any(|g| g.guest == mount.guest)
-                    || Path::new(&mount.guest) == clone_parent;
+                    || mount.guest == clone_parent;
                 (mount.guest.clone(), open)
             })
             .chain(copy.iter().map(|working| (working.guest.clone(), true)))
@@ -421,7 +423,7 @@ fn checked_directory(path: &Path) -> Result<PathBuf, Failure> {
 
 /// Where a command file is inside the microVM: a packaged one in the code
 /// every microVM mounts, a workspace one at its own path.
-fn command_path(host: &Host, path: &Path) -> Result<String, Failure> {
+pub fn command_path(host: &Host, path: &Path) -> Result<String, Failure> {
     if path.starts_with(&host.package) {
         code_path(host, path)
     } else {
@@ -432,21 +434,45 @@ fn command_path(host: &Host, path: &Path) -> Result<String, Failure> {
 /// Where a file of the package is inside the microVM.
 fn code_path(host: &Host, path: &Path) -> Result<String, Failure> {
     let relative = path.strip_prefix(&host.package).expect("under the package");
-    let relative = relative.to_str().ok_or_else(|| unnamed(path))?;
+    let relative = relative
+        .components()
+        .map(|part| part.as_os_str().to_str().ok_or_else(|| unnamed(path)))
+        .collect::<Result<Vec<_>, _>>()?
+        .join("/");
     Ok(format!("{CODE_ROOT}/{relative}"))
 }
 
-/// Where a host path is inside the microVM: at its own spelling.
+/// POSIX paths retain their spelling; Windows drives become `/c/...`.
 pub fn guest_path(path: &Path) -> Result<String, Failure> {
-    if !path.is_absolute() {
+    let text = path.to_str().ok_or_else(|| unnamed(path))?;
+    if text.starts_with("\\\\") || text.starts_with("//") {
         return Err(Failure::Command(Sentence::Text(format!(
-            "'{}' is not an absolute path",
-            path.display()
+            "'{text}' is a network path and cannot be mounted"
         ))));
     }
-    path.to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| unnamed(path))
+    let bytes = text.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        let drive = char::from(bytes[0]).to_ascii_lowercase();
+        let mut guest = format!("/{drive}");
+        for part in text[3..]
+            .split(['/', '\\'])
+            .filter(|s| !s.is_empty() && *s != ".")
+        {
+            guest.push('/');
+            guest.push_str(part);
+        }
+        return Ok(guest);
+    }
+    if !text.starts_with('/') {
+        return Err(Failure::Command(Sentence::Text(format!(
+            "'{text}' is not an absolute path"
+        ))));
+    }
+    Ok(text.to_owned())
 }
 
 fn unnamed(path: &Path) -> Failure {

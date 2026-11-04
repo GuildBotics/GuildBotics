@@ -10,6 +10,7 @@ pub struct Device {
     pub snapshot: Option<PathBuf>,
     pub refusal: Option<Sentence>,
     pub warning: Option<Sentence>,
+    dns_problem: Option<Sentence>,
 }
 
 fn sentence(failure: Failure) -> Sentence {
@@ -23,6 +24,9 @@ impl Device {
         let refusal = self.refusal.map(&say).unwrap_or_default();
         let warning = self.warning.map(&say).unwrap_or_default();
         self.view["problem"] = json!(refusal);
+        if let Some(problem) = self.dns_problem {
+            self.view["dns"]["problem"] = json!(say(problem));
+        }
         if self.view["problem_setting"] == "runtime" {
             self.view["runtime"]["reason"] = json!(refusal);
         }
@@ -52,6 +56,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
         snapshot: None,
         refusal: health,
         warning: None,
+        dns_problem: None,
     };
     if device.refusal.is_some() {
         device.view["problem_setting"] = json!("runtime");
@@ -83,9 +88,9 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
             device.view["dns"] = view["dns"].clone();
         }
         Err(error) => {
-            device.view["dns"]["problem"] = json!(error);
+            device.dns_problem = Some(error.clone());
             if device.refusal.is_none() {
-                device.refusal = Some(Sentence::Text(error));
+                device.refusal = Some(error);
                 device.view["problem_setting"] = json!("declaration");
             }
         }
@@ -193,5 +198,62 @@ pub fn registered_workspaces(data: &Path) -> Result<Vec<PathBuf>, String> {
             .map_err(|e| format!("Cannot read workspace registry: {e}")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_problem_is_rendered_even_when_runtime_health_takes_precedence() {
+        let problem = Sentence::Key(
+            "intelligences.agent_environment.declaration.no_device_resolver",
+            vec![
+                ("where", "/config/environment.yml".into()),
+                ("host", "host".into()),
+            ],
+        );
+        for runtime_failed in [false, true] {
+            let device = Device {
+                view: json!({"problem_setting": if runtime_failed { "runtime" } else { "declaration" }, "runtime":{}, "dns":{}, "image":{}}),
+                resources: Resources::default(),
+                snapshot: None,
+                refusal: Some(if runtime_failed {
+                    Sentence::Text("runtime failed".into())
+                } else {
+                    problem.clone()
+                }),
+                warning: None,
+                dns_problem: Some(problem.clone()),
+            };
+            let view = device.rendered(|sentence| match sentence {
+                Sentence::Key(key, params) => {
+                    assert_eq!(
+                        key,
+                        "intelligences.agent_environment.declaration.no_device_resolver"
+                    );
+                    assert_eq!(
+                        params,
+                        [
+                            ("where", "/config/environment.yml".into()),
+                            ("host", "host".into())
+                        ]
+                    );
+                    "translated DNS advice".into()
+                }
+                Sentence::Text(text) => text,
+                _ => panic!("unexpected sentence"),
+            });
+            assert_eq!(view["dns"]["problem"], "translated DNS advice");
+            assert_eq!(
+                view["problem"],
+                if runtime_failed {
+                    "runtime failed"
+                } else {
+                    "translated DNS advice"
+                }
+            );
+        }
     }
 }

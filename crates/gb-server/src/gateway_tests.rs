@@ -283,11 +283,13 @@ async fn login_refusals_reach_the_401_body_in_both_languages_after_retry_too() {
                 )
                 .await;
             assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(failed.headers()["content-type"], "application/json");
+            let bytes = axum::body::to_bytes(failed.into_body(), 4096)
+                .await
+                .unwrap();
             assert_eq!(
-                axum::body::to_bytes(failed.into_body(), 4096)
-                    .await
-                    .unwrap(),
-                expected
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                json!({"type":"error","error":{"type":"authentication_error","message":expected}})
             );
             assert_eq!(
                 upstream.seen.lock().unwrap().len(),
@@ -309,10 +311,11 @@ async fn unavailable_tokens_disconnected_bodies_and_ended_turns_never_reach_the_
         )
         .await;
     assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+    let bytes = axum::body::to_bytes(failed.into_body(), 4096)
+        .await
+        .unwrap();
     assert_eq!(
-        axum::body::to_bytes(failed.into_body(), 4096)
-            .await
-            .unwrap(),
+        serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["message"],
         "synthetic login refusal"
     );
     assert!(upstream.seen.lock().unwrap().is_empty());

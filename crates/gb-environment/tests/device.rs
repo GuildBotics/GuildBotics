@@ -68,13 +68,12 @@ async fn dns_refusal_precedes_missing_image_and_snapshot() {
         ),
     );
     let device = device::read(&host, &workspace).await;
-    assert_eq!(device.view["problem_setting"], "declaration");
-    assert!(
-        device.view["dns"]["problem"]
-            .as_str()
-            .unwrap()
-            .contains("IPv4")
-    );
+    let view = device.rendered(|sentence| match sentence {
+        gb_environment::Sentence::Text(text) => text,
+        _ => panic!("invalid DNS must report its validation error"),
+    });
+    assert_eq!(view["problem_setting"], "declaration");
+    assert!(view["dns"]["problem"].as_str().unwrap().contains("IPv4"));
 }
 #[tokio::test]
 async fn declaration_precedes_snapshot_and_access_preview_keeps_document_rows() {

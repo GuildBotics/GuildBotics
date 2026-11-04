@@ -73,7 +73,7 @@ fn sorted(mut mounts: Vec<Mount>) -> Vec<Mount> {
     mounts
 }
 fn spelled(path: &Path) -> String {
-    path.to_str().unwrap().to_owned()
+    gb_environment::guest_path(path).unwrap()
 }
 
 fn env<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -347,4 +347,89 @@ fn copied_worktree_is_admitted_as_workable_in_command_facts() {
         !made.mounts.iter().any(|mount| mount.guest == made.cwd),
         "the workable copy lives on the VM's own disk"
     );
+}
+
+#[test]
+fn guest_paths_keep_posix_spelling_and_map_windows_drives() {
+    for (path, guest) in [
+        ("/Users/x/repo", "/Users/x/repo"),
+        ("/Users/x/./repo", "/Users/x/./repo"),
+        (r"C:\tmp\gb\repo", "/c/tmp/gb/repo"),
+        (r"d:\", "/d"),
+        ("C:/work", "/c/work"),
+        (r"D:\Work Area\資料", "/d/Work Area/資料"),
+    ] {
+        assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), guest);
+    }
+}
+
+#[test]
+fn relative_and_network_paths_have_no_guest_path() {
+    for path in [
+        "relative",
+        "",
+        "C:relative",
+        r"\work",
+        r"\\srv\share\x",
+        "//srv/share/x",
+        r"\\?\C:\work",
+        r"\\.\device",
+    ] {
+        assert!(
+            gb_environment::guest_path(Path::new(path)).is_err(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths() {
+    let machine = machine();
+    let package_command = machine
+        .host
+        .package
+        .join("templates/commands/functions/x.py");
+    for read_only in [true, false] {
+        let mut request = command(&machine, package_command.clone(), vec![]);
+        request.access.read_only = read_only;
+        std::fs::create_dir_all(&request.cwd).unwrap();
+        let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+        let source = gb_base::host_path::normalize(&request.cwd).unwrap();
+        let guest = gb_environment::guest_path(&source).unwrap();
+        assert_eq!(made.cwd, guest);
+        assert_eq!(made.request.cwd, guest);
+        assert_eq!(
+            made.request.path,
+            format!(
+                "{}/templates/commands/functions/x.py",
+                gb_environment::CODE_ROOT
+            )
+        );
+        assert_eq!(
+            env(&made.env, "HOME"),
+            Some(
+                gb_environment::guest_path(
+                    &gb_base::host_path::normalize(&machine.host.home).unwrap()
+                )
+                .unwrap()
+                .as_str()
+            )
+        );
+        if read_only {
+            assert!(
+                made.mounts
+                    .iter()
+                    .any(|m| m.guest == guest && m.host.is_none())
+            );
+        } else {
+            let copy = made.copy.unwrap();
+            assert_eq!(copy.host, source);
+            assert_eq!(copy.guest, guest);
+        }
+        #[cfg(windows)]
+        {
+            assert!(!made.cwd.contains('\\'));
+            assert!(!made.cwd.contains(':'));
+        }
+    }
 }

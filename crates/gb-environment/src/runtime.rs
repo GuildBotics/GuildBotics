@@ -311,11 +311,11 @@ static VM_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =
 
 /// Drain late boots and shutdown tasks after callers stop accepting work.
 pub async fn drain_vms() {
-    drain_tasks(&VM_TASKS).await;
+    drain_tasks(&VM_TASKS, STOP_TIMEOUT).await;
 }
-async fn drain_tasks(tasks: &tokio_util::task::TaskTracker) {
+async fn drain_tasks(tasks: &tokio_util::task::TaskTracker, deadline: Duration) {
     tasks.close();
-    tasks.wait().await;
+    let _ = tokio::time::timeout(deadline, tasks.wait()).await;
 }
 
 /// An owned cleanup task survives cancellation of the operation awaiting it.
@@ -386,6 +386,20 @@ async fn owned_boot_in<T: Send + 'static>(
 mod lifecycle_tests {
     use super::*;
     #[tokio::test]
+    async fn shutdown_drain_has_a_deadline_for_hanging_vm_tasks() {
+        let tasks = tokio_util::task::TaskTracker::new();
+        let task = tasks.spawn(std::future::pending::<()>());
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            drain_tasks(&tasks, Duration::from_millis(10)),
+        )
+        .await
+        .unwrap();
+        assert!(!tasks.is_empty());
+        task.abort();
+        let _ = task.await;
+    }
+    #[tokio::test]
     async fn shutdown_drain_waits_for_a_cancelled_late_boot_and_its_cleanup() {
         let tasks = tokio_util::task::TaskTracker::new();
         let boot_tasks = tasks.clone();
@@ -408,7 +422,7 @@ mod lifecycle_tests {
         boot_started.await.unwrap();
         waiter.abort();
         let _ = waiter.await;
-        let mut drain = Box::pin(drain_tasks(&tasks));
+        let mut drain = Box::pin(drain_tasks(&tasks, STOP_TIMEOUT));
         assert!(
             tokio::time::timeout(Duration::from_millis(10), &mut drain)
                 .await
@@ -1102,16 +1116,8 @@ where
     save().await
 }
 
-fn build_vm_name(directory: &Path) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-    let directory = directory
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let digest: String = Sha256::digest(directory.as_os_str().as_encoded_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(format!("guildbotics-build-{}", &digest[..16]))
+fn build_vm_name() -> String {
+    format!("guildbotics-build-{}", uuid::Uuid::new_v4().simple())
 }
 
 pub(crate) async fn build_lifecycle<T, Booting, Run, Ran, Close, Closed>(
@@ -1126,16 +1132,22 @@ where
     Close: FnOnce() -> Closed,
     Closed: Future<Output = ()>,
 {
-    // A submitted boot can finish after cancellation; retain its cleanup until
-    // it completes while snapshot::build still owns the build lock.
-    let (vm, close) = boot.await?;
+    // Owned boot and cleanup tasks survive this waiter; each build has its own VM.
+    let (vm, close) = tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => return Err("Environment build cancelled".into()),
+        result = boot => result?,
+    };
     let result = tokio::select! {
         biased;
         _ = cancelled.cancelled() => Err("Environment build cancelled".into()),
         result = run(vm) => result,
     };
-    close().await;
-    result
+    tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => Err("Environment build cancelled".into()),
+        _ = close() => result,
+    }
 }
 
 pub async fn build_snapshot(
@@ -1158,7 +1170,7 @@ pub async fn build_snapshot(
         _ = cancelled.cancelled() => return Err("Environment build cancelled".into()),
         result = backend(home) => result.map_err(|e| format!("{e:?}"))?,
     }
-    let vm_name = build_vm_name(directory)?;
+    let vm_name = build_vm_name();
     let builder = build_builder(
         Sandbox::builder(&vm_name),
         image,
@@ -1267,18 +1279,83 @@ mod build_tests {
         }
     }
     #[test]
-    fn build_vm_names_are_stable_and_distinct_between_workspaces() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let name = build_vm_name(first.path()).unwrap();
-        assert_eq!(name, build_vm_name(&first.path().join(".")).unwrap());
-        assert_ne!(name, build_vm_name(second.path()).unwrap());
-        #[cfg(unix)]
-        {
-            let aliases = tempfile::tempdir().unwrap();
-            let alias = aliases.path().join("alias");
-            std::os::unix::fs::symlink(first.path(), &alias).unwrap();
-            assert_eq!(name, build_vm_name(&alias).unwrap());
+    fn every_build_uses_a_distinct_vm_identity() {
+        let first = build_vm_name();
+        let replacement = build_vm_name();
+        assert_ne!(first, replacement);
+        assert!(first.starts_with("guildbotics-build-"));
+    }
+    #[tokio::test]
+    async fn cancelled_late_boot_and_cleanup_cannot_remove_a_replacement_vm() {
+        for cancel_during_cleanup in [false, true] {
+            let first = build_vm_name();
+            let second = build_vm_name();
+            let registry =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+            registry.lock().unwrap().insert(second.clone());
+            let owned = registry.clone();
+            let (boot_started, started) = tokio::sync::oneshot::channel();
+            let (boot_release, boot_released) = tokio::sync::oneshot::channel();
+            let (cleanup_started, cleaning) = tokio::sync::oneshot::channel();
+            let (cleanup_release, cleanup_released) = tokio::sync::oneshot::channel();
+            let (cleaned, done) = tokio::sync::oneshot::channel();
+            let token = tokio_util::sync::CancellationToken::new();
+            let cancelled = token.clone();
+            let waiter = tokio::spawn(async move {
+                build_lifecycle(
+                    async move {
+                        owned_boot(async move {
+                            let _ = boot_started.send(());
+                            let _ = boot_released.await;
+                            owned.lock().unwrap().insert(first.clone());
+                            let cleanup = Cleanup::new(async move {
+                                let _ = cleanup_started.send(());
+                                let _ = cleanup_released.await;
+                                owned.lock().unwrap().remove(&first);
+                                let _ = cleaned.send(());
+                            });
+                            Ok(((), move || cleanup.finish()))
+                        })
+                        .await
+                    },
+                    cancelled,
+                    |_| async { Ok(PathBuf::from("saved")) },
+                )
+                .await
+            });
+            started.await.unwrap();
+            if cancel_during_cleanup {
+                boot_release.send(()).unwrap();
+                cleaning.await.unwrap();
+                token.cancel();
+            } else {
+                token.cancel();
+                tokio::time::timeout(Duration::from_millis(100), waiter)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap_err();
+                boot_release.send(()).unwrap();
+                cleaning.await.unwrap();
+                cleanup_release.send(()).unwrap();
+                done.await.unwrap();
+                assert_eq!(
+                    *registry.lock().unwrap(),
+                    std::collections::HashSet::from([second])
+                );
+                continue;
+            }
+            tokio::time::timeout(Duration::from_millis(100), waiter)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            cleanup_release.send(()).unwrap();
+            done.await.unwrap();
+            assert_eq!(
+                *registry.lock().unwrap(),
+                std::collections::HashSet::from([second])
+            );
         }
     }
     #[tokio::test]

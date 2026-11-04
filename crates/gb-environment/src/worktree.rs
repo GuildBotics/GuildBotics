@@ -176,6 +176,28 @@ fn refused(copy: &Copy, reason: String) -> Sentence {
     )
 }
 
+fn feedback_text(error: &Sentence) -> String {
+    match error {
+        Sentence::Text(text) => text.clone(),
+        Sentence::AtPath(path, reason) => format!("{}: {}", path.display(), feedback_text(reason)),
+        Sentence::Key(key, params) => {
+            static LOCALE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(
+                || {
+                    gb_config::yaml_value(include_str!("../../../guildbotics/templates/locales/intelligences/agent_environment.en.yml")).expect("bundled environment locale")
+                },
+            );
+            let mut text = LOCALE["en"]["runtime"][key.rsplit('.').next().unwrap()]
+                .as_str()
+                .expect("worktree error translation")
+                .to_owned();
+            for (name, value) in params {
+                text = text.replace(&format!("%{{{name}}}"), value);
+            }
+            text
+        }
+    }
+}
+
 #[derive(Default)]
 struct Cancellation {
     requested: AtomicBool,
@@ -198,7 +220,10 @@ impl Cancellation {
                 copy.host.display()
             ),
             Err(error) if !self.stopped.load(Ordering::Acquire) => {
-                tracing::error!("The cancelled command's write-back failed: {error:?}")
+                tracing::error!(
+                    "The cancelled command's write-back failed: {}",
+                    feedback_text(error)
+                )
             }
             Err(_) => {}
         }
@@ -700,9 +725,20 @@ mod portable {
             if phase == "failing" {
                 assert_eq!(*level, tracing::Level::ERROR);
                 assert!(message.contains("write-back failed"));
-                assert!(message.contains("worktree_partial"));
+                assert!(message.contains("stopped partway"));
+                assert!(!message.contains("worktree_partial"));
                 assert!(message.contains("good"));
-                assert!(message.contains("reason"));
+                assert!(
+                    !message
+                        .split("stopped partway (")
+                        .nth(1)
+                        .unwrap()
+                        .split(");")
+                        .next()
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(message.contains("these were written back: good"));
             } else {
                 assert_eq!(*level, tracing::Level::WARN);
                 assert!(message.contains("were written back"));
