@@ -237,7 +237,11 @@ async fn gateway_retries_once_preserves_body_and_never_follows_redirects_or_enco
         assert_eq!(
             *upstream.asked.lock().unwrap(),
             if calls == 2 {
-                vec![None, Some("synthetic-private".into())]
+                vec![
+                    None,
+                    Some("synthetic-private".into()),
+                    Some("synthetic-private".into()),
+                ]
             } else {
                 vec![None]
             }
@@ -245,9 +249,57 @@ async fn gateway_retries_once_preserves_body_and_never_follows_redirects_or_enco
     }
 }
 #[tokio::test]
+async fn login_refusals_reach_the_401_body_in_both_languages_after_retry_too() {
+    for language in ["ja", "en"] {
+        for after_retry in [false, true] {
+            let mut upstream = Upstream::start().await;
+            let reason = crate::i18n::t(
+                language,
+                "intelligences.agent_environment.tool.login_refused",
+                &[
+                    ("tool", "Claude Code"),
+                    ("command", "guildbotics environment login claude"),
+                ],
+            );
+            let expected = reason.clone();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            upstream.state.source = Arc::new(move |_| {
+                let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let reason = reason.clone();
+                Box::pin(async move {
+                    if after_retry && call < 2 {
+                        Ok("synthetic-private".into())
+                    } else {
+                        Err(reason)
+                    }
+                })
+            });
+            let failed = upstream
+                .send(
+                    Method::POST,
+                    "/v1/messages",
+                    "Bearer synthetic-stand-in",
+                    "retry",
+                )
+                .await;
+            assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                axum::body::to_bytes(failed.into_body(), 4096)
+                    .await
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                upstream.seen.lock().unwrap().len(),
+                if after_retry { 2 } else { 0 }
+            );
+        }
+    }
+}
+#[tokio::test]
 async fn unavailable_tokens_disconnected_bodies_and_ended_turns_never_reach_the_provider() {
     let mut upstream = Upstream::start().await;
-    upstream.state.source = Arc::new(|_| Box::pin(async { Err(()) }));
+    upstream.state.source = Arc::new(|_| Box::pin(async { Err("synthetic login refusal".into()) }));
     let failed = upstream
         .send(
             Method::POST,
@@ -257,6 +309,12 @@ async fn unavailable_tokens_disconnected_bodies_and_ended_turns_never_reach_the_
         )
         .await;
     assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        axum::body::to_bytes(failed.into_body(), 4096)
+            .await
+            .unwrap(),
+        "synthetic login refusal"
+    );
     assert!(upstream.seen.lock().unwrap().is_empty());
     let body = Body::from_stream(futures_util::stream::once(async {
         Err::<Vec<u8>, _>(std::io::Error::other("disconnected"))

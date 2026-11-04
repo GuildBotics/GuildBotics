@@ -15,7 +15,7 @@ use std::{
 struct Held {
     files: Files,
     refreshed: bool,
-    failed: bool,
+    refusal: Option<&'static str>,
     _lease: Lease,
 }
 pub struct ToolLogin {
@@ -23,10 +23,31 @@ pub struct ToolLogin {
     pub guest_root: String,
     pub host_root: tempfile::TempDir,
     pub gateway: Gateway,
+    source: TokenSource,
+    keychain: Arc<dyn gb_config::secrets::Keychain>,
     data: PathBuf,
     catalog: Value,
+    language: String,
+    command: String,
     state: Arc<tokio::sync::Mutex<Option<Held>>>,
 }
+fn login_problem(catalog: &Value, key: &str, command: &str, language: &str) -> String {
+    crate::i18n::t(
+        language,
+        &format!("intelligences.agent_environment.tool.{key}"),
+        &[
+            (
+                "tool",
+                catalog["label"]
+                    .as_str()
+                    .or_else(|| catalog["name"].as_str())
+                    .unwrap_or("tool"),
+            ),
+            ("command", command),
+        ],
+    )
+}
+
 fn path(data: &Path, name: &str) -> PathBuf {
     data.join("agent_environment")
         .join(name)
@@ -209,6 +230,7 @@ impl ToolLogin {
         data: &Path,
         home: &Path,
         catalog: Value,
+        language: &str,
         vm: LoginVm,
     ) -> Result<Arc<Self>, String> {
         let name = catalog["name"]
@@ -216,6 +238,14 @@ impl ToolLogin {
             .ok_or("Tool name missing.")?
             .to_owned();
         let broker = &catalog["provision"]["credential_broker"];
+        let command = format!(
+            "'{}' environment login {name}",
+            home.join(".guildbotics/bin/guildbotics")
+                .to_string_lossy()
+                .replace('\'', "'\"'\"'")
+        );
+        let source_language = language.to_owned();
+        let source_command = command.clone();
         let state = Arc::new(tokio::sync::Mutex::new(None::<Held>));
         let shared = state.clone();
         let source_catalog = catalog.clone();
@@ -227,40 +257,93 @@ impl ToolLogin {
             let vm = vm.clone();
             let data = source_data.clone();
             let name = source_name.clone();
+            let language = source_language.clone();
+            let command = source_command.clone();
             Box::pin(async move {
                 spawn_private(private_tasks(), async move {
                     let mut held = shared.lock().await;
-                    let login = held.as_mut().ok_or(())?;
+                    let login = held.as_mut().ok_or_else(|| {
+                        login_problem(&catalog, "credentials_missing", &command, &language)
+                    })?;
+                    let had_refusal = login.refusal.is_some();
+                    let rejected_login = !had_refusal
+                        && refused.is_some()
+                        && (login.refreshed
+                            || catalog["provision"]["credential_broker"]["refresh"]
+                                .as_array()
+                                .is_none_or(|v| v.is_empty()));
                     let refresh_catalog = catalog.clone();
-                    lent_access(login, &catalog, refused, move |stale| async move {
+                    let refresh_data = data.clone();
+                    let refresh_name = name.clone();
+                    let result = lent_access(login, &catalog, refused, move |stale| async move {
                         let keychain = SystemKeychain;
                         let device = DeviceKey {
-                            machine_root: data.parent().unwrap_or(&data).into(),
+                            machine_root: refresh_data.parent().unwrap_or(&refresh_data).into(),
                             keychain: &keychain,
                         };
-                        refresh_login(&device, &data, &name, &refresh_catalog, &stale, |files| {
-                            let argv = refresh_catalog["provision"]["credential_broker"]["refresh"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect();
-                            private_run(
-                                vm,
-                                refresh_catalog.clone(),
-                                files,
-                                argv,
-                                false,
-                                tokio_util::sync::CancellationToken::new(),
-                            )
-                        })
+                        refresh_login(
+                            &device,
+                            &refresh_data,
+                            &refresh_name,
+                            &refresh_catalog,
+                            &stale,
+                            |files| {
+                                let argv =
+                                    refresh_catalog["provision"]["credential_broker"]["refresh"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(Value::as_str)
+                                        .map(str::to_owned)
+                                        .collect();
+                                private_run(
+                                    vm,
+                                    refresh_catalog.clone(),
+                                    files,
+                                    argv,
+                                    false,
+                                    tokio_util::sync::CancellationToken::new(),
+                                )
+                            },
+                        )
                         .await
                     })
-                    .await
+                    .await;
+                    if let Err(mut key) = result {
+                        if key == "refresh_failed" && !had_refusal {
+                            let device = DeviceKey {
+                                machine_root: data.parent().unwrap_or(&data).into(),
+                                keychain: &SystemKeychain,
+                            };
+                            let status = credential_vault::status(
+                                &device,
+                                &path(&data, &name),
+                                &label(
+                                    &name,
+                                    catalog["provision"]["credential_broker"]["format"]
+                                        .as_str()
+                                        .unwrap_or(""),
+                                ),
+                                command.clone(),
+                            );
+                            key = match status.state {
+                                "locked" => "credentials_locked",
+                                "unavailable" => "credentials_unavailable",
+                                "corrupt" => "credentials_corrupt",
+                                "missing" => "credentials_missing",
+                                _ => key,
+                            };
+                            login.refusal = Some(key);
+                        }
+                        if rejected_login {
+                            authentication_outcome(&data, &name, true)?;
+                        }
+                        return Err(login_problem(&catalog, key, &command, &language));
+                    }
+                    result.map_err(str::to_owned)
                 })
                 .await
-                .map_err(|_| ())?
+                .map_err(|_| "The private login task failed.".to_owned())?
             })
         });
         let routes = broker["routes"]
@@ -295,9 +378,9 @@ impl ToolLogin {
                     .filter_map(Value::as_str)
                     .map(str::to_owned),
             );
-            Gateway::start_tls(policy, source, names).await
+            Gateway::start_tls(policy, source.clone(), names).await
         } else {
-            Gateway::start(policy, source).await
+            Gateway::start(policy, source.clone()).await
         }
         .map_err(|_| "The credential gateway cannot start.")?;
         gateway.revoke();
@@ -315,13 +398,17 @@ impl ToolLogin {
             guest_root,
             host_root: root,
             gateway,
+            source,
+            keychain: Arc::new(SystemKeychain),
             data: data.into(),
             catalog,
+            language: language.into(),
+            command,
             state,
         }))
     }
     pub async fn begin(&self) -> Result<BTreeMap<String, String>, String> {
-        self.begin_with_keychain(Arc::new(SystemKeychain)).await
+        self.begin_with_keychain(self.keychain.clone()).await
     }
     async fn begin_with_keychain(
         &self,
@@ -336,20 +423,41 @@ impl ToolLogin {
         let data = self.data.clone();
         let name = self.name.clone();
         let format = broker["format"].as_str().unwrap_or("").to_owned();
+        let problem_catalog = self.catalog.clone();
+        let problem_language = self.language.clone();
+        let command = self.command.clone();
         let files = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let path = path(&data, &name);
             let device = DeviceKey {
                 machine_root: data.parent().unwrap_or(&data).into(),
                 keychain: keychain.as_ref(),
             };
-            let files = credential_vault::unseal(&device, &path, &label(&name, &format))
-                .map_err(|_| "The sealed login cannot be opened. Log in again.")?
-                .ok_or("Credentials missing. Log in again.")?;
+            let label = label(&name, &format);
+            let problem = || {
+                let status = credential_vault::status(&device, &path, &label, command.clone());
+                let key = match status.state {
+                    "locked" => "credentials_locked",
+                    "unavailable" => "credentials_unavailable",
+                    "missing" => "credentials_missing",
+                    _ => "credentials_corrupt",
+                };
+                login_problem(&problem_catalog, key, &command, &problem_language)
+            };
+            let files = credential_vault::unseal(&device, &path, &label)
+                .map_err(|_| problem())?
+                .ok_or_else(problem)?;
             Ok(files)
         })
         .await
         .map_err(|_| "The sealed login cannot be read.")??;
-        access(&files, &self.catalog)?;
+        access(&files, &self.catalog).map_err(|_| {
+            login_problem(
+                &self.catalog,
+                "credentials_corrupt",
+                &self.command,
+                &self.language,
+            )
+        })?;
         let auth = provision["auth"]
             .as_str()
             .ok_or("Tool auth file missing.")?;
@@ -442,14 +550,22 @@ impl ToolLogin {
         *active = Some(Held {
             files,
             refreshed: false,
-            failed: false,
+            refusal: None,
             _lease: lease,
         });
+        drop(active);
+        if let Err(reason) = (self.source)(None).await {
+            self.end().await;
+            return Err(reason);
+        }
         Ok(env)
     }
-    pub async fn end(&self) {
+    pub async fn end(&self) -> String {
         self.gateway.revoke();
-        *self.state.lock().await = None;
+        let held = self.state.lock().await.take();
+        held.and_then(|held| held.refusal)
+            .map(|key| login_problem(&self.catalog, key, &self.command, &self.language))
+            .unwrap_or_default()
     }
 }
 impl Drop for Held {
@@ -652,7 +768,7 @@ mod tests {
         Held {
             files,
             refreshed: false,
-            failed: false,
+            refusal: None,
             _lease: gb_environment::gateway::Leases::default().lend(),
         }
     }
@@ -810,14 +926,12 @@ mod tests {
         ] {
             assert!(keep_capture(&device, dir.path(), "tool", &catalog(), captured).is_err());
             assert!(marker.exists());
-            complete_login(
+            keep_capture(
                 &device,
                 dir.path(),
-                &catalog(),
                 "tool",
-                0,
-                &credentials("synthetic"),
-                true,
+                &catalog(),
+                Ok(credentials("synthetic")),
             )
             .unwrap();
             assert!(marker.exists());
@@ -829,7 +943,7 @@ mod tests {
                     "tool",
                     1,
                     &credentials("synthetic"),
-                    false
+                    "en"
                 )
                 .is_err()
             );
@@ -841,7 +955,7 @@ mod tests {
                 "tool",
                 0,
                 &credentials("synthetic"),
-                false,
+                "en",
             )
             .unwrap();
             assert!(!marker.exists());
@@ -944,10 +1058,10 @@ mod tests {
             cpus: 1,
             nameservers: vec![],
         };
-        let first = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), vm.clone())
+        let first = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), "en", vm.clone())
             .await
             .unwrap();
-        let second = ToolLogin::prepare(dir.path(), &vm.home, catalog, vm.clone())
+        let second = ToolLogin::prepare(dir.path(), &vm.home, catalog, "en", vm.clone())
             .await
             .unwrap();
         first
@@ -968,6 +1082,224 @@ mod tests {
         second.end().await;
         assert!(second.state.lock().await.is_none());
     }
+    #[tokio::test]
+    async fn interactive_login_starts_empty_even_with_a_corrupt_vault_and_keeps_new_account_state()
+    {
+        for corrupt in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let device = DeviceKey {
+                machine_root: dir.path().into(),
+                keychain: &FakeKeychain,
+            };
+            let vault = path(dir.path(), "tool");
+            if corrupt {
+                std::fs::create_dir_all(vault.parent().unwrap()).unwrap();
+                std::fs::write(&vault, b"corrupt old vault").unwrap();
+            } else {
+                credential_vault::seal(
+                    &device,
+                    &vault,
+                    "tool:default:test",
+                    &credentials("synthetic-old"),
+                )
+                .unwrap();
+            }
+            authentication_outcome(dir.path(), "tool", true).unwrap();
+            let result = login_operation(
+                &device,
+                dir.path(),
+                &catalog(),
+                "tool",
+                false,
+                "en",
+                |handed| async move {
+                    assert!(handed.is_empty());
+                    let mut captured = credentials("synthetic-new");
+                    captured.insert("settings.json".into(), b"new account settings".to_vec());
+                    Ok((0, captured, vec![]))
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, json!({"tool":"tool", "saved":true}));
+            let saved = credential_vault::unseal(&device, &vault, "tool:default:test")
+                .unwrap()
+                .unwrap();
+            assert_eq!(access(&saved, &catalog()).unwrap(), "synthetic-new");
+            assert_eq!(saved.len(), 1);
+            assert_eq!(
+                std::fs::read(
+                    dir.path()
+                        .join("agent_environment/tool/.tool/settings.json")
+                )
+                .unwrap(),
+                b"new account settings"
+            );
+            assert!(
+                !dir.path()
+                    .join("agent_environment/tool/authentication-failed")
+                    .exists()
+            );
+            let before = std::fs::read(&vault).unwrap();
+            for (code, files) in [(0, Files::new()), (1, credentials("synthetic-other"))] {
+                assert!(
+                    login_operation(
+                        &device,
+                        dir.path(),
+                        &catalog(),
+                        "tool",
+                        false,
+                        "en",
+                        |handed| async move {
+                            assert!(handed.is_empty());
+                            Ok((code, files, vec![]))
+                        }
+                    )
+                    .await
+                    .is_err()
+                );
+                assert_eq!(std::fs::read(&vault).unwrap(), before);
+                assert_eq!(
+                    std::fs::read(
+                        dir.path()
+                            .join("agent_environment/tool/.tool/settings.json")
+                    )
+                    .unwrap(),
+                    b"new account settings"
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn private_environment_start_failures_preserve_the_login_without_marking_authentication_failed()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let device = DeviceKey {
+            machine_root: dir.path().into(),
+            keychain: &FakeKeychain,
+        };
+        let vault = path(dir.path(), "tool");
+        credential_vault::seal(
+            &device,
+            &vault,
+            "tool:default:test",
+            &credentials("synthetic-old"),
+        )
+        .unwrap();
+        let before = std::fs::read(&vault).unwrap();
+        let marker = dir
+            .path()
+            .join("agent_environment/tool/authentication-failed");
+        for usage in [false, true] {
+            let error = login_operation(
+                &device,
+                dir.path(),
+                &catalog(),
+                "tool",
+                usage,
+                "en",
+                |_| async { Err("VM failed to start".into()) },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, "VM failed to start");
+            assert!(!marker.exists());
+            assert_eq!(std::fs::read(&vault).unwrap(), before);
+        }
+        let error = refresh_login(
+            &device,
+            dir.path(),
+            "tool",
+            &catalog(),
+            "synthetic-old",
+            |_| async { Err("VM failed to start".into()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "VM failed to start");
+        assert!(!marker.exists());
+        assert_eq!(std::fs::read(&vault).unwrap(), before);
+    }
+    #[tokio::test]
+    async fn usage_operation_unseals_and_saves_rotation_before_a_failing_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = DeviceKey {
+            machine_root: dir.path().into(),
+            keychain: &FakeKeychain,
+        };
+        let vault = path(dir.path(), "tool");
+        credential_vault::seal(
+            &device,
+            &vault,
+            "tool:default:test",
+            &credentials("synthetic-old"),
+        )
+        .unwrap();
+        let error = login_operation(
+            &device,
+            dir.path(),
+            &catalog(),
+            "tool",
+            true,
+            "en",
+            |handed| async move {
+                assert_eq!(access(&handed, &catalog()).unwrap(), "synthetic-old");
+                Ok((1, credentials("synthetic-rotated"), vec![]))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("probe failed"));
+        let saved = credential_vault::unseal(&device, &vault, "tool:default:test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(access(&saved, &catalog()).unwrap(), "synthetic-rotated");
+    }
+    #[tokio::test]
+    async fn completed_login_rejects_api_keys_with_account_guidance_without_replacing_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = DeviceKey {
+            machine_root: dir.path().into(),
+            keychain: &FakeKeychain,
+        };
+        let mut catalog = catalog();
+        catalog["label"] = json!("Tool");
+        catalog["provision"]["credential_broker"]["refresh_token"] = json!(["refresh"]);
+        let vault = path(dir.path(), "tool");
+        std::fs::create_dir_all(vault.parent().unwrap()).unwrap();
+        std::fs::write(&vault, b"corrupt previous vault").unwrap();
+        authentication_outcome(dir.path(), "tool", true).unwrap();
+        for language in ["en", "ja"] {
+            let error = login_operation(
+                &device,
+                dir.path(),
+                &catalog,
+                "tool",
+                false,
+                language,
+                |handed| async move {
+                    assert!(handed.is_empty());
+                    Ok((0, credentials("synthetic-api-key"), vec![]))
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error,
+                crate::i18n::t(
+                    language,
+                    "intelligences.agent_environment.tool.login_not_an_account",
+                    &[("tool", "Tool")]
+                )
+            );
+        }
+        assert_eq!(std::fs::read(&vault).unwrap(), b"corrupt previous vault");
+        assert!(
+            dir.path()
+                .join("agent_environment/tool/authentication-failed")
+                .exists()
+        );
+    }
     #[test]
     fn only_a_completed_login_clears_a_failure() {
         for code in [0, 1] {
@@ -984,7 +1316,7 @@ mod tests {
                 "tool",
                 code,
                 &credentials("synthetic"),
-                false,
+                "en",
             );
             assert_eq!(result.is_ok(), code == 0);
             assert_eq!(
@@ -1015,9 +1347,216 @@ mod tests {
             cpus: 1,
             nameservers: vec![],
         };
-        ToolLogin::prepare(data, &vm.home, catalog, vm.clone())
+        ToolLogin::prepare(data, &vm.home, catalog, "en", vm.clone())
             .await
             .unwrap()
+    }
+    #[tokio::test]
+    async fn expiring_logins_refresh_again_until_a_provider_rejects_the_refreshed_token() {
+        let mut catalog = catalog();
+        catalog["provision"]["credential_broker"]["refresh"] = json!(["refresh"]);
+        let mut login = held(expire(credentials("synthetic-old"), &catalog).unwrap());
+        login.refreshed = true;
+        assert_eq!(
+            lent_access(&mut login, &catalog, None, |_| async {
+                Ok(credentials("synthetic-new"))
+            })
+            .await
+            .unwrap(),
+            "synthetic-new"
+        );
+        assert_eq!(
+            lent_access(
+                &mut login,
+                &catalog,
+                Some("synthetic-new".into()),
+                |_| async { panic!("rejected refreshed login must stop") }
+            )
+            .await
+            .unwrap_err(),
+            "refresh_failed"
+        );
+    }
+    #[tokio::test]
+    async fn begin_waits_for_the_token_source_before_giving_the_turn_its_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut loan = tool(dir.path()).await;
+        let device = DeviceKey {
+            machine_root: dir.path().into(),
+            keychain: &FakeKeychain,
+        };
+        credential_vault::seal(
+            &device,
+            &path(dir.path(), "tool"),
+            "tool:default:test",
+            &credentials("synthetic-old"),
+        )
+        .unwrap();
+        let state = loan.state.clone();
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = called.clone();
+        Arc::get_mut(&mut loan).unwrap().source = Arc::new(move |refused| {
+            assert!(refused.is_none());
+            let state = state.clone();
+            let observed = observed.clone();
+            Box::pin(async move {
+                assert!(state.lock().await.is_some());
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err("synthetic refresh refusal".into())
+            })
+        });
+        assert_eq!(
+            loan.begin_with_keychain(Arc::new(FakeKeychain))
+                .await
+                .unwrap_err(),
+            "synthetic refresh refusal"
+        );
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(loan.state.lock().await.is_none());
+    }
+    #[tokio::test]
+    async fn a_sticky_vm_start_refusal_does_not_mark_authentication_when_old_requests_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let loan = tool(dir.path()).await;
+        let mut login = held(credentials("synthetic-old"));
+        login.refreshed = true;
+        login.refusal = Some("refresh_failed");
+        *loan.state.lock().await = Some(login);
+        for refused in [None, Some("synthetic-old".into())] {
+            assert_eq!(
+                (loan.source)(refused).await.unwrap_err(),
+                login_problem(&loan.catalog, "refresh_failed", &loan.command, "en")
+            );
+            assert!(
+                !dir.path()
+                    .join("agent_environment/tool/authentication-failed")
+                    .exists()
+            );
+        }
+        assert_eq!(
+            loan.end().await,
+            login_problem(&loan.catalog, "refresh_failed", &loan.command, "en")
+        );
+    }
+    #[tokio::test]
+    async fn host_end_turn_returns_the_lent_login_refusal_and_revokes_the_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut loan = tool(dir.path()).await;
+        Arc::get_mut(&mut loan).unwrap().keychain = Arc::new(FakeKeychain);
+        credential_vault::seal(
+            &DeviceKey {
+                machine_root: dir.path().into(),
+                keychain: &FakeKeychain,
+            },
+            &path(dir.path(), "tool"),
+            "tool:default:test",
+            &credentials("synthetic"),
+        )
+        .unwrap();
+        let invocation = gb_environment::broker::Invocation {
+            person_id: "aiko".into(),
+            run_id: "run".into(),
+            trace_id: "trace".into(),
+            work_kind: "ticket".into(),
+            work_identity: "87".into(),
+            cwd: dir.path().into(),
+            access: gb_wire::CommandAccess {
+                read_only: false,
+                inspects: vec![],
+            },
+        };
+        let host = crate::host_window::HttpHost::start_context(crate::host_window::Context {
+            broker: gb_environment::broker::Broker::new(
+                dir.path().join("unused-cli"),
+                invocation.clone(),
+            ),
+            invocation,
+            workspace: dir.path().into(),
+            home: dir.path().to_string_lossy().into_owned(),
+            mounts: BTreeMap::from([(dir.path().to_string_lossy().into_owned(), true)]),
+            turn_mounts: BTreeMap::new(),
+            tools: ["tool".into()].into(),
+            summary_tools: ["tool".into()].into(),
+            loans: BTreeMap::from([("tool".into(), loan.clone())]),
+            rate_limits: BTreeMap::new(),
+            record: Arc::new(|_| {}),
+        })
+        .await
+        .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let begin = client
+            .post(format!("http://127.0.0.1:{}/host/begin_turn", host.port))
+            .bearer_auth(&host.token)
+            .json(&json!({"tool":"tool","cwd":dir.path()}))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let grant = begin["result"]["turn_grant"].as_str().unwrap();
+        loan.state.lock().await.as_mut().unwrap().refusal = Some("refresh_failed");
+        let end = || {
+            client
+                .post(format!("http://127.0.0.1:{}/host/end_turn", host.port))
+                .bearer_auth(&host.token)
+                .json(&json!({"turn_grant":grant}))
+        };
+        let answer = end().send().await.unwrap();
+        assert_eq!(answer.status(), reqwest::StatusCode::OK);
+        let answer = answer.json::<Value>().await.unwrap();
+        assert_eq!(
+            answer["result"]["refusal"],
+            login_problem(&loan.catalog, "refresh_failed", &loan.command, "en")
+        );
+        assert!(loan.state.lock().await.is_none());
+        assert_eq!(
+            end().send().await.unwrap().status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+    }
+    #[tokio::test]
+    async fn end_preserves_the_localized_sticky_refusal_before_releasing_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = tool(dir.path()).await;
+        for key in [
+            "refresh_failed",
+            "login_refused",
+            "credentials_corrupt",
+            "credentials_locked",
+            "credentials_unavailable",
+        ] {
+            let mut login = held(credentials("synthetic"));
+            login.refusal = Some(key);
+            *tool.state.lock().await = Some(login);
+            assert_eq!(
+                tool.end().await,
+                login_problem(&tool.catalog, key, &tool.command, "en")
+            );
+            assert!(tool.state.lock().await.is_none());
+            assert_eq!(tool.end().await, "");
+        }
+        let mut login = held(credentials("synthetic"));
+        let mut catalog = catalog();
+        catalog["provision"]["credential_broker"]["refresh"] = json!(["refresh"]);
+        let reason = lent_access(&mut login, &catalog, Some("synthetic".into()), |_| async {
+            Err("private failure".into())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(reason, "refresh_failed");
+        assert_eq!(login.refusal, Some("refresh_failed"));
+        for language in ["ja", "en"] {
+            let text = login_problem(
+                &catalog,
+                reason,
+                "guildbotics environment login tool",
+                language,
+            );
+            assert!(text.contains("guildbotics environment login tool"));
+            assert!(!text.contains("%{"));
+            assert!(!text.contains("intelligences.agent_environment"));
+        }
     }
     #[tokio::test]
     async fn persisted_state_is_allowlisted_and_readonly_account_copies_are_fresh() {
@@ -1243,7 +1782,7 @@ mod tests {
                 cpus: 1,
                 nameservers: vec![],
             };
-            let tool = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), vm.clone())
+            let tool = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), "en", vm.clone())
                 .await
                 .unwrap();
             let environment = tool
@@ -1398,21 +1937,22 @@ mod tests {
             .unwrap();
         });
         started.await.unwrap();
+        let login_started = std::cell::Cell::new(false);
         let logging_in = async {
-            let _held = hold_login(path(&data, "tool")).await.unwrap();
-            complete_login(
-                &device,
-                &data,
-                &catalog(),
-                "tool",
-                0,
-                &credentials("synthetic-relogin"),
-                false,
-            )
+            login_operation(&device, &data, &catalog(), "tool", false, "en", |handed| {
+                login_started.set(true);
+                assert!(handed.is_empty());
+                async { Ok((0, credentials("synthetic-relogin"), vec![])) }
+            })
+            .await
             .unwrap();
         };
         tokio::pin!(logging_in);
         assert!(futures_util::poll!(logging_in.as_mut()).is_pending());
+        assert!(
+            login_started.get(),
+            "Interactive login runs before acquiring the save lock"
+        );
         release.send(()).unwrap();
         refreshing.await.unwrap();
         logging_in.await;
@@ -1668,43 +2208,55 @@ async fn lent_access<F, Fut>(
     catalog: &Value,
     refused: Option<String>,
     refresh: F,
-) -> Result<String, ()>
+) -> Result<String, &'static str>
 where
     F: FnOnce(String) -> Fut,
     Fut: std::future::Future<Output = Result<Files, String>>,
 {
-    if login.failed {
-        return Err(());
+    if let Some(reason) = login.refusal {
+        return Err(reason);
     }
-    let token = access(&login.files, catalog).map_err(|_| ())?;
+    let token = access(&login.files, catalog).map_err(|_| {
+        login.refusal = Some("credentials_corrupt");
+        "credentials_corrupt"
+    })?;
     if refused.as_ref().is_some_and(|refused| refused != &token)
         || (refused.is_none() && !expiring(&login.files, catalog))
     {
         return Ok(token);
     }
-    if login.refreshed
-        || catalog["provision"]["credential_broker"]["refresh"]
-            .as_array()
-            .is_none_or(|v| v.is_empty())
+    if refused.is_some()
+        && (login.refreshed
+            || catalog["provision"]["credential_broker"]["refresh"]
+                .as_array()
+                .is_none_or(|v| v.is_empty()))
     {
-        login.failed = true;
-        return Err(());
+        let key = if login.refreshed {
+            "refresh_failed"
+        } else {
+            "login_refused"
+        };
+        login.refusal = Some(key);
+        return Err(key);
     }
     login.refreshed = true;
     match refresh(token).await {
         Ok(files) => {
             login.files = files;
-            access(&login.files, catalog).map_err(|_| ())
+            access(&login.files, catalog).map_err(|_| {
+                login.refusal = Some("credentials_corrupt");
+                "credentials_corrupt"
+            })
         }
         Err(_) => {
-            login.failed = true;
-            Err(())
+            login.refusal = Some("refresh_failed");
+            Err("refresh_failed")
         }
     }
 }
 async fn hold_login(path: PathBuf) -> Result<gb_base::files::FileLock, String> {
     tokio::task::spawn_blocking(move || {
-        credential_vault::hold(&path, std::time::Duration::from_secs(30))
+        credential_vault::hold(&path, std::time::Duration::from_secs(270))
     })
     .await
     .map_err(|_| "The login lock failed.")?
@@ -1737,7 +2289,8 @@ where
         return Ok(files);
     }
     let handed = expire(files, catalog)?;
-    let captured = run(handed.clone()).await.map(|(_, files, _)| files);
+    let (_, files, _) = run(handed.clone()).await?;
+    let captured = Ok(files);
     if let Ok(files) = &captured
         && access(files, catalog).is_ok()
         && !refresh_changed(files, &handed, catalog)
@@ -1826,22 +2379,73 @@ fn complete_login(
     tool: &str,
     code: i32,
     files: &Files,
-    usage: bool,
+    language: &str,
 ) -> Result<(), String> {
-    if !usage && code != 0 {
-        return Err("The provider login or usage probe failed.".into());
-    }
-    keep_capture(device, data, tool, catalog, Ok(files.clone()))?;
     if code != 0 {
         return Err("The provider login or usage probe failed.".into());
     }
-    if !usage {
-        keep_persisted(data, tool, catalog, files)?;
-        authentication_outcome(data, tool, false)?;
-        crate::environment::forget_usage(data, tool);
-    }
+    access(files, catalog)
+        .map_err(|_| login_problem(catalog, "login_not_an_account", "", language))?;
+    keep_capture(device, data, tool, catalog, Ok(files.clone()))?;
+    keep_persisted(data, tool, catalog, files)?;
+    authentication_outcome(data, tool, false)?;
+    crate::environment::forget_usage(data, tool);
     Ok(())
 }
+
+/// Interactive login starts afresh; only a usage probe opens the existing login.
+async fn login_operation<F, Fut>(
+    device: &DeviceKey<'_>,
+    data: &Path,
+    catalog: &Value,
+    tool: &str,
+    usage: bool,
+    language: &str,
+    run: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(Files) -> Fut,
+    Fut: std::future::Future<Output = Result<(i32, Files, Vec<u8>), String>>,
+{
+    let vault = path(data, tool);
+    let _held = if usage {
+        Some(hold_login(vault.clone()).await?)
+    } else {
+        None
+    };
+    let files = if usage {
+        let label = label(
+            tool,
+            catalog["provision"]["credential_broker"]["format"]
+                .as_str()
+                .ok_or("Tool has no credential broker.")?,
+        );
+        let files = credential_vault::unseal(device, &vault, &label)
+            .map_err(|_| "The login cannot be opened.")?
+            .unwrap_or_default();
+        access(&files, catalog)?;
+        files
+    } else {
+        Files::new()
+    };
+    let before = files.clone();
+    let (code, files, reply) = run(files).await?;
+    // A probe can rotate a refresh token before returning a failing exit code.
+    if usage {
+        complete_probe(device, data, catalog, tool, code, &before, &files)?;
+        complete_usage(data, tool, &reply)
+    } else {
+        if code != 0 {
+            return Err("The provider login or usage probe failed.".into());
+        }
+        access(&files, catalog)
+            .map_err(|_| login_problem(catalog, "login_not_an_account", "", language))?;
+        let _held = hold_login(vault).await?;
+        complete_login(device, data, catalog, tool, code, &files, language)?;
+        Ok(json!({"tool":tool,"saved":true}))
+    }
+}
+
 fn private_network(
     catalog: &Value,
     nameservers: &[String],
@@ -2049,9 +2653,18 @@ async fn private_run(
         .await
     }
     .map_err(|_| "The private credential environment could not start.")?;
-    let kept = result
-        .files
-        .map_err(|_| "The private credential environment could not return its login.")?
+    let captured = match result.files {
+        Ok(files) => files,
+        Err(_) => {
+            authentication_outcome(
+                &vm.data,
+                catalog["name"].as_str().ok_or("Tool name missing.")?,
+                true,
+            )?;
+            return Err("The private credential environment could not return its login.".into());
+        }
+    };
+    let kept = captured
         .into_iter()
         .filter_map(|(path, value)| {
             Path::new(&path)
@@ -2135,27 +2748,18 @@ async fn login_with_cancellation(
             .map(str::to_owned)
             .collect(),
     };
+    let language = std::fs::read_to_string(workspace.join(".guildbotics/config/team/project.yml"))
+        .ok()
+        .and_then(|text| gb_config::yaml_value(&text).ok())
+        .and_then(|value| value["language"].as_str().map(crate::i18n::language))
+        .unwrap_or("en");
     let tool = tool.to_owned();
     let task = spawn_private(private_tasks(), async move {
-        let path = path(&vm.data, &tool);
-        let label = label(
-            &tool,
-            catalog["provision"]["credential_broker"]["format"]
-                .as_str()
-                .ok_or("Tool has no credential broker.")?,
-        );
-        let _held = hold_login(path.clone()).await?;
         let keychain = SystemKeychain;
         let device = DeviceKey {
             machine_root: vm.data.parent().unwrap_or(&vm.data).into(),
             keychain: &keychain,
         };
-        let files = credential_vault::unseal(&device, &path, &label)
-            .map_err(|_| "The login cannot be opened.")?
-            .unwrap_or_default();
-        if usage {
-            access(&files, &catalog)?;
-        }
         let argv = if usage {
             vec![
                 "/opt/guildbotics/venv/bin/python".into(),
@@ -2176,29 +2780,16 @@ async fn login_with_cancellation(
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
-        let before = files.clone();
-        let captured =
-            private_run(vm.clone(), catalog.clone(), files, argv, !usage, cancelled).await;
-        let (code, files, reply) = match captured {
-            Ok(result) => result,
-            Err(error) => {
-                authentication_outcome(&vm.data, &tool, true)?;
-                return Err(error);
-            }
-        };
-        // Capture and save precede the process outcome: refresh tokens may have
-        // rotated even when the provider subsequently failed or timed out.
-        if usage {
-            complete_probe(&device, &vm.data, &catalog, &tool, code, &before, &files)?;
-        } else {
-            complete_login(&device, &vm.data, &catalog, &tool, code, &files, false)?;
-        }
-        if usage {
-            complete_usage(&vm.data, &tool, &reply)
-        } else {
-            access(&files, &catalog)?;
-            Ok(json!({"tool":tool,"saved":true}))
-        }
+        login_operation(
+            &device,
+            &vm.data,
+            &catalog,
+            &tool,
+            usage,
+            language,
+            |files| private_run(vm.clone(), catalog.clone(), files, argv, !usage, cancelled),
+        )
+        .await
     });
     task.await
         .map_err(|_| "The private credential task failed.".to_owned())?

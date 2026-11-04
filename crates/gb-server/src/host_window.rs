@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 type Answer = Pin<Box<dyn Future<Output = Result<Value, HostError>> + Send>>;
 pub type HostCalls = Arc<dyn Fn(String, Value) -> Answer + Send + Sync>;
 pub type TokenSource = Arc<
-    dyn Fn(Option<String>) -> Pin<Box<dyn Future<Output = Result<String, ()>> + Send>>
+    dyn Fn(Option<String>) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -379,7 +379,8 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
     let (response, token) = loop {
         let token = match (state.source)(refused.clone()).await {
             Ok(token) if !token.is_empty() => token,
-            _ => return StatusCode::UNAUTHORIZED.into_response(),
+            Ok(_) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(reason) => return (StatusCode::UNAUTHORIZED, reason).into_response(),
         };
         if !state.leases.accepts(generation, &stand_in) {
             return StatusCode::UNAUTHORIZED.into_response();
@@ -398,6 +399,11 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
         if answer.status() == StatusCode::UNAUTHORIZED && refused.is_none() {
             refused = Some(token);
             continue;
+        }
+        if answer.status() == StatusCode::UNAUTHORIZED
+            && let Err(reason) = (state.source)(Some(token.clone())).await
+        {
+            return (StatusCode::UNAUTHORIZED, reason).into_response();
         }
         break (answer, token);
     };
@@ -545,6 +551,63 @@ mod tests {
             std::path::Path::new("/exchange/closed/file")
         ));
         assert!(!admits(&facts, std::path::Path::new("/unknown")));
+    }
+    #[test]
+    fn stored_secrets_are_masked_in_activity_even_when_names_overlap() {
+        use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
+        struct Fake;
+        impl Keychain for Fake {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                use base64::Engine;
+                Ok(Some(
+                    base64::engine::general_purpose::STANDARD.encode([19; 32]),
+                ))
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("key exists")
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let host = gb_environment::Host {
+            data: dir.path().join("data"),
+            home: dir.path().join("home"),
+            package: dir.path().join("package"),
+            identity_root: dir.path().join("identity"),
+        };
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            host.identity_root.clone(),
+            Some(workspace.clone()),
+        );
+        for (scope, value) in [
+            (Scope::Identity, "synthetic-identity-value"),
+            (Scope::Workspace, "synthetic-workspace-value"),
+        ] {
+            SecretStore::new(
+                &writes,
+                scope,
+                DeviceKey {
+                    machine_root: dir.path().into(),
+                    keychain: &Fake,
+                },
+            )
+            .unwrap()
+            .set("STORE_ONLY_TEST_KEY", value)
+            .unwrap();
+        }
+        let redactor = command_redactor(&host, &workspace, &Fake).unwrap();
+        let value = redactor.local(record_entry(json!({"type":"event", "span":null, "event":{"kind":"failed", "name":"failed", "message":"synthetic-identity-value / synthetic-workspace-value"}}), "trace", "run", "aiko", "test").unwrap());
+        let encoded = serde_json::to_string(&value).unwrap();
+        assert!(!encoded.contains("synthetic-identity-value"));
+        assert!(!encoded.contains("synthetic-workspace-value"));
+        assert!(encoded.contains("*** / ***"));
+        gb_observability::Diagnostics::open(&workspace).record(value.as_object().unwrap().clone());
+        let saved =
+            std::fs::read_to_string(workspace.join(".guildbotics/local/run/sessions/trace.jsonl"))
+                .unwrap();
+        assert!(saved.contains("*** / ***"));
+        assert!(!saved.contains("synthetic-identity-value"));
+        assert!(!saved.contains("synthetic-workspace-value"));
     }
     #[test]
     fn recorded_io_retains_local_detail_and_span_summary_keeps_its_schema() {
@@ -923,12 +986,16 @@ impl HttpHost {
                             ));
                         }
                         context.broker.deactivate().await;
+                        let mut refusal = String::new();
                         for loan in context.loans.values() {
-                            loan.end().await;
+                            let reason = loan.end().await;
+                            if !reason.is_empty() {
+                                refusal = reason;
+                            }
                         }
                         *active = None;
                         released.notify_waiters();
-                        Ok(json!({"refusal":""}))
+                        Ok(json!({"refusal":refusal}))
                     }
                     "member" => {
                         let existing = current.lock().await.clone();
@@ -1246,24 +1313,7 @@ pub async fn prepare_command(
         .filter_map(|brain| brain["definition"]["adapter"].as_str())
         .map(str::to_owned)
         .collect();
-    let mut secret_names = gb_config::secrets::read_secret_index(&roots.config)
-        .map_err(|_| "The workspace secret index cannot be read.".to_owned())?;
-    secret_names.extend(
-        gb_config::secrets::read_secret_index(&host.identity_root.join(".guildbotics/config"))
-            .map_err(|_| "The identity secret index cannot be read.".to_owned())?,
-    );
-    secret_names.extend(
-        [
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GOOGLE_API_KEY",
-            "GEMINI_API_KEY",
-            "JEV_API_KEY",
-            "TYPESAFE_API_KEY",
-        ]
-        .map(str::to_owned),
-    );
-    let redactor = gb_observability::redaction::Redactor::from_environment(secret_names);
+    let redactor = command_redactor(host, workspace, &gb_config::secrets::SystemKeychain)?;
     let diagnostics = gb_observability::Diagnostics::open(workspace);
     let trace_id = command.trace_id.clone();
     let person_id = command.person_id.clone();
@@ -1312,6 +1362,7 @@ pub async fn prepare_command(
             &host.data,
             &host.home,
             tool.clone(),
+            resolved["language"].as_str().unwrap_or("en"),
             crate::tool_login::LoginVm {
                 data: host.data.clone(),
                 home: host.home.clone(),
@@ -1455,7 +1506,9 @@ pub async fn prepare_command(
         let value = host_secret(host, workspace, key)?;
         let source: TokenSource = Arc::new(move |_| {
             let value = value.clone();
-            Box::pin(async move { value.ok_or(()) })
+            Box::pin(async move {
+                value.ok_or_else(|| "The inference credential is unavailable.".to_owned())
+            })
         });
         let gateway = Gateway::start(
             Policy {
@@ -1497,7 +1550,9 @@ pub async fn prepare_command(
         )?;
         let source: TokenSource = Arc::new(move |_| {
             let value = value.clone();
-            Box::pin(async move { value.ok_or(()) })
+            Box::pin(async move {
+                value.ok_or_else(|| "The inference credential is unavailable.".to_owned())
+            })
         });
         let gateway = Gateway::start(
             Policy {
@@ -1548,6 +1603,56 @@ pub async fn prepare_command(
         _host: window,
         _gateways: gateways,
     })
+}
+
+fn command_redactor(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    keychain: &dyn gb_config::secrets::Keychain,
+) -> Result<gb_observability::redaction::Redactor, String> {
+    let writes = gb_base::shared_writes::SharedWrites::new(
+        host.identity_root.clone(),
+        Some(workspace.into()),
+    );
+    let mut values = Vec::new();
+    let mut names = std::collections::BTreeSet::from_iter(
+        [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "JEV_API_KEY",
+            "TYPESAFE_API_KEY",
+        ]
+        .map(str::to_owned),
+    );
+    for scope in [
+        gb_config::secrets::Scope::Identity,
+        gb_config::secrets::Scope::Workspace,
+    ] {
+        let store = gb_config::secrets::SecretStore::new(
+            &writes,
+            scope,
+            gb_config::secrets::DeviceKey {
+                machine_root: host.data.parent().unwrap_or(&host.data).into(),
+                keychain,
+            },
+        )
+        .map_err(|_| "The host secret store is unavailable.".to_owned())?;
+        for (name, value) in store
+            .values()
+            .map_err(|_| "The host secret store could not open.".to_owned())?
+        {
+            names.insert(name);
+            values.push(value);
+        }
+    }
+    values.extend(
+        names
+            .into_iter()
+            .filter_map(|name| std::env::var(name).ok()),
+    );
+    Ok(gb_observability::redaction::Redactor::new(values))
 }
 
 fn host_secret(

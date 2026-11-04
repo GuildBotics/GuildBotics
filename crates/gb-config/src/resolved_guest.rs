@@ -17,6 +17,43 @@ fn read(path: &Path) -> anyhow::Result<Value> {
     crate::yaml::value(&std::fs::read_to_string(path)?)
         .map_err(|_| anyhow::anyhow!("Invalid configuration: {}", path.display()))
 }
+// Optional YAML dictionaries use the frozen host's _yaml_dict semantics.
+fn dictionary(path: &Path) -> anyhow::Result<serde_json::Map<String, Value>> {
+    if !path.is_file() {
+        return Ok(serde_json::Map::new());
+    }
+    Ok(read(path)?.as_object().cloned().unwrap_or_default())
+}
+
+fn optional_definition(
+    roots: &CommandRoots,
+    person: &str,
+    relative: &str,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    safe(relative)?;
+    match selected(roots, person, relative) {
+        Ok(path) => dictionary(&path),
+        Err(_) => Ok(serde_json::Map::new()),
+    }
+}
+
+fn effort_overlay(value: Option<&Value>) -> anyhow::Result<Value> {
+    let Some(value) = value.filter(|value| !value.is_null() && **value != json!("")) else {
+        return Ok(json!({}));
+    };
+    let mut result = serde_json::Map::new();
+    for (level, settings) in value.as_object().context("Effort must be a mapping")? {
+        let level = level.trim().to_lowercase();
+        anyhow::ensure!(
+            ["low", "high"].contains(&level.as_str()),
+            "Invalid effort level"
+        );
+        anyhow::ensure!(settings.is_object(), "Effort settings must be a mapping");
+        result.insert(level, settings.clone());
+    }
+    Ok(Value::Object(result))
+}
+
 fn safe(relative: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !relative.is_empty()
@@ -59,15 +96,7 @@ fn mapping(
             .config
             .join(format!("team/members/{person}/{relative}")),
     ] {
-        if path.is_file() {
-            let value = read(&path)?;
-            for (key, value) in value
-                .as_object()
-                .context("Slot mapping must be an object")?
-            {
-                result.insert(key.clone(), value.clone());
-            }
-        }
+        result.extend(dictionary(&path)?);
     }
     Ok(result)
 }
@@ -246,22 +275,38 @@ fn resolve_brain(roots: &CommandRoots, person: &str, config: &Value) -> anyhow::
                 let inherited = if Path::new(relative) != default {
                     selected(roots, person, &relative_default)
                         .ok()
-                        .map(|path| read(&path))
+                        .map(|path| dictionary(&path))
                         .transpose()?
                         .and_then(|value| value.get("effort").cloned())
-                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
+                        .filter(|value| match value {
+                            Value::Null => false,
+                            Value::String(text) => !text.is_empty(),
+                            Value::Object(map) => !map.is_empty(),
+                            Value::Array(values) => !values.is_empty(),
+                            Value::Bool(value) => *value,
+                            Value::Number(value) => value.as_f64() != Some(0.0),
+                        })
                 } else {
                     None
                 };
                 let packaged = roots.templates.join(relative_default);
                 definition["effort"] = match inherited {
                     Some(effort) => effort,
-                    None if packaged.is_file() => {
-                        read(&packaged)?.get("effort").cloned().unwrap_or(json!({}))
-                    }
+                    None if packaged.is_file() => dictionary(&packaged)?
+                        .get("effort")
+                        .cloned()
+                        .unwrap_or(json!({})),
                     None => json!({}),
                 };
             }
+            definition["effort"] = effort_overlay(definition.get("effort"))?;
+            if definition.get("parameters").is_none_or(Value::is_null) {
+                definition["parameters"] = json!({});
+            }
+            anyhow::ensure!(
+                definition["parameters"].is_object(),
+                "Model parameters must be a mapping"
+            );
             // Model schemas contain no secret values; key arguments are host-owned.
             for key in ["api_key", "token"] {
                 definition.as_object_mut().unwrap().remove(key);
@@ -291,34 +336,19 @@ fn resolve_brain(roots: &CommandRoots, person: &str, config: &Value) -> anyhow::
                 .get(slot)
                 .and_then(Value::as_str)
                 .context("Unknown CLI slot")?;
-            let mut definition = read(&selected(
-                roots,
-                person,
-                &format!("intelligences/{relative}"),
-            )?)?;
+            let mut definition =
+                optional_definition(roots, person, &format!("intelligences/{relative}"))?;
             let default = Path::new(relative)
                 .parent()
                 .context("Invalid CLI definition")?
                 .join("default.yml");
             if default != Path::new(relative) {
-                let mut inherited = selected(
+                let mut inherited = optional_definition(
                     roots,
                     person,
                     &format!("intelligences/{}", default.display()),
-                )
-                .ok()
-                .map(|path| read(&path))
-                .transpose()?
-                .unwrap_or(json!({}));
-                inherited
-                    .as_object_mut()
-                    .context("CLI default must be an object")?
-                    .extend(
-                        definition
-                            .as_object()
-                            .context("CLI definition must be an object")?
-                            .clone(),
-                    );
+                )?;
+                inherited.extend(definition);
                 definition = inherited;
             }
             let adapter = relative
@@ -331,7 +361,7 @@ fn resolve_brain(roots: &CommandRoots, person: &str, config: &Value) -> anyhow::
             );
             (
                 slot.to_owned(),
-                json!({"adapter":adapter,"parameters":definition.get("parameters").cloned().unwrap_or(json!({})),"effort":definition.get("effort").cloned().unwrap_or(json!({}))}),
+                json!({"adapter":adapter,"parameters":definition.get("parameters").and_then(Value::as_object).cloned().unwrap_or_default(),"effort":effort_overlay(definition.get("effort"))?}),
             )
         }
         "jev" => {
@@ -429,6 +459,258 @@ mod tests {
         );
         (dir, roots, identity)
     }
+    // Frozen python-host fea9e05a: load_person_slot_mapping, _yaml_dict,
+    // _cli_agent_definition, _parameters_of and validate_effort_overlay.
+    #[test]
+    fn slot_mappings_ignore_non_objects_at_every_scope() {
+        let (_dir, roots, _) = fixture();
+        for name in ["brain", "model", "cli_agent"] {
+            let relative = format!("intelligences/{name}_mapping.yml");
+            for source in ["", "null", "[]", "scalar", "{}"] {
+                put(&roots.templates, &relative, "packaged: packaged\n");
+                put(&roots.config, &relative, source);
+                let member = format!("team/members/aiko/{relative}");
+                put(&roots.config, &member, "member: member\n");
+                assert_eq!(
+                    mapping(&roots, "aiko", name).unwrap(),
+                    BTreeMap::from([("member".into(), json!("member")),]),
+                    "{name}: team {source:?}"
+                );
+                put(&roots.config, &relative, "team: team\n");
+                put(&roots.config, &member, source);
+                assert_eq!(
+                    mapping(&roots, "aiko", name).unwrap(),
+                    BTreeMap::from([("team".into(), json!("team")),]),
+                    "{name}: member {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cli_dictionary_population_and_missing_files_inherit_shallow_defaults() {
+        let (_dir, roots, _) = fixture();
+        put(
+            &roots.config,
+            "intelligences/cli_agent_mapping.yml",
+            "fast: cli_agents/claude/fast.yml\n",
+        );
+        let config = json!({"kind":"ai_cli","cli_agent":"fast"});
+        let slot = "intelligences/cli_agents/claude/fast.yml";
+        let default = "intelligences/cli_agents/claude/default.yml";
+        let parameters = json!({"model":"inherited"});
+        for source in [
+            None,
+            Some(""),
+            Some("null"),
+            Some("[]"),
+            Some("scalar"),
+            Some("{}"),
+        ] {
+            put(
+                &roots.config,
+                default,
+                "parameters: {model: inherited}\neffort: {high: {value: inherited}}\n",
+            );
+            if let Some(source) = source {
+                put(&roots.config, slot, source);
+            }
+            let value = resolve_brain(&roots, "aiko", &config).unwrap();
+            assert_eq!(
+                value["definition"]["parameters"], parameters,
+                "slot {source:?}"
+            );
+            assert_eq!(
+                value["definition"]["effort"],
+                json!({"high":{"value":"inherited"}})
+            );
+            if source.is_some() {
+                std::fs::remove_file(roots.config.join(slot)).unwrap();
+            }
+        }
+        for source in ["", "null", "[]", "scalar", "{}"] {
+            put(&roots.config, default, source);
+            put(&roots.config, slot, "parameters: {model: slot}\n");
+            let value = resolve_brain(&roots, "aiko", &config).unwrap();
+            assert_eq!(value["definition"]["parameters"], json!({"model":"slot"}));
+            assert_eq!(value["definition"]["effort"], json!({}));
+        }
+        for source in ["null", "[]", "scalar", "{}"] {
+            put(
+                &roots.config,
+                slot,
+                &format!("parameters: {source}\neffort: null\n"),
+            );
+            let value = resolve_brain(&roots, "aiko", &config).unwrap();
+            assert_eq!(value["definition"]["parameters"], json!({}));
+            assert_eq!(value["definition"]["effort"], json!({}));
+        }
+    }
+
+    #[test]
+    fn effort_population_is_normalized_and_validated_for_model_and_cli() {
+        let (_dir, roots, _) = fixture();
+        for (kind, slot_key, mapping_name, relative, prefix) in [
+            (
+                "model",
+                "model",
+                "model",
+                "models/openai/fast.yml",
+                "model_class: agno.models.openai.OpenAIChat\n",
+            ),
+            (
+                "ai_cli",
+                "cli_agent",
+                "cli_agent",
+                "cli_agents/claude/fast.yml",
+                "",
+            ),
+        ] {
+            put(
+                &roots.config,
+                &format!("intelligences/{mapping_name}_mapping.yml"),
+                &format!("fast: {relative}\n"),
+            );
+            let config = json!({"kind":kind,slot_key:"fast"});
+            for effort in [
+                "null",
+                "''",
+                "{}",
+                "{' HIGH ': {value: high}, ' Low ': {value: low}}",
+            ] {
+                put(
+                    &roots.config,
+                    &format!("intelligences/{relative}"),
+                    &format!("{prefix}parameters: null\neffort: {effort}\n"),
+                );
+                let value = resolve_brain(&roots, "aiko", &config).unwrap();
+                assert_eq!(
+                    value["definition"]["parameters"],
+                    json!({}),
+                    "{kind} {effort}"
+                );
+                assert_eq!(
+                    value["definition"]["effort"],
+                    if effort.contains("HIGH") {
+                        json!({"high":{"value":"high"},"low":{"value":"low"}})
+                    } else {
+                        json!({})
+                    }
+                );
+            }
+            for effort in [
+                "[]",
+                "scalar",
+                "{default: {}}",
+                "{' DEFAULT ': {}}",
+                "{medium: {}}",
+                "{'': {}}",
+                "{high: null}",
+                "{low: []}",
+            ] {
+                put(
+                    &roots.config,
+                    &format!("intelligences/{relative}"),
+                    &format!("{prefix}effort: {effort}\n"),
+                );
+                assert!(
+                    resolve_brain(&roots, "aiko", &config).is_err(),
+                    "{kind} accepted {effort}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inherited_effort_is_validated_at_model_and_cli_sources() {
+        let (_dir, roots, _) = fixture();
+        for (kind, slot_key, mapping_name, directory, prefix) in [
+            (
+                "model",
+                "model",
+                "model",
+                "models/openai",
+                "model_class: agno.models.openai.OpenAIChat\n",
+            ),
+            ("ai_cli", "cli_agent", "cli_agent", "cli_agents/claude", ""),
+        ] {
+            put(
+                &roots.config,
+                &format!("intelligences/{mapping_name}_mapping.yml"),
+                &format!("fast: {directory}/fast.yml\n"),
+            );
+            put(
+                &roots.config,
+                &format!("intelligences/{directory}/fast.yml"),
+                prefix,
+            );
+            for root in [&roots.templates, &roots.config] {
+                for effort in [
+                    "{' HIGH ': {value: inherited}}",
+                    "{default: {}}",
+                    "scalar",
+                    "{high: null}",
+                ] {
+                    put(
+                        root,
+                        &format!("intelligences/{directory}/default.yml"),
+                        &format!("effort: {effort}\n"),
+                    );
+                    let result =
+                        resolve_brain(&roots, "aiko", &json!({"kind":kind,slot_key:"fast"}));
+                    if effort.contains("HIGH") {
+                        assert_eq!(
+                            result.unwrap()["definition"]["effort"],
+                            json!({"high":{"value":"inherited"}})
+                        );
+                    } else {
+                        assert!(result.is_err(), "{kind} accepted inherited {effort}");
+                    }
+                }
+                std::fs::remove_file(root.join(format!("intelligences/{directory}/default.yml")))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn optional_dictionaries_preserve_path_guards_and_yaml_errors() {
+        let (_dir, roots, _) = fixture();
+        for name in ["brain", "model", "cli_agent"] {
+            put(
+                &roots.config,
+                &format!("intelligences/{name}_mapping.yml"),
+                "broken: [",
+            );
+            assert!(mapping(&roots, "aiko", name).is_err());
+        }
+        for relative in ["../outside.yml", "/absolute.yml"] {
+            assert!(optional_definition(&roots, "aiko", relative).is_err());
+        }
+        put(
+            &roots.config,
+            "intelligences/cli_agent_mapping.yml",
+            "fast: cli_agents/claude/fast.yml\n",
+        );
+        for path in ["fast", "default"] {
+            put(
+                &roots.config,
+                &format!("intelligences/cli_agents/claude/{path}.yml"),
+                "broken: [",
+            );
+            assert!(
+                resolve_brain(&roots, "aiko", &json!({"kind":"ai_cli","cli_agent":"fast"}))
+                    .is_err()
+            );
+            std::fs::remove_file(
+                roots
+                    .config
+                    .join(format!("intelligences/cli_agents/claude/{path}.yml")),
+            )
+            .unwrap();
+        }
+    }
+
     #[test]
     fn a_resolved_command_snapshot_does_not_read_changed_settings_between_turns() {
         let (_dir, roots, identity) = fixture();

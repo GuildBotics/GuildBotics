@@ -8,6 +8,15 @@ const PREFIX: &str = "guildbotics-";
 const LOCK_FILE: &str = "build.lock";
 const FAILED_SUFFIX: &str = ".failed";
 
+static BUILD_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =
+    std::sync::LazyLock::new(tokio_util::task::TaskTracker::new);
+
+/// Wait for cancelled builds to finish VM cleanup before draining the runtime.
+pub async fn drain_builds() {
+    BUILD_TASKS.close();
+    BUILD_TASKS.wait().await;
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
     Missing,
@@ -138,12 +147,12 @@ pub async fn build<F, Fut, R, Removed>(
     remove: R,
 ) -> Result<Status, String>
 where
-    F: FnOnce(PathBuf) -> Fut,
-    Fut: Future<Output = Result<PathBuf, String>>,
-    R: FnMut(PathBuf) -> Removed,
-    Removed: Future<Output = Result<(), String>>,
+    F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<PathBuf, String>> + Send,
+    R: FnMut(PathBuf) -> Removed + Send + 'static,
+    Removed: Future<Output = Result<(), String>> + Send,
 {
-    build_with_timeout(
+    owned_build(
         workspace,
         name,
         perform,
@@ -153,18 +162,47 @@ where
     .await
 }
 
+async fn owned_build<F, Fut, R, Removed>(
+    workspace: &Path,
+    name: &str,
+    perform: F,
+    remove: R,
+    timeout: std::time::Duration,
+) -> Result<Status, String>
+where
+    F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<PathBuf, String>> + Send,
+    R: FnMut(PathBuf) -> Removed + Send + 'static,
+    Removed: Future<Output = Result<(), String>> + Send,
+{
+    let workspace = workspace.to_owned();
+    let name = name.to_owned();
+    let cancelled = tokio_util::sync::CancellationToken::new();
+    let cancel_on_drop = cancelled.clone().drop_guard();
+    // The task keeps the lock through cleanup even if its caller goes away.
+    let result = BUILD_TASKS
+        .spawn(async move {
+            build_with_timeout(&workspace, &name, perform, remove, timeout, cancelled).await
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    cancel_on_drop.disarm();
+    result
+}
+
 async fn build_with_timeout<F, Fut, R, Removed>(
     workspace: &Path,
     name: &str,
     perform: F,
     mut remove: R,
     timeout: std::time::Duration,
+    cancelled: tokio_util::sync::CancellationToken,
 ) -> Result<Status, String>
 where
-    F: FnOnce(PathBuf) -> Fut,
-    Fut: Future<Output = Result<PathBuf, String>>,
-    R: FnMut(PathBuf) -> Removed,
-    Removed: Future<Output = Result<(), String>>,
+    F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<PathBuf, String>> + Send,
+    R: FnMut(PathBuf) -> Removed + Send + 'static,
+    Removed: Future<Output = Result<(), String>> + Send,
 {
     status(workspace, name).map_err(|e| e.to_string())?;
     let directory = snapshots_dir(workspace);
@@ -177,9 +215,21 @@ where
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
     }
-    let built = tokio::time::timeout(timeout, perform(directory.clone()))
-        .await
-        .unwrap_or_else(|_| Err("Environment build exceeded 30 minutes".into()));
+    let work = perform(directory.clone(), cancelled.clone());
+    tokio::pin!(work);
+    let built = tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => {
+            let _ = work.await;
+            Err("Environment build cancelled".into())
+        }
+        _ = tokio::time::sleep(timeout) => {
+            cancelled.cancel();
+            let _ = work.await;
+            Err("Environment build exceeded 30 minutes".into())
+        }
+        result = &mut work => result,
+    };
     match built {
         Err(reason) => {
             gb_base::files::atomic_write(&marker, format!("{reason}\n").as_bytes())
@@ -232,16 +282,118 @@ where
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn timeouts_and_aborted_callers_keep_the_lock_through_late_boot_and_cleanup() {
+        for abort in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let name = "guildbotics-0123456789abcdef";
+            let directory = snapshots_dir(root.path());
+            let (started, boot_started) = tokio::sync::oneshot::channel();
+            let (cancelled, cancellation_seen) = tokio::sync::oneshot::channel();
+            let (release_boot, boot_released) = tokio::sync::oneshot::channel();
+            let (cleaning, cleanup_started) = tokio::sync::oneshot::channel();
+            let (release_cleanup, cleanup_released) = tokio::sync::oneshot::channel();
+            let workspace = root.path().to_owned();
+            let waiter = tokio::spawn(async move {
+                owned_build(
+                    &workspace,
+                    name,
+                    move |_, token| async move {
+                        let cancellation = token.clone();
+                        tokio::spawn(async move {
+                            cancellation.cancelled().await;
+                            let _ = cancelled.send(());
+                        });
+                        crate::runtime::build_lifecycle(
+                            async move {
+                                let _ = started.send(());
+                                let _ = boot_released.await;
+                                Ok(((), move || async move {
+                                    let _ = cleaning.send(());
+                                    let _ = cleanup_released.await;
+                                }))
+                            },
+                            token,
+                            |_| async { panic!("cancelled late boots must not run build steps") },
+                        )
+                        .await
+                    },
+                    |_| async { panic!("cancelled builds must not prune") },
+                    if abort {
+                        std::time::Duration::from_secs(60)
+                    } else {
+                        std::time::Duration::from_millis(10)
+                    },
+                )
+                .await
+            });
+            boot_started.await.unwrap();
+            if abort {
+                waiter.abort();
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), cancellation_seen)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                FileLock::try_hold(&directory.join(LOCK_FILE))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(status(root.path(), name).unwrap().state, State::Building);
+            release_boot.send(()).unwrap();
+            cleanup_started.await.unwrap();
+            assert!(
+                FileLock::try_hold(&directory.join(LOCK_FILE))
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!directory.join(format!("{name}{FAILED_SUFFIX}")).exists());
+            release_cleanup.send(()).unwrap();
+            if abort {
+                assert!(waiter.await.unwrap_err().is_cancelled());
+            } else {
+                assert_eq!(
+                    waiter.await.unwrap(),
+                    Err("Environment build exceeded 30 minutes".into())
+                );
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if let Some(_held) = FileLock::try_hold(&directory.join(LOCK_FILE)).unwrap() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                status(root.path(), name).unwrap().state,
+                State::Failed(
+                    if abort {
+                        "Environment build cancelled"
+                    } else {
+                        "Environment build exceeded 30 minutes"
+                    }
+                    .into()
+                )
+            );
+        }
+    }
+    #[tokio::test]
     async fn a_timed_out_build_records_failure_releases_its_lock_and_keeps_old_snapshots() {
         let root = tempfile::tempdir().unwrap();
         let name = "guildbotics-0123456789abcdef";
         let directory = snapshots_dir(root.path());
         let old = directory.join("guildbotics-1111111111111111");
         std::fs::create_dir_all(&old).unwrap();
-        let result = build_with_timeout(
+        let result = owned_build(
             root.path(),
             name,
-            |_| std::future::pending::<Result<PathBuf, String>>(),
+            |_, cancelled| async move {
+                cancelled.cancelled().await;
+                Err("cancelled".into())
+            },
             |_| async { panic!("timed-out build must not prune") },
             std::time::Duration::from_millis(10),
         )

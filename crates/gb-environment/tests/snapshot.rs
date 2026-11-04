@@ -119,7 +119,7 @@ async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
         gb_environment::snapshot::build(
             root.path(),
             name,
-            |_| async { Err("broken".into()) },
+            |_, _| async { Err("broken".into()) },
             |_| async { panic!("failed build must not prune") }
         )
         .await
@@ -135,23 +135,24 @@ async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
     assert!(!gb_environment::snapshot::needs_build(
         &gb_environment::snapshot::State::Failed("broken".into())
     ));
-    let mut removed = Vec::new();
+    let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let removed_by_build = removed.clone();
     let result = gb_environment::snapshot::build(
         root.path(),
         name,
-        |directory| async move {
+        move |directory, _| async move {
             let path = directory.join(name);
             std::fs::create_dir(&path).unwrap();
             Ok(path)
         },
-        |path| {
-            removed.push(path.clone());
+        move |path| {
+            removed_by_build.lock().unwrap().push(path.clone());
             async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
         },
     )
     .await
     .unwrap();
-    assert_eq!(removed, vec![old.clone()]);
+    assert_eq!(*removed.lock().unwrap(), vec![old.clone()]);
     assert_eq!(result.state, gb_environment::snapshot::State::Ready);
     assert!(!old.exists());
 }
@@ -162,18 +163,20 @@ async fn cleanup_runs_under_build_lock_and_propagates_runtime_failure() {
     let directory = snapshots_dir(root.path());
     let old = directory.join(OTHER);
     std::fs::create_dir_all(&old).unwrap();
+    let cleanup_directory = directory.clone();
+    let cleanup_old = old.clone();
     let result = gb_environment::snapshot::build(
         root.path(),
         NAME,
-        |directory| async move {
+        move |directory, _| async move {
             let path = directory.join(NAME);
             std::fs::create_dir(&path).unwrap();
             Ok(path)
         },
-        |path| {
-            assert_eq!(path, old);
+        move |path| {
+            assert_eq!(path, cleanup_old);
             assert!(
-                FileLock::try_hold(&directory.join("build.lock"))
+                FileLock::try_hold(&cleanup_directory.join("build.lock"))
                     .unwrap()
                     .is_none()
             );
@@ -196,7 +199,7 @@ async fn a_second_build_is_refused_without_running_or_pruning() {
     let result = gb_environment::snapshot::build(
         root.path(),
         NAME,
-        |_| async { panic!("locked build must not run") },
+        |_, _| async { panic!("locked build must not run") },
         |_| async { panic!("locked build must not prune") },
     )
     .await;

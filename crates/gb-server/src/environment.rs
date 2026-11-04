@@ -576,7 +576,7 @@ pub async fn build(
     home: &std::path::Path,
     force: bool,
     language: &str,
-    on_line: impl Fn(&str),
+    on_line: impl Fn(&str) + Send + Sync + 'static,
 ) -> anyhow::Result<PathBuf> {
     use gb_environment::{contract, image, recipe::Recipe, runtime, snapshot};
     let runtime_home = data.join("msb");
@@ -615,10 +615,11 @@ pub async fn build(
         .unwrap_or(&recipe.image)
         .to_owned();
     let pull = declared.is_none();
+    let guest_home = home.to_string_lossy().into_owned();
     let result = snapshot::build(
         workspace,
         &name,
-        |directory| async move {
+        move |directory, cancelled| async move {
             runtime::build_snapshot(
                 runtime::Build {
                     home: &runtime_home,
@@ -626,11 +627,12 @@ pub async fn build(
                     recipe: &recipe,
                     image: &base,
                     pull,
-                    guest_home: &home.to_string_lossy(),
+                    guest_home: &guest_home,
                     resources,
                     nameservers: &network.nameservers,
                 },
                 on_line,
+                cancelled,
             )
             .await
         },
@@ -670,10 +672,18 @@ pub(crate) async fn build_route(
     let data = api.data.clone();
     let language = language.to_owned();
     api.work.spawn(async move {
-        if let Err(error) = build(&workspace, &data, &home, input.force, &language, |line| {
-            tracing::info!("{line}");
-            output(&workspace, line);
-        })
+        let output_workspace = workspace.clone();
+        if let Err(error) = build(
+            &workspace,
+            &data,
+            &home,
+            input.force,
+            &language,
+            move |line| {
+                tracing::info!("{line}");
+                output(&output_workspace, line);
+            },
+        )
         .await
         {
             output(&workspace, &format!("Build failed: {error}"));
@@ -796,10 +806,11 @@ pub(crate) async fn upkeep(api: Shared) {
             tracing::warn!("Environment upkeep: {notice}");
             output(&workspace, &notice);
         }
+        let output_workspace = workspace.clone();
         if should_build
-            && let Err(e) = build(&workspace, &api.data, &home, false, "en", |line| {
+            && let Err(e) = build(&workspace, &api.data, &home, false, "en", move |line| {
                 tracing::info!("{line}");
-                output(&workspace, line);
+                output(&output_workspace, line);
             })
             .await
         {

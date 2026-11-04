@@ -153,6 +153,8 @@ impl Server {
         work.close();
         work.wait().await;
         crate::tool_login::drain_private().await;
+        gb_environment::worktree::drain_writebacks().await;
+        gb_environment::snapshot::drain_builds().await;
         gb_environment::runtime::drain_vms().await;
         cancelling.abort();
         if let Some(diagnostics) = diagnostics {

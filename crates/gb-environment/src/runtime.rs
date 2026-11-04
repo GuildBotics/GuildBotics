@@ -530,7 +530,7 @@ pub async fn run_once(
                 .await?;
                 crate::worktree::write_back_async(copy, &copied, &changes)
                     .await
-                    .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+                    .map_err(Failure::Command)?;
             }
             Ok(())
         })
@@ -1022,6 +1022,7 @@ fn build_builder(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     Ok(builder
+        .replace()
         .image(image)
         .registry(|r| r.auth(microsandbox::RegistryAuth::Anonymous))
         .pull_policy(if pull {
@@ -1101,7 +1102,47 @@ where
     save().await
 }
 
-pub async fn build_snapshot(plan: Build<'_>, on_line: impl Fn(&str)) -> Result<PathBuf, String> {
+fn build_vm_name(directory: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let directory = directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let digest: String = Sha256::digest(directory.as_os_str().as_encoded_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("guildbotics-build-{}", &digest[..16]))
+}
+
+pub(crate) async fn build_lifecycle<T, Booting, Run, Ran, Close, Closed>(
+    boot: Booting,
+    cancelled: tokio_util::sync::CancellationToken,
+    run: Run,
+) -> Result<PathBuf, String>
+where
+    Booting: Future<Output = Result<(T, Close), String>>,
+    Run: FnOnce(T) -> Ran,
+    Ran: Future<Output = Result<PathBuf, String>>,
+    Close: FnOnce() -> Closed,
+    Closed: Future<Output = ()>,
+{
+    // A submitted boot can finish after cancellation; retain its cleanup until
+    // it completes while snapshot::build still owns the build lock.
+    let (vm, close) = boot.await?;
+    let result = tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => Err("Environment build cancelled".into()),
+        result = run(vm) => result,
+    };
+    close().await;
+    result
+}
+
+pub async fn build_snapshot(
+    plan: Build<'_>,
+    on_line: impl Fn(&str),
+    cancelled: tokio_util::sync::CancellationToken,
+) -> Result<PathBuf, String> {
     let Build {
         home,
         directory,
@@ -1112,19 +1153,28 @@ pub async fn build_snapshot(plan: Build<'_>, on_line: impl Fn(&str)) -> Result<P
         resources,
         nameservers,
     } = plan;
-    backend(home).await.map_err(|e| format!("{e:?}"))?;
+    tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => return Err("Environment build cancelled".into()),
+        result = backend(home) => result.map_err(|e| format!("{e:?}"))?,
+    }
+    let vm_name = build_vm_name(directory)?;
     let builder = build_builder(
-        Sandbox::builder("guildbotics-build"),
+        Sandbox::builder(&vm_name),
         image,
         pull,
         resources,
         nameservers,
     )?;
-    let vm = owned_boot(async move { builder.create().await.map(OwnedVm::new) })
-        .await
-        .map_err(|e| e.to_string())?;
-    let result = async {
-        let built = serde_json::to_value(vm.config()).map_err(|e| e.to_string())?;
+    let boot = async move {
+        let OwnedVm { sandbox, cleanup } =
+            owned_boot(async move { builder.create().await.map(OwnedVm::new) })
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok((sandbox, move || cleanup.finish()))
+    };
+    build_lifecycle(boot, cancelled, |guest| async move {
+        let built = serde_json::to_value(guest.config()).map_err(|e| e.to_string())?;
         let manifest = built["manifest_digest"]
             .as_str()
             .ok_or("Build VM has no image manifest")?;
@@ -1149,7 +1199,7 @@ pub async fn build_snapshot(plan: Build<'_>, on_line: impl Fn(&str)) -> Result<P
             ))
         })
         .await?;
-        let guest = &*vm;
+        let guest = &guest;
         let output = &on_line;
         run_recipe(
             recipe,
@@ -1184,7 +1234,7 @@ pub async fn build_snapshot(plan: Build<'_>, on_line: impl Fn(&str)) -> Result<P
             },
             || async {
                 microsandbox::Snapshot::builder(name)
-                    .from_sandbox("guildbotics-build")
+                    .from_sandbox(&vm_name)
                     .dest_dir(directory)
                     .force()
                     .create()
@@ -1194,10 +1244,8 @@ pub async fn build_snapshot(plan: Build<'_>, on_line: impl Fn(&str)) -> Result<P
             },
         )
         .await
-    }
-    .await;
-    vm.close().await;
-    result
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1216,6 +1264,21 @@ mod build_tests {
                     script: "second script".into(),
                 },
             ],
+        }
+    }
+    #[test]
+    fn build_vm_names_are_stable_and_distinct_between_workspaces() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let name = build_vm_name(first.path()).unwrap();
+        assert_eq!(name, build_vm_name(&first.path().join(".")).unwrap());
+        assert_ne!(name, build_vm_name(second.path()).unwrap());
+        #[cfg(unix)]
+        {
+            let aliases = tempfile::tempdir().unwrap();
+            let alias = aliases.path().join("alias");
+            std::os::unix::fs::symlink(first.path(), &alias).unwrap();
+            assert_eq!(name, build_vm_name(&alias).unwrap());
         }
     }
     #[tokio::test]
@@ -1238,6 +1301,7 @@ mod build_tests {
             .build()
             .await
             .unwrap();
+            assert!(config.replace_existing);
             assert!(matches!(
                 config.registry_auth,
                 Some(microsandbox::RegistryAuth::Anonymous)
@@ -1313,10 +1377,11 @@ mod build_tests {
             let ran = events.clone();
             let stopped = events.clone();
             let saved = events.clone();
+            let lines = std::sync::Mutex::new(Vec::<String>::new());
             let result = run_recipe(
                 &recipe(),
                 "/home/member",
-                |_| {},
+                |line| lines.lock().unwrap().push(line.to_owned()),
                 move |script, home| {
                     ran.lock().unwrap().push(format!("{home}:{script}"));
                     std::future::ready(Ok(if failure == Some(script.as_str()) {
@@ -1339,6 +1404,14 @@ mod build_tests {
                 },
             )
             .await;
+            assert_eq!(
+                *lines.lock().unwrap(),
+                if failure == Some("first script") {
+                    vec!["[first]"]
+                } else {
+                    vec!["[first]", "[second]"]
+                }
+            );
             let events = events.lock().unwrap();
             assert_eq!(
                 events[0],
@@ -1577,7 +1650,7 @@ async fn execute_private_tty_cancelled(
         None
     };
     let work = tokio::time::timeout(
-        Duration::from_secs(1800),
+        Duration::from_secs(if interactive { 1800 } else { 90 }),
         private_dialogue(
             &mut handle,
             &stdin,
