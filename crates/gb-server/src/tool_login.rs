@@ -65,6 +65,7 @@ pub struct ToolLogin {
     command: String,
     state: Arc<tokio::sync::Mutex<Option<Held>>>,
 }
+
 fn login_problem(catalog: &Value, key: &str, command: &str, language: &str) -> String {
     crate::i18n::t(
         language,
@@ -259,6 +260,33 @@ fn stand_in(document: &Value, broker: &Value, token: &str) -> Result<(Value, Str
     }
     Ok((result, token))
 }
+/// A turn reads these files through the already-mounted tool directory.
+/// Replacing an inode would leave a recently opened guest path pointing at
+/// the unlinked file until the mount's cache expires.
+fn write_turn_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+    use cap_std::fs::OpenOptions;
+    use std::io::Write;
+
+    let directory =
+        gb_base::host_path::open_directory(path.parent().expect("turn file has a parent"), true)
+            .map_err(std::io::Error::other)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file =
+        directory.open_with(path.file_name().expect("turn file has a name"), &options)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    file.set_len(0)?;
+    file.write_all(bytes)
+}
+
 impl ToolLogin {
     pub async fn prepare(
         data: &Path,
@@ -266,6 +294,18 @@ impl ToolLogin {
         catalog: Value,
         language: &str,
         vm: LoginVm,
+    ) -> Result<Arc<Self>, String> {
+        Self::prepare_with_keychain(data, home, catalog, language, vm, Arc::new(SystemKeychain))
+            .await
+    }
+
+    pub(crate) async fn prepare_with_keychain(
+        data: &Path,
+        home: &Path,
+        catalog: Value,
+        language: &str,
+        vm: LoginVm,
+        keychain: Arc<dyn gb_config::secrets::Keychain>,
     ) -> Result<Arc<Self>, String> {
         let name = catalog["name"]
             .as_str()
@@ -285,6 +325,7 @@ impl ToolLogin {
         let source_catalog = catalog.clone();
         let source_data = data.to_path_buf();
         let source_name = name.clone();
+        let source_keychain = keychain.clone();
         let source: TokenSource = Arc::new(move |refused| {
             let shared = shared.clone();
             let catalog = source_catalog.clone();
@@ -293,6 +334,7 @@ impl ToolLogin {
             let name = source_name.clone();
             let language = source_language.clone();
             let command = source_command.clone();
+            let keychain = source_keychain.clone();
             Box::pin(async move {
                 spawn_private(private_tasks(), async move {
                     let mut held = shared.lock().await;
@@ -309,11 +351,11 @@ impl ToolLogin {
                     let refresh_catalog = catalog.clone();
                     let refresh_data = data.clone();
                     let refresh_name = name.clone();
+                    let refresh_keychain = keychain.clone();
                     let result = lent_access(login, &catalog, refused, move |stale| async move {
-                        let keychain = SystemKeychain;
                         let device = DeviceKey {
                             machine_root: refresh_data.parent().unwrap_or(&refresh_data).into(),
-                            keychain: &keychain,
+                            keychain: refresh_keychain.as_ref(),
                         };
                         refresh_login(
                             &device,
@@ -347,7 +389,7 @@ impl ToolLogin {
                         if key == "refresh_failed" && !had_refusal {
                             let device = DeviceKey {
                                 machine_root: data.parent().unwrap_or(&data).into(),
-                                keychain: &SystemKeychain,
+                                keychain: keychain.as_ref(),
                             };
                             let status = credential_vault::status(
                                 &device,
@@ -433,7 +475,7 @@ impl ToolLogin {
             host_root: root,
             gateway,
             source,
-            keychain: Arc::new(SystemKeychain),
+            keychain,
             data: data.into(),
             catalog,
             language: language.into(),
@@ -512,10 +554,7 @@ impl ToolLogin {
             && broker["stand_in_env"].as_str().is_none_or(str::is_empty)
         {
             let target = self.host_root.path().join(auth);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(|_| "Cannot hold stand-in.")?;
-            }
-            gb_base::files::atomic_write(
+            write_turn_file(
                 &target,
                 &serde_json::to_vec(&document).map_err(|_| "Invalid stand-in.")?,
             )
@@ -556,7 +595,7 @@ impl ToolLogin {
             env.insert(name.into(), token.clone());
         }
         if !self.gateway.ca_pem.is_empty() {
-            std::fs::write(self.host_root.path().join("ca.pem"), &self.gateway.ca_pem)
+            write_turn_file(&self.host_root.path().join("ca.pem"), &self.gateway.ca_pem)
                 .map_err(|_| "Cannot hold gateway CA.")?;
             for name in ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"] {
                 env.insert(name.into(), format!("{}/ca.pem", self.guest_root));
@@ -572,7 +611,7 @@ impl ToolLogin {
             .filter(|s| !s.is_empty())
         {
             let path = self.host_root.path().join("stand-in.json");
-            gb_base::files::atomic_write(
+            write_turn_file(
                 &path,
                 &serde_json::to_vec(&json!({"access_token":token,"expires_in":31536000}))
                     .map_err(|_| "Invalid stand-in.")?,
@@ -706,6 +745,31 @@ fn persisted_file(path: &Path) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[path = "real_device.rs"]
+    mod real_device;
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_file_keeps_its_inode_and_never_writes_through_a_link() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state/auth.json");
+        write_turn_file(&path, b"previous turn").unwrap();
+        let inode = std::fs::metadata(&path).unwrap().ino();
+        write_turn_file(&path, b"next turn").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(std::fs::read(&path).unwrap(), b"next turn");
+
+        let other = dir.path().join("untouched");
+        std::fs::write(&other, b"outside").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        symlink(&other, &path).unwrap();
+        assert!(write_turn_file(&path, b"must not write").is_err());
+        assert_eq!(std::fs::read(&other).unwrap(), b"outside");
+    }
+
     #[test]
     fn stand_ins_copy_only_allowlisted_fields_and_never_refresh_tokens() {
         let original = json!({"account":{"id":"visible-id"},"credentials":{"access":"synthetic-private-access","refresh":"synthetic-private-refresh","expires":2},"unknown_future_secret":"synthetic-future"});

@@ -140,24 +140,26 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
     });
     match snapshot::status(workspace, &name) {
         Ok(snapshot) => {
-            let (state, detail) = match snapshot.state {
-                snapshot::State::Ready => ("ready", String::new()),
-                snapshot::State::Missing => ("missing", String::new()),
-                snapshot::State::Stale => ("stale", String::new()),
-                snapshot::State::Building => ("building", String::new()),
-                snapshot::State::Failed(detail) => ("failed", detail),
+            let (state, detail) = match &snapshot.state {
+                snapshot::State::Ready => ("ready", ""),
+                snapshot::State::Missing => ("missing", ""),
+                snapshot::State::Stale => ("stale", ""),
+                snapshot::State::Building => ("building", ""),
+                snapshot::State::Failed(detail) => ("failed", detail.as_str()),
             };
             device.view["snapshot"] =
                 json!({"state":state,"name":name,"detail":detail,"output":[]});
-            if state == "ready" {
-                device.snapshot = Some(snapshot.path);
-            } else if device.refusal.is_none() {
-                device.refusal = snapshot::ready(workspace, &name).err();
-                device.view["problem_setting"] = json!(if state == "building" {
-                    "building"
-                } else {
-                    "snapshot"
-                });
+            match snapshot.require_ready() {
+                Ok(path) => device.snapshot = Some(path),
+                Err(refusal) if device.refusal.is_none() => {
+                    device.refusal = Some(refusal);
+                    device.view["problem_setting"] = json!(if state == "building" {
+                        "building"
+                    } else {
+                        "snapshot"
+                    });
+                }
+                Err(_) => {}
             }
         }
         Err(error) => {

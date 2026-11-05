@@ -14,6 +14,9 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
+#[path = "support/real_device.rs"]
+mod real_device;
+
 const BIN: &str = env!("CARGO_BIN_EXE_guildbotics");
 
 fn free_port() -> u16 {

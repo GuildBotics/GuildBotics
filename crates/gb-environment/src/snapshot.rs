@@ -53,12 +53,20 @@ pub fn status(workspace: &Path, name: &str) -> std::io::Result<Status> {
     let directory = snapshots_dir(workspace);
     let path = directory.join(name);
     let lock = directory.join(LOCK_FILE);
-    if lock.try_exists()? && FileLock::try_hold(&lock)?.is_none() {
-        return Ok(Status {
-            path,
-            state: State::Building,
-        });
-    }
+    let _read_lock = match std::fs::File::open(lock) {
+        Ok(file) => match file.try_lock_shared() {
+            Ok(()) => Some(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Ok(Status {
+                    path,
+                    state: State::Building,
+                });
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     let failed = directory.join(format!("{name}{FAILED_SUFFIX}"));
     let state = match std::fs::read_to_string(&failed) {
         Ok(detail) => State::Failed(detail.trim().to_owned()),
@@ -89,21 +97,28 @@ pub fn status(workspace: &Path, name: &str) -> std::io::Result<Status> {
     Ok(Status { path, state })
 }
 
+impl Status {
+    pub(crate) fn require_ready(self) -> Result<PathBuf, Sentence> {
+        let key = match self.state {
+            State::Ready => return Ok(self.path),
+            State::Missing => "intelligences.agent_environment.snapshot.missing",
+            State::Stale => "intelligences.agent_environment.snapshot.stale",
+            State::Building => "intelligences.agent_environment.snapshot.building",
+            State::Failed(detail) => {
+                return Err(Sentence::Key(
+                    "intelligences.agent_environment.snapshot.failed",
+                    vec![("detail", detail)],
+                ));
+            }
+        };
+        Err(Sentence::key(key))
+    }
+}
+
 pub fn ready(workspace: &Path, name: &str) -> Result<PathBuf, Sentence> {
-    let status = status(workspace, name).map_err(|e| Sentence::Text(e.to_string()))?;
-    let key = match status.state {
-        State::Ready => return Ok(status.path),
-        State::Missing => "intelligences.agent_environment.snapshot.missing",
-        State::Stale => "intelligences.agent_environment.snapshot.stale",
-        State::Building => "intelligences.agent_environment.snapshot.building",
-        State::Failed(detail) => {
-            return Err(Sentence::Key(
-                "intelligences.agent_environment.snapshot.failed",
-                vec![("detail", detail)],
-            ));
-        }
-    };
-    Err(Sentence::key(key))
+    status(workspace, name)
+        .map_err(|e| Sentence::Text(e.to_string()))?
+        .require_ready()
 }
 
 /// Whether automatic upkeep may build: never retry the current failed recipe.

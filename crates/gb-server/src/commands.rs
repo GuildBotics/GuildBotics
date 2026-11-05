@@ -255,6 +255,8 @@ async fn start(
                 &roots,
                 &device,
                 member.as_deref(),
+                #[cfg(test)]
+                None,
             )
             .await
             .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
