@@ -277,18 +277,27 @@ fn number(key: &str) -> Result<u64, ServiceError> {
     key.parse().map_err(|_| ServiceError::NotFound)
 }
 fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) -> ServiceError {
+    let class = match key {
+        "integrations.branvil.api.not_found"
+        | "integrations.branvil.api.not_ticket"
+        | "integrations.branvil.api.not_pull_request"
+        | "integrations.branvil.api.not_path" => ServiceErrorClass::NotFound,
+        "integrations.branvil.api.unsupported"
+        | "integrations.branvil.api.foreign_ticket"
+        | "integrations.branvil.api.closes_foreign"
+        | "integrations.branvil.api.every_on_board" => ServiceErrorClass::Unsupported,
+        "integrations.branvil.api.stopped" => ServiceErrorClass::Unavailable,
+        _ => ServiceErrorClass::Failure,
+    };
+    classified_diagnostic(class, key, args)
+}
+fn classified_diagnostic<const N: usize>(
+    class: ServiceErrorClass,
+    key: &'static str,
+    args: [(&str, String); N],
+) -> ServiceError {
     ServiceError::Diagnostic {
-        class: match key {
-            "integrations.branvil.api.not_found"
-            | "integrations.branvil.api.not_ticket"
-            | "integrations.branvil.api.not_pull_request"
-            | "integrations.branvil.api.not_path" => ServiceErrorClass::NotFound,
-            "integrations.branvil.api.unsupported"
-            | "integrations.branvil.api.foreign_ticket"
-            | "integrations.branvil.api.closes_foreign"
-            | "integrations.branvil.api.every_on_board" => ServiceErrorClass::Unsupported,
-            _ => ServiceErrorClass::Failure,
-        },
+        class,
         key,
         args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
     }
@@ -317,7 +326,12 @@ fn error(e: AppError, operation: &str) -> ServiceError {
             [("message", message)],
         ),
         "invalid_cursor" => ServiceError::InvalidContinuation,
-        _ => diagnostic(
+        _ => classified_diagnostic(
+            if e.code == "unavailable" {
+                ServiceErrorClass::Unavailable
+            } else {
+                ServiceErrorClass::Failure
+            },
             "integrations.branvil.api.refused",
             [
                 ("operation", operation.to_owned()),

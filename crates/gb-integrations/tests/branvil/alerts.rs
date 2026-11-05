@@ -225,6 +225,7 @@ async fn failures(host: &Host, c: &dyn CodeHostingService) {
         for query in [json!({}), json!({"id":"1"})] {
             let result = read(c, query, "").await;
             let error = result.unwrap_err();
+            assert_eq!(error.is_unavailable(), status == 429 || status == 500);
             if status == 404 {
                 assert_eq!(
                     error.translation_key(),

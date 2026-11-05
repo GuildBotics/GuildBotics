@@ -8,6 +8,7 @@ fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {
         AppError::unavailable("integrations.branvil.api.stopped"),
         "authenticate",
     );
+    assert!(stopped.is_unavailable());
     assert_eq!(stopped, diagnostic("integrations.branvil.api.stopped", []));
     let internal = error(AppError::internal("private storage detail"), "pulls_review");
     assert!(!internal.translation_args()["message"].contains("private storage detail"));
@@ -59,6 +60,7 @@ fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {
         ),
     ] {
         let mapped = error(failure, "pulls_review");
+        assert!(!mapped.is_unavailable());
         assert_eq!(mapped.translation_key(), key);
         assert_eq!(
             mapped.translation_args(),
@@ -272,5 +274,31 @@ async fn draft_refusals_propagate_without_retry_or_success() {
         );
         assert_eq!(reads.load(Ordering::SeqCst), 1);
         assert_eq!(writes.load(Ordering::SeqCst), usize::from(!fail_read));
+    }
+}
+
+#[test]
+fn unavailable_population_keeps_guidance_and_retry_category() {
+    for message in [
+        "Storage is shutting down.",
+        "Git is shutting down.",
+        "git http-backend timed out.",
+        "Upstream is unavailable.",
+    ] {
+        let mapped = error(AppError::unavailable(message), "pulls_get");
+        assert!(mapped.is_unavailable(), "{message}");
+        assert!(!mapped.is_not_found());
+        assert!(!mapped.is_unsupported());
+        assert_eq!(mapped.translation_key(), "integrations.branvil.api.refused");
+        assert_eq!(
+            mapped.translation_args(),
+            [
+                ("operation".into(), "pulls_get".into()),
+                ("status".into(), "503".into()),
+                ("code".into(), "unavailable".into()),
+                ("message".into(), message.into()),
+            ]
+            .into()
+        );
     }
 }

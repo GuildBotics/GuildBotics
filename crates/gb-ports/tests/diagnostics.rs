@@ -62,3 +62,41 @@ fn resource_diagnostics_preserve_recovery_arguments_and_categories() {
         assert!(std::error::Error::source(&error).is_none());
     }
 }
+
+#[test]
+fn unavailable_category_is_independent_of_provider_guidance() {
+    use gb_ports::{ServiceError, ServiceErrorClass};
+    assert!(ServiceError::Unavailable.is_unavailable());
+    for class in [
+        ServiceErrorClass::Failure,
+        ServiceErrorClass::NotFound,
+        ServiceErrorClass::Unsupported,
+        ServiceErrorClass::Unavailable,
+    ] {
+        let error = ServiceError::Diagnostic {
+            class,
+            key: "example.service.retry",
+            args: [("operation".into(), "read".into())].into(),
+        };
+        assert_eq!(
+            error.is_unavailable(),
+            class == ServiceErrorClass::Unavailable
+        );
+        assert_eq!(error.is_not_found(), class == ServiceErrorClass::NotFound);
+        assert_eq!(
+            error.is_unsupported(),
+            class == ServiceErrorClass::Unsupported
+        );
+        assert_eq!(error.translation_key(), "example.service.retry");
+        assert_eq!(error.translation_args()["operation"], "read");
+    }
+    for error in [
+        ServiceError::Failed,
+        ServiceError::NotFound,
+        ServiceError::Unsupported,
+        ServiceError::InvalidResult,
+        ServiceError::OutOfScope,
+    ] {
+        assert!(!error.is_unavailable());
+    }
+}

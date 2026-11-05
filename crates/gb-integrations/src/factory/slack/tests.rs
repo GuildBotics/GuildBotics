@@ -1097,3 +1097,24 @@ async fn stop_cancels_pending_pong_without_waiting_for_deadline() {
     assert!(!listener.connected());
     assert_eq!(closed.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn transport_unavailable_uses_the_shared_retry_predicate() {
+    let unavailable = SlackFailure::Unavailable.port();
+    assert!(unavailable.is_unavailable());
+    assert_eq!(
+        unavailable.translation_key(),
+        "integrations.resources.unavailable"
+    );
+    assert!(unavailable.translation_args().is_empty());
+    for failure in [
+        SlackFailure::Api,
+        SlackFailure::InvalidResult,
+        SlackFailure::MissingScope {
+            needed: "chat:write".into(),
+            provided: "read".into(),
+        },
+    ] {
+        assert!(!failure.port().is_unavailable());
+    }
+}

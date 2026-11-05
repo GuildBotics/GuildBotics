@@ -37,6 +37,7 @@ pub enum ServiceErrorClass {
     Failure,
     NotFound,
     Unsupported,
+    Unavailable,
 }
 
 /// All ports fail through this hierarchy. Display returns a locale key;
@@ -78,6 +79,16 @@ pub enum ServiceError {
 }
 
 impl ServiceError {
+    pub fn is_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable
+                | Self::Diagnostic {
+                    class: ServiceErrorClass::Unavailable,
+                    ..
+                }
+        )
+    }
     pub fn is_not_found(&self) -> bool {
         matches!(
             self,
