@@ -262,6 +262,104 @@ async fn failures(host: &Host, c: &dyn CodeHostingService) {
     }
     host.answers.lock().unwrap().failure = None;
 }
+async fn member_alert_command_shows_the_upstreams_alerts(c: &dyn CodeHostingService) {
+    struct Services<'a>(&'a dyn CodeHostingService);
+    impl gb_member::repository::RepositoryServices for Services<'_> {
+        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+            Ok(self.0)
+        }
+        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+            panic!("alert is a code resource")
+        }
+    }
+    struct Current;
+    impl gb_member::WriteGuard for Current {
+        fn ensure_current(&self) -> gb_member::Result<()> {
+            Ok(())
+        }
+    }
+    struct Control;
+    impl gb_member::session::Control for Control {
+        fn command<'a>(
+            &'a self,
+            _: &'a gb_member::command::Parsed,
+            _: &'a str,
+        ) -> gb_member::git::Pending<'a, Value> {
+            panic!("not a completion")
+        }
+        fn record(&self, _: &str, read_only: bool, _: &Value) -> gb_member::Result<()> {
+            assert!(read_only);
+            Ok(())
+        }
+    }
+    let services = Services(c);
+    let roster = std::collections::BTreeMap::new();
+    let root = Path::new("/unused-alert-root");
+    let session = gb_member::session::Session {
+        person_id: "aiko",
+        person_type: "agent",
+        delegated_to: None,
+        workflow: true,
+        repository: gb_member::repository::Repository {
+            services: &services,
+            guard: &Current,
+            roster: &roster,
+        },
+        chat: None,
+        memory: None,
+        git: None,
+        context: json!({}),
+        control: &Control,
+        git_root: root,
+    };
+    let arguments = [
+        "repo-info",
+        "read",
+        "--person",
+        "aiko",
+        "--resource",
+        "dependency_alerts",
+        "--subject",
+        REPO,
+        "--params",
+        r#"{"state":"open","page_size":30}"#,
+    ]
+    .map(str::to_owned);
+    let answer = session.execute(&arguments, "").await.unwrap();
+    let expected = json!({"repo":REPO,"alerts":answer.payload["items"],"continuation":answer.payload["continuation"]});
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut child = Command::new("uv")
+        .args(["run", "--locked", "python"])
+        .arg(repo.join("tests/guildbotics/guest/alert_command_fixture.py"))
+        .current_dir(&repo)
+        .env("PYTHONPATH", &repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(serde_json::to_string(&answer.payload).unwrap().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(shown, expected);
+    assert!(
+        shown["alerts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["patched_version"].is_null())
+    );
+}
 pub(super) async fn contract(
     host: &Host,
     c: &dyn CodeHostingService,
@@ -285,6 +383,7 @@ pub(super) async fn contract(
     )
     .await;
     state_pages(host, c).await;
+    member_alert_command_shows_the_upstreams_alerts(c).await;
     single_id(c).await;
     failures(host, c).await;
     empty_and_unsupported(host, c, base, token).await;

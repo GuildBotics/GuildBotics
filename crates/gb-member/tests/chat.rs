@@ -11,6 +11,7 @@ struct Double {
     posts: Mutex<Vec<Posted>>,
     checks: Vec<CredentialCheck>,
     error: Option<ServiceError>,
+    queries: Mutex<Vec<ChannelEventsQuery>>,
 }
 impl ChatService for Double {
     fn get_bot_identity(&self) -> ServiceFuture<'_, ChatIdentity> {
@@ -54,6 +55,7 @@ impl ChatService for Double {
             assert_eq!(query.limit, 3);
             assert!(query.since.is_some());
             assert!(query.until.is_some());
+            self.queries.lock().unwrap().push(query);
             Ok(page())
         })
     }
@@ -304,4 +306,119 @@ async fn credential_status_handles_empty_unconfigured_mixed_and_failed_checks() 
             assert_eq!(result["credentials"][1]["error"], "safe guidance");
         }
     }
+}
+
+#[tokio::test]
+async fn channel_inspection_parses_naive_times_from_cli_arguments_before_the_provider() {
+    use chrono::TimeZone;
+    use gb_member::{
+        repository::{Repository, RepositoryServices},
+        session::{Control, Session},
+    };
+    struct Forbidden;
+    impl RepositoryServices for Forbidden {
+        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+            panic!("no code access")
+        }
+        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+            panic!("no ticket access")
+        }
+    }
+    struct Records;
+    impl Control for Records {
+        fn command<'a>(
+            &'a self,
+            _: &'a gb_member::command::Parsed,
+            _: &'a str,
+        ) -> gb_member::git::Pending<'a, serde_json::Value> {
+            Box::pin(async { panic!("no run command") })
+        }
+        fn record(&self, _: &str, _: bool, _: &serde_json::Value) -> gb_member::Result<()> {
+            Ok(())
+        }
+    }
+    let provider = Double::default();
+    let roster = BTreeMap::new();
+    let session = Session {
+        person_id: "aiko",
+        person_type: "agent",
+        delegated_to: None,
+        workflow: true,
+        repository: Repository {
+            services: &Forbidden,
+            guard: &Current,
+            roster: &roster,
+        },
+        chat: Some(Chat {
+            service: &provider,
+            service_name: "local",
+            person_id: "aiko",
+            guard: &Current,
+            participant_labels: BTreeMap::new(),
+        }),
+        memory: None,
+        git: None,
+        context: json!({}),
+        control: &Records,
+        git_root: std::path::Path::new("/unused"),
+    };
+    for since in ["2026-05-01", "2026-05-01T09:00:00"] {
+        let input = [
+            "chat",
+            "inspect",
+            "channel",
+            "--person",
+            "aiko",
+            "--channel-id",
+            "C1",
+            "--limit",
+            "3",
+            "--since",
+            since,
+            "--until",
+            "2026-05-02T09:00:00",
+        ]
+        .map(str::to_owned);
+        session.execute(&input, "").await.unwrap();
+        let queries = provider.queries.lock().unwrap();
+        let query = queries.last().unwrap();
+        let hour = if since.len() == 10 { 0 } else { 9 };
+        assert_eq!(
+            query.since,
+            Some(
+                chrono::Local
+                    .with_ymd_and_hms(2026, 5, 1, hour, 0, 0)
+                    .earliest()
+                    .unwrap()
+                    .to_utc()
+            )
+        );
+        assert_eq!(
+            query.until,
+            Some(
+                chrono::Local
+                    .with_ymd_and_hms(2026, 5, 2, 9, 0, 0)
+                    .earliest()
+                    .unwrap()
+                    .to_utc()
+            )
+        );
+    }
+    let input = [
+        "chat",
+        "inspect",
+        "channel",
+        "--person",
+        "aiko",
+        "--channel-id",
+        "C1",
+        "--since",
+        "invalid",
+    ]
+    .map(str::to_owned);
+    assert_eq!(
+        session.execute(&input, "").await.err().unwrap().to_string(),
+        "cli.member.time_invalid"
+    );
+    assert_eq!(provider.queries.lock().unwrap().len(), 2);
 }

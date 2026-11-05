@@ -156,6 +156,12 @@ mod tests {
             include_str!("../../gb-member/src/archive.rs"),
             include_str!("../../gb-member/src/audit.rs"),
             include_str!("../../gb-member/src/memory.rs"),
+            include_str!("../../gb-member/src/command.rs"),
+            include_str!("../../gb-member/src/session.rs"),
+            include_str!("../../gb-member/src/git.rs"),
+            include_str!("../../gb-member/src/control.rs"),
+            include_str!("../../gb-member/src/chat_updates.rs"),
+            include_str!("../../gb-member/src/output.rs"),
         ];
         for source in sources {
             for suffix in source.split("\"cli.member.").skip(1) {
@@ -173,6 +179,14 @@ mod tests {
                             ("name", "CHANNEL"),
                             ("size", "100"),
                             ("limit", "99"),
+                            ("option", "OPTION"),
+                            ("url", "URL"),
+                            ("repository", "REPO"),
+                            ("requested", "REPO"),
+                            ("run_id", "RUN"),
+                            ("status", "blocked"),
+                            ("reason", "REASON"),
+                            ("head", "HEAD"),
                         ],
                     );
                     assert_ne!(sentence, key, "{lang}: {key}");

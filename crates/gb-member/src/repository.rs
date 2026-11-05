@@ -6,7 +6,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Lazy access preserves approval and chat validation before provider creation.
-pub trait RepositoryServices {
+pub trait RepositoryServices: Send + Sync {
+    fn code_configured(&self) -> bool {
+        true
+    }
     fn tickets(&self) -> Result<&dyn TicketService>;
     fn code(&self) -> Result<&dyn CodeHostingService>;
 }

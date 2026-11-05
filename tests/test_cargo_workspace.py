@@ -62,6 +62,10 @@ _ALLOWED = {
         "gb-observability",
         "gb-wire",
         "loopback-auth",
+        "gb-member",
+        "gb-integrations",
+        "gb-ports",
+        "branvil",
     },
     "guildbotics": {
         "gb-base",
@@ -72,6 +76,10 @@ _ALLOWED = {
     },
 }
 
+# Provider integration tests exercise the member dispatcher; providers themselves
+# must still depend only on the lower layers.
+_ALLOWED_DEV = {"gb-integrations": {"gb-member"}}
+
 
 def test_each_crate_uses_only_the_crates_below_it() -> None:
     crates = {path.parent.name for path in (ROOT / "crates").glob("*/Cargo.toml")}
@@ -79,15 +87,17 @@ def test_each_crate_uses_only_the_crates_below_it() -> None:
     for name, allowed in _ALLOWED.items():
         manifest = _load(f"crates/{name}/Cargo.toml")
         scopes = [manifest, *manifest.get("target", {}).values()]
-        used = {
-            dependency
-            for scope in scopes
-            for table in ("dependencies", "dev-dependencies", "build-dependencies")
-            for dependency, spec in scope.get(table, {}).items()
-            if isinstance(spec, dict) and "path" in spec
-        }
-
-        assert used <= allowed, name
+        for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+            used = {
+                dependency
+                for scope in scopes
+                for dependency, spec in scope.get(table, {}).items()
+                if isinstance(spec, dict) and "path" in spec
+            }
+            permitted = allowed | (
+                _ALLOWED_DEV.get(name, set()) if table == "dev-dependencies" else set()
+            )
+            assert used <= permitted, (name, table)
 
 
 def test_only_the_environment_drives_the_microvm_runtime() -> None:

@@ -1,0 +1,1636 @@
+{
+  "context": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--check-credentials",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "markdown",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "help": {
+    "options": [],
+    "read_only": true,
+    "content_required": false
+  },
+  "memory record": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--scope",
+        "default": "personal",
+        "choices": [
+          "personal",
+          "team"
+        ]
+      },
+      {
+        "spelling": "--title",
+        "required": true
+      },
+      {
+        "spelling": "--summary",
+        "default": ""
+      },
+      {
+        "spelling": "--keyword",
+        "multiple": true
+      },
+      {
+        "spelling": "--ticket",
+        "multiple": true
+      },
+      {
+        "spelling": "--pr",
+        "multiple": true
+      },
+      {
+        "spelling": "--channel",
+        "multiple": true
+      },
+      {
+        "spelling": "--thread",
+        "multiple": true
+      },
+      {
+        "spelling": "--kind",
+        "default": "note",
+        "choices": [
+          "note",
+          "policy"
+        ]
+      },
+      {
+        "spelling": "--pin",
+        "flag": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--policy-approved",
+        "flag": true
+      },
+      {
+        "spelling": "--set",
+        "multiple": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "memory recall": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--query",
+        "multiple": true
+      },
+      {
+        "spelling": "--meta-only",
+        "flag": true
+      },
+      {
+        "spelling": "--limit",
+        "default": 20,
+        "integer": true,
+        "min": 1,
+        "max": 200
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "memory get": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--team",
+        "default": null,
+        "flag": true,
+        "flag_value": "team"
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "memory update": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--team",
+        "default": null,
+        "flag": true,
+        "flag_value": "team"
+      },
+      {
+        "spelling": "--title"
+      },
+      {
+        "spelling": "--summary"
+      },
+      {
+        "spelling": "--keyword",
+        "multiple": true
+      },
+      {
+        "spelling": "--add-keyword",
+        "multiple": true
+      },
+      {
+        "spelling": "--remove-keyword",
+        "multiple": true
+      },
+      {
+        "spelling": "--ticket",
+        "multiple": true
+      },
+      {
+        "spelling": "--pr",
+        "multiple": true
+      },
+      {
+        "spelling": "--channel",
+        "multiple": true
+      },
+      {
+        "spelling": "--thread",
+        "multiple": true
+      },
+      {
+        "spelling": "--pin",
+        "default": null,
+        "flag": true,
+        "flag_value": true
+      },
+      {
+        "spelling": "--unpin",
+        "flag": true,
+        "flag_value": false
+      },
+      {
+        "spelling": "--kind",
+        "choices": [
+          "note",
+          "policy"
+        ]
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--policy-approved",
+        "flag": true
+      },
+      {
+        "spelling": "--set",
+        "multiple": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "memory touch": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--team",
+        "default": null,
+        "flag": true,
+        "flag_value": "team"
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "memory archive": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--team",
+        "default": null,
+        "flag": true,
+        "flag_value": "team"
+      },
+      {
+        "spelling": "--policy-approved",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "memory promote": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "chat identity": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--format",
+        "default": "markdown",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "chat updates": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "chat inspect channel": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-id",
+        "default": ""
+      },
+      {
+        "spelling": "--channel-name",
+        "default": ""
+      },
+      {
+        "spelling": "--since",
+        "default": null
+      },
+      {
+        "spelling": "--until",
+        "default": null
+      },
+      {
+        "spelling": "--limit",
+        "default": 50,
+        "integer": true,
+        "min": 1,
+        "max": 200
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "chat resolve-channel": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-name",
+        "required": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "chat inspect thread": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-id",
+        "default": ""
+      },
+      {
+        "spelling": "--channel-name",
+        "default": ""
+      },
+      {
+        "spelling": "--thread-id",
+        "default": ""
+      },
+      {
+        "spelling": "--message-url",
+        "default": ""
+      },
+      {
+        "spelling": "--limit",
+        "default": 100,
+        "integer": true,
+        "min": 1,
+        "max": 200
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "chat post": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-id",
+        "default": ""
+      },
+      {
+        "spelling": "--channel-name",
+        "default": ""
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "chat reply": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-id",
+        "default": ""
+      },
+      {
+        "spelling": "--channel-name",
+        "default": ""
+      },
+      {
+        "spelling": "--thread-id",
+        "default": ""
+      },
+      {
+        "spelling": "--message-url",
+        "default": ""
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "chat reaction add": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--channel-id",
+        "default": ""
+      },
+      {
+        "spelling": "--channel-name",
+        "default": ""
+      },
+      {
+        "spelling": "--message-id",
+        "default": ""
+      },
+      {
+        "spelling": "--message-url",
+        "default": ""
+      },
+      {
+        "spelling": "--reaction",
+        "required": true,
+        "choices": [
+          "ack",
+          "agree",
+          "celebrate",
+          "support"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "chat noop": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "chat complete": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--status",
+        "required": true,
+        "choices": [
+          "done",
+          "asking",
+          "blocked"
+        ]
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "git show": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--repo",
+        "required": true
+      },
+      {
+        "spelling": "--path",
+        "required": true,
+        "multiple": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "git prepare": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--issue-url",
+        "default": ""
+      },
+      {
+        "spelling": "--pr-url",
+        "default": ""
+      },
+      {
+        "spelling": "--repo",
+        "default": ""
+      },
+      {
+        "spelling": "--branch",
+        "default": ""
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "git commit": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--repo-path",
+        "required": true,
+        "path": "git"
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--workspace-mode",
+        "default": "member",
+        "choices": [
+          "member",
+          "current"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "git push": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--repo-path",
+        "required": true,
+        "path": "git"
+      },
+      {
+        "spelling": "--workspace-mode",
+        "default": "member",
+        "choices": [
+          "member",
+          "current"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "git publish": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--repo-path",
+        "required": true,
+        "path": "git"
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--workspace-mode",
+        "default": "member",
+        "choices": [
+          "member",
+          "current"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "ticket comment": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "ticket create": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--tracker",
+        "required": true
+      },
+      {
+        "spelling": "--title",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--label",
+        "multiple": true
+      },
+      {
+        "spelling": "--add-to-board/--no-add-to-board",
+        "default": true,
+        "flag": true
+      },
+      {
+        "spelling": "--interactive",
+        "flag": true
+      },
+      {
+        "spelling": "--assignee"
+      },
+      {
+        "spelling": "--lane",
+        "choices": [
+          "new",
+          "ready",
+          "in_progress"
+        ]
+      },
+      {
+        "spelling": "--parent"
+      },
+      {
+        "spelling": "--blocked-by",
+        "multiple": true
+      },
+      {
+        "spelling": "--human-approved",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "ticket update": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--title",
+        "default": null
+      },
+      {
+        "spelling": "--interactive/--no-interactive",
+        "default": null,
+        "flag": true
+      },
+      {
+        "spelling": "--add-label",
+        "multiple": true
+      },
+      {
+        "spelling": "--remove-label",
+        "multiple": true
+      },
+      {
+        "spelling": "--state",
+        "choices": [
+          "open",
+          "closed"
+        ]
+      },
+      {
+        "spelling": "--state-reason",
+        "choices": [
+          "completed",
+          "not_planned"
+        ]
+      },
+      {
+        "spelling": "--parent",
+        "default": null
+      },
+      {
+        "spelling": "--add-blocked-by",
+        "multiple": true
+      },
+      {
+        "spelling": "--remove-blocked-by",
+        "multiple": true
+      },
+      {
+        "spelling": "--human-approved",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "pr create": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--repo",
+        "required": true
+      },
+      {
+        "spelling": "--head",
+        "required": true
+      },
+      {
+        "spelling": "--base",
+        "default": ""
+      },
+      {
+        "spelling": "--title",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--issue-url",
+        "multiple": true
+      },
+      {
+        "spelling": "--closes-issue/--refs-issue",
+        "default": false,
+        "flag": true
+      },
+      {
+        "spelling": "--draft",
+        "default": "false",
+        "choices": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "pr update": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--title",
+        "default": null
+      },
+      {
+        "spelling": "--issue-url",
+        "multiple": true
+      },
+      {
+        "spelling": "--closes-issue/--refs-issue",
+        "default": false,
+        "flag": true
+      },
+      {
+        "spelling": "--drop-issue-links",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "pr comment": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "pr review": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--event",
+        "required": true,
+        "choices": [
+          "approve",
+          "request_changes",
+          "comment"
+        ]
+      },
+      {
+        "spelling": "--head",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "pr review-comment": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--head",
+        "required": true
+      },
+      {
+        "spelling": "--path",
+        "required": true
+      },
+      {
+        "spelling": "--line",
+        "required": true,
+        "integer": true,
+        "min": 1,
+        "max": null
+      },
+      {
+        "spelling": "--side",
+        "default": "RIGHT",
+        "choices": [
+          "LEFT",
+          "RIGHT"
+        ]
+      },
+      {
+        "spelling": "--start-line",
+        "default": null,
+        "integer": true,
+        "min": 1,
+        "max": null
+      },
+      {
+        "spelling": "--start-side",
+        "default": null,
+        "choices": [
+          "LEFT",
+          "RIGHT"
+        ]
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "pr reply": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--reply-target-id",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "pr artifact download": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--name",
+        "required": true
+      },
+      {
+        "spelling": "--dest",
+        "default": ".",
+        "path": "download"
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "ticket attachment download": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--id",
+        "required": true
+      },
+      {
+        "spelling": "--dest",
+        "default": ".",
+        "path": "download"
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "ticket reaction add": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--comment-id",
+        "required": true
+      },
+      {
+        "spelling": "--reaction",
+        "required": true,
+        "choices": [
+          "ack",
+          "agree",
+          "celebrate",
+          "support"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "pr reaction add": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--url",
+        "required": true
+      },
+      {
+        "spelling": "--comment-id",
+        "required": true
+      },
+      {
+        "spelling": "--reaction",
+        "required": true,
+        "choices": [
+          "ack",
+          "agree",
+          "celebrate",
+          "support"
+        ]
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
+  },
+  "task complete": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--waiting-for",
+        "multiple": true
+      },
+      {
+        "spelling": "--status",
+        "required": true,
+        "choices": [
+          "done",
+          "asking",
+          "blocked"
+        ]
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "task status": {
+    "options": [
+      {
+        "spelling": "--person",
+        "default": ""
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": true,
+    "content_required": false
+  },
+  "checks await": {
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--content-file",
+        "path": "content"
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": true
+  },
+  "ticket read": {
+    "read_only": true,
+    "content_required": false,
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--resource",
+        "required": true,
+        "choices": [
+          "tracker_tickets",
+          "tickets",
+          "ticket_comments",
+          "ticket_attachments",
+          "ticket_pull_requests"
+        ]
+      },
+      {
+        "spelling": "--subject",
+        "required": true
+      },
+      {
+        "spelling": "--params",
+        "default": ""
+      },
+      {
+        "spelling": "--continuation",
+        "default": ""
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ]
+  },
+  "pr read": {
+    "read_only": true,
+    "content_required": false,
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--resource",
+        "required": true,
+        "choices": [
+          "pull_requests",
+          "pull_request_comments",
+          "pull_request_reviews",
+          "pull_request_files",
+          "pull_request_threads",
+          "review_thread_comments",
+          "pull_request_readiness"
+        ]
+      },
+      {
+        "spelling": "--subject",
+        "required": true
+      },
+      {
+        "spelling": "--params",
+        "default": ""
+      },
+      {
+        "spelling": "--continuation",
+        "default": ""
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ]
+  },
+  "repo-info read": {
+    "read_only": true,
+    "content_required": false,
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--resource",
+        "required": true,
+        "choices": [
+          "dependency_alerts"
+        ]
+      },
+      {
+        "spelling": "--subject",
+        "required": true
+      },
+      {
+        "spelling": "--params",
+        "default": ""
+      },
+      {
+        "spelling": "--continuation",
+        "default": ""
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "markdown"
+        ]
+      }
+    ]
+  }
+}

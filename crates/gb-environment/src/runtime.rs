@@ -504,7 +504,28 @@ pub async fn run_once(
     boot: &Boot<'_>,
     process: &Process<'_>,
 ) -> Result<gb_wire::CommandReply, Failure> {
+    run_once_with_guest(boot, process, &crate::guest_process::Channel::new()).await
+}
+pub async fn run_once_with_guest(
+    boot: &Boot<'_>,
+    process: &Process<'_>,
+    channel: &crate::guest_process::Channel,
+) -> Result<gb_wire::CommandReply, Failure> {
+    let mut jobs = channel.take().await?;
     let sandbox = create_vm(boot).await?;
+    let stopped = tokio_util::sync::CancellationToken::new();
+    let guest = async {
+        loop {
+            let job = tokio::select! {
+                job=jobs.recv()=>job,
+                ()=stopped.cancelled()=>{jobs.close();jobs.recv().await},
+            };
+            let Some(job) = job else { break };
+            let result =
+                execute_guest_process(&sandbox, &job.process, process.env, job.deadline).await;
+            let _ = job.reply.send(result);
+        }
+    };
     let ran = async {
         // Disable IPv6 before tools use resolvers; the policy and upstreams are IPv4.
         capture(
@@ -549,10 +570,174 @@ pub async fn run_once(
             Ok(())
         })
         .await
-    }
-    .await;
+    };
+    let main = async {
+        let result = ran.await;
+        stopped.cancel();
+        result
+    };
+    let (ran, ()) = tokio::join!(main, guest);
     sandbox.close().await;
     ran
+}
+
+fn guest_process_environment(
+    base: &[(String, String)],
+    overrides: &[(String, String)],
+) -> std::collections::BTreeMap<String, String> {
+    base.iter().chain(overrides).cloned().collect()
+}
+
+#[cfg(all(test, unix))]
+mod guest_environment_tests {
+    use super::guest_process_environment;
+
+    #[test]
+    fn member_process_inherits_home_timezone_and_language_with_explicit_overrides() {
+        let base = vec![
+            ("HOME".into(), "/guest/member".into()),
+            ("TZ".into(), "Asia/Tokyo".into()),
+            ("LANGUAGE".into(), "ja".into()),
+        ];
+        let overrides = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
+        let env = guest_process_environment(&base, &overrides);
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"printf '%s\n' "$HOME" "$TZ" "$LANGUAGE" "$GIT_TERMINAL_PROMPT"; date +%z"#,
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .envs(&env)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "/guest/member\nAsia/Tokyo\nja\n0\n+0900\n"
+        );
+        let repo = tempfile::tempdir().unwrap();
+        for arguments in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Member",
+                "-c",
+                "user.email=member@example.test",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "environment",
+            ],
+        ] {
+            let result = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(repo.path())
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .envs(&env)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let dated = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%ai"])
+            .current_dir(repo.path())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .envs(&env)
+            .output()
+            .unwrap();
+        assert!(dated.status.success());
+        assert!(
+            String::from_utf8(dated.stdout)
+                .unwrap()
+                .trim()
+                .ends_with("+0900")
+        );
+        let changed = guest_process_environment(&base, &[("TZ".into(), "UTC".into())]);
+        assert_eq!(changed["TZ"], "UTC");
+        assert_eq!(changed["HOME"], "/guest/member");
+    }
+}
+
+async fn execute_guest_process(
+    vm: &Sandbox,
+    process: &crate::guest_process::Process,
+    base_env: &[(String, String)],
+    deadline: std::time::Instant,
+) -> Result<crate::guest_process::Output, Failure> {
+    let (program, args) = process.argv.split_first().expect("validated guest process");
+    let fail = || Failure::Command(Sentence::key("capabilities.member_git.git_failed"));
+    let mut handle = vm
+        .exec_stream_with(program, |e| {
+            e.args(args.iter().cloned())
+                .cwd(&process.cwd)
+                .envs(guest_process_environment(base_env, &process.env))
+                .stdin_pipe()
+        })
+        .await
+        .map_err(|_| fail())?;
+    let input = handle.take_stdin().expect("piped stdin");
+    let sending = async {
+        input.write(&process.stdin).await.map_err(|_| fail())?;
+        input.close().await.map_err(|_| fail())
+    };
+    let reading = async {
+        let mut result = crate::guest_process::Output {
+            code: -1,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        while let Some(event) = handle.recv().await {
+            match event {
+                ExecEvent::Stdout(bytes) => {
+                    if result.stdout.len() + bytes.len() > process.limit {
+                        return Err(fail());
+                    }
+                    result.stdout.extend(bytes);
+                }
+                ExecEvent::Stderr(bytes) => {
+                    if result.stderr.len() + bytes.len() > 1 << 24 {
+                        return Err(fail());
+                    }
+                    result.stderr.extend(bytes);
+                }
+                ExecEvent::Exited { code } => {
+                    result.code = code;
+                    return Ok(result);
+                }
+                ExecEvent::Failed(_) => return Err(fail()),
+                _ => {}
+            }
+        }
+        Err(fail())
+    };
+    let result = tokio::time::timeout_at(deadline.into(), async {
+        let ((), output) = tokio::try_join!(sending, reading)?;
+        Ok::<_, Failure>(output)
+    })
+    .await;
+    match result {
+        Ok(Ok(output)) => Ok(output),
+        _ => {
+            let _ = handle.kill().await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                while let Some(event) = handle.recv().await {
+                    if matches!(event, ExecEvent::Exited { .. } | ExecEvent::Failed(_)) {
+                        break;
+                    }
+                }
+            })
+            .await;
+            Err(fail())
+        }
+    }
 }
 
 async fn finish_command<F, Fut>(

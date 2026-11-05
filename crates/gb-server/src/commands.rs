@@ -237,6 +237,7 @@ async fn start(
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let inputs = api.inputs.mount_if_available().await;
+    let member = api.member.clone();
     let work = api.work.spawn(async move {
         let run = trace.run_command(&name, &person_id, async {
             let roots = gb_config::commands::CommandRoots {
@@ -247,10 +248,16 @@ async fn start(
             if let Some(refusal) = device.refusal.clone() {
                 return Err(failed(Failure::Command(refusal), language));
             }
-            let mut services =
-                crate::host_window::prepare_command(&host, &workspace, &command, &roots, &device)
-                    .await
-                    .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
+            let mut services = crate::host_window::prepare_command(
+                &host,
+                &workspace,
+                &command,
+                &roots,
+                &device,
+                member.as_deref(),
+            )
+            .await
+            .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
             if let Some(inputs) = inputs {
                 services.session.mounts.push(inputs);
             }
@@ -263,8 +270,9 @@ async fn start(
                 },
                 &services.session,
             )
-            .await
-            .map_err(|failure| failed(failure, language))?;
+            .await;
+            services.settle().await;
+            let reply = reply.map_err(|failure| failed(failure, language))?;
             trace.command_output(&name, &person_id, &reply.text_output);
             match reply.failure {
                 None => Ok(reply.text_output),

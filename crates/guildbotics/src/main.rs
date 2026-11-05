@@ -173,7 +173,7 @@ async fn serve() -> anyhow::Result<u8> {
     let (signal, cancel) = server_stops()?;
     let branvil_stops = branvil::stop_signals()?;
     let branvil_stops = branvil::initialized()?.then_some(branvil_stops);
-    let server = gb_server::Server::start().await?;
+    let mut server = gb_server::Server::start().await?;
     let Some((branvil_interrupt, branvil_terminate)) = branvil_stops else {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
         let (_held, served) = server.serve(signal, cancel).await;
@@ -191,7 +191,24 @@ async fn serve() -> anyhow::Result<u8> {
             }
         }
     };
-    let running = tokio::spawn(branvil::serve(BRANVIL, interrupt, branvil_terminate));
+    let (ready, data_api) = tokio::sync::oneshot::channel();
+    let running = tokio::spawn(branvil::serve_with_data_api(
+        BRANVIL,
+        interrupt,
+        branvil_terminate,
+        ready,
+    ));
+    let data_api = match data_api.await {
+        Ok(api) => api,
+        // Branvil can stop or fail before exposing its API. Preserve its
+        // exit result, and keep the machine lock until the task ends.
+        Err(_) => return running.await?,
+    };
+    if let Err(error) = server.attach_branvil(data_api) {
+        guildbotics_failed.notify_one();
+        let _ = running.await;
+        return Err(error);
+    }
     // Told however Branvil ends, a panic included.
     let branvil = tokio::spawn({
         let branvil_ended = branvil_ended.clone();

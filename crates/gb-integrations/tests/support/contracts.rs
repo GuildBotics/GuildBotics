@@ -1190,6 +1190,31 @@ pub async fn chat_contract(service: &dyn ChatService, channel: &str) {
             .is_err()
     );
 }
+pub async fn member_show_contract(service: &dyn CodeHostingService, repository: &str) {
+    let temp = tempfile::tempdir().unwrap();
+    let branch = service.default_branch(repository).await.unwrap();
+    let result = gb_member::git::show(
+        temp.path(),
+        service,
+        repository,
+        &[".".into(), "does-not-exist.fixture".into()],
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["default_branch"], branch);
+    assert_eq!(result["items"][0]["kind"], "directory");
+    assert!(
+        result["items"][0]["entries"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert_eq!(
+        result["items"][1],
+        json!({"path":"does-not-exist.fixture","kind":"missing"})
+    );
+    assert!(!temp.path().join("clones").exists());
+}
 /// Frozen code-host operation population; every assertion runs for both providers.
 pub async fn code_contract(
     service: &dyn CodeHostingService,
@@ -1197,6 +1222,7 @@ pub async fn code_contract(
     head_branch: &str,
     base: &str,
 ) {
+    member_show_contract(service, repository).await;
     // Invalid semantic values stop at the typed port boundary before a provider call.
     assert!(serde_json::from_value::<SemanticReaction>(json!("eyes")).is_err());
     let request = |branch: &str| CreatePullRequest {

@@ -778,6 +778,7 @@ async fn scenario() {
         "owner",
         owner_token.trim(),
     );
+    contracts::member_show_contract(c.as_ref(), REPO).await;
     contracts::code_missing_base_contract(c.as_ref(), &next.target.url).await;
     extra::reused_and_gates(
         temp.path(),

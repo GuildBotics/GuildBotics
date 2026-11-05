@@ -101,15 +101,37 @@ async fn read_output(reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Resu
 /// broker (#89). No service CLI or shell is discovered through PATH.
 #[derive(Clone)]
 pub struct Broker {
+    tracker: Option<tokio_util::task::TaskTracker>,
+    handler: Option<Handler>,
     program: PathBuf,
     invocation: Invocation,
     active: Arc<Mutex<Option<String>>>,
     serial: Arc<Mutex<()>>,
     closed: Arc<std::sync::atomic::AtomicBool>,
 }
+pub type Handler = Arc<
+    dyn Fn(
+            Vec<String>,
+            String,
+            Invocation,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result> + Send>>
+        + Send
+        + Sync,
+>;
 impl Broker {
+    pub fn tracked(mut self, tracker: Option<tokio_util::task::TaskTracker>) -> Self {
+        self.tracker = tracker;
+        self
+    }
+    pub fn native(invocation: Invocation, handler: Handler) -> Self {
+        let mut broker = Self::new(PathBuf::new(), invocation);
+        broker.handler = Some(handler);
+        broker
+    }
     pub fn new(program: PathBuf, invocation: Invocation) -> Self {
         Self {
+            tracker: None,
+            handler: None,
             program,
             invocation,
             active: Arc::new(Mutex::new(None)),
@@ -119,6 +141,10 @@ impl Broker {
     }
     pub fn close(&self) {
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub async fn settle(&self) {
+        self.close();
+        let _serial = self.serial.lock().await;
     }
     pub async fn activate(&self) -> String {
         let grant = uuid::Uuid::new_v4().simple().to_string();
@@ -133,7 +159,7 @@ impl Broker {
             .await
     }
     async fn execute_with_timeout(&self, request: Request, timeout: Duration) -> Result {
-        let _serial = self.serial.lock().await;
+        let serial = self.serial.clone().lock_owned().await;
         if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
             return Result::refused("The command broker is closed.");
         }
@@ -146,6 +172,29 @@ impl Broker {
         if let Some(reason) = rejection(&request.arguments, &self.invocation.person_id) {
             return Result::refused(reason);
         }
+        if let Some(handler) = self.handler.clone() {
+            let invocation = self.invocation.clone();
+            // Timeout ends only the response wait. The accepted operation owns
+            // its serial guard until its write and evidence recording settle.
+            let task = async move {
+                let _serial = serial;
+                handler(request.arguments, request.stdin, invocation).await
+            };
+            let mut worker = match &self.tracker {
+                Some(tracker) => tracker.spawn(task),
+                None => tokio::spawn(task),
+            };
+            return match tokio::time::timeout(timeout, &mut worker).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Result::refused("The member command worker failed."),
+                Err(_) => Result {
+                    exit_code: 124,
+                    stdout: String::new(),
+                    stderr: "The member command timed out.".into(),
+                },
+            };
+        }
+        let _serial = serial;
         match tokio::time::timeout(timeout, self.run(request)).await {
             Ok(Ok(result)) => result,
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::FileTooLarge => {
@@ -197,6 +246,86 @@ impl Broker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn native_timeout_retains_serialization_and_shutdown_waits_for_the_accepted_write() {
+        let tracker = tokio_util::task::TaskTracker::new();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler: Handler = {
+            let started = started.clone();
+            let release = release.clone();
+            let writes = writes.clone();
+            Arc::new(move |arguments, stdin, invocation| {
+                let started = started.clone();
+                let release = release.clone();
+                let writes = writes.clone();
+                Box::pin(async move {
+                    assert_eq!(arguments, ["help"]);
+                    assert_eq!(stdin, "body");
+                    assert_eq!(invocation.person_id, "aiko");
+                    started.notify_one();
+                    release.notified().await;
+                    writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Result {
+                        exit_code: 0,
+                        stdout: "finished".into(),
+                        stderr: String::new(),
+                    }
+                })
+            })
+        };
+        let broker = Broker::native(
+            Invocation {
+                person_id: "aiko".into(),
+                run_id: "run".into(),
+                trace_id: "trace".into(),
+                work_kind: "ticket".into(),
+                work_identity: "ticket".into(),
+                cwd: "/guest".into(),
+                access: gb_wire::CommandAccess {
+                    read_only: false,
+                    inspects: vec![],
+                },
+            },
+            handler,
+        )
+        .tracked(Some(tracker.clone()));
+        let grant = broker.activate().await;
+        let result = broker
+            .execute_with_timeout(
+                Request {
+                    arguments: vec!["help".into()],
+                    stdin: "body".into(),
+                    turn_grant: grant.clone(),
+                },
+                Duration::from_millis(1),
+            )
+            .await;
+        assert_eq!(result.exit_code, 124);
+        started.notified().await;
+        assert_eq!(tracker.len(), 1);
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        broker.deactivate().await;
+        broker.close();
+        tracker.close();
+        assert!(!tracker.is_empty());
+        release.notify_one();
+        tracker.wait().await;
+        broker.settle().await;
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            broker
+                .execute(Request {
+                    arguments: vec!["help".into()],
+                    stdin: String::new(),
+                    turn_grant: grant
+                })
+                .await
+                .exit_code,
+            2
+        );
+    }
     #[test]
     fn all_person_spellings_and_workspace_overrides_are_checked() {
         for args in [

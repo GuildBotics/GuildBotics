@@ -5,6 +5,18 @@ use crate::*;
 
 pub const MAX_PAGE_BYTES: usize = 10 * 1024 * 1024 / 16;
 pub const MAX_LOG_TAIL_BYTES: usize = MAX_PAGE_BYTES / 10;
+/// A literal repository or tracker path, with a namespace of any depth.
+pub fn valid_repository_path(path: &str) -> bool {
+    path.contains('/')
+        && path.split('/').all(|name| {
+            !name.is_empty()
+                && name != "."
+                && name != ".."
+                && name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+        })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadSubject {

@@ -1,5 +1,6 @@
 en:
-  member_workspace_mismatch: "This CLI uses a different workspace from the running server (%{workspace}). Stop the service on the Service screen and select the workspace under Setup → Project, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again."
+  member_timed_out: "The member command timed out waiting for its response; it may still complete. Before running it again, read the target ticket, pull request, or thread to check the result."
+  member_workspace_mismatch: "This CLI uses a different workspace from the running server (%{workspace}). Stop the service on the Service screen and select the workspace under Setup → Project."
   member_backend_closing: "The GuildBotics server is shutting down. Start it again after it has stopped, then run the command again."
   member_invalid_request: "The member transport request is invalid."
   member_version_mismatch: "CLI and server versions differ. Restart the server after updating its checkout, and use the CLI of the same checkout."

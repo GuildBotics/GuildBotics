@@ -100,13 +100,18 @@ impl Server {
                 tracing::error!("cannot open the selected workspace: {e:#}");
                 None
             });
+        let work = tokio_util::task::TaskTracker::new();
+        let member = workspace
+            .as_ref()
+            .and_then(|workspace| member_backend(workspace, &data, &work, None));
         let api = Arc::new(Api {
+            member,
             inputs: crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
             workspace,
-            work: tokio_util::task::TaskTracker::new(),
+            work,
             cancelled: tokio_util::sync::CancellationToken::new(),
         });
         if let Some(workspace) = &api.workspace {
@@ -124,6 +129,14 @@ impl Server {
             listener,
             api,
         })
+    }
+    pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
+        let api =
+            Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
+        if let Some(workspace) = &api.workspace {
+            api.member = member_backend(workspace, &api.data, &api.work, Some(branvil));
+        }
+        Ok(())
     }
 
     /// Serves until `stop`, then waits for the work it started, and hands
@@ -167,6 +180,25 @@ impl Server {
     }
 }
 
+/// Keep workspace recovery screens available when member assembly fails.
+fn member_backend(
+    workspace: &Path,
+    data: &Path,
+    work: &tokio_util::task::TaskTracker,
+    branvil: Option<branvil::api::DataApi>,
+) -> Option<Arc<crate::member::Backend>> {
+    let built = (|| -> anyhow::Result<_> {
+        let mut native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        native.runtime_work = Some(work.clone());
+        native.branvil = branvil;
+        native.backend().map(Some)
+    })();
+    built.unwrap_or_else(|_| {
+        tracing::error!("cannot initialize the member backend for the selected workspace");
+        None
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -201,5 +233,23 @@ mod tests {
         drop(held);
         ServerLock::hold(data.path(), 8766).unwrap();
         assert_eq!(read_lock(&path), Some((std::process::id(), 8766)));
+    }
+    #[test]
+    fn damaged_workspace_identity_disables_member_without_disabling_recovery() {
+        let workspace = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let path = gb_workspace::identity::workspace_identity_path(workspace.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        assert!(
+            member_backend(
+                workspace.path(),
+                data.path(),
+                &tokio_util::task::TaskTracker::new(),
+                None
+            )
+            .is_none()
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "not json");
     }
 }

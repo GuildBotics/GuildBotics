@@ -2,10 +2,17 @@
 pub mod archive;
 pub mod audit;
 pub mod chat;
+pub mod chat_updates;
+pub mod command;
 pub mod context;
+pub mod control;
 pub mod events;
+pub mod git;
+mod identity;
 pub mod memory;
+pub mod output;
 pub mod repository;
+pub mod session;
 
 use gb_ports::ServiceError;
 
@@ -40,6 +47,44 @@ impl std::fmt::Display for MemberError {
 }
 impl std::error::Error for MemberError {}
 impl MemberError {
+    pub fn exit_code(&self) -> i32 {
+        let key = match self {
+            Self::Capability(key) | Self::CapabilityArgs { key, .. } => *key,
+            _ => return 1,
+        };
+        if matches!(
+            key,
+            "cli.member.option_choice"
+                | "cli.member.option_flag"
+                | "cli.member.option_integer"
+                | "cli.member.option_required"
+                | "cli.member.option_value"
+                | "cli.member.unknown_command"
+                | "cli.member.unknown_option"
+                | "cli.member.content.empty"
+                | "cli.member.content.exclusive"
+                | "cli.member.content.file_in_environment"
+                | "cli.member.content.required"
+        ) || matches!(
+            key,
+            "cli.member.title_invalid"
+                | "cli.member.params_invalid"
+                | "cli.member.state_reason"
+                | "cli.member.ticket_links_exclusive"
+                | "cli.member.ticket_links_required"
+                | "cli.member.ticket_links_invalid"
+                | "capabilities.member_git.prepare_anchor"
+                | "cli.member.prepare_repo_pr"
+                | "cli.member.prepare_branch_anchor"
+                | "cli.member.ticket_update_empty"
+                | "cli.member.pr_update_empty"
+                | "cli.member.time_invalid"
+        ) {
+            2
+        } else {
+            1
+        }
+    }
     /// The presentation layer supplies its locale renderer. Approval actions
     /// are translated before insertion into the human-approval guidance.
     pub fn render(

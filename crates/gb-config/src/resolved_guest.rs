@@ -101,9 +101,9 @@ fn mapping(
     Ok(result)
 }
 
-/// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
-/// the environment maps package paths to its read-only code mount once.
-pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {
+/// Resolve public identity, participation, and role overlays without loading
+/// command runtimes or inspecting a member checkout.
+pub fn member(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {
     let team = crate::team::Team::load(&roots.config, identity)?;
     anyhow::ensure!(
         team.members.iter().any(|m| m.person_id == person),
@@ -181,6 +181,18 @@ pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::R
         }
     }
     member["roles"] = Value::Object(roles);
+    Ok(member)
+}
+
+/// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
+/// the environment maps package paths to its read-only code mount once.
+pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {
+    let team = crate::team::Team::load(&roots.config, identity)?;
+    anyhow::ensure!(
+        team.members.iter().any(|m| m.person_id == person),
+        "Unknown guest member"
+    );
+    let member = member(roots, identity, person)?;
     let mut brains = BTreeMap::new();
     for (name, config) in mapping(roots, person, "brain")? {
         let resolved = resolve_brain(roots, person, &config).unwrap_or_else(|error| {
