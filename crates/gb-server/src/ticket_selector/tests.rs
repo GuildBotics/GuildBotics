@@ -1358,6 +1358,18 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
         assert_eq!(events.first().unwrap()["type"], "review_limit.started");
         assert_eq!(events.last().unwrap()["type"], "review_limit.failed");
         assert_eq!(events.last().unwrap()["payload"]["error"], "CancelledError");
+        for event in &events {
+            assert_eq!(event["command"], "pull_request_review_limit");
+            if event["type"] != "pull_request.review_limit" {
+                assert_eq!(event["payload"]["run_id"], event["trace_id"]);
+                assert_eq!(event["payload"]["count"], 3);
+                assert_eq!(
+                    event["payload"]["pull_request"]["url"],
+                    pull.pull_request_url.clone().unwrap()
+                );
+                assert_eq!(event["payload"]["pull_request"]["title"], pull.title);
+            }
+        }
         assert!(
             events
                 .iter()

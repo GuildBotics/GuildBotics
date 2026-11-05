@@ -63,6 +63,7 @@ class Capture:
                     "adoption_version",
                     "duration_ms",
                     "config",
+                    "result",
                 )
             }
 

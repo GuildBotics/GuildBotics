@@ -34,6 +34,10 @@ pub enum Failure {
     RateLimited { at: String, hint: String },
 }
 pub trait Runner: Send + Sync {
+    fn stopping(&self) -> bool {
+        false
+    }
+
     fn selection_failed<'a>(
         &'a self,
         _pending: &'a Pending,
@@ -68,6 +72,9 @@ impl Dispatcher {
     pub async fn process(&self, now: DateTime<Utc>) -> anyhow::Result<usize> {
         let mut count = 0;
         for channel in self.store.channels(&self.service, &self.person)? {
+            if self.runner.stopping() {
+                break;
+            }
             let queued = self.store.pending(&self.service, &self.person, &channel)?;
             let mut threads = Vec::<Vec<Pending>>::new();
             for pending in queued {
@@ -81,6 +88,9 @@ impl Dispatcher {
                 }
             }
             for group in threads {
+                if self.runner.stopping() {
+                    return Ok(count);
+                }
                 let processed = self.processed(&channel)?;
                 let Some(mut pending) = group
                     .iter()
@@ -131,11 +141,20 @@ impl Dispatcher {
                 let invocation = match self.prepare(&pending, &group, &processed).await {
                     Ok(Some(invocation)) => invocation,
                     Ok(None) => {
+                        if self.runner.stopping() {
+                            return Ok(count);
+                        }
                         count += 1;
                         continue;
                     }
                     Err(error) => {
+                        if self.runner.stopping() {
+                            return Ok(count);
+                        }
                         self.runner.selection_failed(&pending, &error).await;
+                        if self.runner.stopping() {
+                            return Ok(count);
+                        }
                         let unavailable = error.downcast_ref::<ContextUnavailable>().is_some()
                             || error
                                 .downcast_ref::<gb_ports::ServiceError>()
@@ -156,6 +175,9 @@ impl Dispatcher {
                         continue;
                     }
                 };
+                if self.runner.stopping() {
+                    return Ok(count);
+                }
                 let requested_run_id = pending.run_id.clone();
                 match self
                     .runner
@@ -197,6 +219,9 @@ impl Dispatcher {
         let thread = &event.message.thread_id;
         let identity = self.chat.get_bot_identity().await?;
         let roster = self.runner.roster(&self.roster).await;
+        if self.runner.stopping() {
+            return Ok(None);
+        }
         if event.message.is_from_user(Some(&identity.user_id)) || event.status.is_some() {
             self.store.acknowledge(
                 &self.service,
@@ -210,6 +235,9 @@ impl Dispatcher {
         let mut cursor = None;
         let mut seen = BTreeSet::new();
         loop {
+            if self.runner.stopping() {
+                return Ok(None);
+            }
             let page = self
                 .chat
                 .list_thread_events(channel, thread, cursor, 100)
@@ -442,8 +470,6 @@ impl Dispatcher {
         ids.push(pending.event.event_id.clone());
         let channel = &pending.event.message.channel_id;
         let thread = &pending.event.message.thread_id;
-        self.store
-            .acknowledge(&self.service, &self.person, channel, &ids)?;
         if let Some(posted) = record
             .provider_evidence
             .iter()
@@ -541,7 +567,8 @@ impl Dispatcher {
                 &json!({"participants":participants}),
             )?;
         }
-        Ok(())
+        self.store
+            .acknowledge(&self.service, &self.person, channel, &ids)
     }
     async fn retry(
         &self,
@@ -549,6 +576,9 @@ impl Dispatcher {
         error: Failure,
         now: DateTime<Utc>,
     ) -> anyhow::Result<()> {
+        if self.runner.stopping() {
+            return Ok(());
+        }
         if let Failure::RateLimited { at, hint } = &error {
             self.runner.event("workflow.rate_limited",pending,json!({"category":"rate_limited","retry_after_at":at,"retry_after_text":hint,"subject_id":pending.event.event_id,"source_event_id":pending.event.event_id}));
         }
@@ -668,4 +698,221 @@ fn skip(policy: &str, mentions: &[String], self_id: &str, thread_mentions: bool)
         return true;
     }
     policy != "social" && !addressed && !thread_mentions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[derive(Default)]
+    struct Runs {
+        stopping: AtomicBool,
+        stop_on_roster: bool,
+        stop_on_dispatch: bool,
+        stop_on_selection_failure: bool,
+        calls: Mutex<Vec<String>>,
+    }
+    impl Runner for Runs {
+        fn selection_failed<'a>(&'a self, _: &'a Pending, _: &'a anyhow::Error) -> Future<'a, ()> {
+            Box::pin(async move {
+                if self.stop_on_selection_failure {
+                    self.stopping.store(true, Ordering::SeqCst);
+                }
+            })
+        }
+        fn stopping(&self) -> bool {
+            self.stopping.load(Ordering::SeqCst)
+        }
+        fn roster<'a>(&'a self, fallback: &'a [PublicMember]) -> Future<'a, Vec<PublicMember>> {
+            Box::pin(async move {
+                if self.stop_on_roster {
+                    self.stopping.store(true, Ordering::SeqCst);
+                }
+                fallback.to_vec()
+            })
+        }
+        fn dispatch<'a>(
+            &'a self,
+            pending: &'a mut Pending,
+            _: WorkflowInvocation,
+            store: &'a Store,
+        ) -> Future<'a, Result<RunRecord, Failure>> {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(pending.event.event_id.clone());
+                pending.attempt_count += 1;
+                store.save("local", "aiko", pending).unwrap();
+                if self.stop_on_dispatch {
+                    self.stopping.store(true, Ordering::SeqCst);
+                }
+                Err(Failure::Failed)
+            })
+        }
+        fn record(&self, _: &str) -> anyhow::Result<Option<RunRecord>> {
+            Ok(None)
+        }
+        fn event(&self, _: &str, _: &Pending, _: Value) {}
+    }
+    fn fixture(
+        root: &std::path::Path,
+        runs: Arc<Runs>,
+    ) -> (Dispatcher, Arc<crate::test_chat::Faults>) {
+        let runtime = crate::test_chat::runtime(root);
+        let chat = Arc::new(crate::test_chat::Faults::new(runtime.chat.unwrap()));
+        let store = Arc::new(Store {
+            workspace: runtime.dispatcher.workspace,
+            writes: runtime.writes,
+            limit: 500,
+        });
+        (
+            Dispatcher {
+                person: "aiko".into(),
+                service: "local".into(),
+                language: "en".into(),
+                roster: runtime.roster,
+                chat: chat.clone(),
+                store,
+                runner: runs,
+            },
+            chat,
+        )
+    }
+    fn pending(channel: &str, thread: &str) -> Pending {
+        Pending::new(serde_json::from_value(json!({"channel_id":channel,"thread_id":thread,"message_id":thread,"event_id":thread,"author_id":"owner","text":"hello","occurred_at":"2026-11-05T00:00:00Z"})).unwrap(), "social")
+    }
+    fn history(dispatcher: &Dispatcher, channel: &str, events: &[Pending]) {
+        let path = dispatcher
+            .store
+            .workspace
+            .join(format!(".guildbotics/local/services/chat/{channel}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            events
+                .iter()
+                .map(|p| format!("{}\n", serde_json::to_string(&p.event).unwrap()))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_checks_cover_channels_threads_selection_and_retry_escalation() {
+        for stage in ["initial", "selection", "selection_failure", "dispatch"] {
+            let root = tempfile::tempdir().unwrap();
+            let runs = Arc::new(Runs {
+                stopping: AtomicBool::new(stage == "initial"),
+                stop_on_roster: stage == "selection",
+                stop_on_dispatch: stage == "dispatch",
+                stop_on_selection_failure: stage == "selection_failure",
+                ..Default::default()
+            });
+            let (dispatcher, chat) = fixture(root.path(), runs.clone());
+            for (channel, thread) in [("C1", "T1"), ("C1", "T2"), ("C2", "T3")] {
+                let p = pending(channel, thread);
+                dispatcher
+                    .store
+                    .receive("local", "aiko", p.event.clone(), "social")
+                    .unwrap();
+            }
+            history(
+                &dispatcher,
+                "C1",
+                &[pending("C1", "T1"), pending("C1", "T2")],
+            );
+            history(&dispatcher, "C2", &[pending("C2", "T3")]);
+            if stage == "selection" || stage == "selection_failure" {
+                chat.errors
+                    .lock()
+                    .unwrap()
+                    .insert("thread:T1".into(), gb_ports::ServiceError::Unavailable);
+            }
+            assert_eq!(dispatcher.process(Utc::now()).await.unwrap(), 0);
+            assert_eq!(
+                runs.calls.lock().unwrap().len(),
+                usize::from(stage == "dispatch")
+            );
+            for channel in ["C1", "C2"] {
+                for p in dispatcher.store.pending("local", "aiko", channel).unwrap() {
+                    assert_eq!(
+                        p.attempt_count,
+                        u32::from(stage == "dispatch" && p.event.event_id == "T1")
+                    );
+                    assert!(p.next_attempt_at.is_none());
+                    assert!(p.last_error_category.is_empty());
+                }
+            }
+            assert!(
+                !chat
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c["operation"] == "post")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeed() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut dispatcher, chat) = fixture(root.path(), Arc::new(Runs::default()));
+        let mut colleague = dispatcher.roster[0].clone();
+        colleague.person_id = "yuki".into();
+        colleague.accounts.insert("local".into(), "yuki".into());
+        colleague.roles = json!({"design":{}});
+        dispatcher.roster.push(colleague);
+        let p = pending("C1", "T1");
+        dispatcher
+            .store
+            .receive("local", "aiko", p.event.clone(), "social")
+            .unwrap();
+        let record: RunRecord = serde_json::from_value(json!({"run_id":"run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","result":{"subject_type":"chat","subject_id":"T1","status":"done"},"provider_evidence":[{"type":"chat_reply","payload":{"text":"@yuki hello","message_id":"reply","thread_id":"T1","occurred_at":"2026-11-05T00:01:00Z"}}]})).unwrap();
+        chat.errors
+            .lock()
+            .unwrap()
+            .insert("identity:".into(), gb_ports::ServiceError::Unavailable);
+        assert!(dispatcher.settle(&p, &record, true).await.is_err());
+        assert_eq!(
+            dispatcher
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!dispatcher.processed("C1").unwrap().contains("T1"));
+        chat.errors.lock().unwrap().clear();
+        dispatcher.settle(&p, &record, true).await.unwrap();
+        dispatcher.settle(&p, &record, true).await.unwrap();
+        assert!(
+            dispatcher
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .is_empty()
+        );
+        let messages = dispatcher
+            .store
+            .messages("local", "aiko", "C1", "T1")
+            .unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_id, "reply");
+        assert!(messages[0].is_bot_message);
+        assert!(dispatcher.processed("C1").unwrap().contains("T1"));
+        let state = dispatcher
+            .store
+            .thread("local", "aiko", "C1", "T1")
+            .unwrap();
+        assert_eq!(state["participants"], json!(["aiko"]));
+        assert_eq!(state["handoffs"].as_array().unwrap().len(), 1);
+        assert_eq!(state["handoffs"][0]["person_id"], "yuki");
+        assert_eq!(state["handoffs"][0]["message_id"], "reply");
+    }
 }

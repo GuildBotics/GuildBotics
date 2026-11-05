@@ -162,7 +162,10 @@ impl Scheduler {
         }
         if settings.event_queue {
             state.last_source = "event_queue";
-            state.engine.events().await
+            {
+                state.engine.events().await;
+                Outcome::Deferred
+            }
         } else {
             Outcome::Deferred
         }
@@ -225,6 +228,7 @@ mod tests {
         delay: AtomicU64,
         calls: StdMutex<Vec<Call>>,
         outcomes: StdMutex<VecDeque<Outcome>>,
+        event_outcome: StdMutex<Outcome>,
         patrol: StdMutex<VecDeque<(Outcome, bool)>>,
     }
     impl Fake {
@@ -234,6 +238,7 @@ mod tests {
                 delay: AtomicU64::new(0),
                 calls: StdMutex::new(vec![]),
                 outcomes: StdMutex::new(VecDeque::new()),
+                event_outcome: StdMutex::new(Outcome::Deferred),
                 patrol: StdMutex::new(VecDeque::new()),
             })
         }
@@ -284,10 +289,29 @@ mod tests {
                     "event_queue".into(),
                     BTreeMap::new(),
                 ));
-                Outcome::Deferred
+                *self.event_outcome.lock().unwrap()
             })
         }
         fn failed(&self, _: u8, _: u8, _: &str) {}
+    }
+    #[tokio::test]
+    async fn chat_results_never_reset_or_increase_command_errors() {
+        let fake = Fake::new();
+        let mut scheduler = Scheduler::default();
+        scheduler.add("aiko".into(), fake.clone(), vec![], vec![]);
+        let settings = Settings {
+            routine: false,
+            scheduled: false,
+            ..Default::default()
+        };
+        for outcome in [Outcome::Succeeded, Outcome::Failed] {
+            *fake.event_outcome.lock().unwrap() = outcome;
+            assert_eq!(
+                scheduler.tick("aiko", &settings, at(0)).await,
+                Outcome::Deferred
+            );
+        }
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
     }
     fn at(minute: i64) -> NaiveDateTime {
         "2026-11-05T12:00:00".parse::<NaiveDateTime>().unwrap() + Duration::minutes(minute)

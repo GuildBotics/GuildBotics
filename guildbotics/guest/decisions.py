@@ -1,6 +1,5 @@
 """Durable judgment snapshots cross the command's authenticated host window."""
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -30,10 +29,32 @@ async def judge_chat(context: Any, turn: Any) -> bool:
     invocation = getattr(context, "shared_state", {}).get(WORKFLOW_INVOCATION_KEY)
     person = context.person.person_id
     state = {
-        **turn.prompt,
+        **{
+            key: turn.prompt[key]
+            for key in (
+                "unprocessed_messages",
+                "participant_labels",
+                "handoff_candidates",
+                "chat_participation",
+                "previous_thread_context",
+                "thread_context",
+                "thread_context_complete",
+            )
+            if key in turn.prompt
+        },
         "member": {
             "person_id": person,
-            "roles": list(context.person.roles),
+            "roles": {
+                role.id: {
+                    key: value
+                    for key, value in (
+                        ("summary", role.summary.strip()),
+                        ("description", role.description.strip()),
+                    )
+                    if value
+                }
+                for role in context.person.roles.values()
+            },
             "profile": context.person.profile,
         },
         "service": turn.subject.service,
@@ -155,8 +176,4 @@ class DecisionRecorder:
         self.client.call("required_io", record_id=record_id, payload=payload)
 
     def evaluated(self, person_id: str, payload: dict[str, Any]) -> None:
-        # The final snapshot is the authoritative result. Logging is optional
-        # and carries no raw model output or source-thread text.
-        logging.getLogger(__name__).info(
-            "Chat judgment completed for %s: %s", person_id, payload["route"]
-        )
+        self.client.call("decision_evaluated", payload=payload)

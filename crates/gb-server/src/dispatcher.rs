@@ -197,6 +197,7 @@ impl Dispatcher {
         )
         .await
         .map_err(|error| DispatchFailure::Environment(Failure::Command(Sentence::Text(error))))?;
+        let _awake = crate::keep_awake::Follow::command().ok();
         let run = gb_environment::run(
             &self.host,
             &self.workspace,

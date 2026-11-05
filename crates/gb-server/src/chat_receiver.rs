@@ -6,7 +6,10 @@ use gb_member::chat_updates::{Heartbeat, Subject};
 use gb_ports::{ChannelEventsQuery, ChatEvent, ChatService, EventListener, ServiceError};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
 };
 use tokio::{sync::Mutex, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -25,12 +28,15 @@ pub struct Receiver {
     pub chat: Arc<dyn ChatService>,
     pub listener: Arc<dyn EventListener>,
     wake: Arc<tokio::sync::Notify>,
-    pub channels: Vec<Subscription>,
+    pub channels: Mutex<Vec<Subscription>>,
     pub store: Arc<Store>,
     heartbeat: Heartbeat,
     catching_up: Mutex<BTreeSet<String>>,
     undelivered: Mutex<VecDeque<ChatEvent>>,
     started: Instant,
+    missing_channels: AtomicUsize,
+    errors: AtomicU64,
+    subscription_count: usize,
 }
 impl Receiver {
     pub async fn new(
@@ -41,18 +47,24 @@ impl Receiver {
         store: Arc<Store>,
     ) -> Result<Self, ServiceError> {
         let mut channels = BTreeMap::new();
+        let mut errors = 0;
         for mut channel in subscriptions {
             if channel.channel_id.is_empty() {
-                channel.channel_id = chat
-                    .resolve_channel_id(&channel.channel_name)
-                    .await?
-                    .unwrap_or_default();
+                channel.channel_id = match chat.resolve_channel_id(&channel.channel_name).await {
+                    Ok(id) => id.unwrap_or_default(),
+                    Err(_) => {
+                        errors += 1;
+                        tracing::warn!("chat channel resolution failed");
+                        String::new()
+                    }
+                };
             }
-            if !channel.channel_id.is_empty() {
-                channels
-                    .entry(channel.channel_id.clone())
-                    .or_insert(channel);
-            }
+            let key = if channel.channel_id.is_empty() {
+                format!("name:{}", channel.channel_name)
+            } else {
+                channel.channel_id.clone()
+            };
+            channels.entry(key).or_insert(channel);
         }
         let heartbeat = Heartbeat::new(&store.workspace);
         let writes = gb_base::shared_writes::SharedWrites {
@@ -65,14 +77,21 @@ impl Receiver {
             writes: Arc::new(writes),
             limit: store.limit,
         });
+        let missing = channels
+            .values()
+            .filter(|c| c.channel_id.is_empty())
+            .count();
         Ok(Self {
+            subscription_count: channels.len(),
+            missing_channels: AtomicUsize::new(missing),
+            errors: AtomicU64::new(errors),
             service: connection.service,
             person,
             chat,
             listener: connection.listener,
             wake: connection.wake,
-            catching_up: Mutex::new(channels.keys().cloned().collect()),
-            channels: channels.into_values().collect(),
+            catching_up: Mutex::new(BTreeSet::new()),
+            channels: Mutex::new(channels.into_values().collect()),
             store,
             heartbeat,
             undelivered: Mutex::new(VecDeque::new()),
@@ -80,6 +99,9 @@ impl Receiver {
         })
     }
     fn status(&self, channel: &str, state: &str) {
+        if channel.is_empty() {
+            return;
+        }
         let subject = Subject {
             service: self.service.clone(),
             channel_id: channel.into(),
@@ -108,7 +130,7 @@ impl Receiver {
             Ok(())
         }
         .await;
-        for channel in &self.channels {
+        for channel in self.channels.lock().await.iter() {
             self.status(&channel.channel_id, "unavailable");
         }
         let stopped = self.listener.stop().await;
@@ -124,23 +146,29 @@ impl Receiver {
         self.accept(self.listener.drain_events()).await;
     }
     async fn accept(&self, events: Vec<ChatEvent>) {
+        let channels = self.channels.lock().await.clone();
         let mut undelivered = self.undelivered.lock().await;
         undelivered.extend(events);
         let mut failure = None;
         while let Some(event) = undelivered.front() {
-            if let Some(channel) = self
-                .channels
+            if let Some(channel) = channels
                 .iter()
                 .find(|c| c.channel_id == event.message.channel_id)
                 && let Err(error) = self.queue(event.clone(), channel)
             {
+                if error
+                    .downcast_ref::<gb_base::shared_writes::SharedWriteBusyError>()
+                    .is_none()
+                {
+                    self.errors.fetch_add(1, Ordering::Relaxed);
+                }
                 failure = Some(error);
                 break;
             }
             undelivered.pop_front();
         }
         let waiting = self.catching_up.lock().await;
-        for channel in &self.channels {
+        for channel in self.channels.lock().await.iter() {
             self.status(
                 &channel.channel_id,
                 if failure.as_ref().is_some_and(|e| {
@@ -157,19 +185,38 @@ impl Receiver {
             );
         }
     }
-    async fn persist<T>(&self, mut apply: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
-        loop {
-            match apply() {
-                Err(error)
-                    if error
-                        .downcast_ref::<gb_base::shared_writes::SharedWriteBusyError>()
-                        .is_some() =>
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await
+    async fn persist<T>(
+        &self,
+        channel: &str,
+        mut apply: impl FnMut() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        self.catching_up.lock().await.insert(channel.into());
+        let result = async {
+            loop {
+                match apply() {
+                    Err(error)
+                        if error
+                            .downcast_ref::<gb_base::shared_writes::SharedWriteBusyError>()
+                            .is_some() =>
+                    {
+                        self.status(
+                            channel,
+                            if self.listener.connected() {
+                                "catching_up"
+                            } else {
+                                "unavailable"
+                            },
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await
+                    }
+                    result => return result,
                 }
-                result => return result,
             }
         }
+        .await;
+        self.catching_up.lock().await.remove(channel);
+        self.wake.notify_one();
+        result
     }
     fn queue(&self, event: ChatEvent, policy: &Subscription) -> anyhow::Result<()> {
         let cursor = self
@@ -195,7 +242,34 @@ impl Receiver {
     async fn backfill_loop(&self, stop: &CancellationToken) {
         let mut last = BTreeMap::<String, Instant>::new();
         loop {
-            for channel in &self.channels {
+            let mut channels = self.channels.lock().await.clone();
+            for channel in &mut channels {
+                if stop.is_cancelled() {
+                    return;
+                }
+                if channel.channel_id.is_empty() {
+                    let resolved = tokio::select! {
+                        biased;
+                        () = stop.cancelled() => return,
+                        result = self.chat.resolve_channel_id(&channel.channel_name) => result,
+                    };
+                    match resolved {
+                        Ok(Some(id)) if !id.is_empty() => channel.channel_id = id,
+                        Err(_) => {
+                            self.errors.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        _ => continue,
+                    }
+                    let mut current = self.channels.lock().await;
+                    if let Some(policy) = current
+                        .iter_mut()
+                        .find(|p| p.channel_name == channel.channel_name && p.channel_id.is_empty())
+                    {
+                        policy.channel_id = channel.channel_id.clone();
+                        self.missing_channels.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
                 let due = last.get(&channel.channel_id).is_none_or(|at| {
                     channel.interval_seconds > 0.0
                         && at.elapsed().as_secs_f64() >= channel.interval_seconds
@@ -203,24 +277,11 @@ impl Receiver {
                 if !due {
                     continue;
                 }
-                self.catching_up
-                    .lock()
-                    .await
-                    .insert(channel.channel_id.clone());
-                self.status(
-                    &channel.channel_id,
-                    if self.listener.connected() {
-                        "catching_up"
-                    } else {
-                        "unavailable"
-                    },
-                );
-                let completed = tokio::select! {biased; ()=stop.cancelled()=>None, result=self.backfill(channel,Utc::now())=>{if result.is_err() {tracing::warn!("chat history backfill failed");} Some(result.is_ok())}};
-                let Some(completed) = completed else {
+                let completed = tokio::select! {biased; ()=stop.cancelled()=>false, result=self.backfill(channel,Utc::now())=>{if result.is_err() {self.errors.fetch_add(1, Ordering::Relaxed); tracing::warn!("chat history backfill failed");} true}};
+                // Cancellation can drop a pending write future before its cleanup runs.
+                self.catching_up.lock().await.remove(&channel.channel_id);
+                if !completed {
                     return;
-                };
-                if completed {
-                    self.catching_up.lock().await.remove(&channel.channel_id);
                 }
                 self.accept(vec![]).await;
                 last.insert(channel.channel_id.clone(), Instant::now());
@@ -264,7 +325,8 @@ impl Receiver {
                     let time = event.message.occurred_at.to_utc();
                     watermark = Some(watermark.map_or(time, |t| t.max(time)));
                     if cutoff.is_none_or(|cutoff| time > cutoff) {
-                        self.persist(|| self.queue(event.clone(), policy)).await?;
+                        self.persist(channel, || self.queue(event.clone(), policy))
+                            .await?;
                     }
                 }
                 cursor = page.cursor;
@@ -277,7 +339,7 @@ impl Receiver {
             if let Some(watermark) = watermark
                 && Some(watermark) != previous
             {
-                self.persist(|| {
+                self.persist(channel, || {
                     self.store.watermark(
                         &self.service,
                         &self.person,
@@ -312,7 +374,7 @@ impl Receiver {
                 {
                     Ok(page) => page,
                     Err(error) if error.is_not_found() => {
-                        self.store.update_thread(&self.service,&self.person,channel,&thread,&serde_json::json!({"backfill_disabled_reason":"thread_not_found","last_backfill_error":"thread_not_found","backfill_error_count":state["backfill_error_count"].as_u64().unwrap_or(0)+1}))?;
+                        self.persist(channel, || self.store.update_thread(&self.service,&self.person,channel,&thread,&serde_json::json!({"backfill_disabled_reason":"thread_not_found","last_backfill_error":"thread_not_found","backfill_error_count":state["backfill_error_count"].as_u64().unwrap_or(0)+1}))).await?;
                         break;
                     }
                     Err(error) => return Err(error.into()),
@@ -322,7 +384,8 @@ impl Receiver {
                     if since.is_none_or(|since| time >= since)
                         && cutoff.is_none_or(|cutoff| time > cutoff)
                     {
-                        self.persist(|| self.queue(event.clone(), policy)).await?;
+                        self.persist(channel, || self.queue(event.clone(), policy))
+                            .await?;
                     }
                 }
                 cursor = page.cursor;
@@ -341,8 +404,28 @@ impl Receiver {
 pub struct Group {
     listener: Arc<dyn EventListener>,
     receivers: Vec<Arc<Receiver>>,
+    drained: AtomicU64,
 }
 impl Group {
+    pub fn subscription_count(&self) -> usize {
+        self.receivers.iter().map(|r| r.subscription_count).sum()
+    }
+    pub fn drained_count(&self) -> u64 {
+        self.drained.load(Ordering::Relaxed)
+    }
+    pub fn missing_channel_people(&self) -> Vec<String> {
+        self.receivers
+            .iter()
+            .filter(|r| r.missing_channels.load(Ordering::Relaxed) > 0)
+            .map(|r| r.person.clone())
+            .collect()
+    }
+    pub fn error_count(&self) -> u64 {
+        self.receivers
+            .iter()
+            .map(|r| r.errors.load(Ordering::Relaxed))
+            .sum()
+    }
     pub fn auth_failed(&self) -> bool {
         self.listener.auth_failed()
     }
@@ -365,10 +448,13 @@ impl Group {
         Ok(Self {
             listener,
             receivers,
+            drained: AtomicU64::new(0),
         })
     }
     pub async fn drain(&self) {
         let events = self.listener.drain_events();
+        self.drained
+            .fetch_add(events.len() as u64, Ordering::Relaxed);
         for receiver in &self.receivers {
             receiver.accept(events.clone()).await;
         }
@@ -386,7 +472,7 @@ impl Group {
             tokio::join!(live,histories);Ok(())
         }.await;
         for receiver in &self.receivers {
-            for channel in &receiver.channels {
+            for channel in receiver.channels.lock().await.iter() {
                 receiver.status(&channel.channel_id, "unavailable");
             }
         }
@@ -428,7 +514,111 @@ mod tests {
         .unwrap();
     }
     #[tokio::test(start_paused = true)]
-    async fn failed_backfill_obeys_each_members_cadence_and_never_claims_ready_until_recovery() {
+    async fn unresolved_channels_retry_individually_without_losing_other_subscriptions() {
+        for failure in [false, true] {
+            let f = Fixture::new();
+            if failure {
+                f.chat
+                    .errors
+                    .lock()
+                    .unwrap()
+                    .insert("resolve:C1".into(), ServiceError::Unavailable);
+            }
+            let policies = crate::work_stops::subscriptions(&json!({"message_channels":[
+                {"chat":{"channel_name":"C1","startup_backfill_minutes":0}},
+                {"chat":{"channel_id":"C2","startup_backfill_minutes":0}}
+            ]}));
+            let receiver = Arc::new(
+                Receiver::new(
+                    "aiko".into(),
+                    f.chat.clone(),
+                    f.connection.clone(),
+                    policies,
+                    f.store.clone(),
+                )
+                .await
+                .unwrap(),
+            );
+            assert_eq!(receiver.channels.lock().await.len(), 2);
+            let group = Group::new(vec![receiver.clone()]).unwrap();
+            assert_eq!(group.subscription_count(), 2);
+            assert_eq!(group.missing_channel_people(), ["aiko"]);
+            assert_eq!(group.error_count(), u64::from(failure));
+            let stop = CancellationToken::new();
+            let task = tokio::spawn({
+                let receiver = receiver.clone();
+                let stop = stop.clone();
+                async move { receiver.backfill_loop(&stop).await }
+            });
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                f.chat
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c["operation"] == "resolve")
+                    .count(),
+                2
+            );
+            f.chat.errors.lock().unwrap().clear();
+            f.history(&[row("live", "live", 1)]);
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            assert!(group.missing_channel_people().is_empty());
+            assert_eq!(
+                receiver
+                    .channels
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|c| !c.channel_id.is_empty())
+                    .count(),
+                2
+            );
+            let event = f
+                .chat
+                .inner
+                .list_thread_events("C1", "live", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(0);
+            receiver.accept(vec![event]).await;
+            assert_eq!(f.store.pending("local", "aiko", "C1").unwrap().len(), 1);
+            stop.cancel();
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn network_backfill_keeps_a_connected_receiver_ready() {
+        let f = Fixture::new();
+        f.history(&[]);
+        let receiver = f.receiver("aiko", json!({})).await;
+        let entered = CancellationToken::new();
+        *f.chat.blocking.lock().unwrap() =
+            Some(("channel".into(), entered.clone(), CancellationToken::new()));
+        let stop = CancellationToken::new();
+        let task = tokio::spawn({
+            let receiver = receiver.clone();
+            let stop = stop.clone();
+            async move { receiver.run(stop).await }
+        });
+        entered.cancelled().await;
+        receiver.drain().await;
+        assert_eq!(state(&f, "aiko"), "ready");
+        stop.cancel();
+        task.await.unwrap().unwrap();
+        assert!(receiver.catching_up.lock().await.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_backfill_obeys_each_members_cadence_and_restores_ready() {
         let f = Fixture::new();
         f.history(&[]);
         f.chat
@@ -468,7 +658,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(count(), 2);
-        assert_eq!(state(&f, "aiko"), "catching_up");
+        assert_eq!(state(&f, "aiko"), "ready");
         tokio::time::advance(std::time::Duration::from_secs(295)).await;
         for _ in 0..8 {
             tokio::task::yield_now().await;
@@ -481,7 +671,7 @@ mod tests {
         }
         assert_eq!(count(), 4);
         assert_eq!(state(&f, "aiko"), "ready");
-        assert_eq!(state(&f, "yuki"), "catching_up");
+        assert_eq!(state(&f, "yuki"), "ready");
         stop.cancel();
         for task in tasks {
             task.await.unwrap();
@@ -743,7 +933,7 @@ mod tests {
             let receiver = f.receiver("aiko", options).await;
             for _ in 0..2 {
                 receiver
-                    .backfill(&receiver.channels[0], at(300))
+                    .backfill(&receiver.channels.lock().await[0], at(300))
                     .await
                     .unwrap();
             }
@@ -854,6 +1044,8 @@ mod tests {
         })
         .await
         .unwrap();
+        assert_eq!(group.subscription_count(), 3);
+        assert_eq!(group.drained_count(), 1);
         assert!(f.store.pending("local", "carol", "C1").unwrap().is_empty());
         assert_eq!(f.listener.starts.load(Ordering::SeqCst), 1);
         assert_eq!(

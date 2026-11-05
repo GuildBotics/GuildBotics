@@ -29,7 +29,9 @@ impl Engine {
     }
     fn outcome(result: Result<gb_wire::CommandReply, Refused>, source: &str) -> Outcome {
         match result {
-            Ok(_) => Outcome::Succeeded,
+            Ok(_) | Err(Refused::Admission(crate::execution::Rejected::Duplicate)) => {
+                Outcome::Succeeded
+            }
             Err(Refused::Admission(
                 crate::execution::Rejected::Store | crate::execution::Rejected::InvalidIdentity,
             )) => Outcome::Failed,
@@ -185,7 +187,10 @@ impl crate::scheduler::Engine for Engine {
                 Some(chat) => match chat.process(chrono::Utc::now()).await {
                     Ok(0) => Outcome::Deferred,
                     Ok(_) => Outcome::Succeeded,
-                    Err(_) => Outcome::Failed,
+                    Err(error) => {
+                        tracing::warn!("chat processing failed: {error:#}");
+                        Outcome::Failed
+                    }
                 },
                 None => Outcome::Deferred,
             }
@@ -206,6 +211,26 @@ impl crate::scheduler::Engine for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn duplicate_is_consumed_while_an_unadmitted_slot_is_deferred() {
+        use crate::execution::Rejected;
+        for source in ["scheduled", "routine"] {
+            for rejected in [
+                Rejected::Duplicate,
+                Rejected::LeaseUnavailable,
+                Rejected::Draining,
+            ] {
+                assert_eq!(
+                    Engine::outcome(Err(Refused::Admission(rejected)), source),
+                    if rejected == Rejected::Duplicate {
+                        Outcome::Succeeded
+                    } else {
+                        Outcome::Deferred
+                    }
+                );
+            }
+        }
+    }
     #[test]
     fn environment_deferral_warns_once_per_changed_reason_then_announces_recovery() {
         let root = tempfile::tempdir().unwrap();

@@ -10,14 +10,25 @@ pub const REVIEW_LIMIT: &str = "pull_request_review_limit";
 
 struct ReviewSettlement<'a> {
     trace: Trace,
+    task: &'a Task,
     runner: &'a dyn Runner,
     draft: Option<Value>,
     ended: bool,
 }
 impl ReviewSettlement<'_> {
+    fn payload(&self, error: &str) -> serde_json::Map<String, Value> {
+        serde_json::from_value(json!({"run_id":self.trace.id(), "pull_request":{"url":self.task.pull_request_url,"label":self.task.label,"title":self.task.title},"count":3,"error":error})).unwrap()
+    }
     fn finish(&mut self, event: &str) {
         self.ended = true;
-        self.trace.event(event, Default::default());
+        self.trace.event(
+            event,
+            self.payload(if event == "review_limit.failed" {
+                "ServiceError"
+            } else {
+                ""
+            }),
+        );
     }
     fn drafted(&mut self, comment_url: &str, error: &str) {
         if let Some(mut fact) = self.draft.take() {
@@ -41,10 +52,7 @@ impl Drop for ReviewSettlement<'_> {
                 "CancelledError"
             };
             self.drafted("", error);
-            self.trace.event(
-                "review_limit.failed",
-                serde_json::from_value(json!({"error":error})).expect("review limit failure"),
-            );
+            self.trace.event("review_limit.failed", self.payload(error));
         }
     }
 }
@@ -355,19 +363,22 @@ impl Selector<'_> {
 
     async fn hand_over(&self, task: &Task) {
         let trace = task_trace(
-            Trace::open(self.diagnostics, "review_limit").person(self.person),
+            Trace::open(self.diagnostics, "review_limit")
+                .person(self.person)
+                .command("pull_request_review_limit"),
             task,
         );
         let (Some(url), Some(code)) = (&task.pull_request_url, self.code) else {
             return;
         };
-        trace.event("review_limit.started", Default::default());
         let mut settlement = ReviewSettlement {
             trace: trace.clone(),
+            task,
             runner: self.runner,
             draft: None,
             ended: false,
         };
+        trace.event("review_limit.started", settlement.payload(""));
         let (reason, key) = match code.convert_pull_request_to_draft(url).await {
             Ok(false) => {
                 settlement.finish("review_limit.finished");

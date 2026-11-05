@@ -293,6 +293,7 @@ async fn start(
                 if let Some(inputs) = inputs {
                     services.session.mounts.push(inputs);
                 }
+                let _awake = crate::keep_awake::Follow::command().ok();
                 let reply = gb_environment::run(
                     &host,
                     &workspace,

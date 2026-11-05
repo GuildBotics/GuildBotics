@@ -122,6 +122,20 @@ pub fn comment_url(evidence: &[Value], url: &str) -> String {
         .into()
 }
 
+pub fn suppressed(record: &RunRecord, roster: &[PublicMember]) -> bool {
+    record.finished_at.is_some()
+        && record.status != RunState::Running
+        && record.result.as_ref().is_some_and(|result| {
+            matches!(result.status, Completion::Asking | Completion::Blocked)
+                && !result.waiting_for.is_empty()
+                && result.waiting_for.iter().all(|id| {
+                    roster.iter().any(|member| {
+                        member.person_id == *id && member.is_active && member.person_type != "human"
+                    })
+                })
+        })
+}
+
 pub fn completed_stop(
     task: &Task,
     record: &RunRecord,
@@ -133,13 +147,7 @@ pub fn completed_stop(
     let result = record.result.as_ref()?;
     let reason = match result.status {
         Completion::Asking | Completion::Blocked => {
-            if !result.waiting_for.is_empty()
-                && result.waiting_for.iter().all(|id| {
-                    roster.iter().any(|member| {
-                        member.person_id == *id && member.is_active && member.person_type != "human"
-                    })
-                })
-            {
+            if suppressed(record, roster) {
                 return None;
             }
             if result.status == Completion::Asking {

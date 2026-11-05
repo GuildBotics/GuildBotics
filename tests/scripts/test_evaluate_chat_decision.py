@@ -13,8 +13,9 @@ from tests.scripts.conftest import SCRIPTS_DIR
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
 async def test_a_case_set_is_judged_by_the_members_configured_brain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failed
 ):
     spec = importlib.util.spec_from_file_location(
         "decision_replay", SCRIPTS_DIR / "evaluate-chat-decision.py"
@@ -34,6 +35,8 @@ async def test_a_case_set_is_judged_by_the_members_configured_brain(
                 "started",
                 "resolved",
             ]
+            if failed:
+                raise ValueError("provider failure")
             return {
                 "answers": {
                     key: {"type": q.type, "value": "unknown"}
@@ -86,4 +89,10 @@ async def test_a_case_set_is_judged_by_the_members_configured_brain(
     assert item["matches_expectation"] is True
     assert item["config"]["brain"] == "chat_decision"
     assert len(records) == 3
-    assert "input" not in item and "result" not in item
+    assert "input" not in item
+    assert item["result"]["model"] == "configured-member-model"
+    assert item["result"]["error"] == ("invalid_response" if failed else "")
+    assert set(item["result"]["answers"]) == (set() if failed else set(QUESTIONS))
+    assert all(
+        answer["value"] == "unknown" for answer in item["result"]["answers"].values()
+    )

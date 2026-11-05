@@ -150,21 +150,27 @@ impl Server {
         cancel: impl Future<Output = ()> + Send + 'static,
     ) -> (Held, anyhow::Result<()>) {
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
-        if let Some(workspace) = &self.api.workspace {
-            match crate::service_settings::Settings::read(workspace) {
-                Ok(settings) if settings.start_with_server => {
-                    if let Err(error) = self.api.service.start().await {
-                        tracing::error!("cannot automatically start service: {error:#}");
+        let autostart_api = self.api.clone();
+        let autostart = tokio::spawn(async move {
+            if let Some(workspace) = &autostart_api.workspace {
+                match crate::service_settings::Settings::read(workspace) {
+                    Ok(settings) if settings.start_with_server => {
+                        if let Err(error) = autostart_api.service.start().await {
+                            tracing::error!("cannot automatically start service: {error:#}");
+                        }
                     }
+                    Err(error) => tracing::error!("cannot read service settings: {error:#}"),
+                    _ => (),
                 }
-                Err(error) => tracing::error!("cannot read service settings: {error:#}"),
-                _ => (),
             }
-        }
+        });
+        let stop_autostart = autostart.abort_handle();
+        let cancel_autostart = autostart.abort_handle();
         let service = self.api.clone();
         let cancelling_service = service.clone();
         let cancelling = tokio::spawn(async move {
             cancel.await;
+            cancel_autostart.abort();
             cancelled.cancel();
             cancelling_service.service.stop(true).await;
         });
@@ -177,9 +183,12 @@ impl Server {
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(async move {
                 stop.await;
+                stop_autostart.abort();
                 service.service.stop(false).await;
             })
             .await;
+        autostart.abort();
+        let _ = autostart.await;
         upkeep.abort();
         let _ = upkeep.await;
         work.close();
@@ -245,8 +254,10 @@ mod tests {
     /// The record of the lock at `path`: its holder's PID and port.
     fn read_lock(path: &Path) -> Option<(u32, u16)> {
         let mut text = String::new();
-        File::open(path).ok()?.read_to_string(&mut text).ok()?;
-        let record: serde_json::Value = serde_json::from_str(text.get(1..)?).ok()?;
+        let mut file = File::open(path).ok()?;
+        file.seek(SeekFrom::Start(1)).ok()?;
+        file.read_to_string(&mut text).ok()?;
+        let record: serde_json::Value = serde_json::from_str(&text).ok()?;
         Some((
             u32::try_from(record["pid"].as_u64()?).ok()?,
             u16::try_from(record["port"].as_u64()?).ok()?,
@@ -259,8 +270,11 @@ mod tests {
         let held = ServerLock::hold(data.path(), 8765).unwrap();
         let path = data.path().join("run/app-api.lock");
         assert_eq!(read_lock(&path), Some((std::process::id(), 8765)));
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.starts_with(' ') && text.ends_with('\n'), "{text:?}");
+        let mut owner = String::new();
+        let mut file = File::open(&path).unwrap();
+        file.seek(SeekFrom::Start(1)).unwrap();
+        file.read_to_string(&mut owner).unwrap();
+        assert!(owner.ends_with('\n'), "{owner:?}");
         let refused = ServerLock::hold(data.path(), 8766).err().unwrap();
         assert_eq!(
             refused.to_string(),
@@ -270,6 +284,75 @@ mod tests {
         ServerLock::hold(data.path(), 8766).unwrap();
         assert_eq!(read_lock(&path), Some((std::process::id(), 8766)));
     }
+    #[tokio::test]
+    async fn autostart_waits_for_service_without_blocking_http_readiness() {
+        use tokio_util::sync::CancellationToken;
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        crate::service_settings::Settings::write(
+            &crate::service_settings::Settings {
+                start_with_server: true,
+                ..Default::default()
+            },
+            &native.workspace,
+        )
+        .unwrap();
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let api = Arc::new(Api {
+            service: crate::service_runtime::Controller::new(native.clone(), host),
+            member: None,
+            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            auth: ServerAuth::open(&native.data, port).unwrap(),
+            instance_id: "fixture".into(),
+            data: native.data.clone(),
+            workspace: Some(native.workspace.clone()),
+            work: Default::default(),
+            cancelled: Default::default(),
+        });
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let assembly = api.service.hold_start_for_test().await;
+        let server = Server {
+            lock: ServerLock::hold(&native.data, port).unwrap(),
+            listener,
+            api: api.clone(),
+        };
+        let stop = CancellationToken::new();
+        let serving = tokio::spawn({
+            let stop = stop.clone();
+            async move {
+                server
+                    .serve(
+                        async move { stop.cancelled().await },
+                        std::future::pending(),
+                    )
+                    .await
+            }
+        });
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{port}/api/health"))
+                .bearer_auth(token.trim())
+                .send(),
+        )
+        .await;
+        stop.cancel();
+        drop(assembly);
+        let (_held, result) = serving.await.unwrap();
+        result.unwrap();
+        assert!(response.unwrap().unwrap().status().is_success());
+        assert!(!api.service.service.status().await.running);
+    }
+
     #[test]
     fn damaged_workspace_identity_disables_member_without_disabling_recovery() {
         let workspace = tempfile::tempdir().unwrap();

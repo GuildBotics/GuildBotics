@@ -38,6 +38,32 @@ impl FileLock {
 
     /// Lock an already opened file without reopening any pathname.
     pub fn try_file(file: File) -> std::io::Result<Option<FileLock>> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn LockFile(
+                    handle: *mut std::ffi::c_void,
+                    low: u32,
+                    high: u32,
+                    length_low: u32,
+                    length_high: u32,
+                ) -> i32;
+            }
+            // SAFETY: the handle belongs to this live File. Only the reserved
+            // first byte is locked, allowing contenders to read the owner.
+            if unsafe { LockFile(file.as_raw_handle(), 0, 0, 1, 0) } != 0 {
+                return Ok(Some(FileLock(file)));
+            }
+            let error = std::io::Error::last_os_error();
+            return if error.raw_os_error() == Some(33) {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+        #[cfg(not(windows))]
         match file.try_lock() {
             Ok(()) => Ok(Some(FileLock(file))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -118,6 +144,21 @@ mod tests {
         assert_eq!(refused.kind(), std::io::ErrorKind::TimedOut);
         drop(held);
         FileLock::hold(&path, Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn a_contender_reads_owner_bytes_after_the_reserved_lock_byte() {
+        use std::io::{Read, Seek, SeekFrom};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("owner.lock");
+        let held = FileLock::try_hold(&path).unwrap().unwrap();
+        held.file().write_all(b" {\"pid\":42}\n").unwrap();
+        assert!(FileLock::try_hold(&path).unwrap().is_none());
+        let mut reader = File::open(&path).unwrap();
+        reader.seek(SeekFrom::Start(1)).unwrap();
+        let mut owner = String::new();
+        reader.read_to_string(&mut owner).unwrap();
+        assert_eq!(owner, "{\"pid\":42}\n");
     }
 
     #[test]

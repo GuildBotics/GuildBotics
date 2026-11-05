@@ -1,7 +1,7 @@
 # Scheduler / workflow 凍結テスト対応表
 
 凍結点: `origin/python-host` / `fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`。
-対象は24ファイル・339テスト関数（パラメータ展開前）。各関数を個別行にし、
+対象は26ファイル・388テスト関数（パラメータ展開前）。各関数を個別行にし、
 その下に移植条件と設計上の差を記す。同じRustテストへ集約した場合も行は省略しない。
 
 ## 境界と条件の差
@@ -16,7 +16,7 @@
   通常失敗は区別したまま失敗する。thread historyを取得できない場合はcacheで
   代行せず、入力をpendingに保つ。旧実装の未到達時1試行消費は0にする。
 - 受信のevent loop参照とthread cacheは、service世代が所有するNotify・task・
-  connectionへ置換する。backfill完了前はcatching upを維持し、保存待ちもheartbeatを更新する。
+  connectionへ置換する。catching_upは保存ロック待ちだけに限定し、ネットワーク履歴取得・失敗後はreadyを維持する。
   同一接続はlistenerとwakeを共有し、メンバーごとのqueue/cadenceは独立させる。
 - 停止待ちのtimeout後に受付を再開する旧挙動は廃止する。停止完了までdrain gateを閉じる。
   定期コマンドの間隔は開始時刻からではなく完了時刻から測る。
@@ -1461,3 +1461,174 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 - `tests/guildbotics/cli/test_service_process.py::test_sigterm_to_start_alone_cancels_the_work_at_once` -> `#92：CLIのservice client/別process起動・signal・watchdogの黒箱検査。`
 
   条件: チケット本文の分担どおりCLI完成後に実行。Rust HTTP開始停止、重複起動、認証拒否、設定破損、graceful/force、親serverの独立はこのPRのservice/serverテストで確認。
+
+## App API lifecycle (28 frozen tests)
+
+The Rust host has one service generation and one serial worker per active member. Scheduler and event-only HTTP aliases select that same service; separate Python thread/context mocks are replaced by worker, receiver, coordinator, and ownership assertions. Lifecycle status is read from synchronized state, and cleanup releases ownership without a status poll.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_start_publishes_starting_then_running` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_events_start_publishes_starting_then_running` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_context_factory_is_used_for_runtimes` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_only_scheduler_starts_only_scheduler` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_only_events_starts_event_listener_and_event_queue_worker` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_both_targets_start_when_only_is_none` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_service_lock_is_shared_by_scheduler_and_events` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_status_poll_does_not_release_lock_during_start` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_a_status_read_while_the_scheduler_starts_finds_it_running` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_event_runner_natural_stop_releases_lock_without_status_poll` -> `crates/gb-server/src/service_runtime.rs::natural_worker_completion_reopens_manual_admission_without_status_polling`
+
+  Condition: Natural completion drains receiver and command cleanup, opens a fresh coordinator generation, and releases ownership without status polling.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_restart_scheduler_does_not_spawn_duplicate` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_restart_events_does_not_spawn_duplicate` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: The controller gate serializes assembly/start, starting is observable through the separate status mutex, and all source combinations share one service lock. Python target-specific threads and bus publication are replaced by a unified generation.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_metadata_reflects_request_and_summary` -> `crates/gb-server/src/service.rs::deferral_preserves_errors_success_resets_them_and_limit_stops_the_worker; crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker`
+
+  Condition: One synchronized service summary contains settings, active/live counts and live cycle counters; worker scheduler heartbeats provide member routines. No mutable Python summary dictionary remains.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_events_metadata_reflects_summary` -> `crates/gb-server/src/service.rs::deferral_preserves_errors_success_resets_them_and_limit_stops_the_worker; crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker`
+
+  Condition: One synchronized service summary contains settings, active/live counts and live cycle counters; worker scheduler heartbeats provide member routines. No mutable Python summary dictionary remains.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_metadata_coerces_member_routines` -> `crates/gb-server/src/service.rs::deferral_preserves_errors_success_resets_them_and_limit_stops_the_worker; crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker`
+
+  Condition: One synchronized service summary contains settings, active/live counts and live cycle counters; worker scheduler heartbeats provide member routines. No mutable Python summary dictionary remains.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_stop_clears_member_routines` -> `crates/gb-server/src/service.rs::graceful_stop_finishes_current_work_and_prevents_the_next_cycle`
+
+  Condition: Receiver cancellation is requested before cleanup waits; current member work settles before lock release. Stopped views clear live routines.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_get_status_refreshes_scheduler_cycle_metadata` -> `crates/gb-server/src/service.rs::deferral_preserves_errors_success_resets_them_and_limit_stops_the_worker; crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker`
+
+  Condition: One synchronized service summary contains settings, active/live counts and live cycle counters; worker scheduler heartbeats provide member routines. No mutable Python summary dictionary remains.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_stop_stops_events_before_scheduler` -> `crates/gb-server/src/service.rs::graceful_stop_finishes_current_work_and_prevents_the_next_cycle`
+
+  Condition: Receiver cancellation is requested before cleanup waits; current member work settles before lock release. Stopped views clear live routines.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_graceful_scheduler_shutdown_waits_without_timeout` -> `crates/gb-server/src/service.rs::force_timeout_retains_ownership_until_cleanup_finishes; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: Force waits at most five seconds; a timed-out cleanup retains the machine lock and failed/running status. Graceful drain has no deadline.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_force_scheduler_shutdown_uses_stop_timeout` -> `crates/gb-server/src/service.rs::force_timeout_retains_ownership_until_cleanup_finishes; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: Force waits at most five seconds; a timed-out cleanup retains the machine lock and failed/running status. Graceful drain has no deadline.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_force_stop_during_graceful_stop_publishes_single_stop_transition` -> `crates/gb-server/src/service.rs::force_timeout_retains_ownership_until_cleanup_finishes; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: Force waits at most five seconds; a timed-out cleanup retains the machine lock and failed/running status. Graceful drain has no deadline.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_stop_timeout_marks_failed_with_running_true` -> `crates/gb-server/src/service.rs::force_timeout_retains_ownership_until_cleanup_finishes; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: Force waits at most five seconds; a timed-out cleanup retains the machine lock and failed/running status. Graceful drain has no deadline.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_events_stop_timeout_marks_failed_with_running_true` -> `crates/gb-server/src/service.rs::force_timeout_retains_ownership_until_cleanup_finishes; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
+
+  Condition: Force waits at most five seconds; a timed-out cleanup retains the machine lock and failed/running status. Graceful drain has no deadline.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_start_context_factory_exception_marks_failed` -> `crates/gb-server/src/service_runtime.rs::startup_failure_is_recorded_and_never_started_events_are_empty; crates/gb-server/src/service.rs::worker_panic_records_failed_status_after_cleanup`
+
+  Condition: Assembly failure records failed before returning. A worker panic records a localized error after tracked cleanup; partially assembled receivers have no spawned tasks.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_events_start_context_factory_exception_marks_member_worker_failed` -> `crates/gb-server/src/service_runtime.rs::startup_failure_is_recorded_and_never_started_events_are_empty; crates/gb-server/src/service.rs::worker_panic_records_failed_status_after_cleanup`
+
+  Condition: Assembly failure records failed before returning. A worker panic records a localized error after tracked cleanup; partially assembled receivers have no spawned tasks.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_events_start_failure_stops_new_member_worker` -> `crates/gb-server/src/service_runtime.rs::startup_failure_is_recorded_and_never_started_events_are_empty; crates/gb-server/src/service.rs::worker_panic_records_failed_status_after_cleanup`
+
+  Condition: Assembly failure records failed before returning. A worker panic records a localized error after tracked cleanup; partially assembled receivers have no spawned tasks.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_scheduler_thread_exception_reflected_in_failed_event_and_status` -> `crates/gb-server/src/service_runtime.rs::startup_failure_is_recorded_and_never_started_events_are_empty; crates/gb-server/src/service.rs::worker_panic_records_failed_status_after_cleanup`
+
+  Condition: Assembly failure records failed before returning. A worker panic records a localized error after tracked cleanup; partially assembled receivers have no spawned tasks.
+
+- `tests/guildbotics/app_api/test_lifecycle.py::test_status_refresh_after_thread_terminates_naturally` -> `crates/gb-server/src/service_runtime.rs::natural_worker_completion_reopens_manual_admission_without_status_polling`
+
+  Condition: Natural completion drains receiver and command cleanup, opens a fresh coordinator generation, and releases ownership without status polling.
+
+### tests/guildbotics/drivers/test_command_runner.py
+
+独立監査: 全21件。共有Python維持・Rust分割検査・設計変更による非移植を区別。部分対応の範囲も明記。
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_passes_top_level_cwd_to_spec_factory` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_passes_top_level_cwd_to_spec_factory に維持。Rust hostへ移す処理ではない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger に維持。ledgerとattempt別parametersとcwdを検査。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_refuses_completion_managed_turns_without_a_ledger` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_refuses_completion_managed_turns_without_a_ledger に維持。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_command_runs_in_the_environment_booted_for_it` -> `crates/gb-environment/tests/shape.rs::shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths + crates/gb-environment/tests/shape.rs::selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity + crates/gb-environment/src/runtime.rs::cancelled_boot_cleans_up_a_vm_that_finishes_starting_later。補足: guest入力・member・pipe・invocationは tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved。これらはshapeとcleanupの分割検査であり、単一command正常/失敗のboot-discard結合検査と同一ではない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_run_uses_spec_cwd_not_runner_cwd` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_run_uses_spec_cwd_not_runner_cwd に維持。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_ask_passes_message_member_and_working_tree_to_brain` -> `移さない：共有Python ask templateとcommand machineryの契約を tests/guildbotics/commands/test_runner_contract.py::test_ask_passes_message_member_and_working_tree_to_brain に維持。en/jaでmessage/member/cwd/未commitファイル保持を検査。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_ticket_workflow_runs_only_through_its_selector` -> `crates/gb-server/src/member/native.rs::workflow_runtime_assembles_local_ports_and_idle_ticket_command_leaves_no_run + crates/gb-server/src/member/native.rs::native_ticket_patrol_moves_the_local_ticket_and_accepts_real_member_comment_and_completion。manualとroutineを分割検査。scheduledでselectorを通る境界の直接assertはない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_ticket_workflow_without_a_run_outputs_what_the_selector_said` -> `crates/gb-server/src/member/native.rs::workflow_runtime_assembles_local_ports_and_idle_ticket_command_leaves_no_run + crates/gb-server/src/ticket_selector/tests.rs::rate_limit_settles_without_worker_failure_or_work_stop_and_preserves_reset。注意: idle no-runは直接検査。旧selectorの返却文字列そのものの同一出力assertではない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_output_a_run_returns_is_kept_in_its_trace_only` -> `crates/gb-observability/tests/screens.rs::output_is_io_in_the_transcript_before_the_end_and_not_in_the_index。空出力を省略、正常/失敗ともIOのみのtranscript保存を検査。ticket selector noticeのcaller接続は別境界なのでこのテスト単独で同一としない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_environment_is_shaped_for_every_tool_the_member_is_configured_with` -> `crates/gb-server/src/host_window.rs::every_configured_brain_adapter_is_available_once_to_the_command + crates/gb-environment/tests/shape.rs::a_read_only_command_reads_and_works_on_its_own。全brain adapterの集合・重複排除と非CLI/invalid除外を純粋関数で検査、accessによるread-only mount shapingを既存shape検査で分割固定。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_invalid_contract_settings_fail_the_command_when_it_starts` -> `crates/gb-environment/tests/device.rs::declaration_precedes_snapshot_and_access_preview_keeps_document_rows + crates/gb-environment/tests/contract.rs::every_planned_grant_is_checked_before_creating_any。toolchain/grants/permissionの順序とboot無しの全分岐が同一に検査されるとは限らない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_invalid_ai_cli_tool_settings_fail_the_command_when_it_starts` -> `移さない：未使用の壊れた任意slotが無関係なcommandを止めない既存設計へ変更済み。不正brain slotをkind=invalidとしてsnapshotへ保存し利用時に拒否する。crates/gb-config/src/resolved_guest.rs::workspace_mapping_shadows_templates_and_invalid_slots_are_deferred がその変更後の契約を直接検査。凍結hostは全CLI slotを開始時に検査したため、これは等価移植ではなく明示的な契約変更。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it` -> `移さない：workspace未設定でHostRunLedgerを遅延構築するPython host APIは廃止。Rust Runtimeは明示的workspaceとRunStoreをassemble時に持ち、guestは既存commandのClientRunLedgerのみ受け取る。未設定workspaceのhost ledger状態は構築しない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_run_is_granted_for_its_member_run_and_work` -> `crates/gb-server/src/dispatcher.rs::dispatcher_resolves_member_override_once_and_carries_the_callers_work_and_run + crates/gb-environment/tests/shape.rs::selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity。選択member、work kind/identity、trace/run相関、chat subjectを検査。旧HostWindow内部属性は廃止。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_run_started_outside_a_trace_is_refused` -> `crates/gb-server/src/dispatcher.rs::dispatcher_resolves_member_override_once_and_carries_the_callers_work_and_run。空trace idでprepareが拒否する。旧Python contextvars依存は廃止。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_grant_ends_with_its_command_however_it_ended` -> `crates/gb-server/src/tool_login.rs::host_end_turn_returns_the_lent_login_refusal_and_revokes_the_grant + crates/gb-server/src/host_window.rs::host_calls_require_the_command_token_and_preserve_the_wire_envelope。注意: loan revokeと認証は分割検査で、全commandの正常/失敗後HTTP endpoint消滅を直接固定するものではない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_machine_stays_awake_while_the_command_runs_however_it_ends` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。factoryで成功/失敗/cancel後hold数0を検査。production command入口はcommands.rs/dispatcher.rsのFollow::commandで保持するが、test自体は入口との結合をstubしていない。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_commands_running_together_each_keep_the_machine_awake` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。独立2holdの一方cancel後1、最後drop後0。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_result_crosses_only_as_the_type_the_caller_reads_it_as` -> `移さない：任意Python result_type/Pydantic modelをhostで復元するAPIを廃止。wire CommandReply JSON schemaとcaller固有のparseを使用。unread resultの省略は tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved。functions/talk_asはstring contentのみを採用。旧TroubleshootingResult callerは別ticket #89の範囲。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_failure_in_the_environment_is_rebuilt_as_the_host_knows_it` -> `crates/gb-server/src/commands.rs::a_failure_in_the_environment_is_named_and_answered_as_the_host_rebuilds_it + crates/gb-server/src/dispatcher.rs::wrapped_cli_authentication_and_explicit_cancellation_keep_their_alert_codes + crates/gb-server/src/ticket_selector/tests.rs::rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_other_categories。補足: guest failure packingは tests/guildbotics/guest/test_entry.py::test_a_failure_is_said_the_way_the_host_rebuilds_it。`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_subcommand_works_only_where_the_environment_lets_one_work` -> `crates/gb-server/src/host_window.rs::guest_work_admission_uses_posix_boundaries_on_every_host。補足: 共有guestのcommand拒否は tests/guildbotics/guest/test_entry.py::test_child_rejects_cwd_outside_main_mounts。凍結4パターンのcwd解決そのものは共有Python spec_factory契約であり、host grant側testと同じ検査ではない。`
+
+
+## レビュー修正後の条件
+
+- lifecycle28件とcommand_runner21件を追加監査した。起動前のstatusはnull、起動中はstarting、取消・失敗はfailedとerror、自然終了はstopped。force停止の上限を越えてもrunningと所有権を残し、実際の終了後に共有drainを開け直す。
+- コマンドVMごとのkeep-awakeを設定によるservice保持と分離し、成功・失敗・取消・並行時の解放を確認する。
+- チャット結果はroutineの連続エラーを変更しない。Duplicateは実行済みとしてslotを消費し、未到達・lease競合だけを見送る。自律work_kindは凍結値のcommand行へ戻し、VMのgrantにも同じ値を渡す。slotのkindはslot_kindを維持する。kind/identityはmember RunControlが会話のWorkと照合する予約fieldであり、routine/scheduledを入れるとticket完了がidentity_changedになるため、同名の異なる情報を分離する。
+- 判定stateは凍結prompt項目のみを選ぶ。rolesはsummary/description、decision.evaluatedは相関metadata、replayはresultを保持する。旧assertが縮めていた値を戻した。
+- talk_asはtrimして空ならlocaleへ戻し、空履歴の引数を渡さない。無効な未使用AI slotを遅延検証する既存Rust設計は維持する。設定した全adapterの集合とaccessは個別の境界で検査する。

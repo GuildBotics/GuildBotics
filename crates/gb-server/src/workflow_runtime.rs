@@ -6,6 +6,7 @@ use crate::{
     ticket_selector::{self, Runner, Selector},
     work_stops::{self, Subscription, WorkStop},
 };
+use anyhow::Context;
 use chrono::Utc;
 use gb_base::shared_writes::SharedWrites;
 use gb_member::context::PublicMember;
@@ -128,13 +129,21 @@ impl Runtime {
             machine_root: native.data.parent().unwrap_or(&native.data).into(),
             keychain: native.keychain.as_ref(),
         };
-        let secrets = SecretStore::new(&writes, Scope::Identity, key())?;
-        let workspace_secrets = SecretStore::new(&writes, Scope::Workspace, key())?;
+        let secrets = SecretStore::new(&writes, Scope::Identity, key())
+            .context(crate::service_runtime::StartupSecrets)?;
+        let workspace_secrets = SecretStore::new(&writes, Scope::Workspace, key())
+            .context(crate::service_runtime::StartupSecrets)?;
         let redactor = Redactor::new(
             secrets
-                .values()?
+                .values()
+                .context(crate::service_runtime::StartupSecrets)?
                 .into_values()
-                .chain(workspace_secrets.values()?.into_values()),
+                .chain(
+                    workspace_secrets
+                        .values()
+                        .context(crate::service_runtime::StartupSecrets)?
+                        .into_values(),
+                ),
         );
         let config = crate::member::native::integration(
             &native.workspace,
@@ -281,7 +290,7 @@ impl Runtime {
         &self,
         line: &str,
         source: &str,
-        mut slot: BTreeMap<String, String>,
+        slot: BTreeMap<String, String>,
     ) -> Result<CommandReply, Refused> {
         let words = shlex::split(line).unwrap_or_default();
         let name = words.first().cloned().unwrap_or_else(|| line.to_owned());
@@ -328,11 +337,17 @@ impl Runtime {
         let trace = self.traced(Trace::open(&self.diagnostics(), source), Default::default());
         let invocation:WorkflowInvocation=serde_json::from_value(json!({"command":name,"person_id":self.person.person_id,"source":source,"trigger_type":if source=="scheduled" {"scheduled"} else {"generic"}}))
             .map_err(|_|Refused::Dispatch(DispatchFailure::InvalidCommand))?;
-        let command = self.dispatcher.prepare(line, invocation, trace.id());
-        if let Some(kind) = slot.remove("kind") {
-            slot.insert("slot_kind".into(), kind);
-        }
-        let record:RunRecord=serde_json::from_value(json!({"run_id":trace.id(),"work_kind":command.as_ref().map(|c|c.work_kind.as_str()).unwrap_or("manual"),"work_identity":slot,
+        let command = self
+            .dispatcher
+            .prepare(line, invocation, trace.id())
+            .map(|mut command| {
+                if source != "manual" {
+                    command.work_kind = line.into();
+                }
+                command
+            });
+        let slot = slot_identity(slot);
+        let record:RunRecord=serde_json::from_value(json!({"run_id":trace.id(),"work_kind":if source == "manual" { "manual" } else { line },"work_identity":slot,
             "attributes":self.attributes(Default::default()),"execution_mode":if source=="manual" {"user_initiated"} else {"autonomous"},"member_id":self.person.person_id,
             "device_id":self.device_id,"source":source,"started_at":chrono::Utc::now().to_rfc3339()})).expect("host run fields");
         let execution = Execution::enter(
@@ -448,9 +463,7 @@ impl Runtime {
         {
             return Err(Refused::Dispatch(DispatchFailure::InvalidCommand));
         }
-        if let Some(kind) = slot.remove("kind") {
-            slot.insert("slot_kind".into(), kind);
-        }
+        slot = slot_identity(slot);
         slot.insert("ticket_url".into(), task.url.clone().unwrap_or_default());
         slot.insert(
             "trigger_reason".into(),
@@ -544,11 +557,7 @@ impl Runner for Runtime {
                 .dispatcher
                 .prepare("functions/talk_as", invocation.clone(), trace.id())
                 .ok()?;
-            command.args = vec![
-                format!("topic={text}"),
-                "context_location=Ticket".into(),
-                "conversation_history=[]".into(),
-            ];
+            command.args = vec![format!("topic={text}"), "context_location=Ticket".into()];
             command.wants_result = true;
             // A helper is not a second ticket turn and must not inherit its
             // workflow invocation, which owns the completion contract.
@@ -558,11 +567,7 @@ impl Runner for Runtime {
                 .dispatch_prepared(command, trace, &self.cancelled)
                 .await
                 .ok()?;
-            reply
-                .result
-                .get("content")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+            spoken(&reply)
         })
     }
     fn evidence(&self, run_id: &str, kind: &str, payload: Value) -> anyhow::Result<()> {
@@ -646,6 +651,14 @@ impl Runner for Runtime {
         Box::pin(async move {
             match self.record(run_id) {
                 Ok(Some(record)) => {
+                    if work_stops::suppressed(&record, &self.roster) {
+                        let payload = json!({"run_id":run_id,"reason":record.result.as_ref().unwrap().status,"url":task.pull_request_url.as_ref().or(task.url.as_ref()),"waiting_for":record.result.as_ref().unwrap().waiting_for});
+                        self.activity(trace, "work_stop.suppressed", payload.clone());
+                        trace.event(
+                            "work_stop.suppressed",
+                            serde_json::from_value(payload).unwrap(),
+                        );
+                    }
                     if let Some(stop) = work_stops::completed_stop(task, &record, &self.roster) {
                         self.notify(stop, trace).await;
                     }
@@ -658,6 +671,10 @@ impl Runner for Runtime {
 }
 
 impl crate::chat_dispatch::Runner for Runtime {
+    fn stopping(&self) -> bool {
+        self.draining.is_cancelled() || self.cancelled.is_cancelled()
+    }
+
     fn selection_failed<'a>(
         &'a self,
         pending: &'a crate::chat_state::Pending,
@@ -886,5 +903,45 @@ impl crate::chat_dispatch::Runner for Runtime {
             Runner::activity(self, &trace, kind, payload.clone());
             trace.event(kind, serde_json::from_value(payload).unwrap_or_default());
         }
+    }
+}
+
+fn spoken(reply: &CommandReply) -> Option<String> {
+    reply
+        .result
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+fn slot_identity(mut slot: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    if let Some(kind) = slot.remove("kind") {
+        slot.insert("slot_kind".into(), kind);
+    }
+    slot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn talk_as_accepts_only_nonempty_trimmed_text() {
+        for content in [json!(null), json!(3), json!([]), json!(""), json!(" \n\t")] {
+            assert_eq!(
+                spoken(&CommandReply {
+                    result: json!({"content":content}),
+                    ..Default::default()
+                }),
+                None
+            );
+        }
+        assert_eq!(
+            spoken(&CommandReply {
+                result: json!({"content":" \nSafe explanation. \n"}),
+                ..Default::default()
+            }),
+            Some("Safe explanation.".into())
+        );
     }
 }

@@ -65,3 +65,11 @@ ja:
   command_file_shadowed: "コマンド '%{command}' は、より優先度の高いファイルに隠されてしまいます。"
 
   work_rejected: '実行環境は停止中か、このメンバーが別の作業を実行中です。現在の作業が停止してから再試行してください。'
+  internal_error: "内部エラーで処理できませんでした。診断を確認して再試行してください。"
+  service_config_invalid: "サービス設定が不正です。プロジェクトとメンバーの設定を確認してください。"
+  service_secret_store_unavailable: "OSのシークレットストアを読み取れませんでした。アクセス権を確認して再試行してください。"
+  service_path_unavailable: "サービスのファイルまたはディレクトリにアクセスできません。パスとアクセス権を確認してください。"
+  service_start_failed: "サービスを開始できませんでした。診断で原因を確認してください。"
+  service_worker_failed: "サービスのワーカーが異常終了しました。診断で原因を確認してください。"
+  service_stop_timeout: "停止がタイムアウトしました。実行中の処理は引き続きサービスが管理しています。"
+  service_events_failed: "チャット受信が異常終了しました。診断で原因を確認してください。"

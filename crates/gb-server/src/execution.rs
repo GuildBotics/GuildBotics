@@ -10,8 +10,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 /// One drain generation is shared by API commands and autonomous workers.
 /// Registration and sealing are atomic, so a request cannot enter after a
 /// stopper has observed an empty tracker.
-#[derive(Default)]
-pub struct Coordinator(std::sync::Mutex<Arc<Generation>>);
+#[derive(Clone, Default)]
+pub struct Coordinator(Arc<std::sync::Mutex<Arc<Generation>>>);
 pub struct Generation {
     pub id: String,
     pub draining: CancellationToken,

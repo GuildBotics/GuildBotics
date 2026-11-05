@@ -75,7 +75,7 @@ async def test_each_required_record_failure_delegates_and_prior_failures_prevent
 ):
     recorder = Recorder(fail)
     brain = Brain(recorder)
-    selection, _ = await assess(
+    selection, evaluation_id = await assess(
         {"thread_context_complete": True},
         None,
         person_id="aiko",
@@ -86,6 +86,14 @@ async def test_each_required_record_failure_delegates_and_prior_failures_prevent
     assert selection.route == "agent"
     assert selection.reason == "invalid"
     assert bool(brain.calls) == (fail == "result")
+    [(_, event)] = recorder.events
+    assert event["evaluation_id"] == evaluation_id
+    assert event["brain"] == "chat_decision"
+    assert event["route"] == "agent"
+    assert event["reason"] == "invalid"
+    assert event["response_effort"] is None
+    assert event["error"] == "recording_failed"
+    assert event["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

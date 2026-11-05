@@ -521,6 +521,29 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
 mod tests {
     use super::*;
     #[test]
+    fn every_configured_brain_adapter_is_available_once_to_the_command() {
+        let resolved = json!({"brains":{
+            "default":{"kind":"ai_cli","definition":{"adapter":"claude"}},
+            "review":{"kind":"ai_cli","definition":{"adapter":"codex"}},
+            "again":{"kind":"ai_cli","definition":{"adapter":"claude"}},
+            "future":{"kind":"ai_cli","definition":{"adapter":"future-provider"}},
+            "model":{"kind":"model","definition":{"parameters":{"id":"fixture"}}},
+            "invalid":{"kind":"invalid","definition":{"error":"unsupported"}},
+            "malformed":{"definition":{"adapter":5}}
+        }});
+        assert_eq!(
+            configured_tools(&resolved),
+            ["claude", "codex", "future-provider"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        for absent in [Value::Null, json!({}), json!({"brains":[]})] {
+            assert!(configured_tools(&absent).is_empty());
+        }
+    }
+
+    #[test]
     fn guest_work_admission_uses_posix_boundaries_on_every_host() {
         let mounts = BTreeMap::from([("/c/work".into(), true), ("/c/work/config".into(), false)]);
         for cwd in ["/c/work", "/c/work/src", "/c/work/with space"] {
@@ -807,6 +830,51 @@ mod tests {
             serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
             saved
         );
+    }
+
+    #[tokio::test]
+    async fn evaluated_decisions_keep_host_correlation_even_without_required_io() {
+        let root = tempfile::tempdir().unwrap();
+        let mut context = command_context(root.path());
+        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = records.clone();
+        context.record = Arc::new(move |entry| {
+            captured
+                .lock()
+                .unwrap()
+                .push(record_entry(entry, "trace-1", "run-1", "aiko", "chat").unwrap());
+        });
+        let host = HttpHost::start_context(context).await.unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("http://127.0.0.1:{}/host/decision_evaluated", host.port);
+        let metadata = json!({"evaluation_id":"evaluation", "brain":"chat_decision", "model":"configured-model", "route":"agent", "reason":"invalid", "response_effort":null, "error":"recording_failed", "duration_ms":12.5});
+        let mut payload = metadata.clone();
+        payload["person_id"] = "foreign".into();
+        payload["trace_id"] = "foreign".into();
+        payload["input"] = "raw source".into();
+        let body = json!({"payload":payload});
+        let denied = client.post(&url).json(&body).send().await.unwrap();
+        assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert!(records.lock().unwrap().is_empty());
+        let accepted = client
+            .post(&url)
+            .bearer_auth(&host.token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert!(accepted.get("result").is_some());
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        let event = &records[0];
+        assert_eq!(event["type"], "decision.evaluated");
+        assert_eq!(event["trace_id"], "trace-1");
+        assert_eq!(event["person_id"], "aiko");
+        assert_eq!(event["attributes"]["agent.run_id"], "run-1");
+        assert_eq!(event["payload"], metadata);
     }
 
     fn command_context(root: &std::path::Path) -> Context {
@@ -1204,6 +1272,12 @@ impl HttpHost {
                         (context.record)(json!({"type":name,"payload":args}));
                         Ok(Value::Null)
                     }
+                    "decision_evaluated" => {
+                        (context.record)(
+                            json!({"type":"decision_evaluated","payload":args["payload"]}),
+                        );
+                        Ok(Value::Null)
+                    }
                     "required_io" => {
                         let store = context
                             .required_io
@@ -1472,6 +1546,16 @@ pub struct CommandTestServices {
     pub recorder_port: Option<u16>,
 }
 
+fn configured_tools(resolved: &Value) -> std::collections::BTreeSet<String> {
+    resolved["brains"]
+        .as_object()
+        .into_iter()
+        .flat_map(|v| v.values())
+        .filter_map(|brain| brain["definition"]["adapter"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
 pub async fn prepare_command(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
@@ -1523,13 +1607,7 @@ pub async fn prepare_command(
             .tracked(member.and_then(|backend| backend.executor.tracker())),
         None => Broker::new(program, invocation.clone()),
     };
-    let tools: std::collections::BTreeSet<String> = resolved["brains"]
-        .as_object()
-        .into_iter()
-        .flat_map(|v| v.values())
-        .filter_map(|brain| brain["definition"]["adapter"].as_str())
-        .map(str::to_owned)
-        .collect();
+    let tools = configured_tools(&resolved);
     let keychain: Arc<dyn gb_config::secrets::Keychain> =
         Arc::new(gb_config::secrets::SystemKeychain);
     #[cfg(test)]
@@ -2200,6 +2278,27 @@ fn record_entry_detail(
                 format!("span.{}", entry["status"].as_str().unwrap_or("finished")),
                 "intelligence",
                 payload,
+            )
+        }
+        "decision_evaluated" => {
+            attributes["agent.run_id"] = run.into();
+            let mut payload = serde_json::Map::new();
+            for key in [
+                "evaluation_id",
+                "brain",
+                "model",
+                "route",
+                "reason",
+                "response_effort",
+                "error",
+                "duration_ms",
+            ] {
+                payload.insert(key.into(), entry["payload"][key].clone());
+            }
+            (
+                "decision.evaluated".into(),
+                "decision",
+                Value::Object(payload),
             )
         }
         "record_completed" => (

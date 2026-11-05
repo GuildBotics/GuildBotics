@@ -1190,7 +1190,13 @@ pub(crate) mod tests {
                 assert_eq!(value["has_active_work"], expected_running);
                 assert_eq!(
                     value["scheduler"]["worker_count"],
-                    if expected_running { 1 } else { 0 }
+                    if expected_running {
+                        json!(1)
+                    } else if path == "/scheduler/status" {
+                        Value::Null
+                    } else {
+                        json!(0)
+                    }
                 );
             }
         }
@@ -1438,11 +1444,10 @@ pub(crate) mod tests {
                 if command.name == "functions/talk_as" && command.wants_result {
                     assert!(command.invocation.is_none());
                     assert!(command.pipe.is_empty());
-                    assert_eq!(command.args.len(), 3);
+                    assert_eq!(command.args.len(), 2);
                     assert_eq!(command.args[1], "context_location=Ticket");
-                    assert_eq!(command.args[2], "conversation_history=[]");
                     return Ok(gb_wire::CommandReply {
-                        result: json!({"content":"Safe failure explanation."}),
+                        result: json!({"content":" \nSafe failure explanation.\n "}),
                         ..Default::default()
                     });
                 }
@@ -1955,14 +1960,55 @@ pub(crate) mod tests {
                     "local:local-aiko:C1:M1"
                 );
             }
-            assert!(store.pending("local", "aiko", "C1").unwrap().is_empty());
+            let remaining = store.pending("local", "aiko", "C1").unwrap();
+            assert!(
+                store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("C1:M1"))
+            );
             let page = chat
                 .list_thread_events("C1", "M1", None, 100)
                 .await
                 .unwrap();
             assert_eq!(page.events.len(), if action == "reply" { 2 } else { 1 });
             if action == "reply" {
-                assert_eq!(page.events[1].message.text, "Handled.");
+                let echo = &page.events[1];
+                assert_eq!(echo.message.text, "Handled.");
+                assert!(echo.message.is_from_user(Some("local-aiko")));
+                assert!(
+                    remaining.iter().all(|p| p.event.event_id == echo.event_id),
+                    "only the agent's reply echo may remain: {}",
+                    serde_json::to_value(&remaining).unwrap()
+                );
+                // Exercise the echo before a later human event regardless of listener timing.
+                store
+                    .receive("local", "aiko", echo.clone(), "strict")
+                    .unwrap();
+                let mut human = page.events[0].clone();
+                human.event_id = "C1:M2".into();
+                human.message.message_id = "M2".into();
+                human.message.text = "@local-aiko Another question.".into();
+                human.message.occurred_at = echo.message.occurred_at + chrono::Duration::seconds(1);
+                store
+                    .receive("local", "aiko", human.clone(), "strict")
+                    .unwrap();
+                assert_eq!(dispatcher.process(chrono::Utc::now()).await.unwrap(), 1);
+                let pending = store.pending("local", "aiko", "C1").unwrap();
+                assert_eq!(pending.len(), 1);
+                assert_eq!(pending[0].event.event_id, human.event_id);
+                assert_eq!(pending[0].attempt_count, 0);
+                let processed = store.cursor("local", "aiko", "C1").unwrap();
+                let processed = processed["processed_event_ids"].as_array().unwrap();
+                assert!(processed.contains(&json!(echo.event_id)));
+                assert!(!processed.contains(&json!(human.event_id)));
+                assert_eq!(driver.calls.lock().unwrap().len(), 1);
+            } else {
+                assert!(
+                    remaining.is_empty(),
+                    "{}",
+                    serde_json::to_value(remaining).unwrap()
+                );
             }
             let records = RunStore::open(&native.workspace).records().unwrap();
             assert_eq!(records.len(), 1);
@@ -2045,7 +2091,14 @@ pub(crate) mod tests {
                 let records = RunStore::open(&native.workspace).records().unwrap();
                 let id = driver.calls.lock().unwrap().last().unwrap().run_id.clone();
                 let record = records.iter().find(|r| r.run_id == id).unwrap();
-                assert_eq!(record.work_kind, "manual");
+                assert_eq!(
+                    record.work_kind,
+                    if source == "manual" {
+                        "manual"
+                    } else {
+                        "functions/talk_as"
+                    }
+                );
                 assert_eq!(
                     record.status,
                     if deferred {
@@ -4160,7 +4213,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         receiver
-            .backfill(&receiver.channels[0], chrono::Utc::now())
+            .backfill(&receiver.channels.lock().await[0], chrono::Utc::now())
             .await
             .unwrap();
         assert_eq!(store.pending("local", "aiko", "C1").unwrap().len(), 2);
@@ -4188,7 +4241,7 @@ pub(crate) mod tests {
             json!({"cutoff":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()}),
         );
         receiver
-            .backfill(&receiver.channels[0], chrono::Utc::now())
+            .backfill(&receiver.channels.lock().await[0], chrono::Utc::now())
             .await
             .unwrap();
         assert!(store.pending("local", "aiko", "C1").unwrap().is_empty());
@@ -4239,7 +4292,7 @@ pub(crate) mod tests {
                 "yuki".into(),
                 chat.clone(),
                 connection,
-                primary.channels.clone(),
+                primary.channels.lock().await.clone(),
                 store.clone(),
             )
             .await

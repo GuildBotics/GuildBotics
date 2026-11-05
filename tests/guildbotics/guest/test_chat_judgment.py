@@ -61,7 +61,15 @@ def fixture(monkeypatch, selection, **options):
     client = Client(**options)
     monkeypatch.setattr("guildbotics.guest.host_client.command_window", lambda: client)
     context = SimpleNamespace(
-        person=SimpleNamespace(person_id="aiko", roles={"architect": {}}, profile={}),
+        person=SimpleNamespace(
+            person_id="aiko",
+            roles={
+                "architect": SimpleNamespace(
+                    id="architect", summary=" Design ", description="  "
+                )
+            },
+            profile={},
+        ),
         logger=logging.getLogger(__name__),
         brain_factory=object(),
     )
@@ -144,7 +152,7 @@ async def test_agent_judgment_promotes_effort_and_preserves_batch_context(monkey
     assert await judge_chat(context, selected) is True
     assert selected.effort == "high"
     assert client.calls == ["evidence"]
-    assert states[0]["member"]["roles"] == ["architect"]
+    assert states[0]["member"]["roles"] == {"architect": {"summary": "Design"}}
     assert states[0]["event_ids"] == ["E1"]
     assert states[0]["previous_outcomes"] == []
 
@@ -242,3 +250,113 @@ async def test_a_failed_fast_path_rejudges_and_keeps_visible_reactions_idempoten
     assert len(visible) == (0 if failure == "reaction" and edited else 1)
     assert receipts == ([] if edited and failure != "completion" else ["reaction"])
     assert ("require_completion" in client.calls) is not edited
+
+
+@pytest.mark.asyncio
+async def test_judgment_passes_only_the_frozen_prompt_fields(monkeypatch):
+    context, _, states = fixture(monkeypatch, Selection(route="agent", reason="work"))
+    selected = turn()
+    prompt = {
+        "unprocessed_messages": [{"text": "bounded"}],
+        "participant_labels": {"U1": "alice"},
+        "handoff_candidates": [],
+        "chat_participation": "strict",
+        "previous_thread_context": "previous",
+        "thread_context": "bounded context",
+        "thread_context_complete": True,
+    }
+    selected.prompt.update(prompt, source_cursor="cursor", unexpected="raw")
+    assert await judge_chat(context, selected)
+    state = states[0]
+    for key, value in prompt.items():
+        assert state[key] == value
+    assert set(state) == set(prompt) | {
+        "member",
+        "service",
+        "channel_id",
+        "thread_id",
+        "event_ids",
+        "reaction_target",
+        "run_id",
+        "previous_outcomes",
+    }
+
+
+def test_evaluated_sends_structured_metadata_to_the_host():
+    from guildbotics.guest.decisions import DecisionRecorder
+
+    calls = []
+    client = SimpleNamespace(call=lambda name, **args: calls.append((name, args)))
+    payload = {
+        "evaluation_id": "evaluation",
+        "brain": "chat_decision",
+        "model": "member-model",
+        "route": "agent",
+        "reason": "invalid",
+        "response_effort": None,
+        "error": "recording_failed",
+        "duration_ms": 12.5,
+    }
+    DecisionRecorder(client).evaluated("aiko", payload)
+    assert calls == [("decision_evaluated", {"payload": payload})]
+
+
+@pytest.mark.asyncio
+async def test_raw_snapshot_changes_do_not_change_the_model_input_or_input_hash(
+    monkeypatch,
+):
+    from guildbotics.intelligences.decisions.models import Evaluation
+
+    from guildbotics.intelligences.decisions import assessment
+
+    real_assess = assessment.assess
+    context, client, _ = fixture(monkeypatch, Selection(route="agent", reason="work"))
+    monkeypatch.setattr(assessment, "assess", real_assess)
+    records = []
+    model_inputs = []
+
+    def call(name, **args):
+        if name == "required_io":
+            records.append(args["payload"])
+        return [] if name == "evidence" else None
+
+    async def evaluate(config, state, questions, **kwargs):
+        model_inputs.append(state)
+        return Evaluation(error="evaluation_failed")
+
+    monkeypatch.setattr(client, "call", call)
+    monkeypatch.setattr(assessment, "evaluate", evaluate)
+    for raw in ("raw old", "raw edited"):
+        selected = turn()
+        selected.prompt.update(
+            source_snapshot=[{"text": raw}],
+            source_cursor=raw,
+            extra=raw,
+            thread_context="same bounded input",
+        )
+        assert await judge_chat(context, selected)
+    finals = [payload for payload in records if "input_hash" in payload]
+    assert len(finals) == 2
+    assert finals[0]["input_hash"] == finals[1]["input_hash"]
+    assert model_inputs[0] == model_inputs[1]
+    assert all("raw" not in json.dumps(payload["input"]) for payload in finals)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "summary,description,expected",
+    [
+        (" Brief ", " Details ", {"summary": "Brief", "description": "Details"}),
+        ("  ", " Details ", {"description": "Details"}),
+        ("  ", "  ", {}),
+    ],
+)
+async def test_judgment_role_details_preserve_frozen_whitespace_rules(
+    monkeypatch, summary, description, expected
+):
+    context, _, states = fixture(monkeypatch, Selection(route="agent", reason="work"))
+    role = context.person.roles["architect"]
+    role.summary = summary
+    role.description = description
+    assert await judge_chat(context, turn())
+    assert states[0]["member"]["roles"] == {"architect": expected}

@@ -107,12 +107,24 @@ impl Follow {
         Self::with_factory(workspace, enabled, Arc::new(platform_hold))
     }
     fn with_factory(workspace: PathBuf, enabled: bool, factory: Factory) -> anyhow::Result<Self> {
+        Self::watch(Some(workspace), enabled, factory)
+    }
+    pub fn command() -> anyhow::Result<Self> {
+        Self::watch(None, true, Arc::new(platform_hold))
+    }
+    fn watch(workspace: Option<PathBuf>, enabled: bool, factory: Factory) -> anyhow::Result<Self> {
         let (stop, received) = std::sync::mpsc::channel();
         let (ready, entered) = std::sync::mpsc::sync_channel(0);
         let thread = std::thread::Builder::new()
             .name("guildbotics-keep-awake".into())
             .spawn(move || {
-                let signature = signature(&workspace).unwrap_or_default();
+                let follows_settings = workspace.is_some();
+                let workspace = workspace.unwrap_or_default();
+                let signature = if follows_settings {
+                    signature(&workspace).unwrap_or_default()
+                } else {
+                    None
+                };
                 let mut state = State {
                     workspace,
                     signature,
@@ -128,7 +140,9 @@ impl Follow {
                     received.recv_timeout(std::time::Duration::from_secs(1)),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout)
                 ) {
-                    state.refresh();
+                    if follows_settings {
+                        state.refresh();
+                    }
                 }
             })?;
         entered.recv()?;
@@ -238,6 +252,37 @@ mod tests {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(Box::new(Hold(count.clone())))
         })
+    }
+    #[tokio::test]
+    async fn commands_hold_independently_through_success_failure_and_cancellation() {
+        let count = Arc::new(AtomicUsize::new(0));
+        for fails in [false, true] {
+            let held = count.clone();
+            let result: Result<(), ()> = async {
+                let _hold = Follow::watch(None, true, factory(held.clone())).unwrap();
+                assert_eq!(held.load(Ordering::SeqCst), 1);
+                if fails { Err(()) } else { Ok(()) }
+            }
+            .await;
+            assert_eq!(result.is_err(), fails);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+        }
+        let first = Follow::watch(None, true, factory(count.clone())).unwrap();
+        let held = count.clone();
+        let entered = tokio_util::sync::CancellationToken::new();
+        let ready = entered.clone();
+        let running = tokio::spawn(async move {
+            let _hold = Follow::watch(None, true, factory(held)).unwrap();
+            ready.cancel();
+            std::future::pending::<()>().await;
+        });
+        entered.cancelled().await;
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        running.abort();
+        assert!(running.await.unwrap_err().is_cancelled());
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        drop(first);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
     }
     #[test]
     fn independent_holds_start_synchronously_and_release_from_another_thread() {
