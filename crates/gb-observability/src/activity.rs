@@ -3,6 +3,7 @@ use crate::redaction::{MAX_SHARED_TEXT_CHARS, Redactor};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use gb_base::{files::SHARED_RECORD_SCHEMA_VERSION, shared_writes::Writer};
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 pub const DOMAIN_EVENT_TYPES: &[&str] = &[
@@ -51,32 +52,41 @@ impl ActivityEvents {
         record: &Value,
         redactor: &Redactor,
     ) -> anyhow::Result<bool> {
+        let (path, event) = self.once_record(record, redactor)?;
+        if read_event(&path, &event)?.is_some() {
+            return Ok(false);
+        }
+        writer.write_json(&path, &event)?;
+        Ok(true)
+    }
+
+    /// Read only this event's durable location, independent of other activity history.
+    pub fn existing_once(
+        &self,
+        record: &Value,
+        redactor: &Redactor,
+    ) -> anyhow::Result<Option<Value>> {
+        let (path, event) = self.once_record(record, redactor)?;
+        read_event(&path, &event)
+    }
+
+    fn once_record(&self, record: &Value, redactor: &Redactor) -> anyhow::Result<(PathBuf, Value)> {
         let trace = text(record, &["trace_id", "local_trace_id"]);
         anyhow::ensure!(!trace.is_empty(), "domain event requires a trace identity");
-        // Recovery must fail closed on unreadable records, unlike a best-effort activity feed.
-        for year in children(&self.root)? {
-            if !year.is_dir() {
-                continue;
-            }
-            for month in children(&year)? {
-                if !month.is_dir() {
-                    continue;
-                }
-                for path in children(&month)? {
-                    if path.extension().is_none_or(|extension| extension != "json") {
-                        continue;
-                    }
-                    let existing: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-                    if text(&existing, &["local_trace_id"]) == trace
-                        && text(&existing, &["kind"]) == text(record, &["type", "kind"])
-                    {
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-        self.record(writer, record, redactor)?;
-        Ok(true)
+        // The terminal journal supplies a stable date, including after month boundaries.
+        let date = timestamp(record, "timestamp")
+            .ok_or_else(|| anyhow::anyhow!("domain event requires a timestamp"))?;
+        let mut record = record.clone();
+        record["event_id"] = sha2::Sha256::digest(serde_json::to_vec(&(
+            trace,
+            text(&record, &["type", "kind"]),
+        ))?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        .into();
+        let (_, event) = self.render(&record, redactor)?;
+        Ok((self.path(&event, date)?, event))
     }
 
     pub fn record(
@@ -85,6 +95,12 @@ impl ActivityEvents {
         record: &Value,
         redactor: &Redactor,
     ) -> anyhow::Result<PathBuf> {
+        let (path, event) = self.render(record, redactor)?;
+        writer.write_json(&path, &event)?;
+        Ok(path)
+    }
+
+    fn render(&self, record: &Value, redactor: &Redactor) -> anyhow::Result<(PathBuf, Value)> {
         let generated = uuid::Uuid::new_v4().simple().to_string();
         let now = Utc::now().to_rfc3339();
         let event_id = text(record, &["event_id"]);
@@ -123,14 +139,16 @@ impl ActivityEvents {
         }
         let event = redactor.redact(event);
         let date = timestamp(&event, "occurred_at").unwrap_or_else(|| Utc::now().fixed_offset());
+        Ok((self.path(&event, date)?, event))
+    }
+
+    fn path(&self, event: &Value, date: DateTime<FixedOffset>) -> anyhow::Result<PathBuf> {
         // The bounded/masked identifier must name the file as well as the record.
         let id = event["event_id"].as_str().unwrap();
         super::runs::checked_id(id)?;
-        let path = self
+        Ok(self
             .root
-            .join(format!("{:04}/{:02}/{id}.json", date.year(), date.month()));
-        writer.write_json(&path, &event)?;
-        Ok(path)
+            .join(format!("{:04}/{:02}/{id}.json", date.year(), date.month())))
     }
 
     pub fn list_between(
@@ -211,6 +229,29 @@ impl ActivityEvents {
     }
 }
 
+fn read_event(path: &Path, expected: &Value) -> anyhow::Result<Option<Value>> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let event: Value = serde_json::from_slice(&bytes)?;
+            for key in ["event_id", "kind", "local_trace_id", "occurred_at"] {
+                anyhow::ensure!(
+                    event[key] == expected[key],
+                    "conflicting activity identity at {}",
+                    path.display()
+                );
+            }
+            anyhow::ensure!(
+                event["payload"].is_object() && event["attributes"].is_object(),
+                "invalid activity event at {}",
+                path.display()
+            );
+            Ok(Some(event))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(crate) fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     let entries = match std::fs::read_dir(path) {
         Ok(entries) => entries,
@@ -229,23 +270,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recovery_dedup_fails_closed_on_unreadable_or_malformed_event_records() {
+    fn recovery_partition_uses_the_journal_date_even_when_redacted() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ActivityEvents::open(root.path());
+        let redactor = Redactor::new(["2026-10-".into()]);
+        let event = json!({"type":"workflow.completed","trace_id":"run","timestamp":"2026-10-31T23:59:00Z"});
+        let (path, rendered) = store.once_record(&event, &redactor).unwrap();
+        assert_eq!(path.parent().unwrap(), store.root.join("2026/10"));
+        assert!(timestamp(&rendered, "occurred_at").is_none());
+    }
+
+    #[test]
+    fn recovery_dedup_reads_only_the_stable_target_and_fails_closed_on_its_errors() {
         let root = tempfile::tempdir().unwrap();
         let store = ActivityEvents::open(root.path());
         let writes = gb_base::shared_writes::SharedWrites::new(
             root.path().join("identity"),
             Some(root.path().into()),
         );
-        let path = store.root.join("2026/11/prior.json");
+        let redactor = Redactor::new(["private-trace".into()]);
+        let event = json!({"type":"workflow.completed","trace_id":"private-trace","timestamp":"2026-10-31T23:59:00Z"});
+        let (path, _) = store.once_record(&event, &redactor).unwrap();
+        assert_eq!(path.parent().unwrap(), store.root.join("2026/10"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let redactor = Redactor::new(Vec::<String>::new());
-        let event = json!({"type":"workflow.completed","trace_id":"run"});
-        std::fs::write(&path, "invalid json").unwrap();
-        assert!(
-            writes
-                .transaction(|writer| store.record_once(writer, &event, &redactor))
-                .is_err()
-        );
+        for contents in ["invalid json", "{}", r#"{"kind":"other"}"#] {
+            std::fs::write(&path, contents).unwrap();
+            assert!(
+                writes
+                    .transaction(|writer| store.record_once(writer, &event, &redactor))
+                    .is_err()
+            );
+        }
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(
@@ -254,15 +309,37 @@ mod tests {
                 .is_err()
         );
         std::fs::remove_dir(&path).unwrap();
+        let unrelated = store.root.join("2025/01/broken.json");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        std::fs::write(unrelated, "broken").unwrap();
+        std::fs::create_dir_all(store.root.join("2026/10/unreadable.json")).unwrap();
         assert!(
             writes
                 .transaction(|writer| store.record_once(writer, &event, &redactor))
                 .unwrap()
         );
+        let restarted = ActivityEvents::open(root.path());
         assert!(
             !writes
-                .transaction(|writer| store.record_once(writer, &event, &redactor))
+                .transaction(|writer| restarted.record_once(writer, &event, &redactor))
                 .unwrap()
+        );
+        assert!(
+            restarted
+                .existing_once(&event, &redactor)
+                .unwrap()
+                .is_some()
+        );
+        let mut other = event.clone();
+        other["trace_id"] = "another-private-trace".into();
+        assert!(
+            writes
+                .transaction(|writer| store.record_once(writer, &other, &redactor))
+                .unwrap()
+        );
+        assert_ne!(
+            store.once_record(&event, &redactor).unwrap().0,
+            store.once_record(&other, &redactor).unwrap().0
         );
     }
 }

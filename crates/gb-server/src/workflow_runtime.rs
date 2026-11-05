@@ -864,34 +864,49 @@ impl crate::chat_dispatch::Runner for Runtime {
         &self,
         pending: &crate::chat_state::Pending,
         record: &RunRecord,
+        recovered: bool,
     ) -> anyhow::Result<()> {
         let Some(result) = &record.result else {
             return Ok(());
         };
-        let event = gb_member::events::completed(
+        let mut event = gb_member::events::completed(
             &record.run_id,
             u64::from(pending.attempt_count),
-            true,
+            recovered,
             serde_json::to_value(result.status)?.as_str().unwrap_or(""),
         );
+        let store = gb_observability::activity::ActivityEvents::open(&self.dispatcher.workspace);
+        let identity = json!({"trace_id":record.run_id,"type":"workflow.completed","timestamp":record.finished_at});
+        let existing = self
+            .diagnostics()
+            .event(&record.run_id, "workflow.completed")?
+            .map(Value::Object)
+            .or(store.existing_once(&identity, &self.redactor)?);
+        if let Some(existing) = existing {
+            event["payload"] = existing["payload"].clone();
+            event["attributes"] = existing["attributes"].clone();
+        }
         let mut attributes = crate::chat_dispatch::attributes(&self.chat_provider, pending);
         attributes.extend(event["attributes"].as_object().unwrap().clone());
         let trace = self
             .traced(
                 Trace::resume(&self.diagnostics(), "event_queue", &record.run_id)?,
-                attributes,
+                serde_json::Map::new(),
             )
             .command(crate::chat_dispatch::COMMAND);
+        let trace = attributes
+            .into_iter()
+            .fold(trace, |trace, (key, value)| trace.attribute(&key, value));
         trace.event_once(
             "workflow.completed",
             event["payload"].as_object().unwrap().clone(),
         )?;
         let mut activity = trace.correlation();
+        activity["timestamp"] = json!(record.finished_at);
         activity["type"] = event["type"].clone();
         activity["payload"] = event["payload"].clone();
         self.writes.transaction(|writer| {
-            gb_observability::activity::ActivityEvents::open(&self.dispatcher.workspace)
-                .record_once(writer, &activity, &self.redactor)?;
+            store.record_once(writer, &activity, &self.redactor)?;
             Ok(())
         })
     }

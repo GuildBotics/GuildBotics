@@ -93,6 +93,20 @@ impl Diagnostics {
         }
     }
 
+    /// Read a domain event from its own trace, preserving the original terminal payload.
+    pub fn event(
+        &self,
+        trace_id: &str,
+        event_type: &str,
+    ) -> std::io::Result<Option<Map<String, Value>>> {
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(
+            read_records(&self.sessions.join(format!("{}.jsonl", safe_id(trace_id))))?
+                .into_iter()
+                .find(|record| record.get("type").and_then(Value::as_str) == Some(event_type)),
+        )
+    }
+
     /// Check the full durable transcript and append under the same writer lock.
     pub fn record_once(&self, record: Map<String, Value>) -> std::io::Result<bool> {
         let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());

@@ -58,7 +58,12 @@ pub trait Runner: Send + Sync {
     ) -> Future<'a, Result<RunRecord, Failure>>;
     fn record(&self, id: &str) -> anyhow::Result<Option<RunRecord>>;
     /// Persist missing terminal observability before acknowledging the input.
-    fn completed(&self, _pending: &Pending, _record: &RunRecord) -> anyhow::Result<()> {
+    fn completed(
+        &self,
+        _pending: &Pending,
+        _record: &RunRecord,
+        _recovered: bool,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
     fn event(&self, kind: &str, pending: &Pending, payload: Value);
@@ -138,7 +143,7 @@ impl Dispatcher {
                     && record.finished_at.is_some()
                     && record.result.is_some()
                 {
-                    self.settle(&pending, &record).await?;
+                    self.settle(&pending, &record, true).await?;
                     count += 1;
                     continue;
                 }
@@ -176,13 +181,15 @@ impl Dispatcher {
                 if self.runner.stopping() {
                     return Ok(count);
                 }
+                let requested_run_id = pending.run_id.clone();
                 match self
                     .runner
                     .dispatch(&mut pending, invocation, &self.store)
                     .await
                 {
                     Ok(record) if record.finished_at.is_some() && record.result.is_some() => {
-                        self.settle(&pending, &record).await?;
+                        self.settle(&pending, &record, record.run_id != requested_run_id)
+                            .await?;
                         count += 1;
                     }
                     Ok(_) => self.retry(&mut pending, Failure::Failed, now).await?,
@@ -442,8 +449,13 @@ impl Dispatcher {
             "thread_context":&context[from..],"thread_context_complete":true,"source_cursor":event.message.position(),"source_snapshot":snapshot.iter().map(ChatEvent::payload).collect::<Vec<_>>(),"event_ids":batch.iter().map(|e|&e.event_id).collect::<Vec<_>>()}),
         )
     }
-    async fn settle(&self, pending: &Pending, record: &RunRecord) -> anyhow::Result<()> {
-        self.runner.completed(pending, record)?;
+    async fn settle(
+        &self,
+        pending: &Pending,
+        record: &RunRecord,
+        recovered: bool,
+    ) -> anyhow::Result<()> {
+        self.runner.completed(pending, record, recovered)?;
         let status = record
             .result
             .as_ref()
@@ -984,7 +996,7 @@ mod tests {
             .unwrap()
             .insert("identity:".into(), gb_ports::ServiceError::Unavailable);
         for _ in 0..3 {
-            assert!(dispatcher.settle(&p, &record).await.is_err());
+            assert!(dispatcher.settle(&p, &record, true).await.is_err());
         }
         assert_eq!(
             dispatcher
@@ -996,8 +1008,8 @@ mod tests {
         );
         assert!(!dispatcher.processed("C1").unwrap().contains("T1"));
         chat.errors.lock().unwrap().clear();
-        dispatcher.settle(&p, &record).await.unwrap();
-        dispatcher.settle(&p, &record).await.unwrap();
+        dispatcher.settle(&p, &record, true).await.unwrap();
+        dispatcher.settle(&p, &record, true).await.unwrap();
         assert!(
             dispatcher
                 .store

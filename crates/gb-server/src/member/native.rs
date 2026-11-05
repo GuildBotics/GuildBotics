@@ -2013,6 +2013,20 @@ pub(crate) mod tests {
             }
             let records = RunStore::open(&native.workspace).records().unwrap();
             assert_eq!(records.len(), 1);
+            let activity = gb_observability::activity::ActivityEvents::open(&native.workspace)
+                .list_between(
+                    chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                    chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                )
+                .unwrap();
+            let completed = activity
+                .iter()
+                .filter(|event| event["kind"] == "workflow.completed")
+                .collect::<Vec<_>>();
+            assert_eq!(completed.len(), 1);
+            assert_eq!(completed[0]["payload"]["recovered"], false);
+            assert_eq!(completed[0]["payload"]["run_id"], records[0].run_id);
+            assert_eq!(completed[0]["payload"]["attempt"], 1);
             let evidence = records[0]
                 .provider_evidence
                 .iter()
@@ -2585,15 +2599,18 @@ pub(crate) mod tests {
                             .map(|_| ())
                     })
                     .unwrap();
-                // The host already emitted the terminal event before recovery.
-                let mut prior = dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
-                prior.run_id = "prior-run".into();
-                crate::chat_dispatch::Runner::event(
-                    runtime.as_ref(),
-                    "workflow.completed",
-                    &prior,
-                    json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
-                );
+                if batch {
+                    // The host already emitted the terminal event before recovery.
+                    let mut prior =
+                        dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
+                    prior.run_id = "prior-run".into();
+                    crate::chat_dispatch::Runner::event(
+                        runtime.as_ref(),
+                        "workflow.completed",
+                        &prior,
+                        json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
+                    );
+                }
                 assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
                 assert!(driver.calls.lock().unwrap().is_empty());
                 let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
@@ -2634,6 +2651,21 @@ pub(crate) mod tests {
                         .count(),
                     1
                 );
+                if !batch {
+                    let activity =
+                        gb_observability::activity::ActivityEvents::open(&native.workspace)
+                            .list_between(
+                                chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                            )
+                            .unwrap();
+                    let completed = activity
+                        .iter()
+                        .find(|event| event["kind"] == "workflow.completed")
+                        .unwrap();
+                    assert_eq!(completed["payload"]["run_id"], "prior-run");
+                    assert_eq!(completed["payload"]["recovered"], true);
+                }
                 cleanup.close();
                 cleanup.wait().await;
             }
@@ -2674,7 +2706,7 @@ pub(crate) mod tests {
                 let record: RunRecord = serde_json::from_value(json!({
                     "run_id":pending.run_id,"work_kind":"chat","execution_mode":"autonomous",
                     "member_id":"aiko","device_id":"device","source":"event_queue",
-                    "started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
+                    "started_at":"2026-10-31T23:58:00Z","finished_at":"2026-10-31T23:59:00Z","status":"succeeded",
                     "work_identity":{"service":"local","channel_id":"C1","event_id":"C1:M1"},
                     "provider_evidence":[{"type":"chat_reply","payload":{"text":"answered"}}],
                     "result":{"subject_type":"chat","subject_id":"local:C1:M1","status":"done"}
@@ -2698,7 +2730,15 @@ pub(crate) mod tests {
                 .unwrap()
                 .person("aiko")
                 .command(crate::chat_dispatch::COMMAND);
-                let original = gb_member::events::completed(&pending.run_id, 3, false, "done");
+                let mut original = gb_member::events::completed(&pending.run_id, 2, false, "done");
+                original["attributes"]["service_run_id"] = json!("prior-service");
+                let trace = original["attributes"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .fold(trace, |trace, (key, value)| {
+                        trace.attribute(key, value.clone())
+                    });
                 if diagnostic_exists {
                     trace.event(
                         "workflow.completed",
@@ -2708,16 +2748,42 @@ pub(crate) mod tests {
                 let activity = gb_observability::activity::ActivityEvents::open(&native.workspace);
                 if activity_exists {
                     let mut event = trace.correlation();
+                    event["timestamp"] = json!(record.finished_at);
                     event["type"] = original["type"].clone();
                     event["payload"] = original["payload"].clone();
                     runtime
                         .writes
                         .transaction(|writer| {
-                            activity.record(writer, &event, &runtime.redactor)?;
+                            activity.record_once(writer, &event, &runtime.redactor)?;
                             Ok(())
                         })
                         .unwrap();
                 }
+                if !activity_exists {
+                    // Failure at this run's month must retain the durable input.
+                    let month = native.workspace.join(".guildbotics/state/events/2026/10");
+                    std::fs::create_dir_all(month.parent().unwrap()).unwrap();
+                    std::fs::write(&month, "blocked").unwrap();
+                    assert!(dispatch.process(chrono::Utc::now()).await.is_err());
+                    assert_eq!(
+                        dispatch.store.pending("local", "aiko", "C1").unwrap().len(),
+                        1
+                    );
+                    assert!(driver.calls.lock().unwrap().is_empty());
+                    std::fs::remove_file(month).unwrap();
+                }
+                // Unrelated damaged history must not block completion or acknowledgement.
+                let broken = native
+                    .workspace
+                    .join(".guildbotics/state/events/2025/01/broken.json");
+                std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+                std::fs::write(&broken, "broken").unwrap();
+                std::fs::create_dir_all(
+                    native
+                        .workspace
+                        .join(".guildbotics/state/events/2026/10/unreadable.json"),
+                )
+                .unwrap();
                 // A directory at the thread file forces settlement to fail after event persistence.
                 let blocked = dispatch
                     .store
@@ -2747,6 +2813,28 @@ pub(crate) mod tests {
                     }
                     assert!(driver.calls.lock().unwrap().is_empty());
                     assert!(restarted_driver.calls.lock().unwrap().is_empty());
+                    let check_completed = |completed: Vec<&Value>| {
+                        assert_eq!(completed.len(), 1);
+                        if diagnostic_exists || activity_exists {
+                            assert_eq!(
+                                completed[0]["attributes"]["service_run_id"],
+                                "prior-service"
+                            );
+                        }
+                        assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
+                        assert_eq!(
+                            completed[0]["payload"]["attempt"],
+                            if diagnostic_exists || activity_exists {
+                                2
+                            } else {
+                                3
+                            }
+                        );
+                        assert_eq!(
+                            completed[0]["payload"]["recovered"],
+                            !(diagnostic_exists || activity_exists)
+                        );
+                    };
                     let detail = gb_observability::Diagnostics::open(&native.workspace)
                         .trace_detail(&pending.run_id)
                         .unwrap();
@@ -2756,10 +2844,7 @@ pub(crate) mod tests {
                         .iter()
                         .filter(|event| event["type"] == "workflow.completed")
                         .collect::<Vec<_>>();
-                    assert_eq!(completed.len(), 1);
-                    assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
-                    assert_eq!(completed[0]["payload"]["attempt"], 3);
-                    assert_eq!(completed[0]["payload"]["recovered"], !diagnostic_exists);
+                    check_completed(completed);
                     let events = activity
                         .list_between(
                             chrono::DateTime::<chrono::Utc>::MIN_UTC,
@@ -2770,10 +2855,7 @@ pub(crate) mod tests {
                         .iter()
                         .filter(|event| event["kind"] == "workflow.completed")
                         .collect::<Vec<_>>();
-                    assert_eq!(completed.len(), 1);
-                    assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
-                    assert_eq!(completed[0]["payload"]["attempt"], 3);
-                    assert_eq!(completed[0]["payload"]["recovered"], !activity_exists);
+                    check_completed(completed);
                     assert_eq!(
                         RunStore::open(&native.workspace)
                             .read(&pending.run_id)
