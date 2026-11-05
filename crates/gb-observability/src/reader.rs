@@ -18,6 +18,19 @@ fn stamp(value: &Value) -> (i64, String) {
     )
 }
 
+/// Selects traces and how much of the diagnostics store is searched.
+pub struct TraceSearch<'a> {
+    pub source: Option<&'a str>,
+    pub person: Option<&'a str>,
+    pub query: Option<&'a str>,
+    pub attr_key: Option<&'a str>,
+    pub attr_value: Option<&'a str>,
+    pub include_assistant: bool,
+    pub include_system: bool,
+    pub search_transcripts: bool,
+    pub limit: usize,
+}
+
 impl Diagnostics {
     fn completion_summaries(&self) -> BTreeMap<(String, String), String> {
         let workspace = self
@@ -48,6 +61,31 @@ impl Diagnostics {
         attr_value: Option<&str>,
         limit: usize,
     ) -> std::io::Result<Value> {
+        self.search_traces(TraceSearch {
+            source,
+            person,
+            query,
+            attr_key,
+            attr_value,
+            limit,
+            include_assistant: true,
+            include_system: true,
+            search_transcripts: false,
+        })
+    }
+
+    pub fn search_traces(&self, search: TraceSearch<'_>) -> std::io::Result<Value> {
+        let TraceSearch {
+            source,
+            person,
+            query,
+            attr_key,
+            attr_value,
+            limit,
+            include_assistant,
+            include_system,
+            search_transcripts,
+        } = search;
         let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         let indexed = self.indexed()?;
         for record in &indexed {
@@ -78,12 +116,33 @@ impl Diagnostics {
             {
                 continue;
             }
-            if !matches_query(&summary, &records, query) {
+            if !include_assistant
+                && ["author:", "troubleshoot:"]
+                    .iter()
+                    .any(|prefix| text(&summary, "command").starts_with(prefix))
+            {
                 continue;
+            }
+            if !matches_query(&summary, &records, query) {
+                let found = if search_transcripts {
+                    let path = self.sessions.join(format!("{}.jsonl", safe_id(&id)));
+                    let query = query.unwrap_or_default().to_lowercase();
+                    read_records(&path)?.into_iter().any(|record| {
+                        serde_json::Value::Object(record)
+                            .to_string()
+                            .to_lowercase()
+                            .contains(&query)
+                    })
+                } else {
+                    false
+                };
+                if !found {
+                    continue;
+                }
             }
             summaries.push(summary);
         }
-        if source.is_none() && person.is_none() && attr_key.is_none() {
+        if include_system && source.is_none() && person.is_none() && attr_key.is_none() {
             summaries.extend(system_summaries(&indexed, false).into_iter().filter(|s| {
                 let id = text(s, "trace_id").strip_prefix("system:").unwrap_or("");
                 let records: Vec<_> = indexed
@@ -100,6 +159,25 @@ impl Diagnostics {
         summaries.sort_by_key(|s| std::cmp::Reverse(stamp(&json!({"timestamp":s["started_at"]}))));
         summaries.truncate(limit);
         Ok(json!({"traces":summaries}))
+    }
+
+    /// The newest system session is stored on disk and can be read offline.
+    pub fn latest_system_records(&self, limit: usize) -> std::io::Result<Value> {
+        let indexed = self.indexed()?;
+        let id = indexed.iter().rev().find_map(|record| {
+            (text(record, "type") == "system.started")
+                .then(|| record["attributes"]["system_session_id"].as_str())
+                .flatten()
+        });
+        let Some(id) = id else {
+            return Ok(json!({"trace_id":"", "records":[]}));
+        };
+        let mut records = read_records(&self.sessions.join(format!("{}.jsonl", safe_id(id))))?;
+        let start = records.len().saturating_sub(limit);
+        Ok(json!({
+            "trace_id": format!("system:{id}"),
+            "records": records.drain(start..).map(|r| record(&Value::Object(r))).collect::<Vec<_>>(),
+        }))
     }
 
     pub fn trace_detail(&self, id: &str) -> std::io::Result<Value> {

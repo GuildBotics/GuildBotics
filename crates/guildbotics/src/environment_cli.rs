@@ -1,11 +1,15 @@
 //! The environment commands share the server's device reading.
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Subcommand)]
-pub enum EnvironmentCommand {
+pub(crate) enum EnvironmentCommand {
     /// Read the device's environment and refusal or warning
-    Status,
+    Status {
+        /// Select the output format
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: OutputFormat,
+    },
     /// Build the declared environment on this device
     Build {
         #[arg(long)]
@@ -23,8 +27,14 @@ pub enum EnvironmentCommand {
         command: ImageCommand,
     },
 }
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum OutputFormat {
+    Markdown,
+    Json,
+}
+
 #[derive(Subcommand)]
-pub enum ImageCommand {
+pub(crate) enum ImageCommand {
     /// Load a Docker save or OCI archive built for this device's CPU
     Load {
         archive: PathBuf,
@@ -34,7 +44,11 @@ pub enum ImageCommand {
     /// Load an archive into the workspace code host's CI runner
     LoadCi { archive: PathBuf },
     /// List eligible local base images
-    List,
+    List {
+        /// Select the output format
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: OutputFormat,
+    },
     /// Declare the image's digest per architecture in the selected workspace
     Declare {
         reference: Option<String>,
@@ -44,26 +58,22 @@ pub enum ImageCommand {
         digests: Vec<String>,
     },
 }
-pub fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> anyhow::Result<()> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(execute(command, workspace))
-}
-async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> anyhow::Result<()> {
+pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> anyhow::Result<()> {
     let data = gb_base::home::data()?;
     let runtime = data.join("msb");
+    let language = gb_server::client::language().await;
     let usage = matches!(&command, EnvironmentCommand::Usage { .. });
     match command {
         EnvironmentCommand::Remove => {
             gb_environment::runtime::remove_snapshots(
                 &runtime,
-                &gb_server::environment::workspace(workspace)?,
+                &gb_server::workspace::resolve(&data, workspace, language)?,
             )
             .await
             .map_err(anyhow::Error::msg)?;
         }
         EnvironmentCommand::Login { tool } | EnvironmentCommand::Usage { tool } => {
+            let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
@@ -73,26 +83,18 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 package: gb_base::home::python_package(),
                 identity_root: gb_base::home::identity_root()?,
             };
-            let result = gb_server::tool_login::login(
-                &host,
-                &gb_server::environment::workspace(workspace)?,
-                &tool,
-                usage,
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
+            let result = gb_server::tool_login::login(&host, &workspace, &tool, usage)
+                .await
+                .map_err(anyhow::Error::msg)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         EnvironmentCommand::Build { force } => {
-            let workspace = gb_server::environment::workspace(workspace)?;
+            let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-            let language = gb_environment::language::ui_language()
-                .await
-                .unwrap_or_else(|| "en".into());
             let built =
-                gb_server::environment::build(&workspace, &data, &home, force, &language, |line| {
+                gb_server::environment::build(&workspace, &data, &home, force, language, |line| {
                     println!("{line}")
                 })
                 .await?;
@@ -101,23 +103,31 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 built.file_name().unwrap_or_default().to_string_lossy()
             );
         }
-        EnvironmentCommand::Status => {
+        EnvironmentCommand::Status { format } => {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-            let language = gb_environment::language::ui_language()
-                .await
-                .unwrap_or_else(|| "en".into());
-            let view = gb_server::environment::status(
-                gb_server::environment::workspace(workspace)?,
+            let mut view = gb_server::environment::status(
+                gb_server::workspace::resolve(&data, workspace, language)?,
                 data,
                 home,
-                &language,
+                language,
             )
             .await?;
-            for field in ["problem", "warning"] {
-                if let Some(text) = view[field].as_str().filter(|text| !text.is_empty()) {
-                    println!("{text}");
+            if matches!(format, OutputFormat::Markdown) {
+                for field in ["problem", "warning"] {
+                    if let Some(text) = view[field].as_str().filter(|text| !text.is_empty()) {
+                        println!("{text}");
+                    }
+                }
+            }
+            if matches!(format, OutputFormat::Json)
+                && let Some(view) = view.as_object_mut()
+            {
+                for (source, target) in [("problem", "refusal"), ("problem_setting", "setting")] {
+                    if let Some(value) = view.remove(source) {
+                        view.insert(target.into(), value);
+                    }
                 }
             }
             println!("{}", serde_json::to_string_pretty(&view)?);
@@ -125,7 +135,7 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
         EnvironmentCommand::Image { command } => match command {
             ImageCommand::LoadCi { archive } => {
                 let loaded = gb_server::environment::load_ci(
-                    &gb_server::environment::workspace(workspace)?,
+                    &gb_server::workspace::resolve(&data, workspace, language)?,
                     &archive,
                 )
                 .await?;
@@ -134,30 +144,49 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 }
             }
             ImageCommand::Load { archive, tag } => {
-                gb_environment::image_archive::validate(
-                    &archive,
-                    gb_environment::image::device_architecture(),
-                )
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-                gb_environment::runtime::ensure(&runtime).map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 for (reference, digest) in gb_environment::load_image(&runtime, &archive, tag)
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?
                 {
                     println!("loaded {reference} {digest}");
                 }
             }
-            ImageCommand::List => {
-                let recipe = gb_environment::recipe::Recipe::load(
-                    &gb_base::home::python_package().join("templates"),
-                )
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-                for (reference, digest, _) in
-                    gb_environment::runtime::images(&runtime, &recipe.image)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("{e:?}"))?
-                {
-                    println!("{reference} {digest}");
+            ImageCommand::List { format } => {
+                let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
+                let mut list = gb_server::environment::list_images(&data, Some(&workspace)).await?;
+                if matches!(format, OutputFormat::Json) {
+                    list.as_object_mut().expect("image list").remove("problem");
+                    println!("{}", serde_json::to_string_pretty(&list)?);
+                } else {
+                    println!(
+                        "architecture: {}",
+                        list["architecture"].as_str().unwrap_or_default()
+                    );
+                    let images = list["images"].as_array().expect("image rows");
+                    if images.is_empty() {
+                        println!(
+                            "{}",
+                            gb_server::i18n::t(
+                                language,
+                                "intelligences.agent_environment.image.empty",
+                                &[]
+                            )
+                        );
+                    }
+                    for image in images {
+                        let reference = image["reference"].as_str().unwrap_or_default();
+                        let digest = image["digest"].as_str().unwrap_or_default();
+                        let declared = if image["declared"] == true {
+                            gb_server::i18n::t(
+                                language,
+                                "intelligences.agent_environment.image.declared",
+                                &[],
+                            )
+                        } else {
+                            String::new()
+                        };
+                        println!("{}", format!("{reference} {digest} {declared}").trim_end());
+                    }
                 }
             }
             ImageCommand::Declare {
@@ -193,7 +222,7 @@ async fn execute(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                     declared.insert(gb_environment::image::device_architecture().into(), digest);
                 }
                 gb_server::environment::declare(
-                    &gb_server::environment::workspace(workspace)?,
+                    &gb_server::workspace::resolve(&data, workspace, language)?,
                     reference,
                     declared,
                 )?;

@@ -8,6 +8,11 @@ use sha2::{Digest, Sha256};
 pub use slack::{IntegrationEvent, IntegrationObserver};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+/// The providers that issue the human's Git credentials are selected here.
+pub async fn human_git_credential(origin: &str) -> anyhow::Result<Option<GitCredential>> {
+    branvil::owner_git::credential(origin).await
+}
+
 #[derive(Clone, Debug)]
 pub struct IntegrationConfig {
     pub local_root: PathBuf,

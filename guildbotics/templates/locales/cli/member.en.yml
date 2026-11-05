@@ -1,7 +1,12 @@
 en:
   client:
+    invalid_response: "The server returned an invalid member command response."
     backend_required: "Start the GuildBotics server (`guildbotics server start`, or its OS service) before using member commands, including --help."
     workspace_required: "Select a workspace with --workspace or `guildbotics workspace use <path>` first."
+    current_repository: "Current workspace mode requires running inside the target git repository."
+    current_path: "The repository path must match the current workspace repository: %{path}"
+    empty_commit: "Commit message must not be empty."
+    credentials_in_remote: "Remove credentials from the Git remote URL before publishing."
   content:
     empty: "The command content must not be empty."
     exclusive: "Use exactly one of --content-stdin and --content-file."

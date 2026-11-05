@@ -8,6 +8,7 @@
 //! trace. Screen requests additionally compare the selected shared file's
 //! identity and revision with this member's runtime target before starting.
 
+pub(crate) use crate::i18n::say;
 use std::path::{Path, PathBuf};
 
 use axum::Json;
@@ -19,7 +20,7 @@ use gb_config::team::{Member, Team};
 use gb_environment::{Failure, Sentence};
 use gb_observability::{Diagnostics, Trace};
 use gb_wire::{CliAgentExecutionResult, CommandFailure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::api::{ApiError, Body, Shared};
@@ -29,20 +30,30 @@ use crate::i18n;
 /// directory, under the person's home.
 const EXCHANGE_DIRECTORY: &str = "Documents/GuildBotics";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunRequest {
-    command: String,
+    pub(crate) command: String,
     #[serde(default)]
-    args: Vec<String>,
-    person: Option<String>,
+    pub(crate) args: Vec<String>,
+    pub(crate) person: Option<String>,
     #[serde(default)]
-    message: String,
-    cwd: Option<PathBuf>,
+    pub(crate) message: String,
+    pub(crate) cwd: Option<PathBuf>,
     /// The workspace the caller means, which must still be the selected one.
-    expected_workspace: Option<PathBuf>,
-    expected_command_file_id: Option<String>,
-    expected_command_file_revision: Option<String>,
+    pub(crate) expected_workspace: Option<PathBuf>,
+    pub(crate) expected_command_file_id: Option<String>,
+    pub(crate) expected_command_file_revision: Option<String>,
+}
+
+struct RunState<'a> {
+    service: &'a crate::service_runtime::Controller,
+    member: Option<std::sync::Arc<crate::member::Backend>>,
+    inputs: Option<&'a crate::input_files::InputFileStore>,
+    data: &'a Path,
+    workspace: Option<&'a PathBuf>,
+    work: &'a tokio_util::task::TaskTracker,
+    cancelled: &'a tokio_util::sync::CancellationToken,
 }
 
 /// How a run that started did not succeed, as its trace records it.
@@ -68,13 +79,74 @@ pub(crate) async fn run(
     headers: HeaderMap,
     Body(request): Body<RunRequest>,
 ) -> Response {
-    start(&api, &headers, request)
+    let state = RunState {
+        service: &api.service,
+        member: api.member.clone(),
+        inputs: Some(&api.inputs),
+        data: &api.data,
+        workspace: api.workspace.as_ref(),
+        work: &api.work,
+        cancelled: &api.cancelled,
+    };
+    start(&state, &headers, request)
         .await
         .unwrap_or_else(|refused| refused)
 }
 
+/// Use the same execution boundary when no server has accepted this run.
+pub(crate) async fn run_locally(
+    request: RunRequest,
+    workspace: &PathBuf,
+    data: &Path,
+    language: &'static str,
+) -> anyhow::Result<String> {
+    let work = tokio_util::task::TaskTracker::new();
+    let cancelled = tokio_util::sync::CancellationToken::new();
+    let service = crate::server::service_controller(Some(workspace), data);
+    let member = crate::server::member_backend(workspace, data, &work, None);
+    let state = RunState {
+        service: &service,
+        member,
+        inputs: None,
+        data,
+        workspace: Some(workspace),
+        work: &work,
+        cancelled: &cancelled,
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-guildbotics-language",
+        axum::http::HeaderValue::from_static(language),
+    );
+    let signal = tokio::spawn({
+        let cancelled = cancelled.clone();
+        async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                cancelled.cancel();
+            }
+        }
+    });
+    let response = start(&state, &headers, request)
+        .await
+        .unwrap_or_else(|error| error);
+    work.close();
+    work.wait().await;
+    signal.abort();
+    crate::tool_login::drain_private().await;
+    gb_environment::worktree::drain_writebacks().await;
+    gb_environment::runtime::drain_vms().await;
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let answer = serde_json::from_slice(&bytes).unwrap_or_default();
+    anyhow::ensure!(
+        status.is_success(),
+        crate::client::response_error(status, &answer)
+    );
+    crate::client::command_output(answer, language)
+}
+
 async fn start(
-    api: &crate::api::Api,
+    api: &RunState<'_>,
     headers: &HeaderMap,
     request: RunRequest,
 ) -> Result<Response, Response> {
@@ -90,7 +162,7 @@ async fn start(
     // The run is accepted for the workspace it was asked for before anything
     // is derived from it.
     if let Some(expected) = &request.expected_workspace {
-        let same = api.workspace.as_ref().is_some_and(|workspace| {
+        let same = api.workspace.is_some_and(|workspace| {
             std::fs::canonicalize(expected)
                 .ok()
                 .zip(std::fs::canonicalize(workspace).ok())
@@ -100,7 +172,7 @@ async fn start(
             return Err(error(StatusCode::CONFLICT, "command_workspace_changed").into_response());
         }
     }
-    let Some(workspace) = &api.workspace else {
+    let Some(workspace) = api.workspace else {
         return Err(error(StatusCode::BAD_REQUEST, "config_not_found")
             .context(json!({"path": ""}))
             .into_response());
@@ -132,7 +204,7 @@ async fn start(
     let host = match api.service.host() {
         Some(host) => host,
         None => std::sync::Arc::new(gb_environment::Host {
-            data: api.data.clone(),
+            data: api.data.to_path_buf(),
             home,
             package: gb_base::home::python_package(),
             identity_root: gb_base::home::identity_root()
@@ -250,14 +322,17 @@ async fn start(
     // goes with it.
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
-    let inputs = api.inputs.mount_if_available().await;
+    let inputs = match api.inputs {
+        Some(inputs) => inputs.mount_if_available().await,
+        None => None,
+    };
     let member = api.member.clone();
     let mut admission = crate::execution::Admission {
         generation: None,
         command: name.clone(), workspace: workspace.clone(),
         writes: std::sync::Arc::new(gb_base::shared_writes::SharedWrites::new(host.identity_root.clone(), Some(workspace.clone()))),
         record: serde_json::from_value(json!({"run_id":trace_id,"work_kind":"manual","work_identity":{"run_id":trace_id},"execution_mode":"user_initiated","member_id":person_id,
-            "device_id":gb_workspace::identity::ensure_device_identity(&api.data).map_err(|e|internal(&e.to_string(),"RuntimeError"))?.device_id,
+            "device_id":gb_workspace::identity::ensure_device_identity(api.data).map_err(|e|internal(&e.to_string(),"RuntimeError"))?.device_id,
             "source":"manual","started_at":chrono::Utc::now().to_rfc3339()})).expect("manual record fields"),
         redactor: crate::host_window::command_redactor(&host, &workspace, &gb_config::secrets::SystemKeychain).map_err(|e|internal(&e,"RuntimeError"))?,
         exclusive: !command.access.read_only, record_start: true, cleanup: api.work.clone(),
@@ -375,7 +450,7 @@ async fn execute<T>(workspace: &Path, run: impl std::future::Future<Output = T>)
 }
 
 async fn manual_ticket(
-    api: &crate::api::Api,
+    api: &RunState<'_>,
     headers: &HeaderMap,
     person: &str,
 ) -> Result<Response, Response> {
@@ -504,17 +579,6 @@ fn person<'a>(
 
 /// A run its environment did not let end: refused or failed as a command,
 /// or failed otherwise, which the caller is not told the words of.
-pub(crate) fn say(sentence: Sentence, language: &str) -> String {
-    match sentence {
-        Sentence::Text(text) => text,
-        Sentence::AtPath(path, reason) => format!("{}: {}", path.display(), say(*reason, language)),
-        Sentence::Key(key, params) => {
-            let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            i18n::t(language, key, &params)
-        }
-    }
-}
-
 fn failed(failure: Failure, language: &str) -> Ended {
     match failure {
         Failure::Command(sentence) => Ended {
@@ -650,6 +714,7 @@ mod tests {
             workspace: Some(workspace),
             work: Default::default(),
             cancelled: Default::default(),
+            shutdown: Default::default(),
         });
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let response = crate::api::router(api.clone())

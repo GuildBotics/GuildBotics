@@ -52,6 +52,81 @@ pub fn grammar() -> &'static BTreeMap<String, Grammar> {
         .expect("member grammar")
     })
 }
+/// Render member help from the grammar the backend uses to parse it.
+pub fn usage(command: &str) -> String {
+    use std::fmt::Write;
+
+    let path = if command.is_empty() {
+        "guildbotics member".to_owned()
+    } else {
+        format!("guildbotics member {command}")
+    };
+    let mut usage = format!("Usage: {path} [OPTIONS]\n");
+    if let Some(grammar) = grammar().get(command) {
+        for option in &grammar.options {
+            let argument = if option.flag {
+                String::new()
+            } else if let Some(choices) = &option.choices {
+                format!(" <{}>", choices.join("|"))
+            } else {
+                " <VALUE>".into()
+            };
+            let default = option.default.as_ref().map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string())
+            });
+            let bounds = match (option.min, option.max) {
+                (Some(min), Some(max)) => format!("{min}<=x<={max}"),
+                (Some(min), None) => format!("x>={min}"),
+                (None, Some(max)) => format!("x<={max}"),
+                _ => String::new(),
+            };
+            write!(usage, "  {}{argument}", option.spelling).unwrap();
+            if let Some(default) = default {
+                write!(usage, " [default: {default}").unwrap();
+                if !bounds.is_empty() {
+                    write!(usage, "; {bounds}").unwrap();
+                }
+                usage.push(']');
+            } else if !bounds.is_empty() {
+                write!(usage, " [{bounds}]").unwrap();
+            }
+            if option.required {
+                usage.push_str(" [required]");
+            }
+            if option.multiple {
+                usage.push_str(" (repeatable)");
+            }
+            usage.push('\n');
+        }
+    } else {
+        let prefix = if command.is_empty() {
+            String::new()
+        } else {
+            format!("{command} ")
+        };
+        let children = grammar()
+            .keys()
+            .filter_map(|name| {
+                name.strip_prefix(&prefix)
+                    .and_then(|tail| tail.split_whitespace().next())
+            })
+            .collect::<BTreeSet<_>>();
+        for child in children {
+            writeln!(usage, "  {child}").unwrap();
+        }
+        if command.is_empty() {
+            usage.push_str(
+                "  --workspace <PATH>  Require the server to have this workspace selected\n",
+            );
+        }
+    }
+    usage.push_str("  --help  Print help\n");
+    usage
+}
+
 pub struct Parsed {
     pub command: String,
     pub options: Map<String, Value>,

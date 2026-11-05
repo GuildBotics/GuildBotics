@@ -59,6 +59,11 @@ struct Cli {
     command: Command,
 }
 
+/// The CLI definition, also used by GuildBotics' generated reference.
+pub fn cli_command() -> clap::Command {
+    Cli::command()
+}
+
 /// Names the data directory when no `--data-dir` does.
 const DATA_DIR_ENV: &str = "BRANVIL_DATA_DIR";
 

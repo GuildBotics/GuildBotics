@@ -1,7 +1,12 @@
 ja:
   client:
+    invalid_response: "サーバーから返されたメンバーコマンドの応答が無効です。"
     backend_required: "member コマンド（--help を含む）の前に、GuildBotics のサーバー（`guildbotics server start` または OS のサービス）を起動してください。"
     workspace_required: "先に --workspace または `guildbotics workspace use <パス>` でワークスペースを選んでください。"
+    current_repository: "current モードは、対象の Git リポジトリ内から実行してください。"
+    current_path: "リポジトリのパスは現在の作業リポジトリと一致させてください。%{path}"
+    empty_commit: "コミットメッセージを入力してください。"
+    credentials_in_remote: "公開する前に Git リモートの URL から資格情報を取り除いてください。"
   content:
     empty: "本文を空にはできません。"
     exclusive: "--content-stdin と --content-file のどちらか一方だけを指定してください。"

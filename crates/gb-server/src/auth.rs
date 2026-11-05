@@ -67,6 +67,30 @@ pub struct EntryLink {
 struct State {
     records: Records,
     entries: Codes<()>,
+    consents: Codes<Consent>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Authorization {
+    client: String,
+    redirect_uri: String,
+    state: String,
+    code_challenge: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Exchange {
+    code: String,
+    redirect_uri: String,
+    code_verifier: String,
+}
+
+struct Consent {
+    client: String,
+    redirect_uri: String,
+    challenge: String,
 }
 
 /// The server's credentials.
@@ -95,6 +119,7 @@ impl ServerAuth {
             state: Mutex::new(State {
                 records,
                 entries: Codes::default(),
+                consents: Codes::default(),
             }),
         };
         auth.keep_owner_token()?;
@@ -112,10 +137,19 @@ impl ServerAuth {
     /// Lets the owner through: a Bearer token, or the session cookie with that
     /// session's CSRF value on every write.
     pub fn authenticate(&self, method: &Method, headers: &HeaderMap) -> Result<(), Denied> {
+        self.authenticate_for(method, headers, false)
+    }
+
+    pub(crate) fn authenticate_for(
+        &self,
+        method: &Method,
+        headers: &HeaderMap,
+        allow_apps: bool,
+    ) -> Result<(), Denied> {
         if let Some(value) = headers.get(AUTHORIZATION) {
             let text = value.to_str().map_err(|_| Denied::Unauthorized)?;
             let (scheme, token) = text.split_once(' ').unwrap_or((text, ""));
-            if !scheme.eq_ignore_ascii_case("bearer") || !self.known_token(token) {
+            if !scheme.eq_ignore_ascii_case("bearer") || !self.known_token(token, allow_apps) {
                 return Err(Denied::Unauthorized);
             }
             return Ok(());
@@ -194,16 +228,74 @@ impl ServerAuth {
         (session.expires_at > now()).then(|| session.csrf.clone())
     }
 
-    fn known_token(&self, text: &str) -> bool {
+    fn known_token(&self, text: &str, allow_apps: bool) -> bool {
         let Some((id, secret)) = parse_token(text) else {
             return false;
         };
         let state = self.state.lock().unwrap();
-        state
-            .records
-            .tokens
-            .get(id)
-            .is_some_and(|token| loopback_auth::digest_matches(secret, &token.digest))
+        state.records.tokens.get(id).is_some_and(|token| {
+            (token.label == OWNER_FILE || allow_apps && token.label.starts_with("app:"))
+                && loopback_auth::digest_matches(secret, &token.digest)
+        })
+    }
+
+    pub(crate) fn authorize(&self, request: Authorization) -> Option<String> {
+        let mut redirect = loopback_auth::loopback_redirect(&request.redirect_uri)?;
+        if !loopback_auth::valid_client(&request.client)
+            || !loopback_auth::valid_challenge(&request.code_challenge)
+            || !(1..=512).contains(&request.state.len())
+            || redirect
+                .query_pairs()
+                .any(|(key, _)| matches!(key.as_ref(), "code" | "state"))
+        {
+            return None;
+        }
+        let code = self.state.lock().unwrap().consents.issue(
+            Consent {
+                client: request.client,
+                redirect_uri: request.redirect_uri,
+                challenge: request.code_challenge,
+            },
+            Instant::now(),
+        );
+        redirect
+            .query_pairs_mut()
+            .append_pair("code", &code)
+            .append_pair("state", &request.state);
+        Some(redirect.into())
+    }
+
+    pub(crate) fn app_token(&self, request: Exchange) -> anyhow::Result<Option<serde_json::Value>> {
+        let mut state = self.state.lock().unwrap();
+        let Some(consent) = state.consents.take(&request.code, Instant::now()) else {
+            return Ok(None);
+        };
+        if consent.redirect_uri != request.redirect_uri
+            || !request
+                .code_verifier
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+            || !loopback_auth::verifier_matches(&request.code_verifier, &consent.challenge)
+        {
+            return Ok(None);
+        }
+        let label = format!("app:{}", consent.client);
+        let (id, digest, token) = new_token();
+        let created_at = iso(now());
+        let mut records = state.records.clone();
+        records.tokens.retain(|_, entry| entry.label != label);
+        records.tokens.insert(
+            id.clone(),
+            Token {
+                label: label.clone(),
+                digest,
+                created_at: created_at.clone(),
+            },
+        );
+        self.save(&mut state, records)?;
+        Ok(Some(
+            serde_json::json!({"id": id, "label": label, "token": token, "created_at": created_at}),
+        ))
     }
 
     /// Keeps a token in the owner file that authenticates. When the file is
@@ -211,7 +303,7 @@ impl ServerAuth {
     /// token is revoked and every session ends with it.
     fn keep_owner_token(&self) -> anyhow::Result<()> {
         let path = self.owner_token_path();
-        if std::fs::read_to_string(&path).is_ok_and(|text| self.known_token(&text)) {
+        if std::fs::read_to_string(&path).is_ok_and(|text| self.known_token(&text, false)) {
             return Ok(());
         }
         let mut state = self.state.lock().unwrap();
@@ -473,7 +565,11 @@ mod tests {
             "authorization",
             &format!("Bearer gbt_00112233445566ff_{secret}"),
         )]);
-        assert_eq!(auth.authenticate(&Method::GET, &app), Ok(()));
+        assert_eq!(
+            auth.authenticate(&Method::GET, &app),
+            Err(Denied::Unauthorized)
+        );
+        assert_eq!(auth.authenticate_for(&Method::POST, &app, true), Ok(()));
         // A new owner token ends the sessions, and keeps the app's token.
         let session = headers(&[("cookie", &format!("{}=cookie", auth.cookie))]);
         assert_eq!(auth.session_csrf(&session), None);

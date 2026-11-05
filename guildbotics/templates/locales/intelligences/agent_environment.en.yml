@@ -51,9 +51,12 @@ en:
     not_a_mapping: "%{where}: the declaration must be a mapping"
     no_device_resolver: "%{where}: dns.nameservers is '%{host}' but this device has no IPv4 resolver; name the nameservers explicitly"
   image:
+    empty: "This device holds no image."
+    declared: "declared"
     missing: "The base image %{reference} is not loaded on this device (%{architecture}). Load it with `%{command}`."
     mismatch: "Turns on this device run on the base image %{reference} at %{held}, not the %{digest} the declaration names for %{architecture}. Load it with `%{command}`."
     undeclared: "Turns on this device run on the base image %{reference} at %{held}; the declaration names it for %{declared} but not for this device's architecture (%{architecture}). Declare the image for %{architecture} to bring the devices in line."
+    unreadable_archive: "Could not read image archive %{path}: %{reason}"
     wrong_architecture: "The archive %{path} holds an image built for %{architecture}, which this device (%{device}) cannot run."
     no_ci_runner: "The workspace's code host has no CI runner GuildBotics loads images into; there is nothing to load."
     loading_ci: "Waiting for the CI runner to load %{archive}..."

@@ -17,7 +17,7 @@ pub const WORKSPACE_ROOT_ENV: &str = "GUILDBOTICS_WORKSPACE_ROOT";
 /// Names the workspace by its `<workspace>/.guildbotics/config`.
 pub const CONFIG_DIR_ENV: &str = "GUILDBOTICS_CONFIG_DIR";
 
-const ACTIVE_FILE: &str = "active-workspace.json";
+pub const ACTIVE_FILE: &str = "active-workspace.json";
 const REGISTRY_FILE: &str = "workspaces.json";
 const REGISTRY_LOCK: &str = "workspaces.lock";
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,20 +28,27 @@ pub fn restore(
     data: &Path,
     variable: impl Fn(&str) -> Option<OsString>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    let workspace = match explicit(variable(WORKSPACE_ROOT_ENV), variable(CONFIG_DIR_ENV))? {
-        Some(explicit) => explicit,
-        None => match read_active(data)? {
-            Some(active) => active,
-            None => return Ok(None),
-        },
+    let Some(workspace) = resolve(data, variable)? else {
+        return Ok(None);
     };
     register(data, &workspace)?;
     Ok(Some(workspace))
 }
 
+/// Read the explicit or persisted selection without modifying the registry.
+pub fn resolve(
+    data: &Path,
+    variable: impl Fn(&str) -> Option<OsString>,
+) -> anyhow::Result<Option<PathBuf>> {
+    match specified(variable(WORKSPACE_ROOT_ENV), variable(CONFIG_DIR_ENV))? {
+        Some(explicit) => Ok(Some(explicit)),
+        None => read_active(data),
+    }
+}
+
 /// What the variables name, the root over the config directory, which names
 /// a workspace only when it is one's `.guildbotics/config`.
-fn explicit(
+pub fn specified(
     root: Option<OsString>,
     config_dir: Option<OsString>,
 ) -> anyhow::Result<Option<PathBuf>> {
@@ -75,7 +82,7 @@ fn explicit(
 }
 
 /// The workspace last selected on this machine, when it still is a directory.
-fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
+pub fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
     let Ok(bytes) = std::fs::read(data.join(ACTIVE_FILE)) else {
         return Ok(None);
     };
@@ -90,6 +97,20 @@ fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
     }
     let workspace = host_path::directory(Path::new(named), true)?;
     Ok(workspace.is_dir().then_some(workspace))
+}
+
+/// Save the selected workspace after registering it for filesystem protection.
+pub fn write_active(data: &Path, workspace: &Path) -> anyhow::Result<()> {
+    register(data, workspace)?;
+    let record = serde_json::json!({
+        "workspace": workspace,
+        "config_dir": workspace.join(".guildbotics/config"),
+    });
+    files::atomic_write(
+        &data.join(ACTIVE_FILE),
+        files::dump_shared_json(&record).as_bytes(),
+    )?;
+    Ok(())
 }
 
 /// The workspaces this machine has opened.

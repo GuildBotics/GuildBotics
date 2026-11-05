@@ -6,3 +6,5 @@ ja:
   consent_timeout: "時間内に同意画面から応答がありませんでした。もう一度 `guildbotics connect` を実行してください。"
   denied: "同意画面で、このマシンは許可されませんでした。"
   connected: "このマシンの CLI を GuildBotics サーバーにつなぎました。"
+  invalid_token: "サーバーから返されたアプリのトークンが無効です。"
+  invalid_link: "GuildBotics サーバーから返された入口リンクが無効です。"

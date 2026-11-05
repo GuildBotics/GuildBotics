@@ -77,38 +77,19 @@ A member can carry a session over and resume where it left off. For the isolated
 
 ### Installation
 
-GuildBotics has no installer: the server runs from a checkout of this repository on the Hub. Clone it, install its dependencies, and build the screens:
+Build the Rust CLI and the screens from the checkout on the Hub.
 
 ```bash
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-uv sync --locked --extra test --extra dev
 npm ci && npm run build --workspace desktop
+cargo build --locked -p guildbotics
+target/debug/guildbotics install
 ```
 
-On macOS, then register the server as a service of your user (a LaunchAgent):
+`install` places the built executable at `~/.guildbotics/bin/guildbotics` and copies the GuildBotics skill to the user skill directories of supported tools it finds. On Unix it also adds `~/.local/bin/guildbotics` if the path is available. It preserves user-owned commands and edited skills. Run `install` again after rebuilding to update the managed binary.
 
-```bash
-scripts/hub-server.sh install
-```
-
-Before you run it:
-
-- If the former GuildBotics Desktop app is installed, quit it and uninstall it. The `~/.guildbotics/programs/` directory it left can be deleted by hand
-- Stop any other GuildBotics server (`guildbotics server stop`): `install` refuses while one runs
-- If you already have a workspace, select it with `.venv/bin/guildbotics workspace use <path>`. The server opens the selected workspace when it starts; without one, you create or choose it on the screens after `guildbotics open`
-- If this machine's keychain already holds GuildBotics secrets (from the Desktop app, for example), run `.venv/bin/guildbotics server start` once in a terminal, answer each keychain prompt with "Always Allow", and stop it with Ctrl-C. The service has no window to answer those prompts
-
-`install` places the following and starts the server:
-
-- `~/.guildbotics/bin/guildbotics`: the managed GuildBotics CLI, a small script that runs the checkout's `.venv/bin/guildbotics`. AI CLI tools, the skill, and the git credential helper of human members use this path
-- `~/.local/bin/guildbotics`: forwards to the CLI above, so `guildbotics` works once `~/.local/bin` is on your PATH (a `guildbotics` there that GuildBotics did not write is left alone)
-- The GuildBotics skill under the user skill directory of each Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI found on the machine. Skills you edited are never overwritten
-- The LaunchAgent `local.guildbotics`, which runs `guildbotics server start` of the checkout now, at every login, and again if it stops unexpectedly (→ [Run the Server as a Service](#run-the-server-as-a-service))
-
-On Linux, run the server in a terminal with `.venv/bin/guildbotics server start`, and place the CLI and the skill with `.venv/bin/python scripts/install_cli_assets.py`.
-
-Environment operations use the native Rust `guildbotics` executable. From a source checkout, run `cargo run -p guildbotics -- environment ...`; the managed `~/.guildbotics/bin/guildbotics` path must point to that executable to use the same commands.
+If you already have a workspace, select it with `~/.guildbotics/bin/guildbotics workspace use <path>`. Start the server in a terminal with `~/.guildbotics/bin/guildbotics server start`. Run `guildbotics open` from another terminal to open the GuildBotics screens, or `guildbotics open --branvil` to open Branvil.
 
 The isolated agent environment's runtime is embedded in that executable and placed under `~/.guildbotics/data/msb` on first use, without a runtime download. Windows builds supply the pinned `msb.exe` and `libkrunfw.dll` under `MSB_HOME` during the native build. Windows may ask for firewall permission for that fixed runtime binary.
 
@@ -166,7 +147,7 @@ You are set if the translated text appears under **Output**. The default LLM you
 
 ## Work Together with a Member
 
-`scripts/hub-server.sh install` (and `update`) installs the **guildbotics skill** into the user skill directory of each detected AI CLI tool, such as Claude Code or Codex (→ [Installation](#installation)). That skill is what lets you work together with a member in the repository you currently have open.
+`guildbotics install` installs the **guildbotics skill** into the user skill directory of each detected AI CLI tool, such as Claude Code or Codex (→ [Installation](#installation)). That skill is what lets you work together with a member in the repository you currently have open.
 
 The skill lives in the user skill directory each tool reads (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and so on), so the same skill is used whether you start the tool from its CLI or from its app. The install prints where it put the skill for each tool, and which copies it kept because you had edited them.
 
@@ -183,7 +164,7 @@ Start your AI CLI tool in the repository you want to work in and ask for work, *
 Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again (`scripts/hub-server.sh restart` for the service). File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
+Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 
@@ -608,31 +589,11 @@ desktop session.
    Until that unlock, workflows that need a secret fail at run time. GuildBotics never
    falls back to a plaintext file.
 
-### Run the Server as a Service
+### Run the Server in a Terminal
 
-On a macOS Hub, `scripts/hub-server.sh install` (→ [Installation](#installation)) runs `guildbotics server start` of the checkout as the LaunchAgent `local.guildbotics`, in your login session: the server's secrets are in your keychain. The server starts alone; to have the patrol and chat events resume at every login, turn on **Start the services when the server starts** on the **Service** screen. Run the script from the checkout:
+Run `guildbotics server start` on the Hub. Leave that terminal open to see startup and service logs. Use `guildbotics server start --services` to start scheduled commands, ticket patrol, and chat reception at the same time.
 
-```bash
-scripts/hub-server.sh status      # the service and its last exit
-scripts/hub-server.sh restart     # stop the server after its in-flight work, as `guildbotics server stop` does, then start it again
-scripts/hub-server.sh update      # after updating the checkout: see below
-scripts/hub-server.sh uninstall   # stop the server and remove the LaunchAgent
-```
-
-- **Logs**: the server's output goes to `~/Library/Logs/guildbotics.log`, appended and never rotated. When the server does not start or stopped, look there first
-- **When it runs**: it starts at login, and after the Hub restarts it does not run until you log in. It starts again when it ends unexpectedly: a crash, or a forced termination. `guildbotics server stop` keeps it stopped until the next login or `scripts/hub-server.sh restart`, with `--force` as well, unless the server had to be force-terminated. When the server cannot start (another server already running, for example), the service tries again every 15 seconds and the log says why. Without a selected workspace the server still starts, and its screens ask for one
-- **When macOS stops it** (logout or restart): the server receives SIGTERM and cancels its in-flight work at once, and those runs end as they do when `guildbotics server stop --force` cancels them. `restart`, `update`, and `uninstall` instead stop it as `guildbotics server stop` does, after its in-flight work, waiting however long that takes; `guildbotics server stop --force` from another terminal cancels the work instead
-- **Environment**: the service keeps the `PATH` of the shell that ran `install`, so the server finds `git`, `uv`, and the other commands it uses, and `GUILDBOTICS_SERVER_PORT` when it is set. Run `install` again after changing them
-
-**Updating**: update the checkout (for example with `git pull`), then run:
-
-```bash
-scripts/hub-server.sh update
-```
-
-It installs the dependencies again (`uv sync`, and `npm ci` at the repository root), builds the screens (`npm run build --workspace desktop`), installs the CLI and the skill again, and restarts the server after its in-flight work finishes. Stop any `guildbotics run` you started yourself first.
-
-When the update changed the Python interpreter, the keychain asks again, once for each GuildBotics item, before the new interpreter may read it. The service has no window to answer that, so `update` stops the server and asks you to run `guildbotics server start` once in a terminal, answer each prompt with "Always Allow", stop it with Ctrl-C, and then run `scripts/hub-server.sh restart`.
+To update from a newly built checkout, stop the server with `guildbotics server stop`. Build the screens and the Rust executable as in [Installation](#installation), run the new executable's `install` command, and start the server again.
 
 ### Use It from a Browser
 
@@ -672,7 +633,7 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
    sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
    ```
 
-   `~/.guildbotics/bin/guildbotics` is the managed shim that the install places, so it keeps pointing at the checkout's CLI.
+   `~/.guildbotics/bin/guildbotics` is the managed binary. Re-run `guildbotics install` from a newly built binary to update it.
 
 4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 8765` (and `--port 7878` as well when you use Branvil). For a single session, `ssh -L 8765:127.0.0.1:8765 <Hub>` also works.
 5. Print an entry link on the Hub and paste it into your browser:
@@ -798,7 +759,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | Symptom | What to check first |
 | --- | --- |
 | `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. If neither exists, install them again (→ [Installation](#installation)) |
-| The server does not start, or has stopped | Read `~/Library/Logs/guildbotics.log` and run `scripts/hub-server.sh status` (→ [Run the Server as a Service](#run-the-server-as-a-service)) |
+| The server does not start, or has stopped | Read the output of `guildbotics server start` (see [Run the Server in a Terminal](#run-the-server-in-a-terminal)) |
 | Not sure which workspace is in use | Check and change it under **Setup → Project**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** |
 | Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |

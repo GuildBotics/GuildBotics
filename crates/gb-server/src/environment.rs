@@ -52,14 +52,6 @@ fn image_projection(
     }).collect::<Vec<_>>(),"problem":""})
 }
 
-pub fn workspace(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    gb_workspace::selection::restore(&gb_base::home::data()?, |key| std::env::var_os(key))?
-        .ok_or_else(|| anyhow::anyhow!("No workspace is selected"))
-}
-
 /// Compare and update the shared declaration within the configuration writer.
 pub fn declare(
     workspace: &std::path::Path,
@@ -543,30 +535,41 @@ pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Respon
 }
 
 pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
+    Json(
+        match list_images(&api.data, api.workspace.as_deref()).await {
+            Ok(view) => view,
+            Err(error) => json!({
+                "architecture":gb_environment::image::device_architecture(),
+                "images":[],
+                "problem":error.to_string(),
+            }),
+        },
+    )
+}
+
+pub async fn list_images(
+    data: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> anyhow::Result<Value> {
     let templates = gb_base::home::python_package().join("templates");
-    let architecture = gb_environment::image::device_architecture();
-    let result = async {
-        let default = gb_environment::recipe::Recipe::load(&templates)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .image;
-        let declared = match &api.workspace {
-            Some(workspace) => gb_config::agent_environment::image(
-                &workspace.join(".guildbotics/config"),
-                &templates,
-            )
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-            None => None,
-        };
-        let images = gb_environment::runtime::images(&api.data.join("msb"), &default)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        Ok::<_, anyhow::Error>(image_projection(images, declared.as_ref(), architecture))
-    }
-    .await;
-    Json(match result {
-        Ok(view) => view,
-        Err(error) => json!({"architecture":architecture,"images":[],"problem":error.to_string()}),
-    })
+    let default = gb_environment::recipe::Recipe::load(&templates)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .image;
+    let declared = match workspace {
+        Some(workspace) => {
+            gb_config::agent_environment::image(&workspace.join(".guildbotics/config"), &templates)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+        }
+        None => None,
+    };
+    let images = gb_environment::runtime::images(&data.join("msb"), &default)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    Ok(image_projection(
+        images,
+        declared.as_ref(),
+        gb_environment::image::device_architecture(),
+    ))
 }
 
 fn build_timeout(language: &str) -> String {
@@ -1003,6 +1006,7 @@ mod tests {
             workspace: Some(root.path().join("workspace")),
             work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
+            shutdown: crate::server::Shutdown::default(),
         });
         let app = crate::api::router(api);
         for (agent, authorized, expected) in [

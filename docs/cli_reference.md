@@ -2,1804 +2,2041 @@
 
 <!-- AUTO-GENERATED FILE. DO NOT EDIT BY HAND. -->
 
-This reference is generated from the Click definitions in `guildbotics/cli/`.
-To regenerate it after changing the CLI, run:
-
-```bash
-uv run --no-sync python scripts/generate-cli-reference.py
-```
-
-For concepts (workspaces, custom commands, scheduling, secrets), see the
-[README](../README.md) and the
-[Custom Command Development Guide](custom_command_guide.en.md).
-
-## Command index
-
-| Command | Summary |
-| --- | --- |
-| [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
-| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
-| [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
-| [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
-| [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
-| [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
-| [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
-| [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
-| [`guildbotics environment image`](#guildbotics-environment-image) | The base images this device holds for the environment. |
-| [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
-| [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
-| [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
-| [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci) | Load an image archive into the CI runner of the workspace's code host. |
-| [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
-| [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
-| [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
-| [`guildbotics environment usage`](#guildbotics-environment-usage) | Probe saved provider credentials for usage. |
-| [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
-| [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
-| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
-| [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
-| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect chat channel or thread messages for interactive decisions. |
-| [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel) | Read recent channel messages. |
-| [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread) | Read a thread before replying or reacting. |
-| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
-| [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
-| [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
-| [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add) | Add a semantic reaction. |
-| [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
-| [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel) | Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name. |
-| [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
-| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
-| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
-| [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
-| [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
-| [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
-| [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
-| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
-| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
-| [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
-| [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
-| [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
-| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata and body without changing recency. |
-| [`guildbotics member memory promote`](#guildbotics-member-memory-promote) | Move a personal memory into team memory without changing the document id. |
-| [`guildbotics member memory recall`](#guildbotics-member-memory-recall) | Search personal and team memory by literal OR queries and return compact hits. |
-| [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
-| [`guildbotics member memory touch`](#guildbotics-member-memory-touch) | Mark a useful memory as actually used by moving it to the digest front. |
-| [`guildbotics member memory update`](#guildbotics-member-memory-update) | Replace selected body or metadata fields and move the document to the digest front. |
-| [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
-| [`guildbotics member pr artifact`](#guildbotics-member-pr-artifact) | CI artifact operations. |
-| [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download) | Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection. |
-| [`guildbotics member pr comment`](#guildbotics-member-pr-comment) | Comment on a PR conversation. |
-| [`guildbotics member pr create`](#guildbotics-member-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member pr reaction`](#guildbotics-member-pr-reaction) | Reactions to pull request comments and reviews. |
-| [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add) | React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it. |
-| [`guildbotics member pr read`](#guildbotics-member-pr-read) | Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or... |
-| [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
-| [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
-| [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
-| [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
-| [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
-| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
-| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
-| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
-| [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
-| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
-| [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
-| [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
-| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
-| [`guildbotics run`](#guildbotics-run) | Run a command on the server of the same workspace when it runs, otherwise locally. |
-| [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
-| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
-| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
-| [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
-| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
-| [`guildbotics server`](#guildbotics-server) | Run and stop the server: the screens, the API, and the services in it. |
-| [`guildbotics server start`](#guildbotics-server-start) | Run the server in the foreground. |
-| [`guildbotics server stop`](#guildbotics-server-stop) | Stop the server and wait for it to exit, after its in-flight work. |
-| [`guildbotics service`](#guildbotics-service) | Start and stop the services of a running server, as the Service screen does: scheduled commands, ticket patrol, and chat events. |
-| [`guildbotics service start`](#guildbotics-service-start) | Start the services with the settings saved on the Service screen. |
-| [`guildbotics service stop`](#guildbotics-service-stop) | Stop the services after their in-flight work; the server keeps running. |
-| [`guildbotics version`](#guildbotics-version) | Print version. |
-| [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
-| [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
-| [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
-| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for the server and external AI CLI tools. |
+Regenerate this reference from the Rust CLI.
+
+```sh
+cargo run --locked -p guildbotics -- generate-cli-reference
+```
+
+For workspace setup and examples, see the [README](../README.md).
+
+## Commands
+
+- [`guildbotics`](#guildbotics)
+- [`guildbotics environment`](#guildbotics-environment)
+- [`guildbotics environment status`](#guildbotics-environment-status)
+- [`guildbotics environment build`](#guildbotics-environment-build)
+- [`guildbotics environment remove`](#guildbotics-environment-remove)
+- [`guildbotics environment login`](#guildbotics-environment-login)
+- [`guildbotics environment usage`](#guildbotics-environment-usage)
+- [`guildbotics environment image`](#guildbotics-environment-image)
+- [`guildbotics environment image load`](#guildbotics-environment-image-load)
+- [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci)
+- [`guildbotics environment image list`](#guildbotics-environment-image-list)
+- [`guildbotics environment image declare`](#guildbotics-environment-image-declare)
+- [`guildbotics server`](#guildbotics-server)
+- [`guildbotics server start`](#guildbotics-server-start)
+- [`guildbotics server stop`](#guildbotics-server-stop)
+- [`guildbotics member`](#guildbotics-member)
+- [`guildbotics member chat complete`](#guildbotics-member-chat-complete)
+- [`guildbotics member chat identity`](#guildbotics-member-chat-identity)
+- [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel)
+- [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread)
+- [`guildbotics member chat noop`](#guildbotics-member-chat-noop)
+- [`guildbotics member chat post`](#guildbotics-member-chat-post)
+- [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add)
+- [`guildbotics member chat reply`](#guildbotics-member-chat-reply)
+- [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel)
+- [`guildbotics member chat updates`](#guildbotics-member-chat-updates)
+- [`guildbotics member checks await`](#guildbotics-member-checks-await)
+- [`guildbotics member context`](#guildbotics-member-context)
+- [`guildbotics member git commit`](#guildbotics-member-git-commit)
+- [`guildbotics member git prepare`](#guildbotics-member-git-prepare)
+- [`guildbotics member git publish`](#guildbotics-member-git-publish)
+- [`guildbotics member git push`](#guildbotics-member-git-push)
+- [`guildbotics member git show`](#guildbotics-member-git-show)
+- [`guildbotics member help`](#guildbotics-member-help)
+- [`guildbotics member memory archive`](#guildbotics-member-memory-archive)
+- [`guildbotics member memory get`](#guildbotics-member-memory-get)
+- [`guildbotics member memory promote`](#guildbotics-member-memory-promote)
+- [`guildbotics member memory recall`](#guildbotics-member-memory-recall)
+- [`guildbotics member memory record`](#guildbotics-member-memory-record)
+- [`guildbotics member memory touch`](#guildbotics-member-memory-touch)
+- [`guildbotics member memory update`](#guildbotics-member-memory-update)
+- [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download)
+- [`guildbotics member pr comment`](#guildbotics-member-pr-comment)
+- [`guildbotics member pr create`](#guildbotics-member-pr-create)
+- [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add)
+- [`guildbotics member pr read`](#guildbotics-member-pr-read)
+- [`guildbotics member pr reply`](#guildbotics-member-pr-reply)
+- [`guildbotics member pr review`](#guildbotics-member-pr-review)
+- [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment)
+- [`guildbotics member pr update`](#guildbotics-member-pr-update)
+- [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read)
+- [`guildbotics member task complete`](#guildbotics-member-task-complete)
+- [`guildbotics member task status`](#guildbotics-member-task-status)
+- [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download)
+- [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment)
+- [`guildbotics member ticket create`](#guildbotics-member-ticket-create)
+- [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add)
+- [`guildbotics member ticket read`](#guildbotics-member-ticket-read)
+- [`guildbotics member ticket update`](#guildbotics-member-ticket-update)
+- [`guildbotics git-credential`](#guildbotics-git-credential)
+- [`guildbotics install`](#guildbotics-install)
+- [`guildbotics workspace`](#guildbotics-workspace)
+- [`guildbotics workspace use`](#guildbotics-workspace-use)
+- [`guildbotics workspace current`](#guildbotics-workspace-current)
+- [`guildbotics workspace status`](#guildbotics-workspace-status)
+- [`guildbotics run`](#guildbotics-run)
+- [`guildbotics diagnostics`](#guildbotics-diagnostics)
+- [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces)
+- [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace)
+- [`guildbotics diagnostics system`](#guildbotics-diagnostics-system)
+- [`guildbotics version`](#guildbotics-version)
+- [`guildbotics secrets`](#guildbotics-secrets)
+- [`guildbotics secrets status`](#guildbotics-secrets-status)
+- [`guildbotics secrets list`](#guildbotics-secrets-list)
+- [`guildbotics secrets set`](#guildbotics-secrets-set)
+- [`guildbotics secrets delete`](#guildbotics-secrets-delete)
+- [`guildbotics secrets export`](#guildbotics-secrets-export)
+- [`guildbotics secrets import`](#guildbotics-secrets-import)
+- [`guildbotics service`](#guildbotics-service)
+- [`guildbotics service start`](#guildbotics-service-start)
+- [`guildbotics service stop`](#guildbotics-service-stop)
+- [`guildbotics connect`](#guildbotics-connect)
+- [`guildbotics open`](#guildbotics-open)
+- [`guildbotics branvil`](#guildbotics-branvil)
+- [`guildbotics branvil init`](#guildbotics-branvil-init)
+- [`guildbotics branvil serve`](#guildbotics-branvil-serve)
+- [`guildbotics branvil open`](#guildbotics-branvil-open)
+- [`guildbotics branvil member`](#guildbotics-branvil-member)
+- [`guildbotics branvil member list`](#guildbotics-branvil-member-list)
+- [`guildbotics branvil member create`](#guildbotics-branvil-member-create)
+- [`guildbotics branvil member token`](#guildbotics-branvil-member-token)
+- [`guildbotics branvil member account`](#guildbotics-branvil-member-account)
+- [`guildbotics branvil repo`](#guildbotics-branvil-repo)
+- [`guildbotics branvil repo create`](#guildbotics-branvil-repo-create)
+- [`guildbotics branvil repo upstream`](#guildbotics-branvil-repo-upstream)
+- [`guildbotics branvil workspace`](#guildbotics-branvil-workspace)
+- [`guildbotics branvil workspace create`](#guildbotics-branvil-workspace-create)
+- [`guildbotics branvil runner`](#guildbotics-branvil-runner)
+- [`guildbotics branvil runner register`](#guildbotics-branvil-runner-register)
+- [`guildbotics branvil runner pull`](#guildbotics-branvil-runner-pull)
+- [`guildbotics branvil runner doctor`](#guildbotics-branvil-runner-doctor)
+- [`guildbotics branvil runner install-msb`](#guildbotics-branvil-runner-install-msb)
+- [`guildbotics branvil admin`](#guildbotics-branvil-admin)
+- [`guildbotics branvil admin notify`](#guildbotics-branvil-admin-notify)
+- [`guildbotics branvil admin check`](#guildbotics-branvil-admin-check)
+- [`guildbotics branvil admin reindex`](#guildbotics-branvil-admin-reindex)
+- [`guildbotics branvil admin upgrade`](#guildbotics-branvil-admin-upgrade)
+- [`guildbotics branvil backup`](#guildbotics-branvil-backup)
+- [`guildbotics branvil restore`](#guildbotics-branvil-restore)
 
-## `guildbotics`
+## guildbotics
 
-GuildBotics CLI entrypoint.
-
 ```text
-guildbotics [OPTIONS] COMMAND [ARGS]...
-```
+GuildBotics
 
-| Option | Description |
-| --- | --- |
-| `--version` | Show the version and exit. |
-| `--help` | Show this message and exit. |
+Usage: guildbotics <COMMAND>
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
-| [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
-| [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
-| [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
-| [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member through the running server. |
-| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
-| [`guildbotics run`](#guildbotics-run) | Run a command on the server of the same workspace when it runs, otherwise locally. |
-| [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics server`](#guildbotics-server) | Run and stop the server: the screens, the API, and the services in it. |
-| [`guildbotics service`](#guildbotics-service) | Start and stop the services of a running server, as the Service screen does: scheduled commands, ticket patrol, and chat events. |
-| [`guildbotics version`](#guildbotics-version) | Print version. |
-| [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
+Commands:
+  environment     Manage this device's isolated environment
+  server          Run the server
+  member          Operate as a configured member through the running server
+  git-credential  Supply Git with this machine's credential for the remote
+  install         Install this executable and the GuildBotics skill for this user
+  workspace       Select the active workspace for the server and AI CLI tools
+  run             Run a command in the selected workspace's isolated environment
+  diagnostics     Read a workspace's recorded diagnostics
+  version         Print the binary's version
+  secrets         Manage workspace or shared identity secrets
+  service         Start or stop scheduled commands, ticket patrol, and chat events
+  connect         Connect this machine's CLI through the server's consent screen
+  open            Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
+  branvil         Branvil's commands (code hosting: `guildbotics branvil --help`)
+  help            Print this message or the help of the given subcommand(s)
 
-## `guildbotics connect`
+Options:
+  -h, --help
+          Print help
 
-Connect this machine's CLI to the GuildBotics server.
+  -V, --version
+          Print version
+```
 
-For a machine that reaches the server through SSH forwarding: the owner
-allows this machine on the server's consent screen, and the token it is
-given is kept in this machine's OS keychain.
+## guildbotics environment
 
 ```text
-guildbotics connect [OPTIONS]
-```
+Manage this device's isolated environment
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics environment [OPTIONS] <COMMAND>
 
-## `guildbotics diagnostics`
+Commands:
+  status  Read the device's environment and refusal or warning
+  build   Build the declared environment on this device
+  remove  Remove device snapshots while preserving provider logins
+  login   Log in to a provider in its private environment
+  usage   Probe provider usage in its private environment
+  image   Manage local and CI base images
+  help    Print this message or the help of the given subcommand(s)
 
-Read recorded diagnostics for a workspace (read-only).
+Options:
+      --workspace <WORKSPACE>
 
-```text
-guildbotics diagnostics [OPTIONS] COMMAND [ARGS]...
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
-| `--help` | Show this message and exit. |
+## guildbotics environment status
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
-| [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
-| [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
+```text
+Read the device's environment and refusal or warning
 
-## `guildbotics diagnostics system`
+Usage: guildbotics environment status [OPTIONS]
 
-Show service-wide records that belong to no single execution.
+Options:
+      --format <FORMAT>
+          Select the output format
 
-```text
-guildbotics diagnostics system [OPTIONS]
+          [default: markdown]
+          [possible values: markdown, json]
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+## guildbotics environment build
 
-## `guildbotics diagnostics trace`
+```text
+Build the declared environment on this device
 
-Show one execution's summary and records.
+Usage: guildbotics environment build [OPTIONS]
 
-```text
-guildbotics diagnostics trace [OPTIONS] TRACE_ID
-```
+Options:
+      --force
 
-| Option | Description |
-| --- | --- |
-| `--kind [event\|log\|io\|memory]` | Only records of these kinds. Repeat to combine. |
-| `--level TEXT` | Only log records at this level, such as 'error'. |
-| `--limit INTEGER RANGE` | Maximum records, keeping the newest. [default: 200; 1\<=x\<=5000] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
 
-## `guildbotics diagnostics traces`
+  -h, --help
+          Print help
+```
 
-List recorded executions, newest first.
+## guildbotics environment remove
 
 ```text
-guildbotics diagnostics traces [OPTIONS]
-```
+Remove device snapshots while preserving provider logins
 
-| Option | Description |
-| --- | --- |
-| `--source TEXT` | Only traces from this execution source. |
-| `--person TEXT` | Only traces recorded for this member. |
-| `--query TEXT` | Free-text filter over each execution's summary and full transcript. |
-| `--attr-key TEXT` | Only traces carrying this attribute key. |
-| `--attr-value TEXT` | Required value for --attr-key. |
-| `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
-| `--include-assistant / --no-include-assistant` | Include the traces of the screens' AI assistants. [default: no-include-assistant] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics environment remove
 
-## `guildbotics environment`
+Options:
+  -h, --help
+          Print help
+```
 
-Build and log in to the isolated agent environment on this device.
+## guildbotics environment login
 
 ```text
-guildbotics environment [OPTIONS] COMMAND [ARGS]...
-```
+Log in to a provider in its private environment
 
-| Option | Description |
-| --- | --- |
-| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
-| `--help` | Show this message and exit. |
+Usage: guildbotics environment login <TOOL>
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
-| [`guildbotics environment image`](#guildbotics-environment-image) | The base images this device holds for the environment. |
-| [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
-| [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
-| [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
-| [`guildbotics environment usage`](#guildbotics-environment-usage) | Probe saved provider credentials for usage. |
+Arguments:
+  <TOOL>
 
-## `guildbotics environment build`
 
-Build the environment the shared declaration asks for.
+Options:
+  -h, --help
+          Print help
+```
 
-The build installs provider CLIs and nothing else, so it needs no input. A
-build that fails is remembered until the declaration changes or this
-command runs again.
+## guildbotics environment usage
 
 ```text
-guildbotics environment build [OPTIONS]
-```
+Probe provider usage in its private environment
+
+Usage: guildbotics environment usage <TOOL>
 
-| Option | Description |
-| --- | --- |
-| `--force` | Rebuild even when the snapshot already matches the declaration. |
-| `--help` | Show this message and exit. |
+Arguments:
+  <TOOL>
 
-## `guildbotics environment image`
 
-The base images this device holds for the environment.
+Options:
+  -h, --help
+          Print help
+```
 
-A workspace may name an image it built itself as the base of the
-environment; the image is not shared, so each device loads it from an
-archive (`docker save`) built for its CPU architecture, and the
-declaration names the image's digest per architecture.
+## guildbotics environment image
 
 ```text
-guildbotics environment image [OPTIONS] COMMAND [ARGS]...
+Manage local and CI base images
+
+Usage: guildbotics environment image <COMMAND>
+
+Commands:
+  load     Load a Docker save or OCI archive built for this device's CPU
+  load-ci  Load an archive into the workspace code host's CI runner
+  list     List eligible local base images
+  declare  Declare the image's digest per architecture in the selected workspace
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics environment image load
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Load a Docker save or OCI archive built for this device's CPU
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
-| [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
-| [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
-| [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci) | Load an image archive into the CI runner of the workspace's code host. |
+Usage: guildbotics environment image load [OPTIONS] <ARCHIVE>
 
-## `guildbotics environment image declare`
+Arguments:
+  <ARCHIVE>
 
-Name the base image in the workspace's shared declaration.
 
-The declaration is shared with every device of the workspace. Naming the
-same reference again merges the digests, so a device of another
-architecture adds its own; naming another reference replaces them.
+Options:
+      --tag <TAG>
 
-```text
-guildbotics environment image declare [OPTIONS] [REFERENCE]
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--digest ARCH=DIGEST` | Name the image's digest for an architecture (e.g. amd64=sha256:...). Repeatable. Without it, the digest of the image loaded here under REFERENCE is declared for this device's architecture. |
-| `--default` | Declare no image: the environment builds from GuildBotics' own. |
-| `--help` | Show this message and exit. |
+## guildbotics environment image load-ci
 
-## `guildbotics environment image list`
+```text
+Load an archive into the workspace code host's CI runner
 
-List the images this device's declaration may name as its base.
+Usage: guildbotics environment image load-ci <ARCHIVE>
 
-Print each eligible image's reference and configuration digest on one line.
-The Agent execution environment screen uses the same eligible image list.
+Arguments:
+  <ARCHIVE>
 
-```text
-guildbotics environment image list [OPTIONS]
+
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics environment image list
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+List eligible local base images
 
-## `guildbotics environment image load`
+Usage: guildbotics environment image list [OPTIONS]
 
-Load an image archive into this device's runtime.
+Options:
+      --format <FORMAT>
+          Select the output format
 
-Accepts Docker save and OCI layout archives, as tar or gzip-compressed tar.
-Use a single-platform archive built for this device's CPU architecture:
-the first image's architecture is checked when the archive declares it.
-Its own tags are kept; `--tag` adds a reference to the first image.
-What was loaded is printed by reference, with its configuration digest
-(the digest the declaration names), including when a tag is reloaded.
-This command needs the device's installed microVM runtime, but does not
-boot a microVM.
+          [default: markdown]
+          [possible values: markdown, json]
 
-```text
-guildbotics environment image load [OPTIONS] ARCHIVE
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--tag TEXT` | A reference to add to the loaded image, beyond the archive's own tags. |
-| `--help` | Show this message and exit. |
+## guildbotics environment image declare
 
-## `guildbotics environment image load-ci`
+```text
+Declare the image's digest per architecture in the selected workspace
 
-Load an image archive into the CI runner of the workspace's code host.
+Usage: guildbotics environment image declare [OPTIONS] [REFERENCE]
 
-Run it on the machine the CI runner runs on, with an archive built for
-that runner's CPU architecture: the code host reads the file there, by
-its resolved path. Each image reference the runner loaded is printed. A
-code host with no CI runner GuildBotics loads images into is left as it
-is.
+Arguments:
+  [REFERENCE]
 
-```text
-guildbotics environment image load-ci [OPTIONS] ARCHIVE
-```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Options:
+      --default
 
-## `guildbotics environment login`
 
-Log in to an AI CLI tool inside the environment.
+      --digest <DIGESTS>
 
-The tool's own login command runs in the environment and talks you
-through it here; what it stores stays on this device, outside the
-snapshot, and every member uses it.
 
-```text
-guildbotics environment login [OPTIONS] {codex|claude|grok|copilot|antigravity}
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics server
 
-## `guildbotics environment usage`
+```text
+Run the server
 
-Probe an AI CLI tool's usage with the credentials saved on this device.
-The probe runs in a private environment and prints its result as JSON.
+Usage: guildbotics server <COMMAND>
 
-```text
-guildbotics environment usage {codex|claude|grok|copilot|antigravity}
-```
+Commands:
+  start  Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 8765) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, as `guildbotics branvil serve` without options runs it (BRANVIL_DATA_DIR chooses its data directory)
+  stop   Stop the server and wait for its work to end
+  help   Print this message or the help of the given subcommand(s)
 
-## `guildbotics environment remove`
+Options:
+  -h, --help
+          Print help
+```
 
-Remove the workspace's snapshots from this device (logins are kept).
+## guildbotics server start
 
 ```text
-guildbotics environment remove [OPTIONS]
+Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 8765) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, as `guildbotics branvil serve` without options runs it (BRANVIL_DATA_DIR chooses its data directory)
+
+Usage: guildbotics server start [OPTIONS]
+
+Options:
+      --services
+          Start services even when automatic startup is disabled
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics server stop
 
-## `guildbotics environment status`
+```text
+Stop the server and wait for its work to end
+
+Usage: guildbotics server stop [OPTIONS]
+
+Options:
+      --force
+          Cancel in-flight work and force termination if teardown takes too long
+
+  -h, --help
+          Print help
+```
 
-Show the environment's runtime, snapshot, and logins on this device as JSON.
+## guildbotics member
 
 ```text
-guildbotics environment status [OPTIONS]
+Operate as a configured member through the running server
+
+Usage: guildbotics member [ARGUMENTS]...
+
+Arguments:
+  [ARGUMENTS]...
+          Member subcommand and its options
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Start the GuildBotics server before running member commands. Use `member --workspace <path>` to verify the selected workspace.
+See the [member capability reference](../guildbotics/templates/member/reference.md) for examples and option semantics.
 
-## `guildbotics git-credential`
+### guildbotics member chat complete
 
-Hand git the human member's credential for a remote of a service
-GuildBotics is connected to on this machine (ACTION is git's: get,
-store, or erase).
+```text
+Usage: guildbotics member chat complete [OPTIONS]
+  --person <VALUE> [required]
+  --status <done|asking|blocked> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Git runs this as a credential helper: add it, scoped to the service's
-URL, at the end of the global git configuration. Setup shows the lines to
-add.
+### guildbotics member chat identity
 
 ```text
-guildbotics git-credential [OPTIONS] ACTION
+Usage: guildbotics member chat identity [OPTIONS]
+  --person <VALUE> [required]
+  --format <json|markdown> [default: markdown]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+### guildbotics member chat inspect channel
 
-## `guildbotics member`
+```text
+Usage: guildbotics member chat inspect channel [OPTIONS]
+  --person <VALUE> [required]
+  --channel-id <VALUE> [default: ]
+  --channel-name <VALUE> [default: ]
+  --since <VALUE>
+  --until <VALUE>
+  --limit <VALUE> [default: 50; 1<=x<=200]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Operate as a configured GuildBotics member.
+### guildbotics member chat inspect thread
 
 ```text
-guildbotics member [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member chat inspect thread [OPTIONS]
+  --person <VALUE> [required]
+  --channel-id <VALUE> [default: ]
+  --channel-name <VALUE> [default: ]
+  --thread-id <VALUE> [default: ]
+  --message-url <VALUE> [default: ]
+  --limit <VALUE> [default: 100; 1<=x<=200]
+  --format <json|markdown> [default: json]
+  --cursor <VALUE>
+  --help  Print help
 ```
+
+### guildbotics member chat noop
 
-| Option | Description |
-| --- | --- |
-| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
-| `--help` | Show this message and exit. |
+```text
+Usage: guildbotics member chat noop [OPTIONS]
+  --person <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
-| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
-| [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
-| [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
-| [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
-| [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
-| [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
-| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
+### guildbotics member chat post
 
-## `guildbotics member chat`
+```text
+Usage: guildbotics member chat post [OPTIONS]
+  --person <VALUE> [required]
+  --channel-id <VALUE> [default: ]
+  --channel-name <VALUE> [default: ]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Chat identity, posting, replies, reactions, and run completion.
+### guildbotics member chat reaction add
 
 ```text
-guildbotics member chat [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member chat reaction add [OPTIONS]
+  --person <VALUE> [required]
+  --channel-id <VALUE> [default: ]
+  --channel-name <VALUE> [default: ]
+  --message-id <VALUE> [default: ]
+  --message-url <VALUE> [default: ]
+  --reaction <ack|agree|celebrate|support> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
+
+### guildbotics member chat reply
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Usage: guildbotics member chat reply [OPTIONS]
+  --person <VALUE> [required]
+  --channel-id <VALUE> [default: ]
+  --channel-name <VALUE> [default: ]
+  --thread-id <VALUE> [default: ]
+  --message-url <VALUE> [default: ]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
-| [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
-| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect chat channel or thread messages for interactive decisions. |
-| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
-| [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
-| [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
-| [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
-| [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel) | Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name. |
-| [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
+### guildbotics member chat resolve-channel
 
-## `guildbotics member chat complete`
+```text
+Usage: guildbotics member chat resolve-channel [OPTIONS]
+  --person <VALUE> [required]
+  --channel-name <VALUE> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Finish the chat workflow run on its event with evidence.
+### guildbotics member chat updates
 
 ```text
-guildbotics member chat complete [OPTIONS]
+Usage: guildbotics member chat updates [OPTIONS]
+  --person <VALUE> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--status [done\|asking\|blocked]` | Run outcome. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member checks await
 
-## `guildbotics member chat identity`
+```text
+Usage: guildbotics member checks await [OPTIONS]
+  --person <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Show the member's chat identity.
+### guildbotics member context
 
 ```text
-guildbotics member chat identity [OPTIONS]
+Usage: guildbotics member context [OPTIONS]
+  --person <VALUE> [required]
+  --check-credentials
+  --format <json|markdown> [default: markdown]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
+### guildbotics member git commit
 
-## `guildbotics member chat inspect`
+```text
+Usage: guildbotics member git commit [OPTIONS]
+  --person <VALUE> [required]
+  --repo-path <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --workspace-mode <member|current> [default: member]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Inspect chat channel or thread messages for interactive decisions.
+### guildbotics member git prepare
 
 ```text
-guildbotics member chat inspect [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member git prepare [OPTIONS]
+  --person <VALUE> [required]
+  --issue-url <VALUE> [default: ]
+  --pr-url <VALUE> [default: ]
+  --repo <VALUE> [default: ]
+  --branch <VALUE> [default: ]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+### guildbotics member git publish
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel) | Read recent channel messages. |
-| [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread) | Read a thread before replying or reacting. |
+```text
+Usage: guildbotics member git publish [OPTIONS]
+  --person <VALUE> [required]
+  --repo-path <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --workspace-mode <member|current> [default: member]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-## `guildbotics member chat inspect channel`
+### guildbotics member git push
+
+```text
+Usage: guildbotics member git push [OPTIONS]
+  --person <VALUE> [required]
+  --repo-path <VALUE> [required]
+  --workspace-mode <member|current> [default: member]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Read recent channel messages.
+### guildbotics member git show
 
 ```text
-guildbotics member chat inspect channel [OPTIONS]
+Usage: guildbotics member git show [OPTIONS]
+  --person <VALUE> [required]
+  --repo <VALUE> [required]
+  --path <VALUE> [required] (repeatable)
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
-| `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--since TEXT` | Only include messages that occurred at or after this time (ISO 8601; local time without an offset). |
-| `--until TEXT` | Only include messages that occurred at or before this time (ISO 8601; local time without an offset). |
-| `--limit INTEGER RANGE` | Maximum number of messages. [default: 50; 1\<=x\<=200] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member help
 
-## `guildbotics member chat inspect thread`
+```text
+Usage: guildbotics member help [OPTIONS]
+  --help  Print help
+```
 
-Read a thread before replying or reacting.
+### guildbotics member memory archive
 
 ```text
-guildbotics member chat inspect thread [OPTIONS]
+Usage: guildbotics member memory archive [OPTIONS]
+  --person <VALUE> [required]
+  --id <VALUE> [required]
+  --team
+  --policy-approved
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
-| `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--thread-id TEXT` | Thread id (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --thread-id). [default: ""] |
-| `--limit INTEGER RANGE` | Maximum number of messages. [default: 100; 1\<=x\<=200] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member memory get
 
-## `guildbotics member chat noop`
+```text
+Usage: guildbotics member memory get [OPTIONS]
+  --person <VALUE> [required]
+  --id <VALUE> [required]
+  --team
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Record a deliberate no-op for the chat run's event.
+### guildbotics member memory promote
 
 ```text
-guildbotics member chat noop [OPTIONS]
+Usage: guildbotics member memory promote [OPTIONS]
+  --person <VALUE> [required]
+  --id <VALUE> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member memory recall
 
-## `guildbotics member chat post`
+```text
+Usage: guildbotics member memory recall [OPTIONS]
+  --person <VALUE> [required]
+  --query <VALUE> (repeatable)
+  --meta-only
+  --limit <VALUE> [default: 20; 1<=x<=200]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Post a new channel message.
+### guildbotics member memory record
 
 ```text
-guildbotics member chat post [OPTIONS]
+Usage: guildbotics member memory record [OPTIONS]
+  --person <VALUE> [required]
+  --scope <personal|team> [default: personal]
+  --title <VALUE> [required]
+  --summary <VALUE> [default: ]
+  --keyword <VALUE> (repeatable)
+  --ticket <VALUE> (repeatable)
+  --pr <VALUE> (repeatable)
+  --channel <VALUE> (repeatable)
+  --thread <VALUE> (repeatable)
+  --kind <note|policy> [default: note]
+  --pin
+  --content-file <VALUE>
+  --content-stdin
+  --policy-approved
+  --set <VALUE> (repeatable)
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
-| `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member memory touch
 
-## `guildbotics member chat reaction`
+```text
+Usage: guildbotics member memory touch [OPTIONS]
+  --person <VALUE> [required]
+  --id <VALUE> [required]
+  --team
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Chat reaction operations.
+### guildbotics member memory update
 
 ```text
-guildbotics member chat reaction [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member memory update [OPTIONS]
+  --person <VALUE> [required]
+  --id <VALUE> [required]
+  --team
+  --title <VALUE>
+  --summary <VALUE>
+  --keyword <VALUE> (repeatable)
+  --add-keyword <VALUE> (repeatable)
+  --remove-keyword <VALUE> (repeatable)
+  --ticket <VALUE> (repeatable)
+  --pr <VALUE> (repeatable)
+  --channel <VALUE> (repeatable)
+  --thread <VALUE> (repeatable)
+  --pin
+  --unpin
+  --kind <note|policy>
+  --content-file <VALUE>
+  --content-stdin
+  --policy-approved
+  --set <VALUE> (repeatable)
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+### guildbotics member pr artifact download
+
+```text
+Usage: guildbotics member pr artifact download [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --name <VALUE> [required]
+  --dest <VALUE> [default: .]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add) | Add a semantic reaction. |
+### guildbotics member pr comment
 
-## `guildbotics member chat reaction add`
+```text
+Usage: guildbotics member pr comment [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Add a semantic reaction.
+### guildbotics member pr create
 
 ```text
-guildbotics member chat reaction add [OPTIONS]
+Usage: guildbotics member pr create [OPTIONS]
+  --person <VALUE> [required]
+  --repo <VALUE> [required]
+  --head <VALUE> [required]
+  --base <VALUE> [default: ]
+  --title <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --issue-url <VALUE> (repeatable)
+  --closes-issue/--refs-issue [default: false]
+  --draft <true|false> [default: false]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
-| `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--message-id TEXT` | Message id (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --message-id). [default: ""] |
-| `--reaction [ack\|agree\|celebrate\|support]` | Semantic reaction to add. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member pr reaction add
 
-## `guildbotics member chat reply`
+```text
+Usage: guildbotics member pr reaction add [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --comment-id <VALUE> [required]
+  --reaction <ack|agree|celebrate|support> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Reply in a thread in the member voice.
+### guildbotics member pr read
 
 ```text
-guildbotics member chat reply [OPTIONS]
+Usage: guildbotics member pr read [OPTIONS]
+  --person <VALUE> [required]
+  --resource <pull_requests|pull_request_comments|pull_request_reviews|pull_request_files|pull_request_threads|review_thread_comments|pull_request_readiness> [required]
+  --subject <VALUE> [required]
+  --params <VALUE> [default: ]
+  --continuation <VALUE> [default: ]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
-| `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--thread-id TEXT` | Thread id (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --thread-id). [default: ""] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member pr reply
 
-## `guildbotics member chat resolve-channel`
+```text
+Usage: guildbotics member pr reply [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --reply-target-id <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name.
+### guildbotics member pr review
 
 ```text
-guildbotics member chat resolve-channel [OPTIONS]
+Usage: guildbotics member pr review [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --event <approve|request_changes|comment> [required]
+  --head <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--channel-name TEXT` | Channel name to resolve. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member pr review-comment
 
-## `guildbotics member chat updates`
+```text
+Usage: guildbotics member pr review-comment [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --head <VALUE> [required]
+  --path <VALUE> [required]
+  --line <VALUE> [x>=1] [required]
+  --side <LEFT|RIGHT> [default: RIGHT]
+  --start-line <VALUE> [x>=1]
+  --start-side <LEFT|RIGHT>
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable.
+### guildbotics member pr update
 
 ```text
-guildbotics member chat updates [OPTIONS]
+Usage: guildbotics member pr update [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --title <VALUE>
+  --issue-url <VALUE> (repeatable)
+  --closes-issue/--refs-issue [default: false]
+  --drop-issue-links
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member repo-info read
 
-## `guildbotics member checks`
+```text
+Usage: guildbotics member repo-info read [OPTIONS]
+  --person <VALUE> [required]
+  --resource <dependency_alerts> [required]
+  --subject <VALUE> [required]
+  --params <VALUE> [default: ]
+  --continuation <VALUE> [default: ]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-End a run to await the CI checks of its pull requests.
+### guildbotics member task complete
 
 ```text
-guildbotics member checks [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member task complete [OPTIONS]
+  --person <VALUE> [required]
+  --waiting-for <VALUE> (repeatable)
+  --status <done|asking|blocked> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
+
+### guildbotics member task status
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Usage: guildbotics member task status [OPTIONS]
+  --person <VALUE> [default: ]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
+### guildbotics member ticket attachment download
 
-## `guildbotics member checks await`
+```text
+Usage: guildbotics member ticket attachment download [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --id <VALUE> [required]
+  --dest <VALUE> [default: .]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+### guildbotics member ticket comment
 
 ```text
-guildbotics member checks await [OPTIONS]
+Usage: guildbotics member ticket comment [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+### guildbotics member ticket create
 
-## `guildbotics member context`
+```text
+Usage: guildbotics member ticket create [OPTIONS]
+  --person <VALUE> [required]
+  --tracker <VALUE> [required]
+  --title <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --label <VALUE> (repeatable)
+  --add-to-board/--no-add-to-board [default: true]
+  --interactive
+  --assignee <VALUE>
+  --lane <new|ready|in_progress>
+  --parent <VALUE>
+  --blocked-by <VALUE> (repeatable)
+  --human-approved
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Show non-secret member context.
+### guildbotics member ticket reaction add
 
 ```text
-guildbotics member context [OPTIONS]
+Usage: guildbotics member ticket reaction add [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --comment-id <VALUE> [required]
+  --reaction <ack|agree|celebrate|support> [required]
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--check-credentials` | Also verify the member's provider credentials. |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
+### guildbotics member ticket read
 
-## `guildbotics member git`
+```text
+Usage: guildbotics member ticket read [OPTIONS]
+  --person <VALUE> [required]
+  --resource <tracker_tickets|tickets|ticket_comments|ticket_attachments|ticket_pull_requests> [required]
+  --subject <VALUE> [required]
+  --params <VALUE> [default: ]
+  --continuation <VALUE> [default: ]
+  --format <json|markdown> [default: json]
+  --help  Print help
+```
 
-Read repositories and prepare, commit, push, and publish member workspaces.
+### guildbotics member ticket update
 
 ```text
-guildbotics member git [OPTIONS] COMMAND [ARGS]...
+Usage: guildbotics member ticket update [OPTIONS]
+  --person <VALUE> [required]
+  --url <VALUE> [required]
+  --content-file <VALUE>
+  --content-stdin
+  --title <VALUE>
+  --interactive/--no-interactive
+  --add-label <VALUE> (repeatable)
+  --remove-label <VALUE> (repeatable)
+  --state <open|closed>
+  --state-reason <completed|not_planned>
+  --parent <VALUE>
+  --add-blocked-by <VALUE> (repeatable)
+  --remove-blocked-by <VALUE> (repeatable)
+  --human-approved
+  --format <json|markdown> [default: json]
+  --help  Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics git-credential
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
-| [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
-| [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
-| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
-| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
+```text
+Supply Git with this machine's credential for the remote
+
+Usage: guildbotics git-credential <ACTION>
 
-## `guildbotics member git commit`
+Arguments:
+  <ACTION>
+          Credential helper action from Git
 
-Commit already-staged changes with the member identity.
+Options:
+  -h, --help
+          Print help
+```
 
-Stage the files you want with plain git (e.g. ``git add``) first; this
-command commits only what is staged and applies the member name/email to
-that single commit without changing the repository's git config.
+## guildbotics install
 
 ```text
-guildbotics member git commit [OPTIONS]
-```
+Install this executable and the GuildBotics skill for this user
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo-path PATH` | Path to the member repository workspace. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics install
 
-## `guildbotics member git prepare`
+Options:
+  -h, --help
+          Print help
+```
 
-Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+## guildbotics workspace
 
 ```text
-guildbotics member git prepare [OPTIONS]
-```
+Select the active workspace for the server and AI CLI tools
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--issue-url TEXT` | Ticket URL to prepare a workspace for. [default: ""] |
-| `--pr-url TEXT` | PR URL whose head branch to check out. [default: ""] |
-| `--repo TEXT` | Repository path (owner/repo on GitHub): with --branch, or with --issue-url for a ticket that belongs to no repository. [default: ""] |
-| `--branch TEXT` | Branch to create or check out (with --repo). [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics workspace <COMMAND>
 
-## `guildbotics member git publish`
+Commands:
+  use      Persist the active workspace for the server and AI CLI tools
+  current  Show the persisted active workspace
+  status   Show the active workspace status, even when no workspace is configured
+  help     Print this message or the help of the given subcommand(s)
 
-Commit already-staged changes with the member identity, then push.
+Options:
+  -h, --help
+          Print help
+```
 
-Stage the files you want with plain git (e.g. ``git add``) first; this
-commits only what is staged with the member name/email and pushes the
-branch using the member credential.
+## guildbotics workspace use
 
 ```text
-guildbotics member git publish [OPTIONS]
-```
+Persist the active workspace for the server and AI CLI tools
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo-path PATH` | Path to the member repository workspace. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics workspace use [OPTIONS] <WORKSPACE_DIR>
 
-## `guildbotics member git push`
+Arguments:
+  <WORKSPACE_DIR>
 
-Push the current branch with the member credential and report readiness for matching open PRs.
 
-```text
-guildbotics member git push [OPTIONS]
-```
+Options:
+      --format <FORMAT>
+          Select the output format
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo-path PATH` | Path to the member repository workspace. [required] |
-| `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+          [default: markdown]
+          [possible values: markdown, json]
 
-## `guildbotics member git show`
+  -h, --help
+          Print help
+```
 
-Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
+## guildbotics workspace current
 
 ```text
-guildbotics member git show [OPTIONS]
-```
+Show the persisted active workspace
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo TEXT` | Repository path of the code host. [required] |
-| `--path TEXT` | Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics workspace current [OPTIONS]
 
-## `guildbotics member help`
+Options:
+      --format <FORMAT>
+          Select the output format
 
-Print the member capability reference (commands and cross-cutting rules).
+          [default: markdown]
+          [possible values: markdown, json]
 
-This is the same reference embedded in ``member context``; use it to reread
-the available commands without re-running the full context.
+  -h, --help
+          Print help
+```
 
+## guildbotics workspace status
+
 ```text
-guildbotics member help [OPTIONS]
-```
+Show the active workspace status, even when no workspace is configured
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics workspace status [OPTIONS]
 
-## `guildbotics member memory`
+Options:
+      --format <FORMAT>
+          Select the output format
 
-Record, recall, and maintain member memory documents.
+          [default: markdown]
+          [possible values: markdown, json]
 
-```text
-guildbotics member memory [OPTIONS] COMMAND [ARGS]...
+  -h, --help
+          Print help
 ```
+
+## guildbotics run
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Run a command in the selected workspace's isolated environment
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
-| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata and body without changing recency. |
-| [`guildbotics member memory promote`](#guildbotics-member-memory-promote) | Move a personal memory into team memory without changing the document id. |
-| [`guildbotics member memory recall`](#guildbotics-member-memory-recall) | Search personal and team memory by literal OR queries and return compact hits. |
-| [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
-| [`guildbotics member memory touch`](#guildbotics-member-memory-touch) | Mark a useful memory as actually used by moving it to the digest front. |
-| [`guildbotics member memory update`](#guildbotics-member-memory-update) | Replace selected body or metadata fields and move the document to the digest front. |
+Usage: guildbotics run [OPTIONS] <COMMAND> [ARGS]...
 
-## `guildbotics member memory archive`
+Arguments:
+  <COMMAND>
+          Command name, optionally followed by @PERSON
 
-Move a stale memory under archived/ and remove it from recall and digest.
+  [ARGS]...
+          Arguments for the command
 
-```text
-guildbotics member memory archive [OPTIONS]
-```
+Options:
+      --person <PERSON>
+          Member ID or name. Overrides a member specified as COMMAND@PERSON
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--id TEXT` | Memory document id. [required] |
-| `--team` | Operate on team memory instead of personal memory. |
-| `--policy-approved` | Confirm that a human approved this policy memory change. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --cwd <CWD>
+          Working directory for the command
 
-## `guildbotics member memory get`
+  -h, --help
+          Print help
+```
 
-Read one memory document's metadata and body without changing recency.
+## guildbotics diagnostics
 
 ```text
-guildbotics member memory get [OPTIONS]
-```
+Read a workspace's recorded diagnostics
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--id TEXT` | Memory document id. [required] |
-| `--team` | Operate on team memory instead of personal memory. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics diagnostics [OPTIONS] <COMMAND>
 
-## `guildbotics member memory promote`
+Commands:
+  traces  List recorded executions, newest first
+  trace   Show an execution's summary and records
+  system  Show service-wide records outside an execution
+  help    Print this message or the help of the given subcommand(s)
 
-Move a personal memory into team memory without changing the document id.
+Options:
+      --workspace <WORKSPACE>
+          Read a different workspace
 
-```text
-guildbotics member memory promote [OPTIONS]
-```
+      --format <FORMAT>
+          Select the output format
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--id TEXT` | Memory document id. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+          [default: json]
+          [possible values: markdown, json]
 
-## `guildbotics member memory recall`
+  -h, --help
+          Print help
+```
 
-Search personal and team memory by literal OR queries and return compact hits.
+## guildbotics diagnostics traces
 
 ```text
-guildbotics member memory recall [OPTIONS]
-```
+List recorded executions, newest first
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--query TEXT` | Literal search query; repeat for OR matching. |
-| `--meta-only` | Return hit metadata without body excerpts. |
-| `--limit INTEGER RANGE` | Maximum number of hits. [default: 20; 1\<=x\<=200] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics diagnostics traces [OPTIONS]
 
-## `guildbotics member memory record`
+Options:
+      --source <SOURCE>
+          Only traces from this execution source
 
-Create a memory document and move it to the front of the digest.
+      --person <PERSON>
+          Only traces recorded for this member
 
-```text
-guildbotics member memory record [OPTIONS]
-```
+      --query <QUERY>
+          Search execution summaries and transcripts
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--scope [personal\|team]` | Store as personal or team memory. [default: personal] |
-| `--title TEXT` | Document title. [required] |
-| `--summary TEXT` | One-line summary shown in recall hits and the digest. [default: ""] |
-| `--keyword TEXT` | Recall keyword. May be repeated. |
-| `--ticket TEXT` | Related ticket URL (source anchor). May be repeated. |
-| `--pr TEXT` | Related PR URL (source anchor). May be repeated. |
-| `--channel TEXT` | Related chat channel URL (source anchor). May be repeated. |
-| `--thread TEXT` | Related chat thread URL (source anchor). May be repeated. |
-| `--kind [note\|policy]` | Document kind; 'policy' requires --policy-approved. [default: note] |
-| `--pin` | Pin as a standing rule included in member context. |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--policy-approved` | Confirm that a human approved this policy memory change. |
-| `--set TEXT` | Extra metadata as key=value. May be repeated. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --attr-key <ATTR_KEY>
+          Only traces carrying this attribute
 
-## `guildbotics member memory touch`
+      --attr-value <ATTR_VALUE>
+          Match this value of --attr-key
 
-Mark a useful memory as actually used by moving it to the digest front.
+      --include-assistant
+          Include the screens' AI assistant sessions
 
-```text
-guildbotics member memory touch [OPTIONS]
-```
+      --no-include-assistant
+          Hide the screens' AI assistant sessions
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--id TEXT` | Memory document id. [required] |
-| `--team` | Operate on team memory instead of personal memory. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --limit <LIMIT>
+          Maximum traces
 
-## `guildbotics member memory update`
+          [default: 50]
 
-Replace selected body or metadata fields and move the document to the digest front.
+  -h, --help
+          Print help
+```
+
+## guildbotics diagnostics trace
 
 ```text
-guildbotics member memory update [OPTIONS]
-```
+Show an execution's summary and records
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--id TEXT` | Memory document id. [required] |
-| `--team` | Operate on team memory instead of personal memory. |
-| `--title TEXT` | New document title. |
-| `--summary TEXT` | New one-line summary. |
-| `--keyword TEXT` | Replace all recall keywords. May be repeated. |
-| `--add-keyword TEXT` | Add a recall keyword. May be repeated. |
-| `--remove-keyword TEXT` | Remove a recall keyword. May be repeated. |
-| `--ticket TEXT` | Related ticket URL (source anchor). May be repeated. |
-| `--pr TEXT` | Related PR URL (source anchor). May be repeated. |
-| `--channel TEXT` | Related chat channel URL (source anchor). May be repeated. |
-| `--thread TEXT` | Related chat thread URL (source anchor). May be repeated. |
-| `--pin` | Pin as a standing rule included in member context. |
-| `--unpin` | Remove the pin. |
-| `--kind [note\|policy]` | Change the document kind; 'policy' requires --policy-approved. |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--policy-approved` | Confirm that a human approved this policy memory change. |
-| `--set TEXT` | Extra metadata as key=value. May be repeated. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics diagnostics trace [OPTIONS] <TRACE_ID>
 
-## `guildbotics member pr`
+Arguments:
+  <TRACE_ID>
 
-Read, open, update, comment on, and review pull requests, react to their
-comments and reviews, and download their CI artifacts.
 
-```text
-guildbotics member pr [OPTIONS] COMMAND [ARGS]...
-```
+Options:
+      --kind <KIND>
+          Filter by record kind. Repeat to combine kinds
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+          [possible values: event, log, io, memory]
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member pr artifact`](#guildbotics-member-pr-artifact) | CI artifact operations. |
-| [`guildbotics member pr comment`](#guildbotics-member-pr-comment) | Comment on a PR conversation. |
-| [`guildbotics member pr create`](#guildbotics-member-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member pr reaction`](#guildbotics-member-pr-reaction) | Reactions to pull request comments and reviews. |
-| [`guildbotics member pr read`](#guildbotics-member-pr-read) | Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or... |
-| [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
-| [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
-| [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
+      --level <LEVEL>
+          Filter records by log level
 
-## `guildbotics member pr artifact`
+      --limit <LIMIT>
+          Maximum records, keeping the newest
 
-CI artifact operations.
+          [default: 200]
 
-```text
-guildbotics member pr artifact [OPTIONS] COMMAND [ARGS]...
+  -h, --help
+          Print help
 ```
+
+## guildbotics diagnostics system
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Show service-wide records outside an execution
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download) | Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection. |
+Usage: guildbotics diagnostics system [OPTIONS]
 
-## `guildbotics member pr artifact download`
+Options:
+      --limit <LIMIT>
+          Maximum records, keeping the newest
 
-Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection.
+          [default: 50]
 
-```text
-guildbotics member pr artifact download [OPTIONS]
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--name TEXT` | Exact artifact name. [required] |
-| `--dest DIRECTORY` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+## guildbotics version
 
-## `guildbotics member pr comment`
+```text
+Print the binary's version
 
-Comment on a PR conversation.
+Usage: guildbotics version
 
-```text
-guildbotics member pr comment [OPTIONS]
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics secrets
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+```text
+Manage workspace or shared identity secrets
 
-## `guildbotics member pr create`
+Usage: guildbotics secrets [OPTIONS] <COMMAND>
 
-Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
+Commands:
+  status  Show the OS secret-store status and number of keys
+  list    List the names of stored secrets
+  set     Store a secret value from a file or prompt
+  delete  Delete a stored secret
+  export  Export secrets in dotenv format
+  import  Import secrets from a dotenv file
+  help    Print this message or the help of the given subcommand(s)
 
-```text
-guildbotics member pr create [OPTIONS]
-```
+Options:
+      --workspace <WORKSPACE>
+          Use this workspace instead of the active workspace
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo TEXT` | Target repository path (owner/repo on GitHub). [required] |
-| `--head TEXT` | Head branch containing the changes. [required] |
-| `--base TEXT` | Base branch for the pull request. Defaults to the repository default branch. [default: ""] |
-| `--title TEXT` | Pull request title. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--issue-url TEXT` | Related ticket URL to link to the PR. May be repeated. |
-| `--closes-issue / --refs-issue` | Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue. [default: refs-issue] |
-| `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --identities
+          Manage the identity store shared by all workspaces
 
-## `guildbotics member pr reaction`
+  -h, --help
+          Print help
+```
 
-Reactions to pull request comments and reviews.
+## guildbotics secrets status
 
 ```text
-guildbotics member pr reaction [OPTIONS] COMMAND [ARGS]...
+Show the OS secret-store status and number of keys
+
+Usage: guildbotics secrets status
+
+Options:
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics secrets list
+
+```text
+List the names of stored secrets
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add) | React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it. |
+Usage: guildbotics secrets list
 
-## `guildbotics member pr reaction add`
+Options:
+  -h, --help
+          Print help
+```
 
-React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it.
+## guildbotics secrets set
 
 ```text
-guildbotics member pr reaction add [OPTIONS]
-```
+Store a secret value from a file or prompt
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--comment-id TEXT` | The id the item's read gave the comment (or review) to react to. [required] |
-| `--reaction [ack\|agree\|celebrate\|support]` | Semantic reaction to add. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics secrets set [OPTIONS] <KEY> [VALUE]
 
-## `guildbotics member pr read`
+Arguments:
+  <KEY>
 
-Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
-```text
-guildbotics member pr read [OPTIONS]
-```
+  [VALUE]
+
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [pull_requests\|pull_request_comments\|pull_request_reviews\|pull_request_files\|pull_request_threads\|review_thread_comments\|pull_request_readiness]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
-| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
-| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Options:
+      --from-file <FROM_FILE>
+          Read the secret value from a UTF-8 file
 
-## `guildbotics member pr reply`
+  -h, --help
+          Print help
+```
 
-Reply to an inline review thread.
+## guildbotics secrets delete
 
 ```text
-guildbotics member pr reply [OPTIONS]
-```
+Delete a stored secret
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--reply-target-id TEXT` | reply_target_id from repository/pr_inspect include_comments=true. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics secrets delete <KEY>
 
-## `guildbotics member pr review`
+Arguments:
+  <KEY>
 
-Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it.
 
-```text
-guildbotics member pr review [OPTIONS]
+Options:
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--event [approve\|request_changes\|comment]` | Review verdict submitted on the head --head names. [required] |
-| `--head TEXT` | The head commit (head_sha) the member read; refused when the PR's head has moved since. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+## guildbotics secrets export
 
-## `guildbotics member pr review-comment`
+```text
+Export secrets in dotenv format
 
-Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again.
+Usage: guildbotics secrets export [OPTIONS]
 
-```text
-guildbotics member pr review-comment [OPTIONS]
+Options:
+      --file <FILE>
+          Write to an owner-only file instead of standard output
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--head TEXT` | The head commit (head_sha) the member read; refused when the PR's head has moved since. [required] |
-| `--path TEXT` | File path in the PR diff. [required] |
-| `--line INTEGER RANGE` | Line number on the chosen diff side. [x\>=1; required] |
-| `--side [LEFT\|RIGHT]` | Diff side of the line. [default: RIGHT] |
-| `--start-line INTEGER RANGE` | Start line for a multi-line comment. [x\>=1] |
-| `--start-side [LEFT\|RIGHT]` | Diff side of --start-line. |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+## guildbotics secrets import
 
-## `guildbotics member pr update`
+```text
+Import secrets from a dotenv file
 
-Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
+Usage: guildbotics secrets import <FILE>
 
-```text
-guildbotics member pr update [OPTIONS]
-```
+Arguments:
+  <FILE>
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--title TEXT` | Replace the pull request title. |
-| `--issue-url TEXT` | Replace all PR ticket links with these URLs. May be repeated. |
-| `--closes-issue / --refs-issue` | Close every --issue-url ticket on merge, or only refer to it (default). [default: refs-issue] |
-| `--drop-issue-links` | Remove all PR ticket links. Cannot be combined with --issue-url. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
 
-## `guildbotics member repo-info`
+Options:
+  -h, --help
+          Print help
+```
 
-Read information about the repository as a whole.
+## guildbotics service
 
 ```text
-guildbotics member repo-info [OPTIONS] COMMAND [ARGS]...
-```
+Start or stop scheduled commands, ticket patrol, and chat events
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics service <COMMAND>
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
+Commands:
+  start  Start the services with the settings saved on the Service screen
+  stop   Stop the services after their in-flight work; the server keeps running
+  help   Print this message or the help of the given subcommand(s)
 
-## `guildbotics member repo-info read`
+Options:
+  -h, --help
+          Print help
+```
 
-Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+## guildbotics service start
 
 ```text
-guildbotics member repo-info read [OPTIONS]
-```
+Start the services with the settings saved on the Service screen
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [dependency_alerts]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
-| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
-| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics service start
 
-## `guildbotics member task`
+Options:
+  -h, --help
+          Print help
+```
 
-Completion records of runs other than a chat event's.
+## guildbotics service stop
 
 ```text
-guildbotics member task [OPTIONS] COMMAND [ARGS]...
-```
+Stop the services after their in-flight work; the server keeps running
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics service stop [OPTIONS]
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
+Options:
+      --force
+          Cancel in-flight work instead of waiting for it
 
-## `guildbotics member task complete`
+  -h, --help
+          Print help
+```
 
-Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
+## guildbotics connect
 
 ```text
-guildbotics member task complete [OPTIONS]
-```
+Connect this machine's CLI through the server's consent screen
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--waiting-for TEXT` | Next member to act, by the context roster's person_id (repeatable; asking/blocked only). |
-| `--status [done\|asking\|blocked]` | Run outcome. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics connect
 
-## `guildbotics member task status`
+Options:
+  -h, --help
+          Print help
+```
 
-Inspect the run's recorded evidence.
+## guildbotics open
 
 ```text
-guildbotics member task status [OPTIONS]
-```
+Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Accepted for consistency with other member commands; not required. [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics open [OPTIONS]
 
-## `guildbotics member ticket`
+Options:
+      --print
+          Print the link instead of opening it, to paste into a browser on another machine
 
-Read, create, update, and comment on tickets, react to their comments,
-and download their attachments.
+      --branvil
+          Open the Branvil screens
 
-```text
-guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics branvil
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
-| [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
-| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
-| [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+```text
+Branvil: local code hosting (Git over Smart HTTP, tickets, boards, pull requests, CI) for GuildBotics.
 
-## `guildbotics member ticket attachment`
+First run: `branvil init` creates the data directory, the configuration, and the owner, the one person who uses Branvil; the owner's token is kept in <data dir>/secrets/owner.token. Then `branvil serve` starts the service, and `branvil open` opens the GUI without a sign-in screen. The member, workspace, repo, backup, and open commands talk to the running service with the owner's token from that file (or --token / BRANVIL_TOKEN).
 
-Attachment operations.
+Usage: guildbotics branvil <COMMAND>
 
-```text
-guildbotics member ticket attachment [OPTIONS] COMMAND [ARGS]...
+Commands:
+  init       Create the data directory, the configuration, and the owner (its token goes to <data dir>/secrets/owner.token)
+  serve      Run the service
+  open       Open the GUI in the browser with a single-use link (on the Hub machine, as the owner)
+  member     Manage agents, runners, and tokens (through the running service)
+  repo       Manage repositories (through the running service)
+  workspace  Manage workspaces (through the running service)
+  runner     Run the CI runner, a separate process that executes jobs in microVMs (docs/ci.md)
+  admin      Offline maintenance of the data directory (the service must be stopped)
+  backup     Write a consistent backup of the running service into a new directory on its machine
+  restore    Restore a backup into a new data directory and check it (the service need not run)
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics branvil init
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
+```text
+Create the data directory, the configuration, and the owner (its token goes to <data dir>/secrets/owner.token)
 
-## `guildbotics member ticket attachment download`
+Usage: guildbotics branvil init [OPTIONS]
 
-Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading.
+Options:
+      --owner <OWNER>
+          Member name of the owner, the one person who uses Branvil
 
-```text
-guildbotics member ticket attachment download [OPTIONS]
-```
+          [default: owner]
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Ticket URL. [required] |
-| `--id TEXT` | The id the ticket's ticket_attachments read gave the attachment. [required] |
-| `--dest DIRECTORY` | Directory to write the file into. Defaults to the current directory. Remove downloaded files after reading when this is inside a repository. [default: .] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --display-name <DISPLAY_NAME>
+          Display name of the owner
 
-## `guildbotics member ticket comment`
+      --listen <LISTEN>
+          Loopback address written to the configuration
 
-Comment on a ticket in the member voice.
+          [default: 127.0.0.1:7878]
 
-```text
-guildbotics member ticket comment [OPTIONS]
-```
+      --base-url <BASE_URL>
+          Permanent base URL written to the configuration [default: http://<listen>]
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Ticket URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-## `guildbotics member ticket create`
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
 
-Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
+          [env: BRANVIL_DATA_DIR]
 
-```text
-guildbotics member ticket create [OPTIONS]
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--tracker TEXT` | Where the ticket is kept: a repository path (owner/repo) on GitHub. [required] |
-| `--title TEXT` | Ticket title. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--label TEXT` | Label already defined in the tracker. Repeat for several labels. |
-| `--add-to-board / --no-add-to-board` | Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board. [default: add-to-board] |
-| `--interactive` | Create for interactive work; unsupported providers refuse it. |
-| `--assignee TEXT` | Assignee's person_id from the member context roster, including humans. |
-| `--lane [new\|ready\|in_progress]` | Initial lane; defaults to ready with a parent or blockers, new otherwise. |
-| `--parent TEXT` | Parent ticket URL. |
-| `--blocked-by TEXT` | Blocking ticket URL. Repeat for several blockers. |
-| `--human-approved` | Confirm that a human instructed or approved this change. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+## guildbotics branvil serve
 
-## `guildbotics member ticket reaction`
+```text
+Run the service
 
-Reactions to ticket comments.
+Usage: guildbotics branvil serve [OPTIONS]
 
-```text
-guildbotics member ticket reaction [OPTIONS] COMMAND [ARGS]...
-```
+Options:
+      --listen <LISTEN>
+          Loopback address to listen on (port 0 picks a free port) [default: listen of the configuration, else 127.0.0.1:7878]
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+      --base-url <BASE_URL>
+          Permanent base URL [default: base_url of the configuration, else http://<bound address>]
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-## `guildbotics member ticket reaction add`
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
 
-React to a comment of the ticket, by the id its read gave it.
+          [env: BRANVIL_DATA_DIR]
 
-```text
-guildbotics member ticket reaction add [OPTIONS]
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil open
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Ticket URL. [required] |
-| `--comment-id TEXT` | The id the item's read gave the comment (or review) to react to. [required] |
-| `--reaction [ack\|agree\|celebrate\|support]` | Semantic reaction to add. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+```text
+Open the GUI in the browser with a single-use link (on the Hub machine, as the owner)
 
-## `guildbotics member ticket read`
+Usage: guildbotics branvil open [OPTIONS]
 
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Options:
+      --print
+          Print the link (valid once, for 60 seconds) instead of opening a browser
 
-```text
-guildbotics member ticket read [OPTIONS]
-```
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [tracker_tickets\|tickets\|ticket_comments\|ticket_attachments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
-| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
-| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+          [env: BRANVIL_URL]
 
-## `guildbotics member ticket update`
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
 
-Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。
+          [env: BRANVIL_TOKEN]
 
-```text
-guildbotics member ticket update [OPTIONS]
-```
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Ticket URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--title TEXT` | Replace the ticket title. |
-| `--interactive / --no-interactive` | Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it. |
-| `--add-label TEXT` | Add a label already defined in the tracker. Repeat for several labels. |
-| `--remove-label TEXT` | Remove a label from the ticket. Repeat for several labels. |
-| `--state [open\|closed]` | Close or reopen the ticket; requires --human-approved. |
-| `--state-reason [completed\|not_planned]` | Why the ticket is closed; requires --state closed. |
-| `--parent TEXT` | URL of the ticket this one becomes a part of; "" makes it a part of none. |
-| `--add-blocked-by TEXT` | URL of a ticket that must be closed before this one is started. Repeat for several tickets. |
-| `--remove-blocked-by TEXT` | URL of a ticket this one is no longer blocked by. Repeat for several tickets. |
-| `--human-approved` | Confirm that a human instructed or approved this change. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
 
-## `guildbotics open`
+          [env: BRANVIL_DATA_DIR]
 
-Open the GuildBotics screens in the browser.
+  -h, --help
+          Print help
+```
 
-The browser enters with a single-use link that expires after 60 seconds.
+## guildbotics branvil member
 
 ```text
-guildbotics open [OPTIONS]
-```
+Manage agents, runners, and tokens (through the running service)
 
-| Option | Description |
-| --- | --- |
-| `--print` | Print the link instead of opening it, to paste into a browser on another machine. |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil member [OPTIONS] <COMMAND>
 
-## `guildbotics run`
+Commands:
+  list     List members
+  create   Create an agent or a runner
+  token    Issue a token for a member (printed once)
+  account  Set a member's account on an upstream host: a token, or a GitHub App's identity (owner)
+  help     Print this message or the help of the given subcommand(s)
 
-Run a command on the server of the same workspace when it runs, otherwise
-locally.
+Options:
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
 
-```text
-guildbotics run [OPTIONS] CUSTOM_COMMAND [COMMAND_ARGS]...
-```
+          [env: BRANVIL_URL]
 
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name to run the custom command as. Defaults to the team's default_person_id, else its first active non-human member in ID order. |
-| `--cwd TEXT` | Specify the working directory for the custom command. |
-| `--help` | Show this message and exit. |
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
 
-## `guildbotics secrets`
+          [env: BRANVIL_TOKEN]
 
-Manage workspace secrets (API keys and tokens).
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-```text
-guildbotics secrets [OPTIONS] COMMAND [ARGS]...
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
+
+          [env: BRANVIL_DATA_DIR]
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
-| `--identities` | Manage the secrets every workspace shares -- the members' credentials and the services' connections -- instead of the workspace's. |
-| `--help` | Show this message and exit. |
+## guildbotics branvil member list
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
-| [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
-| [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
-| [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
-| [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
-| [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
+```text
+List members
 
-## `guildbotics secrets delete`
+Usage: guildbotics branvil member list
+
+Options:
+  -h, --help
+          Print help
+```
 
-Delete a stored secret.
+## guildbotics branvil member create
 
 ```text
-guildbotics secrets delete [OPTIONS] KEY
-```
+Create an agent or a runner
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil member create [OPTIONS] <NAME>
 
-## `guildbotics secrets export`
+Arguments:
+  <NAME>
 
-Export stored secrets in dotenv format (exchange format only).
 
-```text
-guildbotics secrets export [OPTIONS]
-```
+Options:
+      --display-name <DISPLAY_NAME>
+          Shown name [default: the name]
 
-| Option | Description |
-| --- | --- |
-| `--file FILE` | Write to a file (created with owner-only permissions) instead of stdout. |
-| `--help` | Show this message and exit. |
+      --kind <KIND>
+          agent or runner
 
-## `guildbotics secrets import`
+          [default: agent]
+
+  -h, --help
+          Print help
+```
 
-Import secrets from a dotenv-format exchange file into the OS store.
+## guildbotics branvil member token
 
 ```text
-guildbotics secrets import [OPTIONS] FILE
-```
+Issue a token for a member (printed once)
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil member token [OPTIONS] <NAME>
 
-## `guildbotics secrets list`
+Arguments:
+  <NAME>
 
-List the names of the stored secrets.
 
-```text
-guildbotics secrets list [OPTIONS]
+Options:
+      --label <LABEL>
+          [default: cli]
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics branvil member account
 
-## `guildbotics secrets set`
+```text
+Set a member's account on an upstream host: a token, or a GitHub App's identity (owner)
 
-Store a secret value (prompts when VALUE is omitted).
+Usage: guildbotics branvil member account [OPTIONS] <NAME>
 
-KEY comes first: naming the value first would store it under a name that
-is itself the secret.
+Arguments:
+  <NAME>
 
-```text
-guildbotics secrets set [OPTIONS] KEY [VALUE]
-```
 
-| Option | Description |
-| --- | --- |
-| `--from-file FILE` | Read the secret value from a file instead of VALUE. |
-| `--help` | Show this message and exit. |
+Options:
+      --provider <PROVIDER>
+          [default: github]
 
-## `guildbotics secrets status`
+      --token-env <TOKEN_ENV>
+          Name of an environment variable holding the account's token (never pass it as an argument)
 
-Show OS secret-store status for this workspace.
+      --app-id <APP_ID>
+          The app's id (with --installation-id and --private-key-file)
 
-```text
-guildbotics secrets status [OPTIONS]
-```
+      --installation-id <INSTALLATION_ID>
+          The id of the app's installation that reaches the repositories
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+      --private-key-file <PRIVATE_KEY_FILE>
+          The app's private key (PEM file)
 
-## `guildbotics server`
+  -h, --help
+          Print help
+```
 
-Run and stop the server: the screens, the API, and the services in it.
+## guildbotics branvil repo
 
 ```text
-guildbotics server [OPTIONS] COMMAND [ARGS]...
-```
+Manage repositories (through the running service)
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil repo [OPTIONS] <COMMAND>
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics server start`](#guildbotics-server-start) | Run the server in the foreground. |
-| [`guildbotics server stop`](#guildbotics-server-stop) | Stop the server and wait for it to exit, after its in-flight work. |
+Commands:
+  create    Create an empty managed repository in a workspace
+  upstream  Make a repository follow an upstream repository and publish to it; an empty repository is filled with its default branch (owner)
+  help      Print this message or the help of the given subcommand(s)
 
-## `guildbotics server start`
+Options:
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
 
-Run the server in the foreground.
+          [env: BRANVIL_URL]
 
-It opens the selected workspace, or none until one is selected on the
-screens. It starts the services as well with --services, or when the
-Service screen's setting says so. It runs until `guildbotics server stop`.
-Ctrl-C asks the same: the first lets in-flight work finish, the second
-cancels it. SIGTERM, which an OS sends to stop its service, cancels it at
-once.
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
 
-```text
-guildbotics server start [OPTIONS]
-```
+          [env: BRANVIL_TOKEN]
 
-| Option | Description |
-| --- | --- |
-| `--services` | Also start the services, whatever the Service screen's setting says |
-| `--help` | Show this message and exit. |
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-## `guildbotics server stop`
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
 
-Stop the server and wait for it to exit, after its in-flight work.
+          [env: BRANVIL_DATA_DIR]
 
-```text
-guildbotics server stop [OPTIONS]
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--force` | Cancel in-flight work instead of waiting for it, and force terminate the server if its teardown does not end |
-| `--help` | Show this message and exit. |
+## guildbotics branvil repo create
 
-## `guildbotics service`
+```text
+Create an empty managed repository in a workspace
 
-Start and stop the services of a running server, as the Service screen
-does: scheduled commands, ticket patrol, and chat events.
+Usage: guildbotics branvil repo create [OPTIONS] <PATH>
 
-```text
-guildbotics service [OPTIONS] COMMAND [ARGS]...
+Arguments:
+  <PATH>
+          Repository path <workspace>/<name>, e.g. acme/demo
+
+Options:
+      --default-branch <DEFAULT_BRANCH>
+          [default: main]
+
+      --label <LABELS>
+          A label its tickets may carry (repeatable)
+
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil repo upstream
+
+```text
+Make a repository follow an upstream repository and publish to it; an empty repository is filled with its default branch (owner)
+
+Usage: guildbotics branvil repo upstream [OPTIONS] --repository <REPOSITORY> <PATH>
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Arguments:
+  <PATH>
+          Repository path <workspace>/<name>, e.g. acme/demo
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics service start`](#guildbotics-service-start) | Start the services with the settings saved on the Service screen. |
-| [`guildbotics service stop`](#guildbotics-service-stop) | Stop the services after their in-flight work; the server keeps running. |
+Options:
+      --repository <REPOSITORY>
+          The upstream repository, e.g. acme/demo on GitHub
 
-## `guildbotics service start`
+      --provider <PROVIDER>
+          [default: github]
+
+      --reader <READER>
+          The member whose account reads it [default: kept, or picked for a new upstream]
+
+  -h, --help
+          Print help
+```
 
-Start the services with the settings saved on the Service screen.
+## guildbotics branvil workspace
 
 ```text
-guildbotics service start [OPTIONS]
+Manage workspaces (through the running service)
+
+Usage: guildbotics branvil workspace [OPTIONS] <COMMAND>
+
+Commands:
+  create  Create a workspace: its repositories live under it, and it has one board
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
+
+          [env: BRANVIL_URL]
+
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
+
+          [env: BRANVIL_TOKEN]
+
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
+
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
+
+          [env: BRANVIL_DATA_DIR]
+
+  -h, --help
+          Print help
 ```
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+## guildbotics branvil workspace create
 
-## `guildbotics service stop`
+```text
+Create a workspace: its repositories live under it, and it has one board
+
+Usage: guildbotics branvil workspace create <NAME>
+
+Arguments:
+  <NAME>
+          Workspace name, e.g. acme
+
+Options:
+  -h, --help
+          Print help
+```
 
-Stop the services after their in-flight work; the server keeps running.
+## guildbotics branvil runner
 
 ```text
-guildbotics service stop [OPTIONS]
+Run the CI runner, a separate process that executes jobs in microVMs (docs/ci.md)
+
+Usage: guildbotics branvil runner [OPTIONS]
+       guildbotics branvil runner <COMMAND>
+
+Commands:
+  register     Create a runner member and print its token once (needs the owner's token)
+  pull         Pull an image into the runner's image cache (jobs never pull)
+  doctor       Show which msb is used and whether the executor is ready
+  install-msb  Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --work-dir <WORK_DIR>
+          Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
+
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
+
+          [env: BRANVIL_URL]
+
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
+
+          [env: BRANVIL_TOKEN]
+
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
+
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
+
+          [env: BRANVIL_DATA_DIR]
+
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil runner register
+
+```text
+Create a runner member and print its token once (needs the owner's token)
+
+Usage: guildbotics branvil runner register <NAME>
 
-| Option | Description |
-| --- | --- |
-| `--force` | Cancel in-flight work instead of waiting for it |
-| `--help` | Show this message and exit. |
+Arguments:
+  <NAME>
+          Name of the runner member, e.g. runner1
 
-## `guildbotics version`
+Options:
+  -h, --help
+          Print help
+```
 
-Print version.
+## guildbotics branvil runner pull
 
 ```text
-guildbotics version [OPTIONS]
+Pull an image into the runner's image cache (jobs never pull)
+
+Usage: guildbotics branvil runner pull <IMAGE>
+
+Arguments:
+  <IMAGE>
+          Image reference by tag, [registry/]name[:tag], as pipelines name it
+
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil runner doctor
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+```text
+Show which msb is used and whether the executor is ready
+
+Usage: guildbotics branvil runner doctor
 
-## `guildbotics workspace`
+Options:
+  -h, --help
+          Print help
+```
 
-Manage the active GuildBotics workspace used by AI CLI tools.
+## guildbotics branvil runner install-msb
 
 ```text
-guildbotics workspace [OPTIONS] COMMAND [ARGS]...
+Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
+
+Usage: guildbotics branvil runner install-msb --from <FROM>
+
+Options:
+      --from <FROM>
+          Path of an msb binary that reports the pinned version
+
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil admin
+
+```text
+Offline maintenance of the data directory (the service must be stopped)
+
+Usage: guildbotics branvil admin [OPTIONS] <COMMAND>
 
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
+Commands:
+  notify   Send text to the configured webhook without opening the database; works while the service is running or stopped; no-op if unset
+  check    Check the database structure and that every index matches the records; a passing check also clears the mark an upgrade leaves, which `branvil serve` refuses
+  reindex  Rebuild every derived index from the records
+  upgrade  Upgrade the database from the previous schema version, keeping a copy of it as it was (stop the service and take a backup first). Exits 3 when the database was upgraded, now or before, and has not passed `branvil admin check` since; 0 when it already has this version and is checked; 1 when it failed, which leaves it unchanged
+  help     Print this message or the help of the given subcommand(s)
 
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
-| [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
-| [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for the server and external AI CLI tools. |
+Options:
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
 
-## `guildbotics workspace current`
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
 
-Show the persisted active workspace.
+          [env: BRANVIL_DATA_DIR]
 
+  -h, --help
+          Print help
+```
+
+## guildbotics branvil admin notify
+
 ```text
-guildbotics workspace current [OPTIONS]
+Send text to the configured webhook without opening the database; works while the service is running or stopped; no-op if unset
+
+Usage: guildbotics branvil admin notify <TEXT>
+
+Arguments:
+  <TEXT>
+
+
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil admin check
+
+```text
+Check the database structure and that every index matches the records; a passing check also clears the mark an upgrade leaves, which `branvil serve` refuses
 
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil admin check
 
-## `guildbotics workspace status`
+Options:
+  -h, --help
+          Print help
+```
 
-Show active workspace status without failing when it is missing.
+## guildbotics branvil admin reindex
 
 ```text
-guildbotics workspace status [OPTIONS]
+Rebuild every derived index from the records
+
+Usage: guildbotics branvil admin reindex
+
+Options:
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil admin upgrade
+
+```text
+Upgrade the database from the previous schema version, keeping a copy of it as it was (stop the service and take a backup first). Exits 3 when the database was upgraded, now or before, and has not passed `branvil admin check` since; 0 when it already has this version and is checked; 1 when it failed, which leaves it unchanged
 
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil admin upgrade
 
-## `guildbotics workspace use`
+Options:
+  -h, --help
+          Print help
+```
 
-Persist the active workspace for the server and external AI CLI tools.
+## guildbotics branvil backup
 
 ```text
-guildbotics workspace use [OPTIONS] WORKSPACE_DIR
+Write a consistent backup of the running service into a new directory on its machine
+
+Usage: guildbotics branvil backup [OPTIONS] --to <TO>
+
+Options:
+      --to <TO>
+          Directory to create (must not exist or be empty; on the machine the service runs on)
+
+      --url <URL>
+          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
+
+          [env: BRANVIL_URL]
+
+      --token <TOKEN>
+          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
+
+          [env: BRANVIL_TOKEN]
+
+      --config <CONFIG>
+          Configuration file [default: <data dir>/branvil.toml]
+
+      --data-dir <DATA_DIR>
+          Data directory [default: the OS data directory for "branvil"]
+
+          [env: BRANVIL_DATA_DIR]
+
+  -h, --help
+          Print help
 ```
+
+## guildbotics branvil restore
+
+```text
+Restore a backup into a new data directory and check it (the service need not run)
 
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
+Usage: guildbotics branvil restore --from <FROM> --data-dir <DATA_DIR>
+
+Options:
+      --from <FROM>
+          Backup directory written by `branvil backup`
+
+      --data-dir <DATA_DIR>
+          New data directory to fill (must not exist or be empty)
+
+          [env: BRANVIL_DATA_DIR]
+
+  -h, --help
+          Print help
+```

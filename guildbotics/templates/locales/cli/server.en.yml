@@ -6,3 +6,5 @@ en:
   consent_timeout: "No answer came from the consent screen in time. Run `guildbotics connect` again."
   denied: "The consent screen did not allow this machine."
   connected: "This machine's CLI is connected to the GuildBotics server."
+  invalid_token: "The server returned an invalid application token."
+  invalid_link: "The GuildBotics server returned an invalid entry link."

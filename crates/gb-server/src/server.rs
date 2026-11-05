@@ -2,7 +2,7 @@
 //! of the machine names, telling whoever started it that it listens.
 
 use std::future::Future;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use crate::i18n;
 
 /// Names the port the server listens on.
 pub const PORT_ENV: &str = "GUILDBOTICS_SERVER_PORT";
+const LOCK: &str = "run/app-api.lock";
 const DEFAULT_PORT: u16 = 8765;
 /// The line on stdout that tells a launcher the server listens on the port.
 pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
@@ -39,7 +40,7 @@ pub struct ServerLock(#[allow(dead_code)] FileLock);
 
 impl ServerLock {
     pub fn hold(data: &Path, port: u16) -> anyhow::Result<ServerLock> {
-        let Some(lock) = FileLock::try_hold(&data.join("run/app-api.lock"))? else {
+        let Some(lock) = FileLock::try_hold(&data.join(LOCK))? else {
             anyhow::bail!(i18n::t("en", "runtime.service_lock.already_running", &[]));
         };
         let record = serde_json::json!({"pid": std::process::id(), "port": port});
@@ -50,6 +51,44 @@ impl ServerLock {
         file.sync_all()?;
         Ok(ServerLock(lock))
     }
+}
+
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+pub struct RunningServer {
+    pub pid: u32,
+    pub port: u16,
+}
+
+/// Reads the holder of the machine's lock. A stale record on an unlocked
+/// file is not a running server.
+pub fn running(data: &Path, language: &str) -> anyhow::Result<Option<RunningServer>> {
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(data.join(LOCK))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if FileLock::try_file(file.try_clone()?)?.is_some() {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(1))?;
+    let mut record = Vec::new();
+    file.take(4096).read_to_end(&mut record)?;
+    let owner: RunningServer = serde_json::from_slice(&record).map_err(|_| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "runtime.service_lock.invalid_metadata",
+            &[]
+        ))
+    })?;
+    anyhow::ensure!(
+        owner.pid != 0 && owner.port != 0,
+        i18n::t(language, "runtime.service_lock.invalid_metadata", &[])
+    );
+    Ok(Some(owner))
 }
 
 /// Tells the launcher, as the only line stdout ever carries, that this
@@ -68,11 +107,50 @@ fn announce(port: u16) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Remote stop requests take the same drain and cancellation paths as signals.
+#[derive(Clone, Default)]
+pub struct Shutdown {
+    stop: tokio_util::sync::CancellationToken,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Shutdown {
+    pub async fn wait(&self) {
+        self.stop.cancelled().await;
+    }
+
+    pub async fn wait_for_cancel(&self) {
+        self.cancel.cancelled().await;
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[derive(Default)]
+pub(crate) struct ShutdownRequest {
+    force: bool,
+}
+
+pub(crate) async fn shutdown(
+    axum::extract::State(api): axum::extract::State<api::Shared>,
+    api::Body(body): api::Body<ShutdownRequest>,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    if body.force {
+        api.shutdown.cancel.cancel();
+    }
+    api.shutdown.stop.cancel();
+    (
+        axum::http::StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({})),
+    )
+}
+
 /// The server, holding the machine's lock and listening on its port.
 pub struct Server {
     lock: ServerLock,
     listener: tokio::net::TcpListener,
     api: Arc<Api>,
+    start_services: bool,
 }
 
 /// The machine's lock, which its holder keeps until everything the process
@@ -114,6 +192,7 @@ impl Server {
             workspace,
             work,
             cancelled: tokio_util::sync::CancellationToken::new(),
+            shutdown: crate::server::Shutdown::default(),
         });
         if let Some(workspace) = &api.workspace {
             let diagnostics = gb_observability::Diagnostics::open(workspace);
@@ -129,8 +208,17 @@ impl Server {
             lock,
             listener,
             api,
+            start_services: false,
         })
     }
+    pub fn start_services(&mut self, start: bool) {
+        self.start_services = start;
+    }
+
+    pub fn shutdown_requests(&self) -> Shutdown {
+        self.api.shutdown.clone()
+    }
+
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
         let api =
             Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
@@ -151,10 +239,11 @@ impl Server {
     ) -> (Held, anyhow::Result<()>) {
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
         let autostart_api = self.api.clone();
+        let start_services = self.start_services;
         let autostart = tokio::spawn(async move {
             if let Some(workspace) = &autostart_api.workspace {
                 match crate::service_settings::Settings::read(workspace) {
-                    Ok(settings) if settings.start_with_server => {
+                    Ok(settings) if start_services || settings.start_with_server => {
                         if let Err(error) = autostart_api.service.start().await {
                             tracing::error!("cannot automatically start service: {error:#}");
                         }
@@ -168,8 +257,13 @@ impl Server {
         let cancel_autostart = autostart.abort_handle();
         let service = self.api.clone();
         let cancelling_service = service.clone();
+        let cancel_request = service.shutdown.clone();
+        let stop_request = service.shutdown.clone();
         let cancelling = tokio::spawn(async move {
-            cancel.await;
+            tokio::select! {
+                () = cancel => {},
+                () = cancel_request.wait_for_cancel() => {},
+            }
             cancel_autostart.abort();
             cancelled.cancel();
             cancelling_service.service.stop(true).await;
@@ -182,7 +276,10 @@ impl Server {
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(async move {
-                stop.await;
+                tokio::select! {
+                    () = stop => {},
+                    () = stop_request.wait() => {},
+                }
                 stop_autostart.abort();
                 service.service.stop(false).await;
             })
@@ -209,7 +306,10 @@ impl Server {
 }
 
 /// Keep workspace recovery screens available when member assembly fails.
-fn service_controller(workspace: Option<&Path>, data: &Path) -> crate::service_runtime::Controller {
+pub(crate) fn service_controller(
+    workspace: Option<&Path>,
+    data: &Path,
+) -> crate::service_runtime::Controller {
     let built = (|| -> anyhow::Result<_> {
         let workspace = workspace.ok_or_else(|| anyhow::anyhow!("workspace not selected"))?;
         let native = crate::member::native::Native::new(workspace.into(), data.into())?;
@@ -226,7 +326,7 @@ fn service_controller(workspace: Option<&Path>, data: &Path) -> crate::service_r
     built.unwrap_or_default()
 }
 
-fn member_backend(
+pub(crate) fn member_backend(
     workspace: &Path,
     data: &Path,
     work: &tokio_util::task::TaskTracker,
@@ -317,6 +417,7 @@ mod tests {
             workspace: Some(native.workspace.clone()),
             work: Default::default(),
             cancelled: Default::default(),
+            shutdown: Default::default(),
         });
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let assembly = api.service.hold_start_for_test().await;
@@ -324,6 +425,7 @@ mod tests {
             lock: ServerLock::hold(&native.data, port).unwrap(),
             listener,
             api: api.clone(),
+            start_services: false,
         };
         let stop = CancellationToken::new();
         let serving = tokio::spawn({

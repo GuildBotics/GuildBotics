@@ -17,6 +17,7 @@ fn image_load_help_and_validation_reach_the_real_entry() {
     let output = Command::new(cli)
         .env("HOME", dir.path())
         .env("GUILDBOTICS_HOME", dir.path())
+        .env("LANGUAGE", "en")
         .args(["environment", "image", "load"])
         .arg(&path)
         .args(["--tag", "local/agent:1"])
@@ -139,14 +140,19 @@ fn environment_help_and_status_reach_the_real_entry_without_starting_a_vm() {
     std::fs::write(root.path().join("data/msb"), "cannot be a runtime").unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(workspace.join(".guildbotics/config")).unwrap();
-    let output = Command::new(cli)
-        .env("HOME", root.path())
-        .env("GUILDBOTICS_HOME", root.path())
-        .args(["environment", "--workspace"])
-        .arg(workspace)
-        .arg("status")
-        .output()
-        .unwrap();
+    let status = |arguments: &[&str]| {
+        Command::new(cli)
+            .env("HOME", root.path())
+            .env("GUILDBOTICS_HOME", root.path())
+            .env("LANGUAGE", "en")
+            .args(["environment", "--workspace"])
+            .arg(&workspace)
+            .arg("status")
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+    let output = status(&[]);
     assert!(
         output.status.success(),
         "{}",
@@ -157,6 +163,17 @@ fn environment_help_and_status_reach_the_real_entry_without_starting_a_vm() {
         .split_once("\n{")
         .expect("guidance precedes JSON status");
     let view: serde_json::Value = serde_json::from_str(&format!("{{{document}")).unwrap();
+    let json = status(&["--format", "json"]);
+    assert!(
+        json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["refusal"], view["problem"]);
+    assert_eq!(json["setting"], view["problem_setting"]);
+    assert_eq!(json["runtime"], view["runtime"]);
+    assert_eq!(json["snapshot"], view["snapshot"]);
     assert_eq!(guidance, view["problem"].as_str().unwrap());
     assert_eq!(view["problem_setting"], "runtime");
     assert_eq!(view["runtime"]["available"], false);
@@ -167,4 +184,37 @@ fn environment_help_and_status_reach_the_real_entry_without_starting_a_vm() {
             .iter()
             .any(|tool| tool["label"] == "Claude Code")
     );
+}
+
+#[test]
+fn image_load_localizes_the_wrong_cpu_before_placing_the_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wrong-cpu.tar");
+    let device = gb_environment::image::device_architecture();
+    let other = if device == "arm64" { "amd64" } else { "arm64" };
+    let index = format!(r#"{{"manifests":[{{"platform":{{"architecture":"{other}"}}}}]}}"#);
+    let mut tar = tar::Builder::new(std::fs::File::create(&path).unwrap());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(index.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "index.json", index.as_bytes())
+        .unwrap();
+    tar.finish().unwrap();
+    for (language, message) in [("en", "cannot run"), ("ja", "では動きません")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+            .env("GUILDBOTICS_HOME", dir.path())
+            .env("LANGUAGE", language)
+            .args(["environment", "image", "load"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        for part in ["wrong-cpu.tar", device, other, message] {
+            assert!(error.contains(part), "{error}");
+        }
+        assert!(!dir.path().join("data/msb").exists());
+    }
 }

@@ -67,10 +67,17 @@ fn docker_and_oci_metadata_are_checked_before_loading() {
                 "arm64"
             );
             gb_environment::image_archive::validate(&path, "arm64").unwrap();
-            let error = gb_environment::image_archive::validate(&path, "amd64")
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("arm64") && error.contains("amd64"));
+            assert_eq!(
+                gb_environment::image_archive::validate(&path, "amd64"),
+                Err(gb_environment::Sentence::Key(
+                    "intelligences.agent_environment.image.wrong_architecture",
+                    vec![
+                        ("path", path.display().to_string()),
+                        ("architecture", "arm64".into()),
+                        ("device", "amd64".into()),
+                    ],
+                )),
+            );
         }
     }
 }

@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 gb-config = { path = "../gb-config" }
 gb-base = { path = "../gb-base" }
+gb-workspace = { path = "../gb-workspace" }
 branvil = { path = "../branvil" }
 regex = "1"
 url = "2"
@@ -30,6 +31,7 @@ anyhow = "1"
 tracing = "0.1"
 
 [dev-dependencies]
+axum = { version = "0.8.9", features = ["json"] }
 gb-member = { path = "../gb-member" }
 serde-saphyr = "2.0.0"
 syn = { version = "2", features = ["full", "visit"] }
