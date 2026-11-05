@@ -114,8 +114,10 @@ impl Team {
         let text = |key: &str| match project.get(key) {
             None => Ok(String::new()),
             Some(Value::String(text)) => Ok(text.clone()),
-            Some(_) => Err(anyhow::anyhow!("{key} must be a string")
-                .context(crate::ConfigFile(team.join("project.yml")))),
+            Some(_) => Err(crate::ConfigFile::wrap(
+                team.join("project.yml"),
+                anyhow::anyhow!("{key} must be a string"),
+            )),
         };
         let identities = identity_root.join(".guildbotics/config/team/members");
         let mut members = Vec::new();
@@ -140,28 +142,30 @@ impl Team {
             let string = |file: &Map<String, Value>, key: &str, path: &Path| match file.get(key) {
                 None => Ok(String::new()),
                 Some(Value::String(s)) => Ok(s.clone()),
-                Some(_) => Err(anyhow::anyhow!("{key} must be a string")
-                    .context(crate::ConfigFile(path.into()))),
+                Some(_) => Err(crate::ConfigFile::wrap(
+                    path,
+                    anyhow::anyhow!("{key} must be a string"),
+                )),
             };
             let person_id = string(&identity, "person_id", &identity_file)?;
             if person_id != name {
-                return Err(
-                    anyhow::anyhow!("the member's ID is not its directory's name")
-                        .context(crate::ConfigFile(identity_file.clone())),
-                );
+                return Err(crate::ConfigFile::wrap(
+                    &identity_file,
+                    anyhow::anyhow!("the member's ID is not its directory's name"),
+                ));
             }
             let name_value = identity
                 .get("name")
                 .and_then(Value::as_str)
                 .context("name is required")
-                .with_context(|| crate::ConfigFile(identity_file.clone()))?;
+                .map_err(|error| crate::ConfigFile::wrap(&identity_file, error))?;
             let is_active = match participation.get("is_active") {
                 None => false,
                 Some(value) => lax_bool(value)
-                    .with_context(|| {
-                        format!("{}: is_active must be true or false", directory.display())
-                    })
-                    .with_context(|| crate::ConfigFile(directory.join("member.yml")))?,
+                    .context("is_active must be true or false")
+                    .map_err(|error| {
+                        crate::ConfigFile::wrap(directory.join("member.yml"), error)
+                    })?,
             };
             members.push(Member {
                 person_id,
@@ -252,14 +256,13 @@ fn participants(members: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
 fn yaml_mapping(path: &Path) -> anyhow::Result<Map<String, Value>> {
     (|| {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("cannot read {}", path.display()))?;
+        let text = std::fs::read_to_string(path).context("cannot read configuration")?;
         match crate::yaml::value(&text) {
             Ok(Value::Object(mapping)) => Ok(mapping),
-            _ => anyhow::bail!("{} is not a YAML mapping", path.display()),
+            _ => anyhow::bail!("configuration is not a YAML mapping"),
         }
     })()
-    .with_context(|| crate::ConfigFile(path.into()))
+    .map_err(|error| crate::ConfigFile::wrap(path, error))
 }
 
 /// One of a member's two files, holding only the fields it is for.
@@ -268,8 +271,7 @@ fn member_file(path: &Path, fields: &[&str]) -> anyhow::Result<Map<String, Value
         let file = yaml_mapping(path)?;
         anyhow::ensure!(
             file.get("profile").is_none_or(Value::is_object),
-            "{} is not a YAML mapping",
-            path.display()
+            "profile is not a YAML mapping"
         );
         let misplaced: Vec<&str> = file
             .keys()
@@ -278,18 +280,115 @@ fn member_file(path: &Path, fields: &[&str]) -> anyhow::Result<Map<String, Value
             .collect();
         anyhow::ensure!(
             misplaced.is_empty(),
-            "{}: fields that belong in the other file: {}",
-            path.display(),
+            "fields that belong in the other file: {}",
             misplaced.join(", ")
         );
         Ok(file)
     })()
-    .with_context(|| crate::ConfigFile(path.into()))
+    .map_err(|error| crate::ConfigFile::wrap(path, error))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_config_retains_file_reason_and_io_source() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config");
+        let path = config.join("team/project.yml");
+        let error = Team::load(&config, &root.path().join("identity")).unwrap_err();
+        let file = error.downcast_ref::<crate::ConfigFile>().unwrap();
+        assert_eq!(file.path(), path);
+        let source = error.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            error.to_string(),
+            format!("{}: cannot read configuration: {source}", path.display())
+        );
+    }
+
+    #[test]
+    fn config_errors_identify_the_file_and_validation_reason_once() {
+        for (target, content, reason) in [
+            ("project", "language: 3", "language must be a string"),
+            (
+                "project",
+                "default_person_id: []",
+                "default_person_id must be a string",
+            ),
+            ("project", "[", "not a YAML mapping"),
+            ("identity", "[", "not a YAML mapping"),
+            (
+                "identity",
+                "person_id: aiko\nname: Aiko\nprofile: []",
+                "profile is not a YAML mapping",
+            ),
+            (
+                "identity",
+                "person_id: aiko\nname: Aiko\nis_active: true",
+                "fields that belong in the other file: is_active",
+            ),
+            (
+                "identity",
+                "person_id: 3\nname: Aiko",
+                "person_id must be a string",
+            ),
+            (
+                "identity",
+                "person_id: other\nname: Aiko",
+                "ID is not its directory's name",
+            ),
+            ("identity", "person_id: aiko", "name is required"),
+            (
+                "identity",
+                "person_id: aiko\nname: Aiko\nperson_type: []",
+                "person_type must be a string",
+            ),
+            ("participation", "[", "not a YAML mapping"),
+            (
+                "participation",
+                "name: Aiko",
+                "fields that belong in the other file: name",
+            ),
+            (
+                "participation",
+                "is_active: []",
+                "is_active must be true or false",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = dir.path().join("config");
+            let identity = dir.path().join("identity");
+            let project = config.join("team/project.yml");
+            let participation = config.join("team/members/aiko/member.yml");
+            let member = identity.join(".guildbotics/config/team/members/aiko/identity.yml");
+            for (path, content) in [
+                (&project, "language: en"),
+                (&participation, "is_active: true"),
+                (&member, "person_id: aiko\nname: Aiko"),
+            ] {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, content).unwrap();
+            }
+            let path = match target {
+                "project" => &project,
+                "identity" => &member,
+                _ => &participation,
+            };
+            std::fs::write(path, content).unwrap();
+            let error = Team::load(&config, &identity).unwrap_err();
+            let file = error.downcast_ref::<crate::ConfigFile>().unwrap();
+            assert_eq!(file.path(), path, "{target}: {content}");
+            let message = error.to_string();
+            assert!(message.contains(reason), "{message}");
+            assert_eq!(
+                message.matches(path.to_str().unwrap()).count(),
+                1,
+                "{message}"
+            );
+        }
+    }
 
     #[test]
     fn a_member_id_is_a_directory_name_everywhere() {

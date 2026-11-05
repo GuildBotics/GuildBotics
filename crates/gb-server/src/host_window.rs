@@ -520,6 +520,56 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn command_preparation_preserves_config_file_and_parse_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let host = gb_environment::Host {
+            data: root.path().join("data"),
+            home: root.path().join("home"),
+            package: root.path().join("package"),
+            identity_root: root.path().join("identity"),
+        };
+        let roots = gb_config::commands::CommandRoots {
+            config: workspace.join(".guildbotics/config"),
+            templates: host.package.join("templates"),
+        };
+        let project = roots.config.join("team/project.yml");
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::write(&project, "[").unwrap();
+        let command = gb_environment::Command {
+            wants_result: false,
+            invocation: None,
+            person_id: "aiko".into(),
+            run_id: "run".into(),
+            trace_id: "trace".into(),
+            work_kind: "manual".into(),
+            work_identity: "work".into(),
+            path: root.path().join("probe.py"),
+            name: "probe".into(),
+            access: gb_wire::CommandAccess {
+                read_only: true,
+                inspects: vec![],
+            },
+            args: vec![],
+            cwd: workspace.clone(),
+            pipe: String::new(),
+        };
+        let preflight = gb_environment::device::read(&host, &workspace).await;
+        let error = match prepare_command(
+            &host, &workspace, &command, &roots, &preflight, None, None,
+        )
+        .await
+        {
+            Ok(_) => panic!("malformed configuration must refuse the command"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            format!("{}: configuration is not a YAML mapping", project.display())
+        );
+    }
+
     #[test]
     fn every_configured_brain_adapter_is_available_once_to_the_command() {
         let resolved = json!({"brains":{
@@ -1661,7 +1711,13 @@ pub async fn prepare_command(
             full_transcript,
         ) && let Value::Object(value) = redactor.local(value)
         {
-            diagnostics.record(value);
+            if value["type"] == "workflow.completed" {
+                if let Err(error) = diagnostics.record_once(value) {
+                    tracing::warn!("cannot record workflow completion: {error}");
+                }
+            } else {
+                diagnostics.record(value);
+            }
         }
     });
     let catalog: Value = serde_json::from_slice(

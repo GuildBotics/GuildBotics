@@ -582,7 +582,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/drivers/test_pending_chat_dispatcher.py::test_event_completed_elsewhere_is_processed_without_running_again` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはrunの全トランスクリプトで有無を判定し、未記録なら保存されたattemptでrecovered:trueを記録する。既存の診断・共有Activityは独立に有無を判定し、不足した側だけを補う。既存eventあり/なし・後処理失敗と再起動を含め、両保存先に完了が1件だけ残る条件を completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts でも確認する。
 
 - `tests/guildbotics/drivers/test_pending_chat_dispatcher.py::test_repeated_failures_use_the_whole_attempt_budget_then_abandon` -> `crates/gb-server/src/member/native.rs::chat_retry_budget_is_durable_due_rejection_and_notices_do_not_spend_extra_attempts`
 
@@ -904,7 +904,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_recovered_completion_records_workflow_completed_event` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはrunの全トランスクリプトで有無を判定し、未記録なら保存されたattemptでrecovered:trueを記録する。既存の診断・共有Activityは独立に有無を判定し、不足した側だけを補う。既存eventあり/なし・後処理失敗と再起動を含め、両保存先に完了が1件だけ残る条件を completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts でも確認する。
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_judgment_without_effort_preserves_response_settings` -> `移さない：#81で判定とresponse agentは同じVMの共有Pythonに保持。`
 
@@ -932,7 +932,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_completed_batch_recovery_does_not_consume_new_messages` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはrunの全トランスクリプトで有無を判定し、未記録なら保存されたattemptでrecovered:trueを記録する。既存の診断・共有Activityは独立に有無を判定し、不足した側だけを補う。既存eventあり/なし・後処理失敗と再起動を含め、両保存先に完了が1件だけ残る条件を completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts でも確認する。
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_batch_keeps_unread_messages_beyond_historical_context_bound` -> `crates/gb-server/src/member/native.rs::local_chat_snapshot_paginates_bounds_history_and_keeps_every_unread_message_at_the_same_time`
 
@@ -952,7 +952,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_updates_read_during_turn_are_consumed_only_on_completion` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはrunの全トランスクリプトで有無を判定し、未記録なら保存されたattemptでrecovered:trueを記録する。既存の診断・共有Activityは独立に有無を判定し、不足した側だけを補う。既存eventあり/なし・後処理失敗と再起動を含め、両保存先に完了が1件だけ残る条件を completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts でも確認する。
 
 ### tests/guildbotics/capabilities/test_chat_selection_fast_path.py
 

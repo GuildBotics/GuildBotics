@@ -43,6 +43,42 @@ impl ActivityEvents {
         }
     }
 
+    /// Reconcile a domain event independently of its local diagnostics record.
+    /// The caller holds the shared write transaction across the check and append.
+    pub fn record_once(
+        &self,
+        writer: &mut Writer<'_>,
+        record: &Value,
+        redactor: &Redactor,
+    ) -> anyhow::Result<bool> {
+        let trace = text(record, &["trace_id", "local_trace_id"]);
+        anyhow::ensure!(!trace.is_empty(), "domain event requires a trace identity");
+        // Recovery must fail closed on unreadable records, unlike a best-effort activity feed.
+        for year in children(&self.root)? {
+            if !year.is_dir() {
+                continue;
+            }
+            for month in children(&year)? {
+                if !month.is_dir() {
+                    continue;
+                }
+                for path in children(&month)? {
+                    if path.extension().is_none_or(|extension| extension != "json") {
+                        continue;
+                    }
+                    let existing: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+                    if text(&existing, &["local_trace_id"]) == trace
+                        && text(&existing, &["kind"]) == text(record, &["type", "kind"])
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        self.record(writer, record, redactor)?;
+        Ok(true)
+    }
+
     pub fn record(
         &self,
         writer: &mut Writer<'_>,
@@ -186,4 +222,47 @@ pub(crate) fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
         .collect::<Result<Vec<_>, _>>()?;
     paths.sort();
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_dedup_fails_closed_on_unreadable_or_malformed_event_records() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ActivityEvents::open(root.path());
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            root.path().join("identity"),
+            Some(root.path().into()),
+        );
+        let path = store.root.join("2026/11/prior.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let redactor = Redactor::new(Vec::<String>::new());
+        let event = json!({"type":"workflow.completed","trace_id":"run"});
+        std::fs::write(&path, "invalid json").unwrap();
+        assert!(
+            writes
+                .transaction(|writer| store.record_once(writer, &event, &redactor))
+                .is_err()
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(
+            writes
+                .transaction(|writer| store.record_once(writer, &event, &redactor))
+                .is_err()
+        );
+        std::fs::remove_dir(&path).unwrap();
+        assert!(
+            writes
+                .transaction(|writer| store.record_once(writer, &event, &redactor))
+                .unwrap()
+        );
+        assert!(
+            !writes
+                .transaction(|writer| store.record_once(writer, &event, &redactor))
+                .unwrap()
+        );
+    }
 }

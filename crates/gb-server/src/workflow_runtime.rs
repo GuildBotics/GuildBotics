@@ -123,7 +123,7 @@ impl Runtime {
         let project = (|| -> anyhow::Result<Value> {
             gb_config::yaml_value(&std::fs::read_to_string(&project_path)?)
         })()
-        .with_context(|| gb_config::ConfigFile(project_path))?;
+        .map_err(|error| gb_config::ConfigFile::wrap(project_path, error))?;
         let writes = Arc::new(SharedWrites::new(
             native.identity_root.clone(),
             Some(native.workspace.clone()),
@@ -859,6 +859,41 @@ impl crate::chat_dispatch::Runner for Runtime {
     }
     fn record(&self, id: &str) -> anyhow::Result<Option<RunRecord>> {
         RunStore::open(&self.dispatcher.workspace).read(id)
+    }
+    fn completed(
+        &self,
+        pending: &crate::chat_state::Pending,
+        record: &RunRecord,
+    ) -> anyhow::Result<()> {
+        let Some(result) = &record.result else {
+            return Ok(());
+        };
+        let event = gb_member::events::completed(
+            &record.run_id,
+            u64::from(pending.attempt_count),
+            true,
+            serde_json::to_value(result.status)?.as_str().unwrap_or(""),
+        );
+        let mut attributes = crate::chat_dispatch::attributes(&self.chat_provider, pending);
+        attributes.extend(event["attributes"].as_object().unwrap().clone());
+        let trace = self
+            .traced(
+                Trace::resume(&self.diagnostics(), "event_queue", &record.run_id)?,
+                attributes,
+            )
+            .command(crate::chat_dispatch::COMMAND);
+        trace.event_once(
+            "workflow.completed",
+            event["payload"].as_object().unwrap().clone(),
+        )?;
+        let mut activity = trace.correlation();
+        activity["type"] = event["type"].clone();
+        activity["payload"] = event["payload"].clone();
+        self.writes.transaction(|writer| {
+            gb_observability::activity::ActivityEvents::open(&self.dispatcher.workspace)
+                .record_once(writer, &activity, &self.redactor)?;
+            Ok(())
+        })
     }
     fn event(&self, kind: &str, pending: &crate::chat_state::Pending, mut payload: Value) {
         if kind == "chat_dispatch.abandoned" {

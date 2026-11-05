@@ -99,13 +99,13 @@ impl Trace {
         &self.id
     }
 
-    fn record(
+    fn record_value(
         &self,
         event_type: &str,
         person_id: &str,
         command: &str,
         payload: Map<String, Value>,
-    ) {
+    ) -> Map<String, Value> {
         let Value::Object(record) = json!({
             "kind": if event_type == "command.output" { "io" } else { "event" },
             "type": event_type,
@@ -125,7 +125,29 @@ impl Trace {
         }) else {
             unreachable!("an object")
         };
-        self.diagnostics.record(record);
+        record
+    }
+
+    fn record(
+        &self,
+        event_type: &str,
+        person_id: &str,
+        command: &str,
+        payload: Map<String, Value>,
+    ) {
+        self.diagnostics
+            .record(self.record_value(event_type, person_id, command, payload));
+    }
+
+    /// Append a domain event only when this trace transcript does not already contain its type.
+    /// Read/write failures prevent the caller from acknowledging recoverable work.
+    pub fn event_once(
+        &self,
+        event_type: &str,
+        payload: Map<String, Value>,
+    ) -> std::io::Result<bool> {
+        self.diagnostics
+            .record_once(self.record_value(event_type, "", "", payload))
     }
 
     /// Join an existing execution without opening or ending a boundary.

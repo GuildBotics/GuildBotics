@@ -93,6 +93,30 @@ impl Diagnostics {
         }
     }
 
+    /// Check the full durable transcript and append under the same writer lock.
+    pub fn record_once(&self, record: Map<String, Value>) -> std::io::Result<bool> {
+        let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
+        let path = self
+            .sessions
+            .join(format!("{}.jsonl", safe_id(&text(&record, "trace_id"))));
+        if let Some(existing) = read_records(&path)?
+            .into_iter()
+            .find(|existing| existing.get("type") == record.get("type"))
+        {
+            // A prior append may have succeeded before its derivative index write failed.
+            if belongs_in_index(&existing)
+                && !read_records(&self.index)?
+                    .iter()
+                    .any(|indexed| indexed == &existing)
+            {
+                self.index(&[existing])?;
+            }
+            return Ok(false);
+        }
+        self.route(record)?;
+        Ok(true)
+    }
+
     fn route(&self, mut record: Map<String, Value>) -> std::io::Result<()> {
         let trace_id = text(&record, "trace_id");
         if trace_id.is_empty() {
@@ -415,6 +439,76 @@ mod tests {
             unreachable!()
         };
         record
+    }
+
+    #[test]
+    fn terminal_event_repairs_index_after_transcript_append_succeeded() {
+        let root = tempfile::tempdir().unwrap();
+        let diagnostics = Diagnostics::open(root.path());
+        std::fs::create_dir_all(&diagnostics.index).unwrap();
+        let original = event("run", "event", "workflow.completed");
+        assert!(diagnostics.record_once(original.clone()).is_err());
+        std::fs::remove_dir(&diagnostics.index).unwrap();
+        assert!(
+            !Diagnostics::open(root.path())
+                .record_once(original.clone())
+                .unwrap()
+        );
+        assert_eq!(read_records(&diagnostics.index).unwrap(), vec![original]);
+        assert_eq!(
+            read_records(&diagnostics.sessions.join("run.jsonl"))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn terminal_event_dedup_uses_full_transcript_across_writers_and_reopens() {
+        let root = tempfile::tempdir().unwrap();
+        let diagnostics = Diagnostics::open(root.path());
+        std::thread::scope(|scope| {
+            let writers = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        Diagnostics::open(root.path())
+                            .record_once(event("run", "event", "workflow.completed"))
+                            .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                writers
+                    .into_iter()
+                    .map(|writer| writer.join().unwrap())
+                    .filter(|written| *written)
+                    .count(),
+                1
+            );
+        });
+        // Index retention must never make an already persisted terminal event absent.
+        std::fs::write(&diagnostics.index, "").unwrap();
+        assert!(
+            !Diagnostics::open(root.path())
+                .record_once(event("run", "event", "workflow.completed"))
+                .unwrap()
+        );
+        assert_eq!(
+            read_records(&diagnostics.sessions.join("run.jsonl"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            diagnostics
+                .record_once(event("other", "event", "workflow.completed"))
+                .unwrap()
+        );
+        assert!(
+            diagnostics
+                .record_once(event("run", "event", "workflow.rate_limited"))
+                .unwrap()
+        );
     }
 
     #[test]

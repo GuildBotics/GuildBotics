@@ -46,6 +46,14 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    #[cfg(test)]
+    pub(crate) fn seed_heartbeat(&self, person: &str) {
+        self.heartbeats.lock().unwrap().insert(
+            person.into(),
+            serde_json::json!({"person_id":person,"last_routine_at":"2026-11-05T00:00:00Z"}),
+        );
+    }
+
     pub fn heartbeats(&self) -> Vec<serde_json::Value> {
         self.heartbeats.lock().unwrap().values().cloned().collect()
     }

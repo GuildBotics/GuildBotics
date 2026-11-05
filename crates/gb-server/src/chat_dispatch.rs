@@ -57,6 +57,10 @@ pub trait Runner: Send + Sync {
         store: &'a Store,
     ) -> Future<'a, Result<RunRecord, Failure>>;
     fn record(&self, id: &str) -> anyhow::Result<Option<RunRecord>>;
+    /// Persist missing terminal observability before acknowledging the input.
+    fn completed(&self, _pending: &Pending, _record: &RunRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
     fn event(&self, kind: &str, pending: &Pending, payload: Value);
 }
 pub struct Dispatcher {
@@ -439,6 +443,7 @@ impl Dispatcher {
         )
     }
     async fn settle(&self, pending: &Pending, record: &RunRecord) -> anyhow::Result<()> {
+        self.runner.completed(pending, record)?;
         let status = record
             .result
             .as_ref()

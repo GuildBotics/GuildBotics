@@ -3,18 +3,8 @@ use crate::{
     service::{Outcome, Pending, Worker},
     service_settings::Settings,
 };
-use anyhow::Context;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::OnceCell;
-
-#[derive(Debug)]
-pub(crate) struct StartupConfig;
-impl std::fmt::Display for StartupConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("service_config_invalid")
-    }
-}
-impl std::error::Error for StartupConfig {}
 
 #[derive(Debug)]
 pub(crate) struct StartupSecrets;
@@ -137,8 +127,7 @@ impl Controller {
             &settings,
             self.execution.clone(),
         )
-        .await
-        .context(StartupConfig)?;
+        .await?;
         // Publish the worker before starting its tasks: cancellation while waiting
         // for this lock must not leave an unobservable service running.
         *self.worker.write().await = Some(worker.clone());
@@ -195,7 +184,8 @@ impl Controller {
         }
         scheduler["events_auth_failed_persons"] = serde_json::json!([]);
         scheduler["events_chat_provider"] = serde_json::json!("");
-        let worker = self.worker.read().await;
+        let worker_guard = self.worker.read().await;
+        let worker = worker_guard.as_ref().filter(|_| status.state != "starting");
         scheduler["member_routines"] = serde_json::json!(
             worker
                 .as_ref()
@@ -330,13 +320,10 @@ fn startup_error(
         )
     } else if !configured {
         crate::api::ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", headers)
-    } else if error.downcast_ref::<StartupConfig>().is_some() {
-        let path = error
-            .downcast_ref::<gb_config::ConfigFile>()
-            .map(|file| file.0.display().to_string());
+    } else if let Some(file) = error.downcast_ref::<gb_config::ConfigFile>() {
         crate::api::ApiError::new(StatusCode::BAD_REQUEST, "member_config_invalid", headers)
-            .reason(format!("{error:#}"))
-            .context(serde_json::json!({"path":path}))
+            .reason(file.to_string())
+            .context(serde_json::json!({"path":file.path()}))
     } else if error.downcast_ref::<std::io::Error>().is_some() {
         crate::api::ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -464,13 +451,14 @@ impl NativeWorker {
                 None
             };
             let (scheduled, routines) = commands(&metadata, chrono::Local::now().naive_local())
-                .with_context(|| {
-                    gb_config::ConfigFile(
+                .map_err(|error| {
+                    gb_config::ConfigFile::wrap(
                         native
                             .workspace
                             .join(".guildbotics/config/team/members")
                             .join(&member.person_id)
                             .join("member.yml"),
+                        error,
                     )
                 })?;
             scheduler.add(
@@ -610,31 +598,35 @@ mod tests {
             headers.insert("x-guildbotics-language", language.parse().unwrap());
             for (error, status, code, path, reason) in [
                 (
-                    anyhow::anyhow!("bad yaml")
-                        .context(gb_config::ConfigFile("/team/member.yml".into()))
-                        .context(StartupConfig),
+                    gb_config::ConfigFile::wrap("/team/member.yml", anyhow::anyhow!("bad yaml")),
                     400,
                     "member_config_invalid",
                     Some("/team/member.yml"),
                     "bad yaml",
                 ),
                 (
-                    anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::NotFound))
-                        .context(gb_config::ConfigFile("/team/project.yml".into()))
-                        .context(StartupConfig),
+                    gb_config::ConfigFile::wrap(
+                        "/team/project.yml",
+                        anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                    ),
                     400,
                     "member_config_invalid",
                     Some("/team/project.yml"),
                     "",
                 ),
                 (
-                    anyhow::anyhow!("keychain denied")
-                        .context(StartupSecrets)
-                        .context(StartupConfig),
+                    anyhow::anyhow!("keychain denied").context(StartupSecrets),
                     503,
                     "secret_store_unavailable",
                     None,
                     "keychain denied",
+                ),
+                (
+                    anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+                    503,
+                    "service_path_unavailable",
+                    None,
+                    "",
                 ),
                 (
                     anyhow::anyhow!("unexpected"),
@@ -656,6 +648,13 @@ mod tests {
                 assert!(body["message"].as_str().unwrap().contains(reason));
                 if let Some(path) = path {
                     assert_eq!(body["context"]["path"], path);
+                    assert_eq!(body["message"].as_str().unwrap().matches(path).count(), 1);
+                    assert!(
+                        !body["message"]
+                            .as_str()
+                            .unwrap()
+                            .contains("service_config_invalid")
+                    );
                 }
             }
         }
@@ -848,6 +847,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn starting_hides_every_previous_worker_field_but_keeps_the_exit_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let controller = Controller::new(native.clone(), host.clone());
+        let (mut worker, _) = NativeWorker::assemble(
+            &native,
+            host,
+            &Settings::default(),
+            controller.execution.clone(),
+        )
+        .await
+        .unwrap();
+        worker.scheduler.seed_heartbeat("aiko");
+        assert!(!worker.scheduler.heartbeats().is_empty());
+        let old = Arc::get_mut(&mut worker).unwrap();
+        old.reception_failed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        old.auth_skipped.push("previous-agent".into());
+        old.chat_provider = "previous-provider".into();
+        controller
+            .service
+            .start(
+                &native.data,
+                &native.workspace,
+                vec![],
+                Settings::default(),
+                worker.clone(),
+            )
+            .await
+            .unwrap();
+        while controller.service.status().await.running {
+            tokio::task::yield_now().await;
+        }
+        *controller.worker.write().await = Some(worker);
+        controller.service.starting().await;
+        let view = controller.view().await;
+        assert_eq!(view["has_active_work"], true);
+        assert_eq!(view["scheduler"]["running"], true);
+        assert_eq!(view["scheduler"]["member_routines"], serde_json::json!([]));
+        let events = &view["events"];
+        assert_eq!(events["state"], "starting");
+        assert_eq!(events["running"], false);
+        assert!(events["error"].is_null());
+        assert_eq!(events["listener_count"], 0);
+        assert_eq!(events["events_auth_failed_count"], 0);
+        assert!(events["subscription_count"].is_null());
+        assert!(events["events_drained_count"].is_null());
+        assert!(events["cycle_failure_count"].is_null());
+        assert_eq!(events["events_auth_failed_persons"], serde_json::json!([]));
+        assert_eq!(
+            events["events_missing_channel_persons"],
+            serde_json::json!([])
+        );
+        assert_eq!(events["events_chat_provider"], "");
+        assert_eq!(events["events_error_count"], 0);
+    }
+
+    #[tokio::test]
     async fn preflight_refusals_leave_stopped_without_an_error() {
         for invalid_settings in [false, true] {
             let root = tempfile::tempdir().unwrap();
@@ -907,8 +970,11 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(
-                error.downcast_ref::<gb_config::ConfigFile>().unwrap().0,
-                project
+                error
+                    .downcast_ref::<gb_config::ConfigFile>()
+                    .unwrap()
+                    .path(),
+                project.as_path()
             );
         }
     }

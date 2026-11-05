@@ -2640,6 +2640,154 @@ pub(crate) mod tests {
         }
     }
     #[tokio::test]
+    async fn completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts()
+     {
+        for diagnostic_exists in [false, true] {
+            for activity_exists in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let native = fixture(root.path());
+                let cleanup = tokio_util::task::TaskTracker::new();
+                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                let runtime = Arc::new(runtime);
+                let mut dispatch = crate::chat_dispatch::Dispatcher {
+                    person: "aiko".into(),
+                    service: "local".into(),
+                    language: "en".into(),
+                    roster: runtime.roster.clone(),
+                    chat: runtime.chat.clone().unwrap(),
+                    store: Arc::new(crate::chat_state::Store {
+                        workspace: native.workspace.clone(),
+                        writes: runtime.writes.clone(),
+                        limit: 500,
+                    }),
+                    runner: runtime.clone(),
+                };
+                seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+                let mut pending = dispatch
+                    .store
+                    .pending("local", "aiko", "C1")
+                    .unwrap()
+                    .remove(0);
+                pending.run_id = "interrupted-completion".into();
+                pending.attempt_count = 3;
+                dispatch.store.save("local", "aiko", &pending).unwrap();
+                let record: RunRecord = serde_json::from_value(json!({
+                    "run_id":pending.run_id,"work_kind":"chat","execution_mode":"autonomous",
+                    "member_id":"aiko","device_id":"device","source":"event_queue",
+                    "started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
+                    "work_identity":{"service":"local","channel_id":"C1","event_id":"C1:M1"},
+                    "provider_evidence":[{"type":"chat_reply","payload":{"text":"answered"}}],
+                    "result":{"subject_type":"chat","subject_id":"local:C1:M1","status":"done"}
+                })).unwrap();
+                runtime
+                    .writes
+                    .transaction(|writer| {
+                        RunStore::open(&native.workspace).start(
+                            writer,
+                            record.clone(),
+                            &runtime.redactor,
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap();
+                let trace = gb_observability::Trace::resume(
+                    &gb_observability::Diagnostics::open(&native.workspace),
+                    "event_queue",
+                    &pending.run_id,
+                )
+                .unwrap()
+                .person("aiko")
+                .command(crate::chat_dispatch::COMMAND);
+                let original = gb_member::events::completed(&pending.run_id, 3, false, "done");
+                if diagnostic_exists {
+                    trace.event(
+                        "workflow.completed",
+                        original["payload"].as_object().unwrap().clone(),
+                    );
+                }
+                let activity = gb_observability::activity::ActivityEvents::open(&native.workspace);
+                if activity_exists {
+                    let mut event = trace.correlation();
+                    event["type"] = original["type"].clone();
+                    event["payload"] = original["payload"].clone();
+                    runtime
+                        .writes
+                        .transaction(|writer| {
+                            activity.record(writer, &event, &runtime.redactor)?;
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                // A directory at the thread file forces settlement to fail after event persistence.
+                let blocked = dispatch
+                    .store
+                    .thread_file("local", "aiko", "C1", "M1", false)
+                    .unwrap();
+                std::fs::create_dir_all(&blocked).unwrap();
+                for attempt in 0..4 {
+                    let (restarted, restarted_driver) =
+                        workflow_fixture(&native, root.path(), &cleanup, false);
+                    dispatch.runner = Arc::new(restarted);
+                    if attempt < 3 {
+                        assert!(dispatch.process(chrono::Utc::now()).await.is_err());
+                        assert_eq!(
+                            dispatch.store.pending("local", "aiko", "C1").unwrap().len(),
+                            1
+                        );
+                    } else {
+                        std::fs::remove_dir(&blocked).unwrap();
+                        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+                        assert!(
+                            dispatch
+                                .store
+                                .pending("local", "aiko", "C1")
+                                .unwrap()
+                                .is_empty()
+                        );
+                    }
+                    assert!(driver.calls.lock().unwrap().is_empty());
+                    assert!(restarted_driver.calls.lock().unwrap().is_empty());
+                    let detail = gb_observability::Diagnostics::open(&native.workspace)
+                        .trace_detail(&pending.run_id)
+                        .unwrap();
+                    let completed = detail["records"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event["type"] == "workflow.completed")
+                        .collect::<Vec<_>>();
+                    assert_eq!(completed.len(), 1);
+                    assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
+                    assert_eq!(completed[0]["payload"]["attempt"], 3);
+                    assert_eq!(completed[0]["payload"]["recovered"], !diagnostic_exists);
+                    let events = activity
+                        .list_between(
+                            chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                        )
+                        .unwrap();
+                    let completed = events
+                        .iter()
+                        .filter(|event| event["kind"] == "workflow.completed")
+                        .collect::<Vec<_>>();
+                    assert_eq!(completed.len(), 1);
+                    assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
+                    assert_eq!(completed[0]["payload"]["attempt"], 3);
+                    assert_eq!(completed[0]["payload"]["recovered"], !activity_exists);
+                    assert_eq!(
+                        RunStore::open(&native.workspace)
+                            .read(&pending.run_id)
+                            .unwrap()
+                            .unwrap(),
+                        record
+                    );
+                }
+                cleanup.close();
+                cleanup.wait().await;
+            }
+        }
+    }
+    #[tokio::test]
     async fn malformed_scheduled_and_routine_commands_fail_under_a_closed_trace_and_run() {
         let root = tempfile::tempdir().unwrap();
         let native = fixture(root.path());
