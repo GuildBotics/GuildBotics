@@ -1,0 +1,24 @@
+[package]
+name = "gb-member"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[dependencies]
+gb-ports = { path = "../gb-ports" }
+gb-base = { path = "../gb-base" }
+gb-workspace = { path = "../gb-workspace" }
+gb-observability = { path = "../gb-observability" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-saphyr = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+unicode-casefold = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }

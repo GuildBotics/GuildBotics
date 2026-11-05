@@ -6,6 +6,16 @@
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "cli.member",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/member.en.yml"),
+    ),
+    (
+        "cli.member",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/member.ja.yml"),
+    ),
+    (
         "integrations.resources",
         "en",
         include_str!("../../../guildbotics/templates/locales/integrations/resources.en.yml"),
@@ -135,6 +145,38 @@ fn lookup(language: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_capability_diagnostics_resolve_in_both_languages() {
+        let sources = [
+            include_str!("../../gb-member/src/lib.rs"),
+            include_str!("../../gb-member/src/repository.rs"),
+            include_str!("../../gb-member/src/chat.rs"),
+            include_str!("../../gb-member/src/context.rs"),
+            include_str!("../../gb-member/src/archive.rs"),
+            include_str!("../../gb-member/src/audit.rs"),
+            include_str!("../../gb-member/src/memory.rs"),
+        ];
+        for source in sources {
+            for suffix in source.split("\"cli.member.").skip(1) {
+                let key = format!("cli.member.{}", suffix.split('"').next().unwrap());
+                for lang in ["en", "ja"] {
+                    let sentence = t(
+                        lang,
+                        &key,
+                        &[
+                            ("action", "ACTION"),
+                            ("state", "closed"),
+                            ("person", "PERSON"),
+                            ("blockers", "BLOCKERS"),
+                        ],
+                    );
+                    assert_ne!(sentence, key, "{lang}: {key}");
+                    assert!(!sentence.contains("%{"), "{lang}: {key}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn service_errors_are_translated_with_safe_actionable_parameters() {
