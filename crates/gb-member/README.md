@@ -13,7 +13,8 @@ read は更新確認を必要とせず、write は更新確認を通す。provid
 
 `Chat` は public account と participant labels を扱い、チャンネル名、URL、thread の解決を
 provider に任せる。操作の返り値は送信・reaction の receipt であり、呼び出し側が
-実行中 run の evidence として保存する。`await_checks` の notice は元の work identity と
+実行中 run の evidence として保存する。`await_checks` は告知ごとに記録 callback を呼び、
+次の告知に進む前に成功分を渡す。後続の投稿失敗で先の成功分を失わない。notice は元の work identity と
 確認した head を status に保持する。run の完了記録も呼び出し側が保存する。
 
 `Memory::open` は文書へ触る前に device identity を解決する。同期 API は blocking worker
@@ -44,3 +45,12 @@ cargo nextest run --locked -p gb-member
 cargo nextest run --locked -p gb-integrations --lib 'factory::local::'
 cargo nextest run --locked -p gb-server --lib 'i18n::'
 ```
+
+監査には各操作の transaction 内で解決した文書 snapshot と実際の移動先 path を渡す。
+監査のための scope なしの再読み込みは行わない。文書の探索では読めない文書を飛ばし、
+policy の検索は team だけを対象にする。文書 ID を指定した取得の失敗は隠さない。
+既知の Secret のマスク下限は凍結版と同じ 4 文字で、部分一致もマスクする。
+旧形式の並行サポートを持たない方針に従い、`body.md` が無い場合の `*.md` fallback は持たない。
+artifact の `:` を含む名前は Unix では受け入れ、Windows では拒否する。
+対応表は capabilities 全体と member context の実行主体検査を含み、workflow 制御は #90、
+member CLI の実行・完了・転送は #127 へ関数単位で割り当てている。
