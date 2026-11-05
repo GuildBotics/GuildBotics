@@ -6,6 +6,64 @@
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "commands.workflows.chat_conversation_workflow",
+        "en",
+        include_str!(
+            "../../../guildbotics/templates/locales/commands/workflows/chat_conversation_workflow.en.yml"
+        ),
+    ),
+    (
+        "commands.workflows.chat_conversation_workflow",
+        "ja",
+        include_str!(
+            "../../../guildbotics/templates/locales/commands/workflows/chat_conversation_workflow.ja.yml"
+        ),
+    ),
+    (
+        "drivers.task_scheduler",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/drivers/task_scheduler.en.yml"),
+    ),
+    (
+        "drivers.task_scheduler",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/drivers/task_scheduler.ja.yml"),
+    ),
+    (
+        "commands.workflows.common",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/commands/workflows/common.en.yml"),
+    ),
+    (
+        "commands.workflows.common",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/commands/workflows/common.ja.yml"),
+    ),
+    (
+        "integrations.pull_request_patrol",
+        "en",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/pull_request_patrol.en.yml"
+        ),
+    ),
+    (
+        "integrations.pull_request_patrol",
+        "ja",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/pull_request_patrol.ja.yml"
+        ),
+    ),
+    (
+        "capabilities.work_stops",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/capabilities/work_stops.en.yml"),
+    ),
+    (
+        "capabilities.work_stops",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/capabilities/work_stops.ja.yml"),
+    ),
+    (
         "cli.member",
         "en",
         include_str!("../../../guildbotics/templates/locales/cli/member.en.yml"),
@@ -123,6 +181,7 @@ pub fn t(language: &str, key: &str, params: &[(&str, &str)]) -> String {
         .unwrap_or_else(|| key.to_string());
     for (name, value) in params {
         text = text.replace(&format!("%{{{name}}}"), value);
+        text = text.replace(&format!("{{{name}}}"), value);
     }
     text
 }

@@ -46,6 +46,8 @@ fn machine() -> Machine {
 
 fn command(machine: &Machine, path: PathBuf, inspects: Vec<InspectsItem>) -> Command {
     Command {
+        wants_result: false,
+        invocation: None,
         person_id: "yuki".into(),
         run_id: "trace-1".into(),
         trace_id: "trace-1".into(),
@@ -78,6 +80,36 @@ fn spelled(path: &Path) -> String {
 
 fn env<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
     env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity() {
+    let machine = machine();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/get_os_ui_language.py");
+    let mut command = command(&machine, path, vec![]);
+    let invocation = serde_json::json!({
+        "command":"workflows/ticket_driven_workflow","person_id":"yuki",
+        "source":"routine","trigger_type":"ticket","run_id":"trace-1",
+        "payload":{"ticket_url":"local://tickets/90","max_completion_attempts":5},
+        "work":{"kind":"ticket","identity":"local://tickets/90"}
+    });
+    command.invocation = Some(serde_json::from_value(invocation.clone()).unwrap());
+    command.wants_result = true;
+    let made = shape(
+        &machine.host,
+        &machine.workspace,
+        &command,
+        Some("ja".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(made.request.invocation.unwrap()).unwrap(),
+        invocation
+    );
+    assert!(made.request.wants_result);
 }
 
 #[test]

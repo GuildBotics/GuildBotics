@@ -41,6 +41,7 @@ REGENERATE_COMMAND = "uv run --no-sync python scripts/generate-wire-schema.py"
 # Some host methods return dictionaries after serializing these concrete types.
 # Keep the wire result, rather than the method's broad dict annotation.
 HOST_RESULTS = {
+    "decision_evaluated": type(None),
     "acquire_inference": type(None),
     "begin_turn": wire.HostTurn,
     "end_turn": wire.EndTurnResult,
@@ -52,6 +53,7 @@ HOST_RESULTS = {
     "save": ConversationRecord,
     "mark_unhealthy": ConversationRecord,
     "record": type(None),
+    "required_io": type(None),
     "member": wire.MemberCommandResult,
     "agno": AgnoAnswer,
     "jev": dict[str, object],

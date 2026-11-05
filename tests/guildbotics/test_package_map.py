@@ -182,7 +182,7 @@ def _unreached_shared_packages(graph: grimp.ImportGraph) -> list[str]:
     """The shared packages and subpackages none of whose modules the guest
     reaches from its entries: the entry the host starts, the working
     directory's copy, and the brains the bundled mapping names (loaded by
-    name, so no import reaches them)."""
+    name, so no import reaches them), and bundled commands loaded by path."""
     mapping = yaml.safe_load(_BRAIN_MAPPING.read_text(encoding="utf-8"))
     roots = {"guildbotics.guest.entry", "guildbotics.guest.worktree_copy"} | {
         {
@@ -192,6 +192,18 @@ def _unreached_shared_packages(graph: grimp.ImportGraph) -> list[str]:
         }[slot["kind"]]
         for slot in mapping.values()
     }
+    # Commands are loaded by file path, outside grimp's package graph. Their
+    # imports, including lazy imports inside main(), are real VM entry edges.
+    for path in (_TEMPLATES / "commands").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+            roots.update(name for name in names if name in graph.modules)
     reached = set(roots).union(*(graph.find_upstream_modules(root) for root in roots))
     packages = sorted(
         name

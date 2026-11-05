@@ -1785,6 +1785,7 @@ mod tests {
         )
         .unwrap();
         let invocation = gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),
             trace_id: "trace".into(),
@@ -1811,6 +1812,7 @@ mod tests {
             loans: BTreeMap::from([("tool".into(), loan.clone())]),
             rate_limits: BTreeMap::new(),
             record: Arc::new(|_| {}),
+            required_io: None,
         })
         .await
         .unwrap();

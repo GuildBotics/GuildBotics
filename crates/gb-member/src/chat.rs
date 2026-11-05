@@ -108,10 +108,18 @@ impl Chat<'_> {
         )
     }
     pub async fn inspect_thread(&self, reference: &Reference<'_>, limit: usize) -> Result<Value> {
+        self.inspect_thread_page(reference, limit, None).await
+    }
+    pub async fn inspect_thread_page(
+        &self,
+        reference: &Reference<'_>,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> Result<Value> {
         let target = self.reference(reference).await?;
         let page = self
             .service
-            .list_thread_events(&target.channel_id, &target.thread_id, None, limit)
+            .list_thread_events(&target.channel_id, &target.thread_id, cursor, limit)
             .await?;
         Ok(
             json!({"service":self.service_name,"mode":"thread","channel_id":target.channel_id,

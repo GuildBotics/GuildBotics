@@ -393,6 +393,32 @@ class RecordArguments(BaseModel):
     entries: list[Entry]
 
 
+class RequiredIoArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str
+    payload: dict[str, Any]
+
+
+class DecisionEvaluatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evaluation_id: str
+    brain: str
+    model: str
+    route: str
+    reason: str
+    response_effort: str | None
+    error: str | None
+    duration_ms: float
+
+
+class DecisionEvaluatedArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payload: DecisionEvaluatedPayload
+
+
 class MemberArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -422,6 +448,7 @@ class JevArguments(BaseModel):
 
 
 HOST_ARGUMENTS = {
+    "decision_evaluated": DecisionEvaluatedArguments,
     "acquire_inference": AcquireInferenceArguments,
     "begin_turn": BeginTurnArguments,
     "end_turn": EndTurnArguments,
@@ -433,6 +460,7 @@ HOST_ARGUMENTS = {
     "save": SaveArguments,
     "mark_unhealthy": MarkUnhealthyArguments,
     "record": RecordArguments,
+    "required_io": RequiredIoArguments,
     "member": MemberArguments,
     "agno": AgnoArguments,
     "jev": JevArguments,

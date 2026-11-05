@@ -563,6 +563,17 @@ impl Executor for Native {
         guest: gb_environment::guest_process::Channel,
     ) -> Option<gb_environment::broker::Handler> {
         let mut native = self.clone();
+        native.chat_subject =
+            invocation
+                .chat_subject
+                .as_ref()
+                .map(|s| gb_member::chat_updates::Subject {
+                    service: s.service.clone(),
+                    channel_id: s.channel_id.clone(),
+                    thread_id: s.thread_id.clone(),
+                    event_id: s.event_id.clone(),
+                    self_user_id: s.self_user_id.clone(),
+                });
         native.invocation = Some(invocation);
         native.guest = Some(guest);
         Some(Arc::new(move |arguments, stdin, invocation| {
@@ -818,7 +829,7 @@ fn yaml(path: &Path) -> anyhow::Result<Value> {
     gb_config::yaml_value(&std::fs::read_to_string(path)?)
         .map_err(|_| anyhow::anyhow!("invalid member configuration"))
 }
-fn public(member: &Value) -> PublicMember {
+pub(crate) fn public(member: &Value) -> PublicMember {
     let text = |key: &str| member[key].as_str().unwrap_or("").to_owned();
     let accounts = [("branvil", "branvil_username"), ("slack", "slack_user_id")]
         .into_iter()
@@ -839,7 +850,7 @@ fn public(member: &Value) -> PublicMember {
         accounts,
     }
 }
-fn integration(
+pub(crate) fn integration(
     workspace: &Path,
     identity: &Path,
     project: &Value,
@@ -1052,7 +1063,7 @@ fn markdown(value: &Value, language: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
     use tower::ServiceExt;
@@ -1067,7 +1078,7 @@ mod tests {
             Ok(())
         }
     }
-    fn fixture(root: &Path) -> Native {
+    pub(crate) fn fixture(root: &Path) -> Native {
         let workspace = root.join("workspace");
         let identity = root.join("identity");
         let data = root.join("machine/data");
@@ -1113,9 +1124,3465 @@ mod tests {
             data: Default::default(),
         }
     }
+    #[tokio::test]
+    async fn scheduler_http_owns_native_workers_refuses_unauthorized_start_and_releases_the_lock_on_stop()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let workspace = native.workspace.clone();
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let controller = crate::service_runtime::Controller::new(native.clone(), host.clone());
+        let api = Arc::new(crate::api::Api {
+            service: controller,
+            member: None,
+            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            auth: crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            instance_id: "fixture".into(),
+            data: native.data.clone(),
+            workspace: Some(workspace.clone()),
+            work: Default::default(),
+            cancelled: Default::default(),
+        });
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let app = crate::api::router(api.clone());
+        for (method, path, body, authorized, expected_running, status) in [
+            ("GET", "/scheduler/status", "", true, false, 200),
+            ("POST", "/scheduler/start", "{}", false, false, 401),
+            ("POST", "/scheduler/start", "{}", true, true, 200),
+            ("POST", "/scheduler/start", "{}", true, true, 200),
+            (
+                "POST",
+                "/scheduler/stop",
+                "{\"force\":true}",
+                true,
+                false,
+                200,
+            ),
+            ("POST", "/scheduler/stop", "", true, false, 200),
+        ] {
+            let mut request = axum::http::Request::builder()
+                .method(method)
+                .uri(format!("/api{path}"))
+                .header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json");
+            if authorized {
+                request = request.header("authorization", format!("Bearer {}", token.trim()));
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(axum::body::Body::from(body)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status, "{path}");
+            if status == 200 {
+                let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap();
+                let value: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(value["scheduler"]["running"], expected_running);
+                assert_eq!(value["scheduler"]["target"], "scheduler");
+                assert_eq!(value["events"]["target"], "events");
+                assert_eq!(value["has_active_work"], expected_running);
+                assert_eq!(
+                    value["scheduler"]["worker_count"],
+                    if expected_running {
+                        json!(1)
+                    } else if path == "/scheduler/status" {
+                        Value::Null
+                    } else {
+                        json!(0)
+                    }
+                );
+            }
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/commands/run")
+                    .header("host", "127.0.0.1:8765")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::from(
+                        json!({"command":"workflows/ticket_driven_workflow","person":"aiko"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["trace_id"], "");
+        assert_eq!(value["output"], "");
+        assert!(RunStore::open(&workspace).records().unwrap().is_empty());
+        let lease = gb_base::files::FileLock::try_hold(
+            &workspace.join(".guildbotics/local/run/person-leases/aiko.lock"),
+        )
+        .unwrap()
+        .unwrap();
+        for draining in [false, true] {
+            let generation = draining.then(|| api.service.execution.begin_drain(false));
+            let response = app.clone().oneshot(axum::http::Request::builder().method("POST").uri("/api/commands/run")
+                .header("host", "127.0.0.1:8765").header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token.trim()))
+                .body(axum::body::Body::from(json!({"command":"workflows/chat_conversation_workflow","person":"aiko"}).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+            let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["code"], "work_rejected");
+            if let Some(generation) = generation {
+                api.service.execution.wait(generation).await;
+            }
+        }
+        drop(lease);
+        api.work.close();
+        api.work.wait().await;
+        assert!(RunStore::open(&workspace).records().unwrap().is_empty());
+        let second = crate::service_runtime::Controller::new(native, host);
+        assert!(second.start().await.unwrap().running);
+        assert!(!second.stop(true).await.running);
+        let project_path = workspace.join(".guildbotics/config/team/project.yml");
+        let mut project: Value =
+            serde_json::from_slice(&std::fs::read(&project_path).unwrap()).unwrap();
+        project["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("chat_service");
+        std::fs::write(project_path, project.to_string()).unwrap();
+        let member_path = workspace.join(".guildbotics/config/team/members/aiko/member.yml");
+        std::fs::write(member_path, json!({"is_active":true,"message_channels":[{"name":"general","chat":{"channel_id":"C1"}}]}).to_string()).unwrap();
+        let project_path = workspace.join(".guildbotics/config/team/project.yml");
+        project["services"]["chat_service"] = json!({"name":"slack"});
+        std::fs::write(&project_path, project.to_string()).unwrap();
+        assert!(api.service.start().await.unwrap().running);
+        let view = api.service.view().await;
+        assert_eq!(view["events"]["events_auth_failed_count"], 1);
+        assert_eq!(
+            view["events"]["events_auth_failed_persons"],
+            json!(["aiko"])
+        );
+        assert_eq!(view["events"]["events_chat_provider"], "slack");
+        assert!(!api.service.stop(true).await.running);
+        let stopped = api.service.view().await;
+        assert_eq!(stopped["events"]["events_auth_failed_count"], 0);
+        assert_eq!(stopped["events"]["events_auth_failed_persons"], json!([]));
+        project["services"]["chat_service"] = json!({"name":"local"});
+        std::fs::write(&project_path, project.to_string()).unwrap();
+        assert!(api.service.start().await.unwrap().running);
+        assert_eq!(api.service.view().await["events"]["listener_count"], 1);
+        assert!(!api.service.stop(true).await.running);
+        assert_eq!(api.service.view().await["events"]["listener_count"], 0);
+        project["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("chat_service");
+        std::fs::write(&project_path, project.to_string()).unwrap();
+        assert!(api.service.start().await.unwrap().running);
+        assert_eq!(api.service.view().await["events"]["listener_count"], 0);
+        assert!(!api.service.stop(true).await.running);
+        crate::service_settings::Settings::write(
+            &crate::service_settings::Settings::default(),
+            &workspace,
+        )
+        .unwrap();
+        std::fs::write(
+            crate::service_settings::Settings::path(&workspace),
+            "bad: [",
+        )
+        .unwrap();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/scheduler/start")
+                    .header("host", "127.0.0.1:8765")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            gb_base::files::FileLock::try_hold(&api.data.join("run/service.lock"))
+                .unwrap()
+                .is_some()
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["code"], "service_settings_invalid");
+    }
+    #[tokio::test]
+    async fn workflow_runtime_assembles_local_ports_and_idle_ticket_command_leaves_no_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let native = fixture(temp.path());
+        for (id, kind) in [("kenji", "agent"), ("owner", "human")] {
+            let identity = native.identity_root.join(format!(
+                ".guildbotics/config/team/members/{id}/identity.yml"
+            ));
+            let member = native
+                .workspace
+                .join(format!(".guildbotics/config/team/members/{id}/member.yml"));
+            std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(member.parent().unwrap()).unwrap();
+            std::fs::write(
+                identity,
+                json!({"person_id":id,"name":id,"person_type":kind}).to_string(),
+            )
+            .unwrap();
+            std::fs::write(member, json!({"is_active":false}).to_string()).unwrap();
+        }
+
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: temp.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (runtime, metadata) = crate::workflow_runtime::Runtime::assemble(
+            &native,
+            host,
+            "aiko",
+            cleanup.clone(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            metadata["routine_commands"],
+            json!(["workflows/ticket_driven_workflow"])
+        );
+        assert!(runtime.tickets.is_some());
+        assert!(runtime.code.is_some());
+        assert!(runtime.chat.is_some());
+        let roster = crate::chat_dispatch::Runner::roster(&runtime, &runtime.roster).await;
+        assert_eq!(
+            roster
+                .iter()
+                .find(|m| m.person_id == "aiko")
+                .unwrap()
+                .accounts["local"],
+            "local-aiko"
+        );
+        assert_eq!(
+            roster
+                .iter()
+                .find(|m| m.person_id == "kenji")
+                .unwrap()
+                .accounts["local"],
+            "local-kenji"
+        );
+        assert!(
+            !roster
+                .iter()
+                .find(|m| m.person_id == "owner")
+                .unwrap()
+                .accounts
+                .contains_key("local")
+        );
+        runtime
+            .command(
+                "workflows/ticket_driven_workflow",
+                "routine",
+                BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            RunStore::open(&native.workspace)
+                .records()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !native
+                .workspace
+                .join(".guildbotics/local/run/diagnostics.jsonl")
+                .exists()
+        );
+        cleanup.close();
+        cleanup.wait().await;
+    }
+    struct MemberTurn {
+        chat_action: Mutex<&'static str>,
+        completion: Mutex<&'static str>,
+        after_completion: Mutex<Option<crate::dispatcher::DispatchFailure>>,
+        before_completion: Mutex<Option<crate::dispatcher::DispatchFailure>>,
+        generation: Arc<crate::execution::Generation>,
+        arguments: Mutex<Vec<Vec<String>>>,
+        failures: Mutex<std::collections::VecDeque<crate::dispatcher::DispatchFailure>>,
+        tickets: Arc<dyn gb_ports::TicketService>,
+        native: Native,
+        calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
+    }
+    impl crate::dispatcher::Driver for MemberTurn {
+        fn execute<'a>(
+            &'a self,
+            _: &'a crate::dispatcher::Dispatcher,
+            command: gb_environment::Command,
+            _: &'a tokio_util::sync::CancellationToken,
+        ) -> crate::service::Pending<
+            'a,
+            Result<gb_wire::CommandReply, crate::dispatcher::DispatchFailure>,
+        > {
+            Box::pin(async move {
+                if command.name == "functions/talk_as" && command.wants_result {
+                    assert!(command.invocation.is_none());
+                    assert!(command.pipe.is_empty());
+                    assert_eq!(command.args.len(), 2);
+                    assert_eq!(command.args[1], "context_location=Ticket");
+                    return Ok(gb_wire::CommandReply {
+                        result: json!({"content":" \nSafe failure explanation.\n "}),
+                        ..Default::default()
+                    });
+                }
+                let invocation = command.invocation.clone().unwrap();
+                let snapshot = self.generation.snapshot();
+                assert_eq!(snapshot.len(), 1);
+                assert_eq!(snapshot[0]["id"], command.run_id);
+                assert_eq!(snapshot[0]["person_id"], command.person_id);
+                assert_eq!(
+                    snapshot[0]["source"],
+                    serde_json::to_value(invocation.source).unwrap()
+                );
+                let record = RunStore::open(&self.native.workspace)
+                    .read(&command.run_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(record.attributes["service_run_id"], self.generation.id);
+                self.arguments.lock().unwrap().push(command.args.clone());
+                self.calls.lock().unwrap().push(invocation.clone());
+                if let Some(error) = self.failures.lock().unwrap().pop_front() {
+                    return Err(error);
+                }
+                let mut native = self.native.clone();
+                let bound = crate::host_window::broker_invocation(&command);
+                native.chat_subject = bound.chat_subject.as_ref().map(|subject| {
+                    serde_json::from_value(serde_json::to_value(subject).unwrap()).unwrap()
+                });
+                native.invocation = Some(bound);
+                let steps = if command.work_kind == "chat" {
+                    let channel = invocation.payload["subject"]["channel_id"]
+                        .as_str()
+                        .unwrap();
+                    let thread = invocation.payload["subject"]["thread_id"].as_str().unwrap();
+                    let message = invocation.payload["message_id"].as_str().unwrap();
+                    let action = *self.chat_action.lock().unwrap();
+                    let visible = match action {
+                        "noop" => (
+                            vec!["chat", "noop", "--person", "aiko", "--content-stdin"],
+                            "No response needed.",
+                        ),
+                        "reaction" => (
+                            vec![
+                                "chat",
+                                "reaction",
+                                "add",
+                                "--person",
+                                "aiko",
+                                "--channel-id",
+                                channel,
+                                "--message-id",
+                                message,
+                                "--reaction",
+                                "ack",
+                            ],
+                            "",
+                        ),
+                        _ => (
+                            vec![
+                                "chat",
+                                "reply",
+                                "--person",
+                                "aiko",
+                                "--channel-id",
+                                channel,
+                                "--thread-id",
+                                thread,
+                                "--content-stdin",
+                            ],
+                            "Handled.",
+                        ),
+                    };
+                    vec![
+                        (vec!["chat", "updates", "--person", "aiko"], ""),
+                        (
+                            vec![
+                                "chat",
+                                "inspect",
+                                "thread",
+                                "--person",
+                                "aiko",
+                                "--channel-id",
+                                channel,
+                                "--thread-id",
+                                thread,
+                            ],
+                            "",
+                        ),
+                        visible,
+                        (vec!["chat", "updates", "--person", "aiko"], ""),
+                        (
+                            vec![
+                                "chat",
+                                "complete",
+                                "--person",
+                                "aiko",
+                                "--status",
+                                "done",
+                                "--content-stdin",
+                            ],
+                            "Completed.",
+                        ),
+                    ]
+                } else {
+                    let url = invocation.payload["task"]["url"].as_str().unwrap();
+                    let item = self
+                        .tickets
+                        .read(gb_ports::Resource::Tickets, url, None, "")
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        item.items()[0]["lane"],
+                        if command.work_kind == "ticket_mention" {
+                            invocation.payload["task"]["status"].as_str().unwrap()
+                        } else {
+                            "in_progress"
+                        }
+                    );
+                    if command.work_kind == "ticket_mention" {
+                        assert_eq!(item.items()[0]["assignees"], json!(["local-yuki"]));
+                    }
+                    vec![
+                        (
+                            vec![
+                                "ticket",
+                                "comment",
+                                "--person",
+                                "aiko",
+                                "--url",
+                                url,
+                                "--content-stdin",
+                            ],
+                            "Handled.",
+                        ),
+                        (
+                            vec![
+                                "task",
+                                "complete",
+                                "--person",
+                                "aiko",
+                                "--status",
+                                "done",
+                                "--content-stdin",
+                            ],
+                            "Completed.",
+                        ),
+                    ]
+                };
+                let expected_pr = if command.work_kind == "ticket" {
+                    let url = invocation.payload["task"]["url"].as_str().unwrap();
+                    let output = native.workspace.join("fixture-output");
+                    let read = native
+                        .execute(
+                            request(
+                                &[
+                                    "ticket",
+                                    "read",
+                                    "--person",
+                                    "aiko",
+                                    "--resource",
+                                    "ticket_pull_requests",
+                                    "--subject",
+                                    url,
+                                ],
+                                "",
+                            ),
+                            false,
+                            None,
+                            &output,
+                        )
+                        .await;
+                    assert_eq!(read.exit_code, 0, "{}", read.stderr);
+                    let page: Value = serde_json::from_str(&read.stdout).unwrap();
+                    page["items"]
+                        .as_array()
+                        .unwrap()
+                        .first()
+                        .and_then(|item| item["url"].as_str())
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
+                let mut steps = steps;
+                if expected_pr.is_some() && command.work_kind != "ticket_mention" {
+                    let url = invocation.payload["task"]["url"].as_str().unwrap();
+                    steps.insert(
+                        0,
+                        (
+                            vec![
+                                "pr",
+                                "create",
+                                "--person",
+                                "aiko",
+                                "--repo",
+                                "acme/demo",
+                                "--head",
+                                "feature",
+                                "--base",
+                                "main",
+                                "--title",
+                                "Fix login",
+                                "--issue-url",
+                                url,
+                                "--content-stdin",
+                            ],
+                            "Reuse the requested PR.",
+                        ),
+                    );
+                }
+                let output = native.workspace.join("fixture-output");
+                let completion = *self.completion.lock().unwrap();
+                for (mut args, content) in steps {
+                    if args.get(1) == Some(&"complete")
+                        && let Some(index) = args.iter().position(|arg| *arg == "--status")
+                    {
+                        args[index + 1] = completion;
+                    }
+                    if args.get(1) == Some(&"complete")
+                        && let Some(error) = self.before_completion.lock().unwrap().take()
+                    {
+                        return Err(error);
+                    }
+                    let reply = native
+                        .execute(request(&args, content), false, None, &output)
+                        .await;
+                    assert_eq!(reply.exit_code, 0, "{} {}", reply.stdout, reply.stderr);
+                    if args[..2] == ["pr", "create"] {
+                        let value: Value = serde_json::from_str(&reply.stdout).unwrap();
+                        assert_eq!(value["created"], false);
+                        assert_eq!(value["target"]["url"], expected_pr.as_deref().unwrap());
+                    }
+                }
+                if let Some(error) = self.after_completion.lock().unwrap().take() {
+                    return Err(error);
+                }
+                Ok(gb_wire::CommandReply {
+                    text_output: "done".into(),
+                    ..Default::default()
+                })
+            })
+        }
+    }
+    fn workflow_fixture(
+        native: &Native,
+        root: &Path,
+        cleanup: &tokio_util::task::TaskTracker,
+        receive: bool,
+    ) -> (crate::workflow_runtime::Runtime, Arc<MemberTurn>) {
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let mut connections = BTreeMap::new();
+        let (mut runtime, _) = crate::workflow_runtime::Runtime::assemble_sources(
+            native,
+            host,
+            "aiko",
+            cleanup.clone(),
+            Default::default(),
+            Default::default(),
+            receive.then_some(&mut connections),
+        )
+        .unwrap();
+        let generation = Arc::new(crate::execution::Generation::default());
+        runtime.generation = Some(generation.clone());
+        runtime.service_run_id = Some(generation.id.clone());
+        let driver = Arc::new(MemberTurn {
+            chat_action: Mutex::new("reply"),
+            completion: Mutex::new("done"),
+            after_completion: Default::default(),
+            before_completion: Default::default(),
+            generation,
+            arguments: Default::default(),
+            failures: Default::default(),
+            tickets: runtime.tickets.clone().unwrap(),
+            native: native.clone(),
+            calls: Default::default(),
+        });
+        runtime.dispatcher.driver = driver.clone();
+        (runtime, driver)
+    }
+    #[tokio::test]
+    async fn native_ticket_patrol_moves_the_local_ticket_and_accepts_real_member_comment_and_completion()
+     {
+        for (mention, linked) in [(false, false), (true, false), (false, true), (true, true)] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let tracker = native
+                .workspace
+                .join(".guildbotics/local/services/tickets/acme%2Fteam");
+            let ticket = runtime.tickets.as_ref().unwrap();
+            let task = ready_ticket(&native, &runtime).await;
+            if mention {
+                let path = tracker.join("T-1.json");
+                let mut stored: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                stored["assignees"] = json!(["local-yuki"]);
+                stored["comments"] = json!([{"id":"mention","body":"@local-aiko Please provide context.","author":"owner","created_at":"2026-11-05T00:00:00Z"}]);
+                std::fs::write(path, stored.to_string()).unwrap();
+            }
+            let mut linked_url = None;
+            if linked {
+                seed_code(&native, root.path());
+                let created = runtime
+                    .code
+                    .as_ref()
+                    .unwrap()
+                    .create_pull_request(gb_ports::CreatePullRequest {
+                        repository: "acme/demo".into(),
+                        head: "feature".into(),
+                        base: "main".into(),
+                        title: "Fix login".into(),
+                        body: String::new(),
+                        draft: false,
+                        tickets: vec![gb_ports::TicketLink {
+                            url: task.target.url.clone(),
+                            closes: false,
+                        }],
+                    })
+                    .await
+                    .unwrap();
+                linked_url = Some(created.target.url);
+                let path = tracker.join("T-1.json");
+                let mut stored: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                stored["lane"] = json!("in_progress");
+                if !mention {
+                    stored["comments"] = json!([{"id":"question","body":"Should I add the check?","author":"local-aiko","created_at":"2026-11-05T00:00:00Z"},{"id":"answer","body":"Yes, please add the check.","author":"owner","created_at":"2026-11-05T00:01:00Z"}]);
+                }
+                std::fs::write(path, stored.to_string()).unwrap();
+            }
+            let line = if mention && linked {
+                format!("{} 'message=two words'", crate::ticket_selector::COMMAND)
+            } else {
+                crate::ticket_selector::COMMAND.into()
+            };
+            let slot = crate::scheduler::slot(
+                "routine",
+                "aiko",
+                &line,
+                "2026-11-05T12:00:00".parse().unwrap(),
+            );
+            let reply = runtime.command(&line, "routine", slot).await.unwrap();
+            assert_eq!(reply.text_output, "done");
+            assert_eq!(
+                driver.arguments.lock().unwrap()[0],
+                if mention && linked {
+                    vec!["message=two words"]
+                } else {
+                    vec![]
+                }
+            );
+            let run_id = {
+                let calls = driver.calls.lock().unwrap();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].payload["ticket_url"], task.target.url);
+                assert_eq!(
+                    calls[0].payload["trigger_reason"],
+                    if mention {
+                        "issue_mention"
+                    } else if linked {
+                        "issue_comment"
+                    } else {
+                        "ready_lane"
+                    }
+                );
+                calls[0].run_id.clone()
+            };
+            let record = RunStore::open(&native.workspace)
+                .read(&run_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                record.work_kind,
+                if mention { "ticket_mention" } else { "ticket" }
+            );
+            assert_eq!(record.status, gb_observability::runs::RunState::Succeeded);
+            assert_eq!(
+                record.result.as_ref().unwrap().status,
+                gb_observability::runs::Completion::Done
+            );
+            assert_eq!(record.result.as_ref().unwrap().subject_url, task.target.url);
+            assert_eq!(record.work_identity.unwrap()["slot_kind"], "routine");
+            assert_eq!(record.attributes["target.title"], task.target.title);
+            assert_eq!(record.attributes["target.url"], task.target.url);
+            assert!(runtime.generation.as_ref().unwrap().snapshot().is_empty());
+            let page = ticket
+                .read(
+                    gb_ports::Resource::TicketComments,
+                    &task.target.url,
+                    None,
+                    "",
+                )
+                .await
+                .unwrap();
+            assert!(
+                page.items()
+                    .iter()
+                    .any(|comment| comment["body"] == "Handled.")
+            );
+            assert_eq!(page.items().last().unwrap()["body"], "Handled.");
+            if linked {
+                assert_eq!(page.items().len(), if mention { 2 } else { 3 });
+                let linked = runtime
+                    .code
+                    .as_ref()
+                    .unwrap()
+                    .read(
+                        gb_ports::Resource::TicketPullRequests,
+                        &task.target.url,
+                        None,
+                        "",
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(linked.items().len(), 1);
+                assert_eq!(
+                    linked.items()[0]["url"],
+                    linked_url.as_ref().unwrap().as_str()
+                );
+            }
+            assert!(ticket.candidates().await.unwrap().is_empty());
+            cleanup.close();
+            cleanup.wait().await;
+        }
+    }
+    #[tokio::test]
+    async fn native_chat_reception_dispatch_and_real_member_reply_complete_one_local_thread() {
+        for action in ["reply", "noop", "reaction"] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let path = native
+                .workspace
+                .join(".guildbotics/config/team/members/aiko/member.yml");
+            std::fs::write(path,json!({"is_active":true,"message_channels":[{"name":"general","chat":{"channel_id":"C1"}}]}).to_string()).unwrap();
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, true);
+            *driver.chat_action.lock().unwrap() = action;
+            let runtime = Arc::new(runtime);
+            let store = Arc::new(crate::chat_state::Store {
+                workspace: native.workspace.clone(),
+                writes: runtime.writes.clone(),
+                limit: 500,
+            });
+            let chat = runtime.chat.clone().unwrap();
+            let dispatcher = crate::chat_dispatch::Dispatcher {
+                person: "aiko".into(),
+                service: "local".into(),
+                language: "en".into(),
+                roster: runtime.roster.clone(),
+                chat: chat.clone(),
+                store: store.clone(),
+                runner: runtime.clone(),
+            };
+            let mut row = chat_row("M1", "M1", "@local-aiko Please answer.", 1);
+            row["occurred_at"] = json!(chrono::Utc::now().to_rfc3339());
+            chat_history(&dispatcher, &[row]);
+            let connection = runtime.reception.as_ref().unwrap().clone();
+            let receiver = Arc::new(
+                crate::chat_receiver::Receiver::new(
+                    "aiko".into(),
+                    chat.clone(),
+                    connection,
+                    runtime.channels.clone(),
+                    store.clone(),
+                )
+                .await
+                .unwrap(),
+            );
+            let stop = tokio_util::sync::CancellationToken::new();
+            let task = tokio::spawn({
+                let receiver = receiver.clone();
+                let stop = stop.clone();
+                async move { receiver.run(stop).await }
+            });
+            let subject = gb_member::chat_updates::Subject {
+                service: "local".into(),
+                channel_id: "C1".into(),
+                thread_id: "M1".into(),
+                event_id: "C1:M1".into(),
+                self_user_id: "local-aiko".into(),
+            };
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    receiver.drain().await;
+                    if !store.pending("local", "aiko", "C1").unwrap().is_empty()
+                        && gb_member::chat_updates::Heartbeat::new(&native.workspace).state(
+                            &subject,
+                            "aiko",
+                            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                        ) == "ready"
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(dispatcher.process(chrono::Utc::now()).await.unwrap(), 1);
+            stop.cancel();
+            task.await.unwrap().unwrap();
+            {
+                let calls = driver.calls.lock().unwrap();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(
+                    calls[0].work.as_ref().unwrap().identity,
+                    "local:local-aiko:C1:M1"
+                );
+            }
+            let remaining = store.pending("local", "aiko", "C1").unwrap();
+            assert!(
+                store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("C1:M1"))
+            );
+            let page = chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap();
+            assert_eq!(page.events.len(), if action == "reply" { 2 } else { 1 });
+            if action == "reply" {
+                let echo = &page.events[1];
+                assert_eq!(echo.message.text, "Handled.");
+                assert!(echo.message.is_from_user(Some("local-aiko")));
+                assert!(
+                    remaining.iter().all(|p| p.event.event_id == echo.event_id),
+                    "only the agent's reply echo may remain: {}",
+                    serde_json::to_value(&remaining).unwrap()
+                );
+                // Exercise the echo before a later human event regardless of listener timing.
+                store
+                    .receive("local", "aiko", echo.clone(), "strict")
+                    .unwrap();
+                let mut human = page.events[0].clone();
+                human.event_id = "C1:M2".into();
+                human.message.message_id = "M2".into();
+                human.message.text = "@local-aiko Another question.".into();
+                human.message.occurred_at = echo.message.occurred_at + chrono::Duration::seconds(1);
+                store
+                    .receive("local", "aiko", human.clone(), "strict")
+                    .unwrap();
+                assert_eq!(dispatcher.process(chrono::Utc::now()).await.unwrap(), 1);
+                let pending = store.pending("local", "aiko", "C1").unwrap();
+                assert_eq!(pending.len(), 1);
+                assert_eq!(pending[0].event.event_id, human.event_id);
+                assert_eq!(pending[0].attempt_count, 0);
+                let processed = store.cursor("local", "aiko", "C1").unwrap();
+                let processed = processed["processed_event_ids"].as_array().unwrap();
+                assert!(processed.contains(&json!(echo.event_id)));
+                assert!(!processed.contains(&json!(human.event_id)));
+                assert_eq!(driver.calls.lock().unwrap().len(), 1);
+            } else {
+                assert!(
+                    remaining.is_empty(),
+                    "{}",
+                    serde_json::to_value(remaining).unwrap()
+                );
+            }
+            let records = RunStore::open(&native.workspace).records().unwrap();
+            assert_eq!(records.len(), 1);
+            let activity = gb_observability::activity::ActivityEvents::open(&native.workspace)
+                .list_between(
+                    chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                    chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                )
+                .unwrap();
+            let completed = activity
+                .iter()
+                .filter(|event| event["kind"] == "workflow.completed")
+                .collect::<Vec<_>>();
+            assert_eq!(completed.len(), 1);
+            assert_eq!(completed[0]["payload"]["recovered"], false);
+            assert_eq!(completed[0]["payload"]["run_id"], records[0].run_id);
+            assert_eq!(completed[0]["payload"]["attempt"], 1);
+            let evidence = records[0]
+                .provider_evidence
+                .iter()
+                .map(|e| e["type"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            let kind = match action {
+                "noop" => "chat_noop",
+                "reaction" => "chat_reaction",
+                _ => "chat_reply",
+            };
+            assert!(
+                evidence.iter().position(|e| *e == "chat_batch").unwrap()
+                    < evidence.iter().position(|e| *e == kind).unwrap()
+            );
+            let state = store.thread("local", "aiko", "C1", "M1").unwrap();
+            assert_eq!(
+                state["participants"]
+                    .as_array()
+                    .is_some_and(|a| a.contains(&json!("aiko"))),
+                action != "noop"
+            );
+            assert_eq!(records[0].work_kind, "chat");
+            assert_eq!(records[0].attributes["chat.provider"], "local");
+            assert_eq!(records[0].attributes["chat.channel"], "C1");
+            assert_eq!(records[0].attributes["chat.thread"], "M1");
+            assert_eq!(records[0].attributes["chat.message"], "M1");
+            assert!(runtime.generation.as_ref().unwrap().snapshot().is_empty());
+            assert_eq!(
+                records[0].result.as_ref().unwrap().status,
+                gb_observability::runs::Completion::Done
+            );
+            cleanup.close();
+            cleanup.wait().await;
+        }
+    }
+    #[tokio::test]
+    async fn native_commands_keep_trace_and_journal_in_sync_when_only_autonomous_service_outages_defer()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        for source in ["manual", "scheduled", "routine", "event_queue"] {
+            for problem in [
+                gb_ports::ServiceError::Failed,
+                gb_ports::ServiceError::NotFound,
+                gb_ports::ServiceError::Unsupported,
+                gb_ports::ServiceError::Unavailable,
+            ] {
+                let deferred = source != "manual" && problem.is_unavailable();
+                let error_type = if problem.is_unavailable() {
+                    "ServiceUnavailable"
+                } else if problem.is_not_found() {
+                    "ServiceNotFound"
+                } else if problem.is_unsupported() {
+                    "ServiceUnsupported"
+                } else {
+                    "ServiceError"
+                };
+                driver
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push_back(crate::dispatcher::DispatchFailure::Service(problem));
+                let slot = crate::scheduler::slot(
+                    source,
+                    "aiko",
+                    "functions/talk_as",
+                    "2026-11-05T12:00:00".parse().unwrap(),
+                );
+                assert!(
+                    runtime
+                        .command("functions/talk_as", source, slot)
+                        .await
+                        .is_err()
+                );
+                let records = RunStore::open(&native.workspace).records().unwrap();
+                let id = driver.calls.lock().unwrap().last().unwrap().run_id.clone();
+                let record = records.iter().find(|r| r.run_id == id).unwrap();
+                assert_eq!(
+                    record.work_kind,
+                    if source == "manual" {
+                        "manual"
+                    } else {
+                        "functions/talk_as"
+                    }
+                );
+                assert_eq!(
+                    record.status,
+                    if deferred {
+                        gb_observability::runs::RunState::Deferred
+                    } else {
+                        gb_observability::runs::RunState::Failed
+                    }
+                );
+                let events = std::fs::read_to_string(
+                    native
+                        .workspace
+                        .join(".guildbotics/local/run/diagnostics.jsonl"),
+                )
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|e| {
+                    e["trace_id"] == record.run_id
+                        && e["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind.starts_with("command."))
+                })
+                .collect::<Vec<_>>();
+                assert_eq!(events.len(), 2);
+                assert_eq!(events.last().unwrap()["payload"]["error_type"], error_type);
+                assert_eq!(events.first().unwrap()["type"], "command.started");
+                assert_eq!(
+                    events.last().unwrap()["type"],
+                    if deferred {
+                        "command.deferred"
+                    } else {
+                        "command.failed"
+                    }
+                );
+            }
+        }
+        cleanup.close();
+        cleanup.wait().await;
+    }
+    async fn ready_ticket(
+        native: &Native,
+        runtime: &crate::workflow_runtime::Runtime,
+    ) -> gb_ports::TicketCreated {
+        let tracker = native
+            .workspace
+            .join(".guildbotics/local/services/tickets/acme%2Fteam");
+        write_json(
+            &tracker.join("tracker.json"),
+            json!({"repository":"acme/demo"}),
+        );
+        runtime
+            .tickets
+            .as_ref()
+            .unwrap()
+            .create_ticket(gb_ports::CreateTicket {
+                tracker: "acme/team".into(),
+                title: "Fix login".into(),
+                body: String::new(),
+                labels: vec![],
+                add_to_board: true,
+                interactive: false,
+                assignee: Some(gb_ports::ActorName("local-aiko".into())),
+                lane: Some(gb_ports::CreateLane::Ready),
+                parent: None,
+                blocked_by: vec![],
+            })
+            .await
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn native_patrol_selection_and_refresh_outages_keep_chat_alive_and_recover_without_failed_runs()
+     {
+        use crate::scheduler::Engine as _;
+        for phase in ["candidates", "refresh"] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let ticket = ready_ticket(&native, &runtime).await;
+            let faults = Arc::new(crate::test_ticket::Faults::new(
+                runtime.tickets.clone().unwrap(),
+            ));
+            faults
+                .errors
+                .lock()
+                .unwrap()
+                .insert(phase, gb_ports::ServiceError::Unavailable);
+            runtime.tickets = Some(faults.clone());
+            let runtime = Arc::new(runtime);
+            let dispatch = crate::chat_dispatch::Dispatcher {
+                person: "aiko".into(),
+                service: "local".into(),
+                language: "en".into(),
+                roster: runtime.roster.clone(),
+                chat: runtime.chat.clone().unwrap(),
+                store: Arc::new(crate::chat_state::Store {
+                    workspace: native.workspace.clone(),
+                    writes: runtime.writes.clone(),
+                    limit: 500,
+                }),
+                runner: runtime.clone(),
+            };
+            chat_history(
+                &dispatch,
+                &[chat_row("M1", "M1", "@local-aiko handle chat", 1)],
+            );
+            let event = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(0);
+            dispatch
+                .store
+                .receive("local", "aiko", event, "strict")
+                .unwrap();
+            let subject = gb_member::chat_updates::Subject {
+                service: "local".into(),
+                channel_id: "C1".into(),
+                thread_id: "M1".into(),
+                event_id: "C1:M1".into(),
+                self_user_id: "local-aiko".into(),
+            };
+            gb_member::chat_updates::Heartbeat::new(&native.workspace)
+                .save(
+                    &subject,
+                    "aiko",
+                    "ready",
+                    chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                    0.0,
+                )
+                .unwrap();
+            let engine = crate::native_scheduler::Engine::new(runtime.clone(), Some(dispatch));
+            for minute in 0..4 {
+                let slot = crate::scheduler::slot(
+                    "routine",
+                    "aiko",
+                    crate::ticket_selector::COMMAND,
+                    "2026-11-05T12:00:00"
+                        .parse::<chrono::NaiveDateTime>()
+                        .unwrap()
+                        + chrono::Duration::minutes(minute),
+                );
+                let (outcome, _) = engine.patrol(slot).await;
+                assert_eq!(outcome, crate::service::Outcome::Deferred);
+                assert_eq!(
+                    engine.events().await,
+                    if minute == 0 {
+                        crate::service::Outcome::Succeeded
+                    } else {
+                        crate::service::Outcome::Deferred
+                    }
+                );
+                assert_eq!(driver.calls.lock().unwrap().len(), 1);
+            }
+            faults.errors.lock().unwrap().clear();
+            let slot = crate::scheduler::slot(
+                "routine",
+                "aiko",
+                crate::ticket_selector::COMMAND,
+                "2026-11-05T12:04:00".parse().unwrap(),
+            );
+            assert_eq!(
+                engine.patrol(slot).await,
+                (crate::service::Outcome::Succeeded, true)
+            );
+            let calls = driver.calls.lock().unwrap().clone();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0].work.as_ref().unwrap().kind, "chat");
+            assert_eq!(calls[1].payload["ticket_url"], ticket.target.url);
+            let records = RunStore::open(&native.workspace).records().unwrap();
+            assert_eq!(records.len(), 2);
+            assert!(
+                records
+                    .iter()
+                    .all(|r| r.status == gb_observability::runs::RunState::Succeeded
+                        && r.result.is_some())
+            );
+            cleanup.close();
+            cleanup.wait().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn native_completed_ticket_waits_notify_once_and_later_execution_failure_reports_failed()
+    {
+        for source in ["routine", "manual"] {
+            for status in ["done", "asking", "blocked"] {
+                for phase in ["none", "before", "after"] {
+                    let failed = phase != "none";
+                    let fails_later = phase == "after";
+                    let root = tempfile::tempdir().unwrap();
+                    let native = fixture(root.path());
+                    write_json(
+                        &native
+                            .workspace
+                            .join(".guildbotics/config/team/members/aiko/member.yml"),
+                        json!({"is_active":true,"routine_commands":["workflows/ticket_driven_workflow"],"message_channels":[{"name":"notify","chat":{"channel_id":"C1","notify_work_stops":true}}]}),
+                    );
+                    let cleanup = tokio_util::task::TaskTracker::new();
+                    let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                    *driver.completion.lock().unwrap() = status;
+                    if fails_later {
+                        *driver.after_completion.lock().unwrap() =
+                            Some(crate::dispatcher::DispatchFailure::Journal);
+                    }
+                    if phase == "before" {
+                        driver
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .push_back(crate::dispatcher::DispatchFailure::Journal);
+                    }
+                    let ticket = ready_ticket(&native, &runtime).await;
+                    let slot = crate::scheduler::slot(
+                        source,
+                        "aiko",
+                        crate::ticket_selector::COMMAND,
+                        "2026-11-05T12:00:00".parse().unwrap(),
+                    );
+                    let result = runtime
+                        .command(crate::ticket_selector::COMMAND, source, slot)
+                        .await;
+                    assert_eq!(result.is_err(), failed);
+                    if phase == "before" {
+                        let records = RunStore::open(&native.workspace).records().unwrap();
+                        assert_eq!(records.len(), 1);
+                        assert_eq!(records[0].status, gb_observability::runs::RunState::Failed);
+                        assert!(records[0].finished_at.is_some() && records[0].result.is_none());
+                    }
+                    let notices = runtime
+                        .chat
+                        .as_ref()
+                        .unwrap()
+                        .list_channel_events("C1", Default::default())
+                        .await
+                        .unwrap()
+                        .events;
+                    let expected = source != "manual" && (failed || status != "done");
+                    assert_eq!(notices.len(), usize::from(expected));
+                    if let Some(notice) = notices.first() {
+                        let payload =
+                            serde_json::to_value(notice.status.as_ref().unwrap()).unwrap();
+                        assert_eq!(payload["reason"], if failed { "failed" } else { status });
+                        assert_eq!(payload["subject"], ticket.target.url);
+                        let calls = driver.calls.lock().unwrap();
+                        assert_eq!(payload["run_id"], calls[0].run_id);
+                    }
+                    let comments = runtime
+                        .tickets
+                        .as_ref()
+                        .unwrap()
+                        .read(
+                            gb_ports::Resource::TicketComments,
+                            &ticket.target.url,
+                            None,
+                            "",
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(comments.items().len(), if fails_later { 2 } else { 1 });
+                    if failed {
+                        assert_ne!(comments.items().last().unwrap()["body"], "Handled.");
+                    }
+                    cleanup.close();
+                    cleanup.wait().await;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_failed_selection_closes_traces_without_runs_and_records_the_worker_error_limit()
+    {
+        use crate::scheduler::Engine as _;
+        for phase in ["candidates", "refresh"] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            ready_ticket(&native, &runtime).await;
+            let faults = Arc::new(crate::test_ticket::Faults::new(
+                runtime.tickets.clone().unwrap(),
+            ));
+            faults
+                .errors
+                .lock()
+                .unwrap()
+                .insert(phase, gb_ports::ServiceError::Failed);
+            runtime.tickets = Some(faults.clone());
+            let runtime = Arc::new(runtime);
+            let engine = crate::native_scheduler::Engine::new(runtime.clone(), None);
+            for minute in 0..3 {
+                let slot = crate::scheduler::slot(
+                    "routine",
+                    "aiko",
+                    crate::ticket_selector::COMMAND,
+                    "2026-11-05T12:00:00"
+                        .parse::<chrono::NaiveDateTime>()
+                        .unwrap()
+                        + chrono::Duration::minutes(minute),
+                );
+                assert_eq!(engine.patrol(slot).await.0, crate::service::Outcome::Failed);
+            }
+            engine.failed(3, 3, "routine");
+            assert!(driver.calls.lock().unwrap().is_empty());
+            assert!(
+                RunStore::open(&native.workspace)
+                    .records()
+                    .unwrap()
+                    .is_empty()
+            );
+            let events = std::fs::read_to_string(
+                native
+                    .workspace
+                    .join(".guildbotics/local/run/diagnostics.jsonl"),
+            )
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e["type"] == "command.failed")
+                    .count(),
+                3
+            );
+            let worker = events
+                .iter()
+                .filter(|e| e["type"] == "scheduler.worker.failed")
+                .collect::<Vec<_>>();
+            assert_eq!(worker.len(), 1);
+            assert_eq!(worker[0]["source"], "scheduler");
+            assert_eq!(worker[0]["person_id"], "aiko");
+            assert_eq!(
+                worker[0]["attributes"]["service_run_id"],
+                runtime.generation.as_ref().unwrap().id
+            );
+            assert_eq!(
+                worker[0]["payload"],
+                json!({"source":"routine","consecutive_errors":3,"consecutive_error_limit":3})
+            );
+            cleanup.close();
+            cleanup.wait().await;
+        }
+    }
+    #[test]
+    fn native_members_reuse_one_listener_and_wakeup_for_the_same_connection() {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        for person in ["aiko", "yuki"] {
+            write_json(
+                &native.workspace.join(format!(
+                    ".guildbotics/config/team/members/{person}/member.yml"
+                )),
+                json!({"is_active":true,"message_channels":[{"chat":{"channel_id":"C1"}}]}),
+            );
+            if person == "yuki" {
+                write_json(
+                    &native
+                        .identity_root
+                        .join(".guildbotics/config/team/members/yuki/identity.yml"),
+                    json!({"person_id":"yuki","name":"Yuki","person_type":"agent","profile":{}}),
+                );
+            }
+        }
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let mut connections = BTreeMap::new();
+        let mut made = vec![];
+        for person in ["aiko", "yuki", "aiko"] {
+            let (runtime, _) = crate::workflow_runtime::Runtime::assemble_sources(
+                &native,
+                host.clone(),
+                person,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Some(&mut connections),
+            )
+            .unwrap();
+            made.push(runtime.reception.unwrap());
+        }
+        assert_eq!(connections.len(), 1);
+        assert!(
+            made.windows(2)
+                .all(|pair| Arc::ptr_eq(&pair[0].listener, &pair[1].listener)
+                    && Arc::ptr_eq(&pair[0].wake, &pair[1].wake))
+        );
+    }
+
+    pub(crate) struct Received {
+        pub connected: std::sync::atomic::AtomicBool,
+        pub events: Mutex<Vec<ChatEvent>>,
+        pub starts: std::sync::atomic::AtomicUsize,
+        pub stops: std::sync::atomic::AtomicUsize,
+    }
+    impl Received {
+        pub(crate) fn new() -> Self {
+            Self {
+                connected: std::sync::atomic::AtomicBool::new(true),
+                events: Default::default(),
+                starts: Default::default(),
+                stops: Default::default(),
+            }
+        }
+    }
+    #[tokio::test]
+    async fn completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action() {
+        for batch in [false, true] {
+            for action in [
+                None,
+                Some("chat_reply"),
+                Some("chat_noop"),
+                Some("blocked"),
+                Some("issue_comment"),
+                Some("git_publish"),
+                Some("git_push"),
+                Some("issue_update"),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let native = fixture(root.path());
+                let cleanup = tokio_util::task::TaskTracker::new();
+                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                let runtime = Arc::new(runtime);
+                let dispatch = crate::chat_dispatch::Dispatcher {
+                    person: "aiko".into(),
+                    service: "local".into(),
+                    language: "en".into(),
+                    roster: runtime.roster.clone(),
+                    chat: runtime.chat.clone().unwrap(),
+                    store: Arc::new(crate::chat_state::Store {
+                        workspace: native.workspace.clone(),
+                        writes: runtime.writes.clone(),
+                        limit: 500,
+                    }),
+                    runner: runtime.clone(),
+                };
+                let rows = (1..=4)
+                    .map(|n| chat_row(&format!("M{n}"), "M1", "@local-aiko work", n))
+                    .collect::<Vec<_>>();
+                chat_history(&dispatch, &rows);
+                let events = dispatch
+                    .chat
+                    .list_thread_events("C1", "M1", None, 100)
+                    .await
+                    .unwrap()
+                    .events;
+                for (index, event) in events.into_iter().enumerate() {
+                    if index != 1 || batch {
+                        dispatch
+                            .store
+                            .receive("local", "aiko", event, "strict")
+                            .unwrap();
+                    }
+                }
+                let mut evidence = vec![json!({"type":"chat_reply","payload":{"text":"answered"}})];
+                if batch {
+                    evidence.push(
+                        json!({"type":"chat_batch","payload":{"event_ids":["C1:M1","C1:M2"]}}),
+                    );
+                }
+                if let Some(action) = action {
+                    evidence.push(json!({"type":"chat_updates","payload":{"event_ids":["C1:M3"]}}));
+                    if action != "blocked" {
+                        evidence.push(json!({"type":action,"payload":{"text":"decision"}}));
+                    }
+                }
+                let record:RunRecord=serde_json::from_value(json!({"run_id":"prior-run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","source":"event_queue","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
+                    "work_identity":{"service":"local","channel_id":"C1","event_id":"C1:M1"},"provider_evidence":evidence,
+                    "result":{"subject_type":"chat","subject_id":"local:C1:M1","status":if action==Some("blocked") {"blocked"} else {"done"}}})).unwrap();
+                runtime
+                    .writes
+                    .transaction(|writer| {
+                        RunStore::open(&native.workspace)
+                            .start(writer, record.clone(), &runtime.redactor)
+                            .map(|_| ())
+                    })
+                    .unwrap();
+                if batch {
+                    // The host already emitted the terminal event before recovery.
+                    let mut prior =
+                        dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
+                    prior.run_id = "prior-run".into();
+                    crate::chat_dispatch::Runner::event(
+                        runtime.as_ref(),
+                        "workflow.completed",
+                        &prior,
+                        json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
+                    );
+                }
+                assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+                assert!(driver.calls.lock().unwrap().is_empty());
+                let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+                let unhandled =
+                    action.is_none() || action == Some("chat_noop") || action == Some("blocked");
+                assert_eq!(
+                    pending
+                        .iter()
+                        .map(|p| p.event.event_id.as_str())
+                        .collect::<Vec<_>>(),
+                    if unhandled {
+                        vec!["C1:M3", "C1:M4"]
+                    } else {
+                        vec!["C1:M4"]
+                    }
+                );
+                assert!(
+                    dispatch.store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("C1:M1"))
+                );
+                let records = RunStore::open(&native.workspace).records().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0], record);
+                let transcript = std::fs::read_to_string(
+                    native
+                        .workspace
+                        .join(".guildbotics/local/run/sessions/prior-run.jsonl"),
+                )
+                .unwrap();
+                assert_eq!(
+                    transcript
+                        .lines()
+                        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                        .filter(|e| e["type"] == "workflow.completed"
+                            && e["payload"]["run_id"] == "prior-run")
+                        .count(),
+                    1
+                );
+                if !batch {
+                    let activity =
+                        gb_observability::activity::ActivityEvents::open(&native.workspace)
+                            .list_between(
+                                chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                            )
+                            .unwrap();
+                    let completed = activity
+                        .iter()
+                        .find(|event| event["kind"] == "workflow.completed")
+                        .unwrap();
+                    assert_eq!(completed["payload"]["run_id"], "prior-run");
+                    assert_eq!(completed["payload"]["recovered"], true);
+                }
+                cleanup.close();
+                cleanup.wait().await;
+            }
+        }
+    }
+    #[tokio::test]
+    async fn completed_chat_recovery_reconciles_each_event_store_once_across_failed_settlement_restarts()
+     {
+        for diagnostic_exists in [false, true] {
+            for activity_exists in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let native = fixture(root.path());
+                let cleanup = tokio_util::task::TaskTracker::new();
+                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                let runtime = Arc::new(runtime);
+                let mut dispatch = crate::chat_dispatch::Dispatcher {
+                    person: "aiko".into(),
+                    service: "local".into(),
+                    language: "en".into(),
+                    roster: runtime.roster.clone(),
+                    chat: runtime.chat.clone().unwrap(),
+                    store: Arc::new(crate::chat_state::Store {
+                        workspace: native.workspace.clone(),
+                        writes: runtime.writes.clone(),
+                        limit: 500,
+                    }),
+                    runner: runtime.clone(),
+                };
+                seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+                let mut pending = dispatch
+                    .store
+                    .pending("local", "aiko", "C1")
+                    .unwrap()
+                    .remove(0);
+                pending.run_id = "interrupted-completion".into();
+                pending.attempt_count = 3;
+                dispatch.store.save("local", "aiko", &pending).unwrap();
+                let record: RunRecord = serde_json::from_value(json!({
+                    "run_id":pending.run_id,"work_kind":"chat","execution_mode":"autonomous",
+                    "member_id":"aiko","device_id":"device","source":"event_queue",
+                    "started_at":"2026-10-31T23:58:00Z","finished_at":"2026-10-31T23:59:00Z","status":"succeeded",
+                    "work_identity":{"service":"local","channel_id":"C1","event_id":"C1:M1"},
+                    "provider_evidence":[{"type":"chat_reply","payload":{"text":"answered"}}],
+                    "result":{"subject_type":"chat","subject_id":"local:C1:M1","status":"done"}
+                })).unwrap();
+                runtime
+                    .writes
+                    .transaction(|writer| {
+                        RunStore::open(&native.workspace).start(
+                            writer,
+                            record.clone(),
+                            &runtime.redactor,
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap();
+                let trace = gb_observability::Trace::resume(
+                    &gb_observability::Diagnostics::open(&native.workspace),
+                    "event_queue",
+                    &pending.run_id,
+                )
+                .unwrap()
+                .person("aiko")
+                .command(crate::chat_dispatch::COMMAND);
+                let mut original = gb_member::events::completed(&pending.run_id, 2, false, "done");
+                original["attributes"]["service_run_id"] = json!("prior-service");
+                let trace = original["attributes"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .fold(trace, |trace, (key, value)| {
+                        trace.attribute(key, value.clone())
+                    });
+                if diagnostic_exists {
+                    trace.event(
+                        "workflow.completed",
+                        original["payload"].as_object().unwrap().clone(),
+                    );
+                }
+                let activity = gb_observability::activity::ActivityEvents::open(&native.workspace);
+                if activity_exists {
+                    let mut event = trace.correlation();
+                    event["timestamp"] = json!(record.finished_at);
+                    event["type"] = original["type"].clone();
+                    event["payload"] = original["payload"].clone();
+                    runtime
+                        .writes
+                        .transaction(|writer| {
+                            activity.record_once(writer, &event, &runtime.redactor)?;
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                if !activity_exists {
+                    // Failure at this run's month must retain the durable input.
+                    let month = native.workspace.join(".guildbotics/state/events/2026/10");
+                    std::fs::create_dir_all(month.parent().unwrap()).unwrap();
+                    std::fs::write(&month, "blocked").unwrap();
+                    assert!(dispatch.process(chrono::Utc::now()).await.is_err());
+                    assert_eq!(
+                        dispatch.store.pending("local", "aiko", "C1").unwrap().len(),
+                        1
+                    );
+                    assert!(driver.calls.lock().unwrap().is_empty());
+                    std::fs::remove_file(month).unwrap();
+                }
+                // Unrelated damaged history must not block completion or acknowledgement.
+                let broken = native
+                    .workspace
+                    .join(".guildbotics/state/events/2025/01/broken.json");
+                std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+                std::fs::write(&broken, "broken").unwrap();
+                std::fs::create_dir_all(
+                    native
+                        .workspace
+                        .join(".guildbotics/state/events/2026/10/unreadable.json"),
+                )
+                .unwrap();
+                // A directory at the thread file forces settlement to fail after event persistence.
+                let blocked = dispatch
+                    .store
+                    .thread_file("local", "aiko", "C1", "M1", false)
+                    .unwrap();
+                std::fs::create_dir_all(&blocked).unwrap();
+                for attempt in 0..4 {
+                    let (restarted, restarted_driver) =
+                        workflow_fixture(&native, root.path(), &cleanup, false);
+                    dispatch.runner = Arc::new(restarted);
+                    if attempt < 3 {
+                        assert!(dispatch.process(chrono::Utc::now()).await.is_err());
+                        assert_eq!(
+                            dispatch.store.pending("local", "aiko", "C1").unwrap().len(),
+                            1
+                        );
+                    } else {
+                        std::fs::remove_dir(&blocked).unwrap();
+                        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+                        assert!(
+                            dispatch
+                                .store
+                                .pending("local", "aiko", "C1")
+                                .unwrap()
+                                .is_empty()
+                        );
+                    }
+                    assert!(driver.calls.lock().unwrap().is_empty());
+                    assert!(restarted_driver.calls.lock().unwrap().is_empty());
+                    let check_completed = |completed: Vec<&Value>| {
+                        assert_eq!(completed.len(), 1);
+                        if diagnostic_exists || activity_exists {
+                            assert_eq!(
+                                completed[0]["attributes"]["service_run_id"],
+                                "prior-service"
+                            );
+                        }
+                        assert_eq!(completed[0]["payload"]["run_id"], pending.run_id);
+                        assert_eq!(
+                            completed[0]["payload"]["attempt"],
+                            if diagnostic_exists || activity_exists {
+                                2
+                            } else {
+                                3
+                            }
+                        );
+                        assert_eq!(
+                            completed[0]["payload"]["recovered"],
+                            !(diagnostic_exists || activity_exists)
+                        );
+                    };
+                    let detail = gb_observability::Diagnostics::open(&native.workspace)
+                        .trace_detail(&pending.run_id)
+                        .unwrap();
+                    let completed = detail["records"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event["type"] == "workflow.completed")
+                        .collect::<Vec<_>>();
+                    check_completed(completed);
+                    let events = activity
+                        .list_between(
+                            chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                        )
+                        .unwrap();
+                    let completed = events
+                        .iter()
+                        .filter(|event| event["kind"] == "workflow.completed")
+                        .collect::<Vec<_>>();
+                    check_completed(completed);
+                    assert_eq!(
+                        RunStore::open(&native.workspace)
+                            .read(&pending.run_id)
+                            .unwrap()
+                            .unwrap(),
+                        record
+                    );
+                }
+                cleanup.close();
+                cleanup.wait().await;
+            }
+        }
+    }
+    #[tokio::test]
+    async fn malformed_scheduled_and_routine_commands_fail_under_a_closed_trace_and_run() {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        for source in ["scheduled", "routine"] {
+            for line in ["functions/talk_as '", "   ", "missing"] {
+                let slot = crate::scheduler::slot(
+                    source,
+                    "aiko",
+                    line,
+                    "2026-11-05T12:00:00".parse().unwrap(),
+                );
+                assert!(matches!(
+                    runtime.command(line, source, slot).await,
+                    Err(crate::workflow_runtime::Refused::Dispatch(
+                        crate::dispatcher::DispatchFailure::InvalidCommand
+                    ))
+                ));
+            }
+        }
+        assert!(driver.calls.lock().unwrap().is_empty());
+        let records = RunStore::open(&native.workspace).records().unwrap();
+        assert_eq!(records.len(), 6);
+        let events = std::fs::read_to_string(
+            native
+                .workspace
+                .join(".guildbotics/local/run/diagnostics.jsonl"),
+        )
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+        for record in records {
+            assert_eq!(record.status, gb_observability::runs::RunState::Failed);
+            assert!(record.finished_at.is_some());
+            let boundary = events
+                .iter()
+                .filter(|e| {
+                    e["trace_id"] == record.run_id
+                        && e["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind.starts_with("command."))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(boundary.len(), 2);
+            assert_eq!(boundary[0]["type"], "command.started");
+            assert_eq!(boundary[1]["type"], "command.failed");
+        }
+        cleanup.close();
+        cleanup.wait().await;
+    }
+    #[tokio::test]
+    async fn local_chat_preparation_failure_spends_budget_but_history_outage_retries_without_a_run()
+    {
+        for operation in ["identity:", "thread:M1"] {
+            for error in [
+                gb_ports::ServiceError::Failed,
+                gb_ports::ServiceError::NotFound,
+                gb_ports::ServiceError::Unsupported,
+                gb_ports::ServiceError::Unavailable,
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let native = fixture(root.path());
+                let cleanup = tokio_util::task::TaskTracker::new();
+                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                let runtime = Arc::new(runtime);
+                let chat = Arc::new(crate::test_chat::Faults::new(runtime.chat.clone().unwrap()));
+                chat.errors
+                    .lock()
+                    .unwrap()
+                    .insert(operation.into(), error.clone());
+                let dispatch = crate::chat_dispatch::Dispatcher {
+                    person: "aiko".into(),
+                    service: "local".into(),
+                    language: "en".into(),
+                    roster: runtime.roster.clone(),
+                    chat: chat.clone(),
+                    store: Arc::new(crate::chat_state::Store {
+                        workspace: native.workspace.clone(),
+                        writes: runtime.writes.clone(),
+                        limit: 500,
+                    }),
+                    runner: runtime.clone(),
+                };
+                chat_history(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]);
+                let event = chat
+                    .inner
+                    .list_thread_events("C1", "M1", None, 100)
+                    .await
+                    .unwrap()
+                    .events
+                    .remove(0);
+                let mut pending = crate::chat_state::Pending::new(event, "strict");
+                pending.max_attempts = 2;
+                dispatch.store.save("local", "aiko", &pending).unwrap();
+                let now = "2026-11-05T00:00:05Z"
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap();
+                let unavailable = operation.starts_with("thread") || error.is_unavailable();
+                let mut id = String::new();
+                for attempt in 0..3 {
+                    assert_eq!(
+                        dispatch
+                            .process(now + chrono::Duration::minutes(attempt * 10))
+                            .await
+                            .unwrap(),
+                        0
+                    );
+                    let queued = dispatch.store.pending("local", "aiko", "C1").unwrap();
+                    if unavailable {
+                        assert_eq!(queued.len(), 1);
+                        assert_eq!(queued[0].attempt_count, 0);
+                        assert_eq!(queued[0].last_error_category, "provider_unavailable");
+                        assert!(queued[0].next_attempt_at.is_some());
+                    } else if attempt == 0 {
+                        assert_eq!(queued.len(), 1);
+                        assert_eq!(queued[0].attempt_count, 1);
+                        assert_eq!(queued[0].last_error_category, "failed");
+                        assert!(queued[0].next_attempt_at.is_some());
+                    } else {
+                        assert!(queued.is_empty());
+                    }
+                    if let Some(pending) = queued.first() {
+                        id = pending.run_id.clone();
+                    }
+                }
+                assert!(driver.calls.lock().unwrap().is_empty());
+                assert!(
+                    RunStore::open(&native.workspace)
+                        .records()
+                        .unwrap()
+                        .is_empty()
+                );
+                let events = std::fs::read_to_string(
+                    native
+                        .workspace
+                        .join(".guildbotics/local/run/diagnostics.jsonl"),
+                )
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|e| {
+                    e["trace_id"] == id
+                        && e["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind.starts_with("command."))
+                })
+                .collect::<Vec<_>>();
+                assert_eq!(events.len(), if unavailable { 6 } else { 4 });
+                for pair in events.chunks_exact(2) {
+                    assert_eq!(pair[0]["type"], "command.started");
+                    assert_eq!(
+                        pair[1]["type"],
+                        if operation == "identity:" && error.is_unavailable() {
+                            "command.deferred"
+                        } else {
+                            "command.failed"
+                        }
+                    );
+                    assert_eq!(pair[1]["attributes"]["chat.channel"], "C1");
+                    assert_eq!(pair[1]["attributes"]["chat.thread"], "M1");
+                    assert_eq!(pair[1]["attributes"]["chat.message"], "M1");
+                }
+                let history = chat
+                    .inner
+                    .list_thread_events("C1", "M1", None, 100)
+                    .await
+                    .unwrap();
+                assert_eq!(history.events.len(), if unavailable { 1 } else { 2 });
+                if !unavailable {
+                    assert_eq!(
+                        history.events[1].status.as_ref().unwrap().reason(),
+                        gb_ports::WorkflowStatusReason::Failed
+                    );
+                }
+                cleanup.close();
+                cleanup.wait().await;
+            }
+        }
+    }
+    #[derive(Default)]
+    struct ChatRuns {
+        invocations: Mutex<Vec<gb_wire::WorkflowInvocation>>,
+        failures: Mutex<std::collections::VecDeque<crate::chat_dispatch::Failure>>,
+        records: Mutex<BTreeMap<String, RunRecord>>,
+        events: Mutex<Vec<Value>>,
+    }
+    impl crate::chat_dispatch::Runner for ChatRuns {
+        fn dispatch<'a>(
+            &'a self,
+            pending: &'a mut crate::chat_state::Pending,
+            invocation: gb_wire::WorkflowInvocation,
+            store: &'a crate::chat_state::Store,
+        ) -> crate::service::Pending<
+            'a,
+            std::result::Result<RunRecord, crate::chat_dispatch::Failure>,
+        > {
+            Box::pin(async move {
+                pending.attempt_count += 1;
+                store.save("local", &invocation.person_id, pending).unwrap();
+                self.invocations.lock().unwrap().push(invocation.clone());
+                if let Some(error) = self.failures.lock().unwrap().pop_front() {
+                    if matches!(
+                        error,
+                        crate::chat_dispatch::Failure::Unavailable
+                            | crate::chat_dispatch::Failure::Rejected
+                    ) {
+                        pending.attempt_count -= 1;
+                        store.save("local", &invocation.person_id, pending).unwrap();
+                    }
+                    return Err(error);
+                }
+                let record:RunRecord=serde_json::from_value(json!({"run_id":pending.run_id,"work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
+                    "result":{"subject_type":"chat","subject_id":"event","status":"done"},"provider_evidence":[{"type":"chat_batch","payload":{"event_ids":invocation.payload["prompt"]["event_ids"]}}]})).unwrap();
+                self.records
+                    .lock()
+                    .unwrap()
+                    .insert(pending.run_id.clone(), record.clone());
+                Ok(record)
+            })
+        }
+        fn record(&self, id: &str) -> anyhow::Result<Option<RunRecord>> {
+            Ok(self.records.lock().unwrap().get(id).cloned())
+        }
+        fn event(&self, kind: &str, pending: &crate::chat_state::Pending, payload: Value) {
+            self.events.lock().unwrap().push(json!({"type":kind,"run_id":pending.run_id,"attempt":pending.attempt_count,"max_attempts":pending.max_attempts,"payload":payload}));
+        }
+    }
+    fn chat_fixture(root: &Path) -> (crate::chat_dispatch::Dispatcher, Arc<ChatRuns>) {
+        let native = fixture(root);
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let (runtime, _) = crate::workflow_runtime::Runtime::assemble(
+            &native,
+            host,
+            "aiko",
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+        let store = Arc::new(crate::chat_state::Store {
+            workspace: native.workspace,
+            writes: runtime.writes,
+            limit: 500,
+        });
+        let runner = Arc::new(ChatRuns::default());
+        let dispatch = crate::chat_dispatch::Dispatcher {
+            person: "aiko".into(),
+            service: "local".into(),
+            language: "en".into(),
+            roster: runtime.roster,
+            chat: runtime.chat.unwrap(),
+            store,
+            runner: runner.clone(),
+        };
+        (dispatch, runner)
+    }
+    fn chat_history(dispatch: &crate::chat_dispatch::Dispatcher, rows: &[Value]) {
+        let path = dispatch
+            .store
+            .workspace
+            .join(".guildbotics/local/services/chat/C1.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+    fn chat_row(id: &str, thread: &str, text: &str, second: u32) -> Value {
+        json!({"message_id":id,"thread_id":thread,"author":"owner","text":text,"occurred_at":format!("2026-11-05T00:00:{second:02}Z")})
+    }
+    #[tokio::test]
+    async fn local_chat_snapshot_paginates_bounds_history_and_keeps_every_unread_message_at_the_same_time()
+     {
+        for head in [1, 150] {
+            let root = tempfile::tempdir().unwrap();
+            let (dispatch, runner) = chat_fixture(root.path());
+            let rows = (1..=150)
+                .map(|i| chat_row(&format!("M{i:03}"), "M001", "@local-aiko work", 1))
+                .collect::<Vec<_>>();
+            chat_history(&dispatch, &rows);
+            let events = dispatch
+                .chat
+                .list_thread_events("C1", "M001", None, 200)
+                .await
+                .unwrap()
+                .events;
+            assert_eq!(events.len(), 150);
+            dispatch
+                .store
+                .receive("local", "aiko", events[head - 1].clone(), "strict")
+                .unwrap();
+            assert_eq!(
+                dispatch
+                    .process("2026-11-05T00:00:05Z".parse().unwrap())
+                    .await
+                    .unwrap(),
+                1
+            );
+            let calls = runner.invocations.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let prompt = &calls[0].payload["prompt"];
+            assert_eq!(prompt["thread_context_complete"], true);
+            assert_eq!(
+                prompt["unprocessed_messages"].as_array().unwrap().len(),
+                151 - head
+            );
+            assert_eq!(
+                prompt["thread_context"].as_array().unwrap().len(),
+                if head == 150 { 100 } else { 0 }
+            );
+            assert_eq!(
+                prompt["source_snapshot"].as_array().unwrap().len(),
+                if head == 150 { 101 } else { 150 }
+            );
+            assert_eq!(
+                prompt["unprocessed_messages"][0]["timestamp"],
+                events[head - 1].message.position()
+            );
+            assert_eq!(
+                prompt["unprocessed_messages"][150 - head]["timestamp"],
+                events[149].message.position()
+            );
+            if head == 150 {
+                assert_eq!(
+                    prompt["thread_context"][0]["timestamp"],
+                    events[49].message.position()
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn local_chat_dispatch_participation_gates_leave_no_run_and_provider_outage_keeps_budget()
+    {
+        for (policy, text, self_message, expected) in [
+            ("strict", "ambient", false, 0),
+            ("social", "ambient", false, 1),
+            ("muted", "@local-aiko work", false, 1),
+            ("social", "@other work", false, 0),
+            ("strict", "@local-aiko work", true, 0),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (dispatch, runner) = chat_fixture(temp.path());
+            let mut row = chat_row("M1", "M1", text, 1);
+            if self_message {
+                row["author"] = json!("local-aiko");
+            }
+            chat_history(&dispatch, &[row]);
+            let event = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(0);
+            dispatch
+                .store
+                .receive("local", "aiko", event, policy)
+                .unwrap();
+            dispatch.process(chrono::Utc::now()).await.unwrap();
+            assert_eq!(runner.invocations.lock().unwrap().len(), expected);
+            if expected == 0 {
+                assert!(
+                    RunStore::open(&dispatch.store.workspace)
+                        .records()
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let (dispatch, runner) = chat_fixture(temp.path());
+        chat_history(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]);
+        let event = dispatch
+            .chat
+            .list_thread_events("C1", "M1", None, 100)
+            .await
+            .unwrap()
+            .events
+            .remove(0);
+        dispatch
+            .store
+            .receive("local", "aiko", event, "strict")
+            .unwrap();
+        runner
+            .failures
+            .lock()
+            .unwrap()
+            .push_back(crate::chat_dispatch::Failure::Unavailable);
+        dispatch.process(chrono::Utc::now()).await.unwrap();
+        let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+        assert_eq!(pending[0].attempt_count, 0);
+        assert_eq!(pending[0].last_error_category, "provider_unavailable");
+    }
+    #[tokio::test]
+    async fn local_chat_dispatch_freezes_latest_batch_and_recovers_completion_without_reinvocation()
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let (dispatch, runner) = chat_fixture(temp.path());
+        let old = chat_row("M1", "M1", "@local-aiko original", 1);
+        chat_history(&dispatch, &[old]);
+        let original = dispatch
+            .chat
+            .list_thread_events("C1", "M1", None, 100)
+            .await
+            .unwrap()
+            .events
+            .remove(0);
+        dispatch
+            .store
+            .receive("local", "aiko", original.clone(), "strict")
+            .unwrap();
+        chat_history(
+            &dispatch,
+            &[
+                chat_row("M1", "M1", "@local-aiko corrected", 1),
+                chat_row("M2", "M1", "followup", 2),
+            ],
+        );
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        let calls = runner.invocations.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].payload["prompt"]["unprocessed_messages"][0]["content"],
+            "@aiko corrected"
+        );
+        assert_eq!(
+            calls[0].payload["prompt"]["event_ids"],
+            json!(["C1:M1", "C1:M2"])
+        );
+        assert!(
+            dispatch
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            dispatch.store.thread("local", "aiko", "C1", "M1").unwrap()["participants"].is_null()
+        );
+        let mut retry = crate::chat_state::Pending::new(original, "strict");
+        retry.run_id = calls[0].run_id.clone();
+        dispatch.store.save("local", "aiko", &retry).unwrap();
+        write_json(
+            &dispatch
+                .store
+                .workspace
+                .join(".guildbotics/state/chat_state/local/aiko/channels/C1.json"),
+            json!({"processed_event_ids":[]}),
+        );
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        assert_eq!(runner.invocations.lock().unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn local_chat_dispatch_plain_failure_wakes_for_new_follower_but_rate_limit_does_not() {
+        for rate in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (dispatch, runner) = chat_fixture(temp.path());
+            chat_history(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]);
+            let event = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(0);
+            dispatch
+                .store
+                .receive("local", "aiko", event, "strict")
+                .unwrap();
+            runner.failures.lock().unwrap().push_back(if rate {
+                crate::chat_dispatch::Failure::RateLimited {
+                    at: "2099-01-01T00:00:00Z".into(),
+                    hint: "later".into(),
+                }
+            } else {
+                crate::chat_dispatch::Failure::Failed
+            });
+            let now: chrono::DateTime<chrono::Utc> = "2026-11-05T00:00:05Z".parse().unwrap();
+            assert_eq!(dispatch.process(now).await.unwrap(), 0);
+            assert_eq!(runner.invocations.lock().unwrap().len(), 1);
+            let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+            assert_eq!(pending[0].attempt_count, 1);
+            assert!(pending[0].next_attempt_at.is_some());
+            chat_history(
+                &dispatch,
+                &[
+                    chat_row("M1", "M1", "@local-aiko work", 1),
+                    chat_row("M2", "M1", "wake", 2),
+                ],
+            );
+            let follower = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(1);
+            dispatch
+                .store
+                .receive("local", "aiko", follower, "strict")
+                .unwrap();
+            assert_eq!(
+                dispatch
+                    .process(now + chrono::Duration::seconds(1))
+                    .await
+                    .unwrap(),
+                usize::from(!rate)
+            );
+            assert_eq!(
+                runner.invocations.lock().unwrap().len(),
+                if rate { 1 } else { 2 }
+            );
+        }
+    }
+    #[tokio::test]
+    async fn local_chat_dispatch_final_failure_releases_only_the_head_and_announces_the_correct_reason()
+     {
+        for rate in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (dispatch, runner) = chat_fixture(temp.path());
+            chat_history(
+                &dispatch,
+                &[
+                    chat_row("M1", "M1", "@local-aiko work", 1),
+                    chat_row("M2", "M1", "follower", 2),
+                ],
+            );
+            let events = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events;
+            for event in &events {
+                dispatch
+                    .store
+                    .receive("local", "aiko", event.clone(), "strict")
+                    .unwrap();
+            }
+            let mut head = dispatch
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .remove(0);
+            head.attempt_count = 1;
+            head.max_attempts = 2;
+            dispatch.store.save("local", "aiko", &head).unwrap();
+            runner.failures.lock().unwrap().push_back(if rate {
+                crate::chat_dispatch::Failure::RateLimited {
+                    at: "2099-01-01T00:00:00Z".into(),
+                    hint: "later".into(),
+                }
+            } else {
+                crate::chat_dispatch::Failure::Failed
+            });
+            dispatch.process(chrono::Utc::now()).await.unwrap();
+            let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].event.event_id, "C1:M2");
+            let notices = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .into_iter()
+                .filter_map(|e| e.status)
+                .collect::<Vec<_>>();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(
+                notices[0].reason(),
+                if rate {
+                    WorkflowStatusReason::RateLimited
+                } else {
+                    WorkflowStatusReason::Failed
+                }
+            );
+        }
+    }
+    async fn seed_chat(dispatch: &crate::chat_dispatch::Dispatcher, rows: &[Value]) {
+        chat_history(dispatch, rows);
+        let mut threads = std::collections::BTreeSet::new();
+        for row in rows {
+            threads.insert(row["thread_id"].as_str().unwrap());
+        }
+        for thread in threads {
+            for event in dispatch
+                .chat
+                .list_thread_events("C1", thread, None, 100)
+                .await
+                .unwrap()
+                .events
+            {
+                dispatch
+                    .store
+                    .receive("local", &dispatch.person, event, "strict")
+                    .unwrap();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn chat_retry_budget_is_durable_due_rejection_and_notices_do_not_spend_extra_attempts() {
+        use crate::chat_dispatch::Failure;
+        for rate in [false, true] {
+            for post_fails in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let (mut dispatch, runner) = chat_fixture(root.path());
+                seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+                let faulty = Arc::new(crate::test_chat::Faults::new(dispatch.chat.clone()));
+                if post_fails {
+                    faulty
+                        .errors
+                        .lock()
+                        .unwrap()
+                        .insert("post:C1".into(), ServiceError::Failed);
+                }
+                dispatch.chat = faulty;
+                let mut queued = dispatch
+                    .store
+                    .pending("local", "aiko", "C1")
+                    .unwrap()
+                    .remove(0);
+                queued.max_attempts = 3;
+                dispatch.store.save("local", "aiko", &queued).unwrap();
+                let mut now: chrono::DateTime<chrono::Utc> =
+                    "2026-11-05T00:00:05Z".parse().unwrap();
+                runner.failures.lock().unwrap().push_back(Failure::Rejected);
+                assert_eq!(dispatch.process(now).await.unwrap(), 0);
+                assert_eq!(
+                    dispatch.store.pending("local", "aiko", "C1").unwrap()[0].attempt_count,
+                    0
+                );
+                let mut identity = String::new();
+                for attempt in 1..=3 {
+                    runner.failures.lock().unwrap().push_back(if rate {
+                        Failure::RateLimited {
+                            at: String::new(),
+                            hint: "later".into(),
+                        }
+                    } else {
+                        Failure::Failed
+                    });
+                    assert_eq!(dispatch.process(now).await.unwrap(), 0);
+                    let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+                    if attempt < 3 {
+                        assert_eq!(pending.len(), 1);
+                        let pending = &pending[0];
+                        assert_eq!(pending.attempt_count, attempt);
+                        if identity.is_empty() {
+                            identity = pending.run_id.clone();
+                        }
+                        assert_eq!(pending.run_id, identity);
+                        let next: chrono::DateTime<chrono::Utc> =
+                            pending.next_attempt_at.as_ref().unwrap().parse().unwrap();
+                        assert_eq!(
+                            next - now,
+                            chrono::Duration::seconds(if attempt == 1 { 60 } else { 120 })
+                        );
+                        let calls = runner.invocations.lock().unwrap().len();
+                        assert_eq!(
+                            dispatch
+                                .process(next - chrono::Duration::seconds(1))
+                                .await
+                                .unwrap(),
+                            0
+                        );
+                        assert_eq!(runner.invocations.lock().unwrap().len(), calls);
+                        now = next;
+                    } else {
+                        assert!(pending.is_empty());
+                    }
+                }
+                let attempts = runner
+                    .invocations
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|i| i.payload["attempt"].as_u64().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(attempts, vec![1, 1, 2, 3]);
+                let events = runner.events.lock().unwrap().clone();
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|e| e["type"] == "chat_dispatch.retry_scheduled")
+                        .count(),
+                    2
+                );
+                let abandoned = events
+                    .iter()
+                    .find(|e| e["type"] == "chat_dispatch.abandoned")
+                    .unwrap();
+                assert_eq!(abandoned["attempt"], 3);
+                assert_eq!(abandoned["max_attempts"], 3);
+                assert_eq!(abandoned["run_id"], identity);
+                let state = dispatch.store.thread("local", "aiko", "C1", "M1").unwrap();
+                assert_eq!(
+                    state["system_notices"].as_array().map_or(0, Vec::len),
+                    usize::from(!post_fails)
+                );
+                let notices = dispatch
+                    .chat
+                    .list_thread_events("C1", "M1", None, 100)
+                    .await
+                    .unwrap()
+                    .events
+                    .into_iter()
+                    .filter_map(|e| e.status)
+                    .collect::<Vec<_>>();
+                assert_eq!(notices.len(), usize::from(!post_fails));
+                if let Some(notice) = notices.first() {
+                    assert_eq!(
+                        notice.reason(),
+                        if rate {
+                            WorkflowStatusReason::RateLimited
+                        } else {
+                            WorkflowStatusReason::Failed
+                        }
+                    );
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_failed_head_wakes_once_only_and_other_threads_and_terminal_followers_keep_their_order()
+     {
+        use crate::chat_dispatch::Failure;
+        for category in ["failed", "unknown", "rate_limited"] {
+            let root = tempfile::tempdir().unwrap();
+            let (dispatch, runner) = chat_fixture(root.path());
+            seed_chat(
+                &dispatch,
+                &[
+                    chat_row("M1", "M1", "@local-aiko head", 1),
+                    chat_row("M2", "M1", "follower", 2),
+                    chat_row("M3", "M3", "@local-aiko other", 3),
+                ],
+            )
+            .await;
+            let mut head = dispatch
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .remove(0);
+            head.attempt_count = 1;
+            head.last_error_category = category.into();
+            head.next_attempt_at = Some("2099-01-01T00:00:00Z".into());
+            dispatch.store.save("local", "aiko", &head).unwrap();
+            if category == "failed" {
+                runner.failures.lock().unwrap().push_back(Failure::Failed);
+            }
+            let now = "2026-11-05T00:00:05Z".parse().unwrap();
+            assert_eq!(dispatch.process(now).await.unwrap(), 1);
+            let calls = runner.invocations.lock().unwrap().clone();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|i| i.payload["subject"]["event_id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                if category == "failed" {
+                    vec!["C1:M1", "C1:M3"]
+                } else {
+                    vec!["C1:M3"]
+                }
+            );
+            assert_eq!(dispatch.process(now).await.unwrap(), 0);
+            assert_eq!(runner.invocations.lock().unwrap().len(), calls.len());
+            let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+            assert_eq!(pending.len(), 2);
+            if category == "failed" {
+                assert_eq!(pending[0].wake_cursor, pending[1].event.message.position());
+            }
+            head = pending[0].clone();
+            head.attempt_count = head.max_attempts - 1;
+            head.next_attempt_at = None;
+            dispatch.store.save("local", "aiko", &head).unwrap();
+            runner.failures.lock().unwrap().push_back(Failure::Failed);
+            assert_eq!(dispatch.process(now).await.unwrap(), 0);
+            assert_eq!(
+                dispatch.store.pending("local", "aiko", "C1").unwrap()[0]
+                    .event
+                    .event_id,
+                "C1:M2"
+            );
+            assert_eq!(dispatch.process(now).await.unwrap(), 1);
+            assert!(
+                dispatch
+                    .store
+                    .pending("local", "aiko", "C1")
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn equal_time_threads_sort_by_id_and_already_processed_input_never_calls_the_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut dispatch, runner) = chat_fixture(root.path());
+        seed_chat(
+            &dispatch,
+            &[
+                chat_row("M2", "M2", "@local-aiko second", 1),
+                chat_row("M1", "M1", "@local-aiko first", 1),
+            ],
+        )
+        .await;
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 2);
+        assert_eq!(
+            runner
+                .invocations
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|i| i.payload["subject"]["event_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["C1:M1", "C1:M2"]
+        );
+        let mut pending = crate::chat_state::Pending::new(
+            dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events
+                .remove(0),
+            "strict",
+        );
+        pending.run_id = "unused".into();
+        dispatch.store.save("local", "aiko", &pending).unwrap();
+        let faulty = Arc::new(crate::test_chat::Faults::new(dispatch.chat.clone()));
+        faulty
+            .errors
+            .lock()
+            .unwrap()
+            .insert("identity:".into(), ServiceError::Failed);
+        dispatch.chat = faulty;
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 0);
+        assert_eq!(runner.invocations.lock().unwrap().len(), 2);
+        assert!(
+            dispatch
+                .store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[tokio::test]
+    async fn fresh_followups_preserve_participation_labels_handoff_candidates_and_external_reaction_target()
+     {
+        for policy in ["strict", "social", "muted"] {
+            for other in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let (mut dispatch, runner) = chat_fixture(root.path());
+                let rows = json!([
+                    {"person_id":"aiko","name":"Aiko","accounts":{"local":"local-aiko"},"roles":{"architect":{}}},
+                    {"person_id":"yuki","name":" Yuki ","is_active":false,"accounts":{"local":"local-yuki"},"roles":{"design":{"summary":"Design","description":"UX"}}},
+                    {"person_id":"nochat","name":"No chat","accounts":{},"roles":{"design":{}}},
+                    {"person_id":"roleless","name":"Roleless","accounts":{"local":"other"},"roles":{}}
+                ]);
+                dispatch.roster = rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| {
+                        let mut value = serde_json::to_value(&dispatch.roster[0]).unwrap();
+                        value
+                            .as_object_mut()
+                            .unwrap()
+                            .extend(row.as_object().unwrap().clone());
+                        serde_json::from_value(value).unwrap()
+                    })
+                    .collect();
+                let faulty = Arc::new(crate::test_chat::Faults::new(dispatch.chat.clone()));
+                dispatch.chat = faulty.clone();
+                chat_history(
+                    &dispatch,
+                    &[
+                        chat_row("M1", "M1", "@local-aiko prior", 1),
+                        chat_row(
+                            "M2",
+                            "M1",
+                            if other {
+                                "@local-yuki followup"
+                            } else {
+                                "followup"
+                            },
+                            2,
+                        ),
+                        {
+                            let mut r = chat_row("M3", "M1", "already finished", 3);
+                            r["author"] = json!("local-aiko");
+                            r
+                        },
+                    ],
+                );
+                let events = dispatch
+                    .chat
+                    .list_thread_events("C1", "M1", None, 100)
+                    .await
+                    .unwrap()
+                    .events;
+                dispatch
+                    .store
+                    .receive("local", "aiko", events[1].clone(), policy)
+                    .unwrap();
+                dispatch.store.update_thread("local","aiko","C1","M1",&json!({"effort":"high","thread_topic":"release","latest_focus":"review","handoffs":[{"person_id":"yuki","text":"prior request"}]})).unwrap();
+                faulty.calls.lock().unwrap().clear();
+                assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+                let calls = runner.invocations.lock().unwrap();
+                let expected = !other && policy != "muted";
+                assert_eq!(calls.len(), usize::from(expected));
+                assert_eq!(
+                    faulty
+                        .calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|c| c["operation"] == "thread")
+                        .count(),
+                    1
+                );
+                if expected {
+                    let turn = &calls[0].payload;
+                    let prompt = &turn["prompt"];
+                    assert_eq!(turn["message_id"], "M2");
+                    assert_eq!(turn["effort"], "high");
+                    assert!(turn["context_cursor"].as_str().unwrap().ends_with("M3"));
+                    assert_eq!(prompt["participant_labels"]["local-aiko"], "aiko");
+                    assert_eq!(prompt["participant_labels"]["local-yuki"], "yuki");
+                    assert_eq!(
+                        prompt["handoff_candidates"],
+                        json!([{"person_id":"yuki","name":"Yuki","mention":"@yuki","roles":{"design":{"summary":"Design","description":"UX"}}}])
+                    );
+                    assert_eq!(
+                        prompt["previous_thread_context"]["handoffs"],
+                        json!([{"person_id":"yuki","text":"prior request"}])
+                    );
+                    assert_eq!(prompt["thread_context"][0]["content"], "@aiko prior");
+                    assert_eq!(
+                        prompt["unprocessed_messages"][1]["content"],
+                        "already finished"
+                    );
+                    assert_eq!(
+                        dispatch
+                            .store
+                            .messages("local", "aiko", "C1", "M1")
+                            .unwrap()
+                            .len(),
+                        3
+                    );
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn each_member_can_dispatch_the_same_event_and_thread_identity_survives_new_input() {
+        let root = tempfile::tempdir().unwrap();
+        let (dispatch, runner) = chat_fixture(root.path());
+        seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko first", 1)]).await;
+        let mut other = crate::chat_dispatch::Dispatcher {
+            person: "yuki".into(),
+            service: "local".into(),
+            language: "en".into(),
+            roster: dispatch.roster.clone(),
+            chat: dispatch.chat.clone(),
+            store: dispatch.store.clone(),
+            runner: runner.clone(),
+        };
+        let event = dispatch.store.pending("local", "aiko", "C1").unwrap()[0]
+            .event
+            .clone();
+        other
+            .store
+            .receive("local", "yuki", event, "strict")
+            .unwrap();
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        assert_eq!(other.process(chrono::Utc::now()).await.unwrap(), 1);
+        assert!(
+            other
+                .store
+                .pending("local", "yuki", "C1")
+                .unwrap()
+                .is_empty()
+        );
+        other.person = "aiko".into();
+        chat_history(
+            &dispatch,
+            &[
+                chat_row("M1", "M1", "@local-aiko first", 1),
+                chat_row("M2", "M1", "second", 2),
+            ],
+        );
+        let event = dispatch
+            .chat
+            .list_thread_events("C1", "M1", None, 100)
+            .await
+            .unwrap()
+            .events
+            .remove(1);
+        dispatch
+            .store
+            .receive("local", "aiko", event, "strict")
+            .unwrap();
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        let calls = runner.invocations.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .map(|i| i.person_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aiko", "yuki", "aiko"]
+        );
+        assert_eq!(
+            calls[0].work.as_ref().unwrap().identity,
+            calls[2].work.as_ref().unwrap().identity
+        );
+        assert!(
+            calls[0].payload["context_cursor"].as_str().unwrap()
+                < calls[2].payload["context_cursor"].as_str().unwrap()
+        );
+    }
+    #[tokio::test]
+    async fn native_chat_retry_events_keep_command_trace_rate_metadata_and_capped_abandonment() {
+        use crate::chat_dispatch::Runner as _;
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (runtime, _) = workflow_fixture(&native, root.path(), &cleanup, false);
+        let (dispatch, _) = chat_fixture(root.path());
+        seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+        let mut pending = dispatch
+            .store
+            .pending("local", "aiko", "C1")
+            .unwrap()
+            .remove(0);
+        pending.run_id = "event-run".into();
+        pending.attempt_count = 99;
+        pending.max_attempts = 3;
+        let ((), logs) = crate::test_logs::capture(|| {
+            runtime.event(
+                "chat_dispatch.retry_scheduled",
+                &pending,
+                json!({"next_attempt_at":"later","error_category":"failed"}),
+            );
+            runtime.event("workflow.rate_limited",&pending,json!({"category":"rate_limited","retry_after_at":"2027-01-01T00:00:00Z","retry_after_text":"later","source_event_id":"C1:M1","subject_id":"C1:M1"}));
+            runtime.event(
+                "chat_dispatch.abandoned",
+                &pending,
+                json!({"error_category":"failed"}),
+            );
+        });
+        assert_eq!(logs.len(), 2);
+        assert!(logs[0].contains("event-run"));
+        assert!(logs[1].starts_with("chat event abandoned after final attempt"));
+        assert!(logs[1].contains("aiko"));
+        let diagnostics = std::fs::read_to_string(
+            native
+                .workspace
+                .join(".guildbotics/local/run/diagnostics.jsonl"),
+        )
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|e| e["trace_id"] == "event-run" && e["type"] != "session.pointer")
+        .collect::<Vec<_>>();
+        assert_eq!(diagnostics.len(), 3);
+        for e in &diagnostics {
+            assert_eq!(e["person_id"], "aiko");
+            assert_eq!(e["command"], crate::chat_dispatch::COMMAND);
+            assert_eq!(e["source"], "event_queue");
+            assert_eq!(e["payload"]["attempt_count"], 3);
+            assert_eq!(e["payload"]["max_attempts"], 3);
+            assert_eq!(
+                e["attributes"]["service_run_id"],
+                runtime.generation.as_ref().unwrap().id
+            );
+            assert_eq!(e["attributes"]["chat.thread"], "M1");
+        }
+        assert_eq!(
+            diagnostics[1]["attributes"]["error.category"],
+            "rate_limited"
+        );
+        assert_eq!(
+            diagnostics[1]["attributes"]["rate_limit.retry_after_at"],
+            "2027-01-01T00:00:00Z"
+        );
+        let activity = gb_observability::activity::ActivityEvents::open(&native.workspace)
+            .list_between(
+                "2020-01-01T00:00:00Z".parse().unwrap(),
+                "2099-01-01T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let rate = activity
+            .iter()
+            .find(|e| e["kind"] == "workflow.rate_limited")
+            .unwrap();
+        assert_eq!(rate["attributes"]["error.category"], "rate_limited");
+        assert_eq!(rate["payload"]["source_event_id"], "C1:M1");
+        assert_eq!(rate["command"], crate::chat_dispatch::COMMAND);
+        cleanup.close();
+        cleanup.wait().await;
+    }
+    #[tokio::test]
+    async fn recovered_reply_records_only_known_team_handoffs_and_preserves_topic_focus_and_effort()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (mut dispatch, runner) = chat_fixture(root.path());
+        let mut peer = dispatch.roster[0].clone();
+        peer.person_id = "yuki".into();
+        peer.name = "Yuki".into();
+        peer.accounts = BTreeMap::from([("local".into(), "local-yuki".into())]);
+        peer.roles = json!({"design":{}});
+        dispatch.roster.push(peer);
+        seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+        let mut original = dispatch
+            .store
+            .pending("local", "aiko", "C1")
+            .unwrap()
+            .remove(0);
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        original.run_id = runner.invocations.lock().unwrap()[0].run_id.clone();
+        // This runner double leaves the host terminal event to the fixture.
+        crate::chat_dispatch::Runner::event(
+            runner.as_ref(),
+            "workflow.completed",
+            &original,
+            json!({"run_id":original.run_id,"status":"done"}),
+        );
+        runner.records.lock().unwrap().get_mut(&original.run_id).unwrap().provider_evidence.push(json!({"type":"chat_reply","payload":{"channel_id":"C1","thread_id":"M1","message_id":"response","text":"@local-yuki design review @outsider","occurred_at":"2026-11-05T00:00:05Z"}}));
+        dispatch
+            .store
+            .update_thread(
+                "local",
+                "aiko",
+                "C1",
+                "M1",
+                &json!({"thread_topic":"release","latest_focus":"review","effort":"high"}),
+            )
+            .unwrap();
+        dispatch.store.save("local", "aiko", &original).unwrap();
+        write_json(
+            &dispatch
+                .store
+                .workspace
+                .join(".guildbotics/state/chat_state/local/aiko/channels/C1.json"),
+            json!({"processed_event_ids":[]}),
+        );
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+        assert_eq!(runner.invocations.lock().unwrap().len(), 1);
+        let state = dispatch.store.thread("local", "aiko", "C1", "M1").unwrap();
+        assert_eq!(
+            state["handoffs"],
+            json!([{"person_id":"yuki","roles":["design"],"message_id":"response","text":"@local-yuki design review @outsider","thread_topic":"release","latest_focus":"review"}])
+        );
+        assert_eq!(state["effort"], "high");
+        assert!(
+            state["participants"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("aiko"))
+        );
+        assert_eq!(
+            dispatch
+                .store
+                .messages("local", "aiko", "C1", "M1")
+                .unwrap()
+                .last()
+                .unwrap()
+                .message_id,
+            "response"
+        );
+        assert_eq!(
+            runner
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event["type"] == "workflow.completed")
+                .count(),
+            1
+        );
+    }
+    #[tokio::test]
+    async fn native_patrol_keeps_distinct_candidates_after_failure_and_lease_conflict_then_records_cancellation()
+     {
+        use crate::scheduler::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        let first = ready_ticket(&native, &runtime).await;
+        let second = ready_ticket(&native, &runtime).await;
+        let faults = Arc::new(crate::test_ticket::Faults::new(
+            runtime.tickets.clone().unwrap(),
+        ));
+        runtime.tickets = Some(faults.clone());
+        let runtime = Arc::new(runtime);
+        let engine = crate::native_scheduler::Engine::new(runtime.clone(), None);
+        let slot = || {
+            crate::scheduler::slot(
+                "routine",
+                "aiko",
+                crate::ticket_selector::COMMAND,
+                "2026-11-05T12:00:00".parse().unwrap(),
+            )
+        };
+        let lease_path = native
+            .workspace
+            .join(".guildbotics/local/run/person-leases/aiko.lock");
+        let lease = gb_base::files::FileLock::try_hold(&lease_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            engine.patrol(slot()).await,
+            (crate::service::Outcome::Deferred, false)
+        );
+        assert!(driver.calls.lock().unwrap().is_empty());
+        assert!(!runtime.draining.is_cancelled());
+        drop(lease);
+        driver
+            .failures
+            .lock()
+            .unwrap()
+            .push_back(crate::dispatcher::DispatchFailure::Service(
+                ServiceError::Failed,
+            ));
+        assert_eq!(
+            engine.patrol(slot()).await,
+            (crate::service::Outcome::Failed, false)
+        );
+        let second_path = native
+            .workspace
+            .join(".guildbotics/local/services/tickets/acme%2Fteam/T-2.json");
+        let mut updated: Value =
+            serde_json::from_slice(&std::fs::read(&second_path).unwrap()).unwrap();
+        updated["lane"] = json!("in_progress");
+        updated["title"] = json!("Updated title");
+        write_json(&second_path, updated);
+        faults
+            .errors
+            .lock()
+            .unwrap()
+            .insert("move", ServiceError::Failed);
+        assert_eq!(
+            engine.patrol(slot()).await,
+            (crate::service::Outcome::Succeeded, true)
+        );
+        let records = RunStore::open(&native.workspace).records().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r.work_identity.as_ref().unwrap()["ticket_url"].as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            [first.target.url.as_str(), second.target.url.as_str()]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.status == gb_observability::runs::RunState::Failed)
+                .count(),
+            1
+        );
+        for r in &records {
+            assert_eq!(r.source, "routine");
+            assert_eq!(
+                r.attributes["target.title"],
+                if r.work_identity.as_ref().unwrap()["ticket_url"] == second.target.url {
+                    "Updated title"
+                } else {
+                    "Fix login"
+                }
+            );
+            assert!(r.finished_at.is_some());
+        }
+        for source in ["scheduled", "routine"] {
+            driver
+                .failures
+                .lock()
+                .unwrap()
+                .push_back(crate::dispatcher::DispatchFailure::Cancelled);
+            let outcome = engine
+                .command(
+                    "functions/talk_as",
+                    source,
+                    crate::scheduler::slot(
+                        source,
+                        "aiko",
+                        "functions/talk_as",
+                        "2026-11-05T12:01:00".parse().unwrap(),
+                    ),
+                )
+                .await;
+            assert_eq!(outcome, crate::service::Outcome::Deferred);
+            let id = driver.calls.lock().unwrap().last().unwrap().run_id.clone();
+            assert_eq!(
+                RunStore::open(&native.workspace)
+                    .read(&id)
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                gb_observability::runs::RunState::Cancelled
+            );
+        }
+        cleanup.close();
+        cleanup.wait().await;
+        assert!(runtime.generation.as_ref().unwrap().snapshot().is_empty());
+    }
+    #[tokio::test]
+    async fn failed_native_chat_batches_refresh_edited_and_new_input_and_preserve_prior_action_evidence()
+     {
+        for policy in ["strict", "muted"] {
+            for wrote in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let native = fixture(root.path());
+                let cleanup = tokio_util::task::TaskTracker::new();
+                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+                let runtime = Arc::new(runtime);
+                let dispatch = crate::chat_dispatch::Dispatcher {
+                    person: "aiko".into(),
+                    service: "local".into(),
+                    language: "en".into(),
+                    roster: runtime.roster.clone(),
+                    chat: runtime.chat.clone().unwrap(),
+                    store: Arc::new(crate::chat_state::Store {
+                        workspace: native.workspace.clone(),
+                        writes: runtime.writes.clone(),
+                        limit: 500,
+                    }),
+                    runner: runtime.clone(),
+                };
+                seed_chat(
+                    &dispatch,
+                    &[
+                        chat_row("M1", "M1", "@local-aiko original", 1),
+                        chat_row("M2", "M1", "correction", 2),
+                    ],
+                )
+                .await;
+                let mut head = dispatch
+                    .store
+                    .pending("local", "aiko", "C1")
+                    .unwrap()
+                    .remove(0);
+                head.chat_participation = policy.into();
+                dispatch.store.save("local", "aiko", &head).unwrap();
+                let failure = crate::dispatcher::DispatchFailure::Service(ServiceError::Failed);
+                if wrote {
+                    *driver.before_completion.lock().unwrap() = Some(failure);
+                } else {
+                    driver.failures.lock().unwrap().push_back(failure);
+                }
+                let subject = gb_member::chat_updates::Subject {
+                    service: "local".into(),
+                    channel_id: "C1".into(),
+                    thread_id: "M1".into(),
+                    event_id: "C1:M1".into(),
+                    self_user_id: "local-aiko".into(),
+                };
+                let heartbeat = gb_member::chat_updates::Heartbeat::new(&native.workspace);
+                heartbeat
+                    .save(
+                        &subject,
+                        "aiko",
+                        "ready",
+                        chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                        1.0,
+                    )
+                    .unwrap();
+                let now = chrono::Utc::now();
+                assert_eq!(dispatch.process(now).await.unwrap(), 0);
+                let id = driver.calls.lock().unwrap()[0].run_id.clone();
+                let prior = RunStore::open(&native.workspace)
+                    .read(&id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(prior.status, gb_observability::runs::RunState::Failed);
+                assert!(prior.result.is_none());
+                assert_eq!(
+                    prior
+                        .provider_evidence
+                        .iter()
+                        .any(|e| e["type"] == "chat_reply"),
+                    wrote
+                );
+                assert_eq!(
+                    dispatch.store.pending("local", "aiko", "C1").unwrap().len(),
+                    2
+                );
+                chat_history(
+                    &dispatch,
+                    &[
+                        chat_row("M1", "M1", "@local-aiko edited", 1),
+                        chat_row("M2", "M1", "correction", 2),
+                        chat_row("M3", "M1", "new work", 3),
+                    ],
+                );
+                assert_eq!(
+                    dispatch
+                        .process(now + chrono::Duration::seconds(61))
+                        .await
+                        .unwrap(),
+                    1
+                );
+                let calls = driver.calls.lock().unwrap().clone();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[1].run_id, id);
+                assert_eq!(
+                    calls[1].payload["prompt"]["unprocessed_messages"][0]["content"],
+                    "@aiko edited"
+                );
+                assert_eq!(
+                    calls[1].payload["prompt"]["event_ids"],
+                    json!(["C1:M1", "C1:M2", "C1:M3"])
+                );
+                let record = RunStore::open(&native.workspace)
+                    .read(&id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    record
+                        .provider_evidence
+                        .iter()
+                        .filter(|e| e["type"] == "chat_batch")
+                        .map(|e| e["payload"]["event_ids"].as_array().unwrap().len())
+                        .collect::<Vec<_>>(),
+                    vec![2, 3]
+                );
+                assert_eq!(
+                    record
+                        .provider_evidence
+                        .iter()
+                        .filter(|e| e["type"] == "chat_reply")
+                        .count(),
+                    if wrote { 2 } else { 1 }
+                );
+                assert!(record.result.is_some());
+                assert!(
+                    dispatch
+                        .store
+                        .pending("local", "aiko", "C1")
+                        .unwrap()
+                        .is_empty()
+                );
+                cleanup.close();
+                cleanup.wait().await;
+            }
+        }
+    }
+    #[tokio::test]
+    async fn initial_chat_budget_reads_the_process_environment_without_mutating_the_test_runtime() {
+        const CHILD: &str = "GUILDBOTICS_TEST_CHAT_BUDGET";
+        if std::env::var_os(CHILD).is_none() {
+            let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","member::native::tests::initial_chat_budget_reads_the_process_environment_without_mutating_the_test_runtime","--nocapture"]).env(CHILD,"1").env("GUILDBOTICS_CHAT_MAX_ATTEMPTS","10").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (dispatch, runner) = chat_fixture(root.path());
+        seed_chat(&dispatch, &[chat_row("M1", "M1", "@local-aiko work", 1)]).await;
+        runner
+            .failures
+            .lock()
+            .unwrap()
+            .push_back(crate::chat_dispatch::Failure::Failed);
+        assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 0);
+        let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+        assert_eq!(pending[0].max_attempts, 10);
+        assert_eq!(pending[0].attempt_count, 1);
+    }
+    impl EventListener for Received {
+        fn connected(&self) -> bool {
+            self.connected.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn auth_failed(&self) -> bool {
+            false
+        }
+        fn start(&self) -> ServiceFuture<'_, ()> {
+            Box::pin(async {
+                self.starts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.connected
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        fn stop(&self) -> ServiceFuture<'_, ()> {
+            Box::pin(async {
+                self.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.connected
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        fn drain_events(&self) -> Vec<ChatEvent> {
+            std::mem::take(&mut *self.events.lock().unwrap())
+        }
+    }
+    #[tokio::test]
+    async fn local_chat_receiver_backfills_threads_suppresses_status_and_retains_live_input_during_write_contention()
+     {
+        use crate::{chat_receiver::Receiver, chat_state::Store, work_stops::subscriptions};
+        let temp = tempfile::tempdir().unwrap();
+        let native = fixture(temp.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: temp.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (runtime, _) = crate::workflow_runtime::Runtime::assemble(
+            &native,
+            host,
+            "aiko",
+            cleanup.clone(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+        let chat = runtime.chat.unwrap();
+        let root = chat.post_message("C1", "Root", None, None).await.unwrap();
+        chat.post_message("C1", "Reply", Some(&root.thread_id), None)
+            .await
+            .unwrap();
+        let status: WorkflowStatus = serde_json::from_value(
+            json!({"reason":"failed","person_id":"aiko","run_id":"old","subject":"ticket"}),
+        )
+        .unwrap();
+        let notice = chat
+            .post_message("C1", "Stopped", None, Some(&status))
+            .await
+            .unwrap();
+        let store = Arc::new(Store {
+            workspace: native.workspace.clone(),
+            writes: runtime.writes.clone(),
+            limit: 500,
+        });
+        store
+            .update_thread(
+                "local",
+                "aiko",
+                "C1",
+                &root.thread_id,
+                &json!({"participants":["owner"],"thread_topic":"keep this"}),
+            )
+            .unwrap();
+        let messages = chat
+            .list_thread_events("C1", &root.thread_id, None, 100)
+            .await
+            .unwrap()
+            .events;
+        store.cache("local", "aiko", &messages[0].message).unwrap();
+        assert_eq!(
+            store
+                .thread("local", "aiko", "C1", &root.thread_id)
+                .unwrap()["thread_topic"],
+            "keep this"
+        );
+        store
+            .update_thread("local", "aiko", "C1", "missing", &json!({}))
+            .unwrap();
+        let listener = Arc::new(Received::new());
+        let connection = crate::chat_receiver::Connection {
+            service: "local".into(),
+            key: "fixture".into(),
+            listener: listener.clone(),
+            wake: Default::default(),
+        };
+        let policy = subscriptions(
+            &json!({"message_channels":[{"chat":{"channel_id":"C1","backfill_limit":1,"startup_backfill_minutes":60}}]}),
+        );
+        let receiver = Receiver::new(
+            "aiko".into(),
+            chat.clone(),
+            connection.clone(),
+            policy,
+            store.clone(),
+        )
+        .await
+        .unwrap();
+        receiver
+            .backfill(&receiver.channels.lock().await[0], chrono::Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(store.pending("local", "aiko", "C1").unwrap().len(), 2);
+        assert!(
+            store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(format!("C1:{}", notice.message_id)))
+        );
+        assert_eq!(
+            store.thread("local", "aiko", "C1", "missing").unwrap()["backfill_disabled_reason"],
+            "thread_not_found"
+        );
+        let ids = store
+            .pending("local", "aiko", "C1")
+            .unwrap()
+            .into_iter()
+            .map(|p| p.event.event_id)
+            .collect::<Vec<_>>();
+        store.acknowledge("local", "aiko", "C1", &ids).unwrap();
+        write_json(
+            &native
+                .workspace
+                .join(".guildbotics/state/chat_state/local/aiko/receive_cutoff.json"),
+            json!({"cutoff":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()}),
+        );
+        receiver
+            .backfill(&receiver.channels.lock().await[0], chrono::Utc::now())
+            .await
+            .unwrap();
+        assert!(store.pending("local", "aiko", "C1").unwrap().is_empty());
+        let mut live = messages[0].clone();
+        live.event_id = "live".into();
+        live.message.message_id = "live".into();
+        listener.events.lock().unwrap().push(live);
+        let writes = store.writes.clone();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = tokio::task::spawn_blocking(move || {
+            writes.transaction(|_| {
+                held_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        held_rx.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), receiver.drain())
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .iter()
+                .any(|p| p.event.event_id == "live")
+        );
+        release_tx.send(()).unwrap();
+        holder.await.unwrap().unwrap();
+        receiver.drain().await;
+        assert_eq!(
+            store
+                .pending("local", "aiko", "C1")
+                .unwrap()
+                .iter()
+                .filter(|p| p.event.event_id == "live")
+                .count(),
+            1
+        );
+        let stop = tokio_util::sync::CancellationToken::new();
+        stop.cancel();
+        receiver.run(stop).await.unwrap();
+        assert!(!listener.connected());
+        let primary = Arc::new(receiver);
+        let second = Arc::new(
+            Receiver::new(
+                "yuki".into(),
+                chat.clone(),
+                connection,
+                primary.channels.lock().await.clone(),
+                store.clone(),
+            )
+            .await
+            .unwrap(),
+        );
+        listener.start().await.unwrap();
+        let mut event = messages[0].clone();
+        event.event_id = "fanout".into();
+        event.message.message_id = "fanout".into();
+        listener.events.lock().unwrap().push(event);
+        let group = crate::chat_receiver::Group::new(vec![primary, second]).unwrap();
+        group.drain().await;
+        for person in ["aiko", "yuki"] {
+            assert_eq!(
+                store
+                    .pending("local", person, "C1")
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p.event.event_id == "fanout")
+                    .count(),
+                1
+            );
+        }
+        let stop = tokio_util::sync::CancellationToken::new();
+        stop.cancel();
+        group.run(stop).await.unwrap();
+        assert!(!listener.connected());
+
+        cleanup.close();
+        cleanup.wait().await;
+    }
     async fn http(native: Native, request: MemberRequest, path: &str) -> Value {
         let root = tempfile::tempdir().unwrap();
         let api = Arc::new(crate::api::Api {
+            service: Default::default(),
             member: Some(Arc::new(Backend {
                 version: "fixture".into(),
                 workspace_id: "workspace".into(),
@@ -1316,6 +4783,7 @@ mod tests {
         .await;
         let url = ticket["target"]["url"].as_str().unwrap();
         native.invocation = Some(gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "mention".into(),
             trace_id: "mention".into(),
@@ -1467,6 +4935,7 @@ mod tests {
                 .exists()
         );
         native.invocation = Some(gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),
             trace_id: "run".into(),
@@ -1657,6 +5126,7 @@ mod tests {
         .await;
         let (_, _, head) = seed_code(&native, temp.path());
         native.invocation = Some(gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "bound-run".into(),
             trace_id: "bound-run".into(),
@@ -2205,6 +5675,7 @@ mod tests {
         let interactive = fixture(temp.path());
         let mut bound = interactive.clone();
         bound.invocation = Some(gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "bound".into(),
             trace_id: "bound".into(),

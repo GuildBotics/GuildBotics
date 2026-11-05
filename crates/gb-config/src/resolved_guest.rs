@@ -14,8 +14,11 @@ const MODELS: &[&str] = &[
 ];
 
 fn read(path: &Path) -> anyhow::Result<Value> {
-    crate::yaml::value(&std::fs::read_to_string(path)?)
-        .map_err(|_| anyhow::anyhow!("Invalid configuration: {}", path.display()))
+    (|| {
+        crate::yaml::value(&std::fs::read_to_string(path)?)
+            .map_err(|_| anyhow::anyhow!("Invalid configuration YAML"))
+    })()
+    .map_err(|error| crate::ConfigFile::wrap(path, error))
 }
 // Optional YAML dictionaries use the frozen host's _yaml_dict semantics.
 fn dictionary(path: &Path) -> anyhow::Result<serde_json::Map<String, Value>> {
@@ -471,6 +474,21 @@ mod tests {
         );
         (dir, roots, identity)
     }
+    #[test]
+    fn malformed_guest_yaml_retains_its_path_and_reason_for_plain_display() {
+        let (_dir, roots, identity) = fixture();
+        let relative = "intelligences/brain_mapping.yml";
+        put(&roots.config, relative, "[");
+        let error = resolve(&roots, &identity, "aiko").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{}: Invalid configuration YAML",
+                roots.config.join(relative).display()
+            )
+        );
+    }
+
     // Frozen python-host fea9e05a: load_person_slot_mapping, _yaml_dict,
     // _cli_agent_definition, _parameters_of and validate_effort_overlay.
     #[test]

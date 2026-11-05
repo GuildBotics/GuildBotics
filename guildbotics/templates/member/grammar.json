@@ -482,6 +482,9 @@
           "json",
           "markdown"
         ]
+      },
+      {
+        "spelling": "--cursor"
       }
     ],
     "read_only": true,

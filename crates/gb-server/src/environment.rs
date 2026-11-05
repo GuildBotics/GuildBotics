@@ -885,6 +885,60 @@ fn ci_result(operation: &Value, path: &std::path::Path) -> anyhow::Result<Option
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn diagnostics_preserves_guest_config_file_and_parse_reason() {
+        const CHILD: &str = "GUILDBOTICS_CONFIG_DIAGNOSTICS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "environment::tests::diagnostics_preserves_guest_config_file_and_parse_reason",
+                    "--nocapture",
+                ])
+                .env(CHILD, root.path())
+                .env("HOME", root.path().join("home"))
+                .env(gb_base::home::HOME_ENV, root.path().join("machine"))
+                .env(
+                    gb_base::home::IDENTITY_ROOT_ENV,
+                    root.path().join("identity"),
+                )
+                .status()
+                .unwrap();
+            assert!(result.success());
+            return;
+        }
+        let root = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
+        let workspace = root.join("workspace");
+        let config = workspace.join(".guildbotics/config");
+        let identity = root.join("identity/.guildbotics/config/team/members/aiko/identity.yml");
+        let mapping = config.join("intelligences/brain_mapping.yml");
+        for (path, content) in [
+            (config.join("team/project.yml"), "language: en"),
+            (
+                config.join("team/members/aiko/member.yml"),
+                "is_active: true",
+            ),
+            (identity, "person_id: aiko\nname: Aiko"),
+            (mapping.clone(), "["),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let view = super::status(workspace, root.join("data"), root.join("home"), "en")
+            .await
+            .unwrap();
+        assert_eq!(view["members"][0]["person_id"], "aiko");
+        assert_eq!(
+            view["members"][0]["slots"][0]["problems"][0]["setting"],
+            "declaration"
+        );
+        assert_eq!(
+            view["members"][0]["slots"][0]["problems"][0]["reason"],
+            format!("{}: Invalid configuration YAML", mapping.display())
+        );
+    }
+
+    #[tokio::test]
     async fn server_shutdown_cancels_build_work_without_publishing_a_failure() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().to_owned();
@@ -940,6 +994,7 @@ mod tests {
         let auth = crate::auth::ServerAuth::open(&data, 38761).unwrap();
         let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
         let api = std::sync::Arc::new(crate::api::Api {
+            service: Default::default(),
             member: None,
             inputs: crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
             auth,

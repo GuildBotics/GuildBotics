@@ -29,6 +29,7 @@
     "--content-file",
     "--content-stdin",
     "--continuation",
+    "--cursor",
     "--cwd",
     "--dest",
     "--draft",

@@ -454,6 +454,7 @@ async fn mcp_requires_exact_bearer_and_local_host_and_dispatches_scoped_member_c
     let broker = Broker::new(
         dir.path().join("unused"),
         gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),
             trace_id: "trace".into(),

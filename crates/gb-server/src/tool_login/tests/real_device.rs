@@ -219,6 +219,8 @@ impl Device {
             templates: host.package.join("templates"),
         };
         let command = gb_environment::Command {
+            invocation: None,
+            wants_result: false,
             person_id: person.into(),
             run_id: "real-device".into(),
             trace_id: "real-device".into(),

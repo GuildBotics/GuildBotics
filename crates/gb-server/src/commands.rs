@@ -105,9 +105,15 @@ async fn start(
             .context(json!({"path": ""}))
             .into_response());
     };
-    let home = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
+    let home = api
+        .service
+        .host()
+        .map(|host| host.home.clone())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+        })
         .ok_or_else(|| internal("HOME is not set", "RuntimeError"))?;
     let cwd = match &request.cwd {
         Some(cwd) => working_directory(cwd, &home).map_err(|refused| match refused {
@@ -123,12 +129,15 @@ async fn start(
         })?,
         None => home.join(EXCHANGE_DIRECTORY),
     };
-    let host = gb_environment::Host {
-        data: api.data.clone(),
-        home,
-        package: gb_base::home::python_package(),
-        identity_root: gb_base::home::identity_root()
-            .map_err(|e| internal(&format!("{e:#}"), "RuntimeError"))?,
+    let host = match api.service.host() {
+        Some(host) => host,
+        None => std::sync::Arc::new(gb_environment::Host {
+            data: api.data.clone(),
+            home,
+            package: gb_base::home::python_package(),
+            identity_root: gb_base::home::identity_root()
+                .map_err(|e| internal(&format!("{e:#}"), "RuntimeError"))?,
+        }),
     };
     let config = workspace.join(".guildbotics/config");
     let project = config.join("team/project.yml");
@@ -207,11 +216,16 @@ async fn start(
     if api.cancelled.is_cancelled() {
         return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled").into_response());
     }
+    if request.command == crate::ticket_selector::COMMAND && request.args.is_empty() {
+        return manual_ticket(api, headers, &person.person_id).await;
+    }
     let trace = Trace::open(&Diagnostics::open(workspace), "manual")
         .person(&person.person_id)
         .attribute("run.entry", "command");
     let trace_id = trace.id().to_owned();
     let command = gb_environment::Command {
+        wants_result: false,
+        invocation: None,
         person_id: person.person_id.clone(),
         run_id: trace_id.clone(),
         trace_id: trace_id.clone(),
@@ -238,64 +252,101 @@ async fn start(
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let inputs = api.inputs.mount_if_available().await;
     let member = api.member.clone();
-    let work = api.work.spawn(async move {
-        let run = trace.run_command(&name, &person_id, async {
-            let roots = gb_config::commands::CommandRoots {
-                config: workspace.join(".guildbotics/config"),
-                templates: host.package.join("templates"),
+    let mut admission = crate::execution::Admission {
+        generation: None,
+        command: name.clone(), workspace: workspace.clone(),
+        writes: std::sync::Arc::new(gb_base::shared_writes::SharedWrites::new(host.identity_root.clone(), Some(workspace.clone()))),
+        record: serde_json::from_value(json!({"run_id":trace_id,"work_kind":"manual","work_identity":{"run_id":trace_id},"execution_mode":"user_initiated","member_id":person_id,
+            "device_id":gb_workspace::identity::ensure_device_identity(&api.data).map_err(|e|internal(&e.to_string(),"RuntimeError"))?.device_id,
+            "source":"manual","started_at":chrono::Utc::now().to_rfc3339()})).expect("manual record fields"),
+        redactor: crate::host_window::command_redactor(&host, &workspace, &gb_config::secrets::SystemKeychain).map_err(|e|internal(&e,"RuntimeError"))?,
+        exclusive: !command.access.read_only, record_start: true, cleanup: api.work.clone(),
+    };
+    let work = api
+        .service
+        .execution
+        .spawn(move |generation| async move {
+            admission.generation = Some(generation.clone());
+            let execution =
+                crate::execution::Execution::enter(admission, generation.draining.clone()).await?;
+            let run = trace.run_command(
+                &name,
+                &person_id,
+                execute(&workspace, async {
+                    let roots = gb_config::commands::CommandRoots {
+                        config: workspace.join(".guildbotics/config"),
+                        templates: host.package.join("templates"),
+                    };
+                    let device = gb_environment::device::read(&host, &workspace).await;
+                    if let Some(refusal) = device.refusal.clone() {
+                        return Err(failed(Failure::Command(refusal), language));
+                    }
+                    let mut services = crate::host_window::prepare_command(
+                        &host,
+                        &workspace,
+                        &command,
+                        &roots,
+                        &device,
+                        member.as_deref(),
+                        #[cfg(test)]
+                        None,
+                    )
+                    .await
+                    .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
+                    if let Some(inputs) = inputs {
+                        services.session.mounts.push(inputs);
+                    }
+                    let reply = gb_environment::run(
+                        &host,
+                        &workspace,
+                        command,
+                        |warning| {
+                            tracing::warn!("{}", say(warning, language));
+                        },
+                        &services.session,
+                    )
+                    .await;
+                    services.settle().await;
+                    let reply = reply.map_err(|failure| failed(failure, language))?;
+                    trace.command_output(&name, &person_id, &reply.text_output);
+                    match reply.failure {
+                        None => Ok(reply.text_output),
+                        Some(failure) => Err(failed_in_environment(failure)),
+                    }
+                }),
+            );
+            // The run first: once started, it is recorded however it ends.
+            let result = tokio::select! {
+                biased;
+                ran = run => Some(ran),
+                () = cancelled.cancelled() => None,
+                () = generation.cancelled.cancelled() => None,
             };
-            let device = gb_environment::device::read(&host, &workspace).await;
-            if let Some(refusal) = device.refusal.clone() {
-                return Err(failed(Failure::Command(refusal), language));
+            let state = match &result {
+                Some(Ok(_)) => gb_observability::runs::RunState::Succeeded,
+                Some(Err(_)) => gb_observability::runs::RunState::Failed,
+                None => gb_observability::runs::RunState::Cancelled,
+            };
+            if execution.finish(state).await.is_err() {
+                tracing::warn!("cannot finish manual command record");
             }
-            let mut services = crate::host_window::prepare_command(
-                &host,
-                &workspace,
-                &command,
-                &roots,
-                &device,
-                member.as_deref(),
-                #[cfg(test)]
-                None,
-            )
-            .await
-            .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
-            if let Some(inputs) = inputs {
-                services.session.mounts.push(inputs);
-            }
-            let reply = gb_environment::run(
-                &host,
-                &workspace,
-                command,
-                |warning| {
-                    tracing::warn!("{}", say(warning, language));
-                },
-                &services.session,
-            )
-            .await;
-            services.settle().await;
-            let reply = reply.map_err(|failure| failed(failure, language))?;
-            trace.command_output(&name, &person_id, &reply.text_output);
-            match reply.failure {
-                None => Ok(reply.text_output),
-                Some(failure) => Err(failed_in_environment(failure)),
-            }
-        });
-        // The run first: once started, it is recorded however it ends.
-        tokio::select! {
-            biased;
-            ran = run => Some(ran),
-            () = cancelled.cancelled() => None,
-        }
-    });
+            Ok::<_, crate::execution::Rejected>(result)
+        })
+        .map_err(|_| error(StatusCode::CONFLICT, "work_rejected").into_response())?;
+    // The server still owns a caller-disconnected request's manual work.
+    let work = api.work.spawn(work);
+
     let ran = match work.await {
-        Ok(Some(ran)) => ran,
-        Ok(None) => {
+        Ok(Ok(Ok(Some(ran)))) => ran,
+        Ok(Ok(Ok(None))) => {
             return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled")
                 .context(json!({"trace_id": trace_id}))
                 .into_response());
         }
-        Err(panicked) => return Err(internal(&panicked.to_string(), "RuntimeError")),
+        Ok(Ok(Err(_))) => return Err(error(StatusCode::CONFLICT, "work_rejected").into_response()),
+        Ok(Err(panicked)) | Err(panicked) => {
+            return Err(internal(&panicked.to_string(), "RuntimeError"));
+        }
     };
     match ran {
         Ok(output) => Ok(Json(json!({"trace_id": trace_id, "output": output})).into_response()),
@@ -316,6 +367,88 @@ async fn start(
 /// The working directory as it was typed, ready to run in: `~` expanded, as
 /// a shell would. A relative one names nowhere the person can see (`None`),
 /// and one that climbs or holds a NUL is no name of the host's.
+async fn execute<T>(workspace: &Path, run: impl std::future::Future<Output = T>) -> T {
+    let awake = crate::keep_awake::CommandHold::acquire(workspace).await;
+    let result = run.await;
+    awake.finish().await;
+    result
+}
+
+async fn manual_ticket(
+    api: &crate::api::Api,
+    headers: &HeaderMap,
+    person: &str,
+) -> Result<Response, Response> {
+    use crate::{dispatcher::DispatchFailure, workflow_runtime::Refused};
+    let error = |status, code| ApiError::new(status, code, headers);
+    let mut runtime = api
+        .service
+        .workflow(person, api.work.clone())
+        .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
+    let work = api
+        .service
+        .execution
+        .spawn(move |generation| async move {
+            runtime.draining = generation.draining.clone();
+            runtime.cancelled = generation.cancelled.clone();
+            runtime.generation = Some(generation);
+            runtime.manual_ticket().await
+        })
+        .map_err(|_| error(StatusCode::CONFLICT, "work_rejected").into_response())?;
+    let result = api
+        .work
+        .spawn(work)
+        .await
+        .map_err(|e| internal(&e.to_string(), "RuntimeError"))?
+        .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
+    let language = i18n::language(
+        headers
+            .get("x-guildbotics-language")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    let ended = match result {
+        Ok((trace_id, reply)) => {
+            return Ok(
+                Json(json!({"trace_id":trace_id,"output":reply.text_output})).into_response(),
+            );
+        }
+        Err(Refused::Admission(_)) => {
+            return Err(error(StatusCode::CONFLICT, "work_rejected").into_response());
+        }
+        Err(Refused::Dispatch(DispatchFailure::Cancelled)) => {
+            return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled").into_response());
+        }
+        Err(Refused::Dispatch(DispatchFailure::Guest(failure))) => failed_in_environment(*failure),
+        Err(Refused::Dispatch(DispatchFailure::Environment(failure))) => failed(failure, language),
+        Err(Refused::Dispatch(DispatchFailure::Service(problem))) => {
+            let arguments = problem.translation_args();
+            let arguments = arguments
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<Vec<_>>();
+            Ended {
+                error_type: "CommandError".into(),
+                code: "",
+                answer: Ok(crate::i18n::t(
+                    language,
+                    problem.translation_key(),
+                    &arguments,
+                )),
+            }
+        }
+        Err(_) => {
+            return Err(error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error").into_response());
+        }
+    };
+    match ended.answer {
+        Ok(reason) => Err(error(StatusCode::BAD_REQUEST, "command_error")
+            .reason(reason)
+            .into_response()),
+        Err(defect) => Err(internal(&defect, &ended.error_type)),
+    }
+}
+
 fn working_directory(cwd: &Path, home: &Path) -> Result<PathBuf, Option<String>> {
     let expanded = match cwd.strip_prefix("~") {
         Ok(rest) => home.join(rest),
@@ -450,6 +583,98 @@ fn internal(what: &str, error_type: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn command_entry_holds_during_success_failure_and_cancellation() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let _factory = crate::keep_awake::test_count(root.path(), count.clone());
+        for fail in [false, true] {
+            let result = super::execute(root.path(), async {
+                assert_eq!(count.load(Ordering::SeqCst), 1);
+                if fail { Err(()) } else { Ok(()) }
+            })
+            .await;
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+        }
+        let entered = tokio_util::sync::CancellationToken::new();
+        let ready = entered.clone();
+        let held = count.clone();
+        let workspace = root.path().to_owned();
+        let task = tokio::spawn(async move {
+            super::execute(&workspace, async {
+                assert_eq!(held.load(Ordering::SeqCst), 1);
+                ready.cancel();
+                std::future::pending::<()>().await;
+            })
+            .await;
+        });
+        entered.cancelled().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        crate::keep_awake::wait_released(&count).await;
+    }
+
+    #[tokio::test]
+    async fn manual_http_entry_acquires_and_releases_even_when_device_preflight_refuses() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let workspace = native.workspace.clone();
+        let path = workspace.join(".guildbotics/config/commands/functions/probe.py");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "async def main(context):\n    return 'done'\n").unwrap();
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let count = Arc::new(AtomicUsize::new(0));
+        let factory = crate::keep_awake::test_count(&workspace, count.clone());
+        let api = Arc::new(crate::api::Api {
+            service: crate::service_runtime::Controller::new(native.clone(), host),
+            member: None,
+            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            auth: crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            instance_id: "fixture".into(),
+            data: native.data,
+            workspace: Some(workspace),
+            work: Default::default(),
+            cancelled: Default::default(),
+        });
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let response = crate::api::router(api.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/commands/run")
+                    .header("host", "127.0.0.1:8765")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::from(
+                        serde_json::json!({"command":"functions/probe", "person":"aiko"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(factory.1.load(Ordering::SeqCst), 1);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        api.work.close();
+        api.work.wait().await;
+    }
+
     #[test]
     fn image_status_diagnostics_are_rendered_in_the_requested_language() {
         use gb_config::agent_environment::{BaseImage, DeclarationProblem, ImageIssue};

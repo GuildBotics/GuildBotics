@@ -108,12 +108,37 @@ async fn completion_requires_its_own_evidence_and_stores_a_redacted_summary() {
     control
         .record("ticket comment", false, &json!({"target":{"url":"item"}}))
         .unwrap();
+    let reaction = json!({"service":"local","channel_id":"C1","message_id":"M1","reaction":"ack","reacted":true});
+    control
+        .record("chat reaction add", false, &reaction)
+        .unwrap();
+    control
+        .record("chat reaction add", false, &reaction)
+        .unwrap();
+    control
+        .record("chat reaction add", false, &{
+            let mut next = reaction.clone();
+            next["message_id"] = json!("M2");
+            next
+        })
+        .unwrap();
     let result = control
         .command(&done, "summary secret-sentinel")
         .await
         .unwrap();
     assert_eq!(result["run_id"], "run");
-    assert_eq!(result["evidence_count"], 1);
+    assert_eq!(result["evidence_count"], 2);
+    assert_eq!(
+        RunStore::open(&workspace)
+            .read("run")
+            .unwrap()
+            .unwrap()
+            .provider_evidence
+            .iter()
+            .filter(|e| e["type"] == "chat_reaction")
+            .count(),
+        2
+    );
     assert!(!result.to_string().contains("secret-sentinel"));
     let status = control
         .command(&parsed(&["task", "status"]), "")

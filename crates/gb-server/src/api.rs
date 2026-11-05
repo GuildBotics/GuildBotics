@@ -11,7 +11,7 @@ use axum::extract::{FromRequest, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use loopback_auth::Refusal;
 use serde::Deserialize;
@@ -33,6 +33,7 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
+    pub service: crate::service_runtime::Controller,
     pub member: Option<Arc<crate::member::Backend>>,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
@@ -162,6 +163,11 @@ routes!(
     owner_routes,
     OWNER_ROUTES,
     (get, "/health", health),
+    (get, "/scheduler/status", crate::service_runtime::status),
+    (post, "/scheduler/start", crate::service_runtime::start),
+    (post, "/scheduler/stop", crate::service_runtime::stop),
+    (get, "/service/settings", crate::service_settings::get),
+    (patch, "/service/settings", crate::service_settings::patch),
     (post, "/session/links", entry_link),
     (get, "/session", session),
     (post, "/commands/run", crate::commands::run),
@@ -415,6 +421,12 @@ mod tests {
         // name it here and exercise its CAS boundary beside this test.
         let config: &[(&str, &str)] = &[];
         let elsewhere = [
+            (("post", "/scheduler/start"), "service lifetime"),
+            (("post", "/scheduler/stop"), "service lifetime"),
+            (
+                ("patch", "/service/settings"),
+                "device-local service settings",
+            ),
             (("post", "/member/run"), "member capability execution"),
             (
                 ("post", "/member/plan"),

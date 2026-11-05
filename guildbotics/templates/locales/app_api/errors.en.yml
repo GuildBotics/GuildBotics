@@ -64,3 +64,11 @@ en:
     exists: "Command '%{command}' already exists."
     duplicate: "Command '%{command}' is proposed more than once."
   command_file_shadowed: "Command '%{command}' would be shadowed by a higher-priority file."
+
+  work_rejected: 'Runtime is stopping or this member is already running work. Try again after the current work stops.'
+  internal_error: "An internal error prevented the operation. Check diagnostics and try again."
+  service_path_unavailable: "A service file or directory could not be accessed. Check paths and permissions."
+  service_start_failed: "The service could not start. Check diagnostics for the cause."
+  service_worker_failed: "A service worker stopped unexpectedly. Check diagnostics for the cause."
+  service_stop_timeout: "The service did not stop before the timeout. It still owns its running work."
+  service_events_failed: "Chat reception stopped unexpectedly. Check diagnostics for the cause."

@@ -106,6 +106,16 @@ impl RunControl<'_> {
         self.writes
             .transaction(|writer| {
                 let current = self.snapshot()?;
+                // A retried semantic reaction is the same provider action.
+                // Preserve one receipt even if the prior completion failed.
+                if kind == "chat_reaction"
+                    && current
+                        .provider_evidence
+                        .iter()
+                        .any(|e| e["type"] == kind && e["payload"] == *payload)
+                {
+                    return Ok(());
+                }
                 store.append(
                     writer,
                     current,

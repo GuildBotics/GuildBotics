@@ -78,6 +78,8 @@ pub struct Host {
 /// resolved for it, what it declared, and its arguments, working directory
 /// (as the host spells it) and input.
 pub struct Command {
+    pub wants_result: bool,
+    pub invocation: Option<gb_wire::WorkflowInvocation>,
     pub person_id: String,
     pub run_id: String,
     pub trace_id: String,
@@ -353,11 +355,11 @@ pub fn shape(
     let request = CommandRequest {
         args: command.args.clone(),
         cwd: cwd.clone(),
-        invocation: None,
+        invocation: command.invocation.clone(),
         name: command.name.clone(),
         path: command_path(host, &normalized(&command.path)?)?,
         pipe: command.pipe.clone(),
-        wants_result: false,
+        wants_result: command.wants_result,
     };
     Ok(Shape {
         copy,

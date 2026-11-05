@@ -25,6 +25,9 @@ pub struct Trace {
 
 /// How a run that did not succeed ended, as its `command.failed` names it.
 pub trait Failure {
+    fn deferred(&self, _source: &str) -> bool {
+        false
+    }
     /// What failed, as the screens name it (the Python version's exception
     /// type name).
     fn error_type(&self) -> String;
@@ -37,6 +40,13 @@ pub trait Failure {
 }
 
 impl Trace {
+    /// Reopen the boundary of a persisted retry, retaining its run identity.
+    pub fn resume(diagnostics: &Diagnostics, source: &str, id: &str) -> anyhow::Result<Self> {
+        crate::runs::checked_id(id)?;
+        let mut trace = Self::open(diagnostics, source);
+        trace.id = id.into();
+        Ok(trace)
+    }
     /// Opens a new trace from `source` (`manual`, `scheduled`, ...).
     pub fn open(diagnostics: &Diagnostics, source: &str) -> Trace {
         Trace {
@@ -61,6 +71,18 @@ impl Trace {
         self
     }
 
+    /// Identify the command on domain events outside its execution future.
+    pub fn command(mut self, command: &str) -> Self {
+        self.command = command.into();
+        self
+    }
+
+    /// Correlation for a domain event written to the shared activity store.
+    pub fn correlation(&self) -> Value {
+        json!({"trace_id":self.id,"source":self.source,"person_id":self.person_id,
+            "command":self.command,"workflow":self.workflow,"attributes":self.attributes})
+    }
+
     /// Adds an attribute every record of the trace carries; a null adds none.
     pub fn attribute(mut self, key: &str, value: impl Into<Value>) -> Trace {
         match value.into() {
@@ -77,13 +99,13 @@ impl Trace {
         &self.id
     }
 
-    fn record(
+    fn record_value(
         &self,
         event_type: &str,
         person_id: &str,
         command: &str,
         payload: Map<String, Value>,
-    ) {
+    ) -> Map<String, Value> {
         let Value::Object(record) = json!({
             "kind": if event_type == "command.output" { "io" } else { "event" },
             "type": event_type,
@@ -103,7 +125,29 @@ impl Trace {
         }) else {
             unreachable!("an object")
         };
-        self.diagnostics.record(record);
+        record
+    }
+
+    fn record(
+        &self,
+        event_type: &str,
+        person_id: &str,
+        command: &str,
+        payload: Map<String, Value>,
+    ) {
+        self.diagnostics
+            .record(self.record_value(event_type, person_id, command, payload));
+    }
+
+    /// Append a domain event only when this trace transcript does not already contain its type.
+    /// Read/write failures prevent the caller from acknowledging recoverable work.
+    pub fn event_once(
+        &self,
+        event_type: &str,
+        payload: Map<String, Value>,
+    ) -> std::io::Result<bool> {
+        self.diagnostics
+            .record_once(self.record_value(event_type, "", "", payload))
     }
 
     /// Join an existing execution without opening or ending a boundary.
@@ -168,7 +212,16 @@ impl Trace {
             Err(failure) => {
                 payload.insert("error_type".into(), failure.error_type().into());
                 payload.insert("code".into(), failure.code().into());
-                self.record("command.failed", person_id, command, payload);
+                self.record(
+                    if failure.deferred(&self.source) {
+                        "command.deferred"
+                    } else {
+                        "command.failed"
+                    },
+                    person_id,
+                    command,
+                    payload,
+                );
             }
         }
         ended
