@@ -11,16 +11,18 @@ _IN_DISPATCH_COMPLETION_ATTEMPTS = 2
 
 
 async def main(context: Any) -> None:
-    """Respond to a chat batch the host selected, with an AI CLI turn.
+    """Judge the host-selected batch, then respond in the same VM if needed.
 
-    The host has already judged that the batch needs a response and owns the
-    conversation ledger around it; this workflow asks for the turn, which the
-    host drives until the member records a completion, and raises when it
-    cannot.
+    The host owns the conversation ledger. Judgment and response share this
+    command's VM; lightweight outcomes use the member completion gate.
     """
     turn = ChatTurn.model_validate(
         context.shared_state[WORKFLOW_INVOCATION_KEY].payload
     )
+    from guildbotics.guest.decisions import judge_chat
+
+    if not await judge_chat(context, turn):
+        return
     person_id = context.person.person_id
     member_workspace = get_member_clone_path(person_id)
     prompt = turn.prompt

@@ -63,3 +63,5 @@ ja:
     exists: "コマンド '%{command}' は既に存在します。"
     duplicate: "コマンド '%{command}' が複数回提案されています。"
   command_file_shadowed: "コマンド '%{command}' は、より優先度の高いファイルに隠されてしまいます。"
+
+  work_rejected: '実行環境は停止中か、このメンバーが別の作業を実行中です。現在の作業が停止してから再試行してください。'

@@ -52,6 +52,7 @@ HOST_RESULTS = {
     "save": ConversationRecord,
     "mark_unhealthy": ConversationRecord,
     "record": type(None),
+    "required_io": type(None),
     "member": wire.MemberCommandResult,
     "agno": AgnoAnswer,
     "jev": dict[str, object],

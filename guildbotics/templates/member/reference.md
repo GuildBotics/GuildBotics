@@ -37,7 +37,7 @@
 ### Chat
 - `guildbotics member chat updates --person <person>` — Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable.
 - `guildbotics member chat identity --person <person>` — Show the member's chat identity.
-- `guildbotics member chat inspect thread --person <person> (--message-url <url> | --channel-id <id> --thread-id <id>) [--limit <n>]` — Read a thread before replying or reacting.
+- `guildbotics member chat inspect thread --person <person> (--message-url <url> | --channel-id <id> --thread-id <id>) [--limit <n>] [--cursor <cursor>]` — Read a thread before replying or reacting.
 - `guildbotics member chat inspect channel --person <person> (--channel-id <id> | --channel-name <name>) [--since <iso-time>] [--until <iso-time>] [--limit <n>]` — Read recent channel messages.
 - `guildbotics member chat resolve-channel --person <person> --channel-name <name>` — Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name.
 - `guildbotics member chat reply --person <person> (--message-url <url> | (--channel-id <id> | --channel-name <name>) --thread-id <id>) --content-file <file>` — Reply in a thread in the member voice.

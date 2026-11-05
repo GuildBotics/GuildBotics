@@ -1,3 +1,5 @@
 en:
+  environment_deferred: "Work is deferred on this device: {reason}"
+  environment_resumed: "The agent environment is ready; resuming."
   task_error: "An error occurred while running this task, so it could not be completed. The operator will look into it."
   turn_timeout: "Work stopped because the AI CLI turn reached its {hours}-hour limit. This run will not retry. Reply here to ask me to continue; I will resume the conversation and keep the uncommitted changes on this device."

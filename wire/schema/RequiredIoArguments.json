@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "record_id": {
+      "title": "Record Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "record_id",
+    "payload"
+  ],
+  "title": "RequiredIoArguments",
+  "type": "object"
+}

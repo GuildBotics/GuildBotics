@@ -105,6 +105,7 @@ impl Server {
             .as_ref()
             .and_then(|workspace| member_backend(workspace, &data, &work, None));
         let api = Arc::new(Api {
+            service: service_controller(workspace.as_deref(), &data),
             member,
             inputs: crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
@@ -134,7 +135,8 @@ impl Server {
         let api =
             Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
         if let Some(workspace) = &api.workspace {
-            api.member = member_backend(workspace, &api.data, &api.work, Some(branvil));
+            api.member = member_backend(workspace, &api.data, &api.work, Some(branvil.clone()));
+            api.service.attach_branvil(branvil);
         }
         Ok(())
     }
@@ -148,9 +150,23 @@ impl Server {
         cancel: impl Future<Output = ()> + Send + 'static,
     ) -> (Held, anyhow::Result<()>) {
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
+        if let Some(workspace) = &self.api.workspace {
+            match crate::service_settings::Settings::read(workspace) {
+                Ok(settings) if settings.start_with_server => {
+                    if let Err(error) = self.api.service.start().await {
+                        tracing::error!("cannot automatically start service: {error:#}");
+                    }
+                }
+                Err(error) => tracing::error!("cannot read service settings: {error:#}"),
+                _ => (),
+            }
+        }
+        let service = self.api.clone();
+        let cancelling_service = service.clone();
         let cancelling = tokio::spawn(async move {
             cancel.await;
             cancelled.cancel();
+            cancelling_service.service.stop(true).await;
         });
         let diagnostics = self
             .api
@@ -159,7 +175,10 @@ impl Server {
             .map(|w| gb_observability::Diagnostics::open(w));
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let served = axum::serve(self.listener, api::router(self.api))
-            .with_graceful_shutdown(stop)
+            .with_graceful_shutdown(async move {
+                stop.await;
+                service.service.stop(false).await;
+            })
             .await;
         upkeep.abort();
         let _ = upkeep.await;
@@ -181,6 +200,23 @@ impl Server {
 }
 
 /// Keep workspace recovery screens available when member assembly fails.
+fn service_controller(workspace: Option<&Path>, data: &Path) -> crate::service_runtime::Controller {
+    let built = (|| -> anyhow::Result<_> {
+        let workspace = workspace.ok_or_else(|| anyhow::anyhow!("workspace not selected"))?;
+        let native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        let host = Arc::new(gb_environment::Host {
+            data: data.into(),
+            home: std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        Ok(crate::service_runtime::Controller::new(native, host))
+    })();
+    built.unwrap_or_default()
+}
+
 fn member_backend(
     workspace: &Path,
     data: &Path,

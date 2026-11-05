@@ -25,6 +25,9 @@ pub struct Trace {
 
 /// How a run that did not succeed ended, as its `command.failed` names it.
 pub trait Failure {
+    fn deferred(&self, _source: &str) -> bool {
+        false
+    }
     /// What failed, as the screens name it (the Python version's exception
     /// type name).
     fn error_type(&self) -> String;
@@ -37,6 +40,13 @@ pub trait Failure {
 }
 
 impl Trace {
+    /// Reopen the boundary of a persisted retry, retaining its run identity.
+    pub fn resume(diagnostics: &Diagnostics, source: &str, id: &str) -> anyhow::Result<Self> {
+        crate::runs::checked_id(id)?;
+        let mut trace = Self::open(diagnostics, source);
+        trace.id = id.into();
+        Ok(trace)
+    }
     /// Opens a new trace from `source` (`manual`, `scheduled`, ...).
     pub fn open(diagnostics: &Diagnostics, source: &str) -> Trace {
         Trace {
@@ -59,6 +69,18 @@ impl Trace {
     pub fn workflow(mut self, workflow: &str) -> Trace {
         self.workflow = workflow.into();
         self
+    }
+
+    /// Identify the command on domain events outside its execution future.
+    pub fn command(mut self, command: &str) -> Self {
+        self.command = command.into();
+        self
+    }
+
+    /// Correlation for a domain event written to the shared activity store.
+    pub fn correlation(&self) -> Value {
+        json!({"trace_id":self.id,"source":self.source,"person_id":self.person_id,
+            "command":self.command,"workflow":self.workflow,"attributes":self.attributes})
     }
 
     /// Adds an attribute every record of the trace carries; a null adds none.
@@ -168,7 +190,16 @@ impl Trace {
             Err(failure) => {
                 payload.insert("error_type".into(), failure.error_type().into());
                 payload.insert("code".into(), failure.code().into());
-                self.record("command.failed", person_id, command, payload);
+                self.record(
+                    if failure.deferred(&self.source) {
+                        "command.deferred"
+                    } else {
+                        "command.failed"
+                    },
+                    person_id,
+                    command,
+                    payload,
+                );
             }
         }
         ended

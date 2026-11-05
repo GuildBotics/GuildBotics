@@ -393,6 +393,13 @@ class RecordArguments(BaseModel):
     entries: list[Entry]
 
 
+class RequiredIoArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str
+    payload: dict[str, Any]
+
+
 class MemberArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -433,6 +440,7 @@ HOST_ARGUMENTS = {
     "save": SaveArguments,
     "mark_unhealthy": MarkUnhealthyArguments,
     "record": RecordArguments,
+    "required_io": RequiredIoArguments,
     "member": MemberArguments,
     "agno": AgnoArguments,
     "jev": JevArguments,

@@ -37,6 +37,15 @@ def capability_reference_text() -> str:
 
 
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
+
+
+def test_chat_judgment_owns_repository_work_criteria():
+    from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
+
+    assert "repository guidelines" in QUESTIONS["work_repo_decision"].instructions
+    assert "Technical terminology alone" in QUESTIONS["work_repo_decision"].instructions
+
+
 SKILL_PATH = Path("skills/guildbotics/SKILL.md")
 WORKFLOW_PROMPTS = ("handle_ticket", "handle_chat_event")
 ASK_PATH = Path("guildbotics/templates/commands/ask")

@@ -361,6 +361,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         (
             Arc::new(crate::api::Api {
+                service: Default::default(),
                 member: Some(Arc::new(Backend {
                     version: "build-1".into(),
                     workspace_id: "workspace".into(),

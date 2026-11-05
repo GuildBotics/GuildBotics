@@ -751,26 +751,83 @@ mod tests {
         );
     }
 
-    #[test]
-    fn conversation_snapshots_persist_and_rotate_only_within_the_commands_authority() {
+    #[tokio::test]
+    async fn required_judgment_io_is_acknowledged_only_after_its_own_scoped_file_is_written() {
         let root = tempfile::tempdir().unwrap();
+        let mut context = command_context(root.path());
+        context.required_io = Some(Arc::new(crate::required_io::RequiredIo::new(
+            root.path().into(),
+            "trace-1".into(),
+            "aiko".into(),
+            || {
+                Ok(gb_observability::redaction::Redactor::with_min_length(
+                    ["private-test".into()],
+                    1,
+                ))
+            },
+        )));
+        let host = HttpHost::start_context(context).await.unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("http://127.0.0.1:{}/host/required_io", host.port);
+        let body = json!({"record_id":"abc0","payload":{"prompt":"private-test"}});
+        let denied = client.post(&url).json(&body).send().await.unwrap();
+        assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let accepted = client
+            .post(&url)
+            .bearer_auth(&host.token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert!(accepted.get("result").is_some());
+        assert!(accepted.get("error").is_none());
+        let path = root
+            .path()
+            .join(".guildbotics/local/run/required-io/abc0.json");
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["trace_id"], "trace-1");
+        assert_eq!(saved["payload"]["prompt"], "***");
+        for id in ["abc0", "../escape"] {
+            let rejected = client
+                .post(&url)
+                .bearer_auth(&host.token)
+                .json(&json!({"record_id":id,"payload":{}}))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap();
+            assert_eq!(rejected["error"]["category"], "refused");
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+            saved
+        );
+    }
+
+    fn command_context(root: &std::path::Path) -> Context {
         let invocation = gb_environment::broker::Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run-1".into(),
             trace_id: "trace-1".into(),
             work_kind: "ticket".into(),
             work_identity: "issue-300".into(),
-            cwd: root.path().into(),
+            cwd: root.into(),
             access: gb_wire::CommandAccess {
                 read_only: false,
                 inspects: vec![],
             },
         };
-        let context = Context {
-            broker: Broker::new(root.path().join("unused-cli"), invocation.clone()),
+        Context {
+            broker: Broker::new(root.join("unused-cli"), invocation.clone()),
             invocation,
-            workspace: root.path().into(),
-            home: root.path().to_string_lossy().into(),
+            workspace: root.into(),
+            home: root.to_string_lossy().into(),
             mounts: BTreeMap::new(),
             turn_mounts: BTreeMap::new(),
             tools: ["codex".into()].into(),
@@ -778,7 +835,14 @@ mod tests {
             loans: BTreeMap::new(),
             rate_limits: BTreeMap::new(),
             record: Arc::new(|_| {}),
-        };
+            required_io: None,
+        }
+    }
+
+    #[test]
+    fn conversation_snapshots_persist_and_rotate_only_within_the_commands_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let context = command_context(root.path());
         let key = json!({"person_id":"aiko","adapter":"codex","work_kind":"ticket","work_identity":"issue-300"});
         assert!(conversation(&context, "resolve", &json!({"key":key,"policy":"resume"})).is_err());
         let mut record = conversation(
@@ -908,6 +972,7 @@ mod tests {
         let broker = Broker::new(
             dir.path().join("unused-cli"),
             gb_environment::broker::Invocation {
+                chat_subject: None,
                 person_id: "aiko".into(),
                 run_id: "run".into(),
                 trace_id: "trace".into(),
@@ -998,6 +1063,7 @@ pub struct Context {
     pub loans: BTreeMap<String, Arc<crate::tool_login::ToolLogin>>,
     pub rate_limits: BTreeMap<String, usize>,
     pub record: Arc<dyn Fn(Value) + Send + Sync>,
+    pub required_io: Option<Arc<crate::required_io::RequiredIo>>,
 }
 async fn wait_for_turn(
     serial: &Arc<tokio::sync::Mutex<()>>,
@@ -1136,6 +1202,22 @@ impl HttpHost {
                     }
                     "record_completed" | "record_completion_missing" => {
                         (context.record)(json!({"type":name,"payload":args}));
+                        Ok(Value::Null)
+                    }
+                    "required_io" => {
+                        let store = context
+                            .required_io
+                            .clone()
+                            .ok_or_else(|| HostError::refused("Required IO store unavailable"))?;
+                        let id = args["record_id"]
+                            .as_str()
+                            .ok_or_else(|| HostError::refused("Invalid IO record ID"))?
+                            .to_owned();
+                        let payload = args["payload"].clone();
+                        tokio::task::spawn_blocking(move || store.write(&id, payload))
+                            .await
+                            .map_err(|_| HostError::refused("Required IO recording task failed"))?
+                            .map_err(HostError::refused)?;
                         Ok(Value::Null)
                     }
                     "record" => {
@@ -1427,15 +1509,7 @@ pub async fn prepare_command(
         Some(resolved["language"].as_str().unwrap_or("en").into()),
     )
     .map_err(|_| "The command access contract cannot be resolved.".to_owned())?;
-    let invocation = gb_environment::broker::Invocation {
-        person_id: command.person_id.clone(),
-        run_id: command.run_id.clone(),
-        trace_id: command.trace_id.clone(),
-        work_kind: command.work_kind.clone(),
-        work_identity: command.work_identity.clone(),
-        cwd: command.cwd.clone(),
-        access: command.access.clone(),
-    };
+    let invocation = broker_invocation(command);
     let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| host.home.join(".guildbotics/bin/guildbotics"));
@@ -1568,6 +1642,43 @@ pub async fn prepare_command(
                 .map(str::to_owned)
         })
         .collect::<std::collections::BTreeSet<String>>();
+    let required_host = gb_environment::Host {
+        data: host.data.clone(),
+        home: host.home.clone(),
+        package: host.package.clone(),
+        identity_root: host.identity_root.clone(),
+    };
+    let required_workspace = workspace.to_path_buf();
+    let mut required_io = crate::required_io::RequiredIo::new(
+        workspace.into(),
+        command.trace_id.clone(),
+        command.person_id.clone(),
+        move || {
+            recording_redactor(
+                &required_host,
+                &required_workspace,
+                &gb_config::secrets::SystemKeychain,
+                true,
+            )
+        },
+    );
+    if let Some(subject) = invocation.chat_subject.clone() {
+        let person = command.person_id.clone();
+        let store = crate::chat_state::Store {
+            workspace: workspace.into(),
+            writes: Arc::new(gb_base::shared_writes::SharedWrites::new(
+                host.identity_root.clone(),
+                Some(workspace.into()),
+            )),
+            limit: 500,
+        };
+        required_io = required_io.with_adoption(move |payload| {
+            store
+                .adopt_effort(&subject, &person, payload)
+                .map_err(|_| "Judgment effort could not be persisted".into())
+        });
+    }
+    let required_io = Arc::new(required_io);
     let context = Context {
         invocation,
         workspace: workspace.into(),
@@ -1612,6 +1723,7 @@ pub async fn prepare_command(
             })
             .collect(),
         record,
+        required_io: Some(required_io),
     };
     let window = HttpHost::start_context(context)
         .await
@@ -1760,10 +1872,19 @@ pub async fn prepare_command(
     })
 }
 
-fn command_redactor(
+pub(crate) fn command_redactor(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
     keychain: &dyn gb_config::secrets::Keychain,
+) -> Result<gb_observability::redaction::Redactor, String> {
+    recording_redactor(host, workspace, keychain, false)
+}
+
+fn recording_redactor(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    keychain: &dyn gb_config::secrets::Keychain,
+    required: bool,
 ) -> Result<gb_observability::redaction::Redactor, String> {
     let writes = gb_base::shared_writes::SharedWrites::new(
         host.identity_root.clone(),
@@ -1791,6 +1912,7 @@ fn command_redactor(
         };
         match gb_config::secrets::read_secret_index(&root.join(".guildbotics/config")) {
             Ok(index) => names.extend(index),
+            Err(_) if required => return Err("Required IO redaction index unavailable".into()),
             Err(_) => tracing::warn!("The recording secret index could not be read."),
         }
         match gb_config::secrets::SecretStore::new(
@@ -1809,6 +1931,7 @@ fn command_redactor(
                     values.push(value);
                 }
             }
+            Err(_) if required => return Err("Required IO redaction values unavailable".into()),
             Err(_) => tracing::warn!(
                 "The recording secret store could not be opened; retaining available masks."
             ),
@@ -1819,7 +1942,10 @@ fn command_redactor(
             .into_iter()
             .filter_map(|name| std::env::var(name).ok()),
     );
-    Ok(gb_observability::redaction::Redactor::new(values))
+    Ok(gb_observability::redaction::Redactor::with_min_length(
+        values,
+        if required { 1 } else { 8 },
+    ))
 }
 
 fn host_secret(
@@ -2175,3 +2301,23 @@ fn rotation_reason(record: &Value) -> &str {
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod gateway_contract_tests;
+
+pub(crate) fn broker_invocation(
+    command: &gb_environment::Command,
+) -> gb_environment::broker::Invocation {
+    gb_environment::broker::Invocation {
+        chat_subject: command
+            .invocation
+            .as_ref()
+            .and_then(|v| v.work.as_ref())
+            .and_then(|w| w.chat.as_ref())
+            .cloned(),
+        person_id: command.person_id.clone(),
+        run_id: command.run_id.clone(),
+        trace_id: command.trace_id.clone(),
+        work_kind: command.work_kind.clone(),
+        work_identity: command.work_identity.clone(),
+        cwd: command.cwd.clone(),
+        access: command.access.clone(),
+    }
+}

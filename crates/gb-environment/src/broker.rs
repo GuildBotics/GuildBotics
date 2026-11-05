@@ -7,8 +7,10 @@ use tokio::{
     sync::Mutex,
 };
 
+pub use gb_wire::ChatSubject;
 #[derive(Clone, Serialize)]
 pub struct Invocation {
+    pub chat_subject: Option<ChatSubject>,
     pub person_id: String,
     pub run_id: String,
     pub trace_id: String,
@@ -277,6 +279,7 @@ mod tests {
         };
         let broker = Broker::native(
             Invocation {
+                chat_subject: None,
                 person_id: "aiko".into(),
                 run_id: "run".into(),
                 trace_id: "trace".into(),
@@ -353,6 +356,7 @@ mod tests {
         let broker = Broker::new(
             dir.path().join("not-a-cli"),
             Invocation {
+                chat_subject: None,
                 person_id: "aiko".into(),
                 run_id: "run".into(),
                 trace_id: "trace".into(),
@@ -392,6 +396,7 @@ mod external_tests {
         let broker = Broker::new(
             program,
             Invocation {
+                chat_subject: None,
                 person_id: "aiko".into(),
                 run_id: "run-id".into(),
                 trace_id: "trace".into(),
@@ -418,6 +423,7 @@ mod external_tests {
     }
     fn invocation(root: &std::path::Path) -> Invocation {
         Invocation {
+            chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),
             trace_id: "trace".into(),

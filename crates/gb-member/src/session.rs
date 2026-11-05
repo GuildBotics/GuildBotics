@@ -471,8 +471,12 @@ impl Session<'_> {
                         value(chat.resolve_channel(p.text("channel-name")).await?)?
                     }
                     "chat inspect thread" => {
-                        chat.inspect_thread(&reference, p.integer("limit").unwrap_or(100) as usize)
-                            .await?
+                        chat.inspect_thread_page(
+                            &reference,
+                            p.integer("limit").unwrap_or(100) as usize,
+                            p.optional("cursor"),
+                        )
+                        .await?
                     }
                     "chat inspect channel" => {
                         let date =

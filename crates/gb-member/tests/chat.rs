@@ -12,6 +12,7 @@ struct Double {
     checks: Vec<CredentialCheck>,
     error: Option<ServiceError>,
     queries: Mutex<Vec<ChannelEventsQuery>>,
+    cursors: Mutex<Vec<Option<String>>>,
 }
 impl ChatService for Double {
     fn get_bot_identity(&self) -> ServiceFuture<'_, ChatIdentity> {
@@ -63,13 +64,14 @@ impl ChatService for Double {
         &'a self,
         channel: &'a str,
         thread: &'a str,
-        _cursor: Option<String>,
+        cursor: Option<String>,
         limit: usize,
     ) -> ServiceFuture<'a, ChatEventPage> {
         Box::pin(async move {
             assert_eq!(channel, "C1");
             assert_eq!(thread, "root");
             assert_eq!(limit, 3);
+            self.cursors.lock().unwrap().push(cursor);
             Ok(page())
         })
     }
@@ -209,6 +211,9 @@ async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {
     for result in [
         c.inspect_thread(&reference, 3).await.unwrap(),
         c.inspect_thread(&reply, 3).await.unwrap(),
+        c.inspect_thread_page(&reply, 3, Some("page2".into()))
+            .await
+            .unwrap(),
         c.inspect_channel(
             &reference,
             ChannelEventsQuery {
@@ -225,6 +230,10 @@ async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {
         assert_eq!(result["messages"][0]["message_id"], "1");
         assert!(result["messages"][0].get("status").is_none());
     }
+    assert_eq!(
+        *provider.cursors.lock().unwrap(),
+        vec![None, None, Some("page2".into())]
+    );
     assert!(c.inspect_thread(&Reference::default(), 3).await.is_err());
     assert!(
         c.post(

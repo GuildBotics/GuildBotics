@@ -940,6 +940,7 @@ mod tests {
         let auth = crate::auth::ServerAuth::open(&data, 38761).unwrap();
         let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
         let api = std::sync::Arc::new(crate::api::Api {
+            service: Default::default(),
             member: None,
             inputs: crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
             auth,

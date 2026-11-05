@@ -64,3 +64,5 @@ en:
     exists: "Command '%{command}' already exists."
     duplicate: "Command '%{command}' is proposed more than once."
   command_file_shadowed: "Command '%{command}' would be shadowed by a higher-priority file."
+
+  work_rejected: 'Runtime is stopping or this member is already running work. Try again after the current work stops.'
