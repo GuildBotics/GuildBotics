@@ -2,10 +2,34 @@
 
 use super::*;
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
+
+#[path = "../../tests/support/device_disk.rs"]
+mod device_disk;
 
 const CHILD_HOME: &str = "GUILDBOTICS_REAL_DEVICE_OWNER_HOME";
 const TEST: &str = "runtime::real_device::real_device_owner_exit_stops_the_vm";
+const LOGIN: &str = "synthetic-owner-login";
+const CANARY: &str = "synthetic-owner-disk-positive-control";
+
+#[test]
+fn the_disk_scan_detects_a_planted_login() {
+    let home = tempfile::tempdir().unwrap();
+    let sandbox = home.path().join("sandboxes/guildbotics-probe");
+    std::fs::create_dir_all(&sandbox).unwrap();
+    std::fs::write(sandbox.join("upper.ext4"), CANARY).unwrap();
+    device_disk::assert_private_disk(home.path(), CANARY, LOGIN);
+    let log = sandbox.join("probe.log");
+    std::fs::write(&log, LOGIN).unwrap();
+    assert_eq!(device_disk::disk_matches(home.path(), LOGIN), [log]);
+    assert!(
+        std::panic::catch_unwind(|| {
+            device_disk::assert_private_disk(home.path(), CANARY, LOGIN);
+        })
+        .is_err()
+    );
+}
 
 #[tokio::test]
 #[ignore = "real_device: owner approval and disposable snapshot"]
@@ -53,7 +77,10 @@ async fn real_device_owner_exit_stops_the_vm() {
     .await
     .expect("the owner did not start a VM");
     assert!(name.starts_with(NAME_PREFIX));
+    let scanned =
+        std::panic::catch_unwind(|| device_disk::assert_private_disk(&home, CANARY, LOGIN));
     owner.kill().await.unwrap();
+    let status = owner.wait().await.unwrap();
     backend(&home).await.unwrap();
 
     let ended = tokio::time::timeout(Duration::from_secs(15), async {
@@ -78,7 +105,15 @@ async fn real_device_owner_exit_stops_the_vm() {
     // The named scratch disk is reclaimed separately from the VM. This test
     // places the synthetic credential on a tmpfs and cleans up its own disk.
     let _ = microsandbox::Volume::remove(&format!("{name}-0")).await;
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGKILL),
+        "the owner exited before it was killed"
+    );
     assert!(ended.is_ok(), "the VM outlived the killed owner");
+    if let Err(failure) = scanned {
+        std::panic::resume_unwind(failure);
+    }
 }
 
 async fn hold_synthetic_login(home: &Path, snapshot: &Path) {
@@ -99,25 +134,33 @@ async fn hold_synthetic_login(home: &Path, snapshot: &Path) {
     let argv = [
         "sh".into(),
         "-ec".into(),
-        "test \"$(stat -f -c %T /run/owner-probe)\" = tmpfs; cat > /run/owner-probe/login; printf 'ready\\n'; sleep 300".into(),
+        concat!(
+            "test \"$(stat -f -c %T /run/owner-probe)\" = tmpfs; cat > /run/owner-probe/login; ",
+            "printf %s \"$GB_DISK_CANARY\" > /var/tmp/owner-positive-control; sync; ",
+            "printf 'ready\\n'",
+        )
+        .into(),
     ];
     let name = vm.name().to_owned();
     let process = Process {
         argv: &argv,
         cwd: "/",
-        env: &[],
-        stdin: b"synthetic-owner-login",
+        env: &[("GB_DISK_CANARY".into(), CANARY.into())],
+        stdin: LOGIN.as_bytes(),
     };
-    let result = execute_private(&vm, &process, |chunk| {
-        if chunk.windows(5).any(|part| part == b"ready") {
-            println!("owner-holds-login:{name}");
-            std::io::stdout().flush().unwrap();
-        }
-    })
-    .await;
-    vm.close().await;
-    assert!(
-        result.is_ok(),
-        "the parent should kill the owner while its login is held"
-    );
+    let ended = execute_private(&vm, &process, |_| {}).await.unwrap();
+    assert_eq!(ended.code, 0);
+    assert_eq!(ended.reply, b"ready\n");
+    println!("owner-holds-login:{name}");
+    std::io::stdout().flush().unwrap();
+    // Keep the VM owned by this process while the parent scans its disks.
+    std::future::pending::<()>().await;
+}
+
+#[test]
+fn a_readiness_marker_can_cross_output_frames() {
+    let ready = device_disk::OutputMarker::new(b"ready\n");
+    assert!(!ready.observed(b"rea"));
+    assert!(ready.observed(b"dy\n"));
+    assert!(!ready.observed(b"ready\n"));
 }

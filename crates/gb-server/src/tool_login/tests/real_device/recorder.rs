@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
 use hyper_util::rt::TokioIo;
 use tokio::{net::TcpListener, task::JoinHandle};
-use tokio_rustls::{TlsAcceptor, rustls};
+use tokio_rustls::{LazyConfigAcceptor, rustls};
 
 pub const HOST: &str = "host.microsandbox.internal";
 
@@ -30,7 +30,7 @@ type Answer = dyn Fn(&Seen) -> Option<Reply> + Send + Sync;
 struct State {
     seen: Arc<Mutex<Vec<Seen>>>,
     answer: Arc<Answer>,
-    tls: TlsAcceptor,
+    authority: Arc<TestAuthority>,
 }
 
 pub struct Recorder {
@@ -50,15 +50,12 @@ impl Drop for Recorder {
 }
 
 impl Recorder {
-    pub async fn start(
-        names: &[&str],
-        answer: impl Fn(&Seen) -> Option<Reply> + Send + Sync + 'static,
-    ) -> Self {
-        let (tls, ca) = certificate(names);
+    pub async fn start(answer: impl Fn(&Seen) -> Option<Reply> + Send + Sync + 'static) -> Self {
+        let (authority, ca) = TestAuthority::new();
         let state = State {
             seen: Arc::default(),
             answer: Arc::new(answer),
-            tls,
+            authority: Arc::new(authority),
         };
         let plain = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let secure = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -95,44 +92,50 @@ pub fn reply(status: u16, content_type: &str, body: impl Into<Bytes>) -> Reply {
         .unwrap()
 }
 
-fn certificate(names: &[&str]) -> (TlsAcceptor, Vec<u8>) {
-    let now = time::OffsetDateTime::now_utc();
-    let mut ca = rcgen::CertificateParams::default();
-    ca.distinguished_name
-        .push(rcgen::DnType::CommonName, "CLI contract test CA");
-    ca.not_before = now - time::Duration::minutes(5);
-    ca.not_after = now + time::Duration::days(1);
-    ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    ca.key_usages.push(rcgen::KeyUsagePurpose::KeyCertSign);
-    let ca_key = rcgen::KeyPair::generate().unwrap();
-    let ca_pem = ca.self_signed(&ca_key).unwrap().pem().into_bytes();
-    let mut leaf = rcgen::CertificateParams::new(
-        std::iter::once(HOST)
-            .chain(names.iter().copied())
-            .map(str::to_owned)
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    leaf.not_before = ca.not_before;
-    leaf.not_after = ca.not_after;
-    leaf.extended_key_usages
-        .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
-    leaf.use_authority_key_identifier_extension = true;
-    let key = rcgen::KeyPair::generate().unwrap();
-    let leaf = leaf
-        .signed_by(&key, &rcgen::Issuer::new(ca, ca_key))
-        .unwrap();
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![leaf.der().clone()],
-            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
-        )
-        .unwrap();
-    (TlsAcceptor::from(Arc::new(config)), ca_pem)
+struct TestAuthority {
+    issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
+    not_before: time::OffsetDateTime,
+    not_after: time::OffsetDateTime,
+}
+
+impl TestAuthority {
+    fn new() -> (Self, Vec<u8>) {
+        let now = time::OffsetDateTime::now_utc();
+        let mut ca = rcgen::CertificateParams::default();
+        ca.distinguished_name
+            .push(rcgen::DnType::CommonName, "CLI contract test CA");
+        ca.not_before = now - time::Duration::minutes(5);
+        ca.not_after = now + time::Duration::days(1);
+        ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca.key_usages.push(rcgen::KeyUsagePurpose::KeyCertSign);
+        let key = rcgen::KeyPair::generate().unwrap();
+        let pem = ca.self_signed(&key).unwrap().pem().into_bytes();
+        let authority = Self {
+            not_before: ca.not_before,
+            not_after: ca.not_after,
+            issuer: rcgen::Issuer::new(ca, key),
+        };
+        (authority, pem)
+    }
+
+    fn config(&self, name: &str) -> Option<rustls::ServerConfig> {
+        let mut leaf = rcgen::CertificateParams::new(vec![name.to_owned()]).ok()?;
+        leaf.not_before = self.not_before;
+        leaf.not_after = self.not_after;
+        leaf.extended_key_usages
+            .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        leaf.use_authority_key_identifier_extension = true;
+        let key = rcgen::KeyPair::generate().ok()?;
+        let cert = leaf.signed_by(&key, &self.issuer).ok()?;
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into();
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .ok()?
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], key)
+            .ok()
+    }
 }
 
 async fn listen(listener: TcpListener, state: State, tls: bool) {
@@ -144,12 +147,12 @@ async fn listen(listener: TcpListener, state: State, tls: bool) {
                 let state = state.clone();
                 connections.spawn(async move {
                     if tls {
-                        secure(socket, state).await;
+                        secure(socket, state, None).await;
                     } else {
                         let _ = hyper::server::conn::http1::Builder::new()
                             .serve_connection(TokioIo::new(socket), service_fn(move |req| {
                                 let state = state.clone();
-                                async move { Ok::<_, io::Error>(dispatch(req, state, false)) }
+                                async move { Ok::<_, io::Error>(dispatch(req, state, None)) }
                             }))
                             .with_upgrades()
                             .await;
@@ -161,11 +164,19 @@ async fn listen(listener: TcpListener, state: State, tls: bool) {
     }
 }
 
-async fn secure<S>(stream: S, state: State)
+async fn secure<S>(stream: S, state: State, tunnel: Option<String>)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let Ok(socket) = state.tls.accept(stream).await else {
+    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream);
+    let Ok(hello) = acceptor.await else { return };
+    let name = hello.client_hello().server_name().map(str::to_owned);
+    let certificate = name.as_deref().or(tunnel.as_deref()).unwrap_or(HOST);
+    let Some(config) = state.authority.config(certificate) else {
+        return;
+    };
+    let destination = tunnel.or(name).unwrap_or_else(|| HOST.into());
+    let Ok(socket) = hello.into_stream(Arc::new(config)).await else {
         return;
     };
     let _ = hyper::server::conn::http1::Builder::new()
@@ -173,17 +184,17 @@ where
             TokioIo::new(socket),
             service_fn(move |req| {
                 let state = state.clone();
-                async move { Ok::<_, io::Error>(dispatch(req, state, true)) }
+                let destination = destination.clone();
+                async move { Ok::<_, io::Error>(dispatch(req, state, Some(&destination))) }
             }),
         )
         .await;
 }
 
-fn dispatch(mut request: Request<Incoming>, state: State, tls: bool) -> Reply {
+fn dispatch(mut request: Request<Incoming>, state: State, tls_host: Option<&str>) -> Reply {
     let connect = request.method() == hyper::Method::CONNECT;
-    let host = request
-        .uri()
-        .host()
+    let host = tls_host
+        .or_else(|| request.uri().host())
         .map(str::to_owned)
         .or_else(|| {
             request
@@ -199,7 +210,7 @@ fn dispatch(mut request: Request<Incoming>, state: State, tls: bool) -> Reply {
     let seen = Seen {
         kind: if connect {
             "connect"
-        } else if tls {
+        } else if tls_host.is_some() {
             "tls"
         } else {
             "http"
@@ -217,13 +228,13 @@ fn dispatch(mut request: Request<Incoming>, state: State, tls: bool) -> Reply {
     };
     state.seen.lock().unwrap().push(seen.clone());
     if connect {
-        if tls {
+        if tls_host.is_some() {
             return reply(405, "text/plain", "");
         }
         let upgrade = hyper::upgrade::on(&mut request);
         tokio::spawn(async move {
             if let Ok(stream) = upgrade.await {
-                secure(TokioIo::new(stream), state).await;
+                secure(TokioIo::new(stream), state, Some(seen.host)).await;
             }
         });
         return Response::builder()
@@ -244,7 +255,7 @@ fn dispatch(mut request: Request<Incoming>, state: State, tls: bool) -> Reply {
 async fn the_recorder_terminates_proxy_connect_locally() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let recorder = Recorder::start(&["provider.invalid"], |_| None).await;
+    let recorder = Recorder::start(|_| None).await;
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", recorder.http))
         .await
         .unwrap();
@@ -262,18 +273,19 @@ async fn the_recorder_terminates_proxy_connect_locally() {
     roots
         .add(rustls::pki_types::CertificateDer::from_pem_slice(&recorder.ca).unwrap())
         .unwrap();
-    let client = rustls::ClientConfig::builder_with_provider(Arc::new(
+    let mut client = rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .unwrap()
     .with_root_certificates(roots)
     .with_no_client_auth();
+    client.enable_sni = false;
     let mut stream = tokio_rustls::TlsConnector::from(Arc::new(client))
         .connect("provider.invalid".try_into().unwrap(), stream)
         .await
         .unwrap();
-    stream.write_all(b"GET /profile HTTP/1.1\r\nHost: provider.invalid\r\nAuthorization: Bearer synthetic\r\nConnection: close\r\n\r\n").await.unwrap();
+    stream.write_all(b"GET /profile HTTP/1.1\r\nHost: host.microsandbox.internal\r\nAuthorization: Bearer synthetic\r\nConnection: close\r\n\r\n").await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     assert!(response.starts_with(b"HTTP/1.1 403"));

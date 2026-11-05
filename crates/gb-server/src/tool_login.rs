@@ -65,6 +65,7 @@ pub struct ToolLogin {
     command: String,
     state: Arc<tokio::sync::Mutex<Option<Held>>>,
 }
+
 fn login_problem(catalog: &Value, key: &str, command: &str, language: &str) -> String {
     crate::i18n::t(
         language,
@@ -294,6 +295,18 @@ impl ToolLogin {
         language: &str,
         vm: LoginVm,
     ) -> Result<Arc<Self>, String> {
+        Self::prepare_with_keychain(data, home, catalog, language, vm, Arc::new(SystemKeychain))
+            .await
+    }
+
+    pub(crate) async fn prepare_with_keychain(
+        data: &Path,
+        home: &Path,
+        catalog: Value,
+        language: &str,
+        vm: LoginVm,
+        keychain: Arc<dyn gb_config::secrets::Keychain>,
+    ) -> Result<Arc<Self>, String> {
         let name = catalog["name"]
             .as_str()
             .ok_or("Tool name missing.")?
@@ -312,6 +325,7 @@ impl ToolLogin {
         let source_catalog = catalog.clone();
         let source_data = data.to_path_buf();
         let source_name = name.clone();
+        let source_keychain = keychain.clone();
         let source: TokenSource = Arc::new(move |refused| {
             let shared = shared.clone();
             let catalog = source_catalog.clone();
@@ -320,6 +334,7 @@ impl ToolLogin {
             let name = source_name.clone();
             let language = source_language.clone();
             let command = source_command.clone();
+            let keychain = source_keychain.clone();
             Box::pin(async move {
                 spawn_private(private_tasks(), async move {
                     let mut held = shared.lock().await;
@@ -336,11 +351,11 @@ impl ToolLogin {
                     let refresh_catalog = catalog.clone();
                     let refresh_data = data.clone();
                     let refresh_name = name.clone();
+                    let refresh_keychain = keychain.clone();
                     let result = lent_access(login, &catalog, refused, move |stale| async move {
-                        let keychain = SystemKeychain;
                         let device = DeviceKey {
                             machine_root: refresh_data.parent().unwrap_or(&refresh_data).into(),
-                            keychain: &keychain,
+                            keychain: refresh_keychain.as_ref(),
                         };
                         refresh_login(
                             &device,
@@ -374,7 +389,7 @@ impl ToolLogin {
                         if key == "refresh_failed" && !had_refusal {
                             let device = DeviceKey {
                                 machine_root: data.parent().unwrap_or(&data).into(),
-                                keychain: &SystemKeychain,
+                                keychain: keychain.as_ref(),
                             };
                             let status = credential_vault::status(
                                 &device,
@@ -460,7 +475,7 @@ impl ToolLogin {
             host_root: root,
             gateway,
             source,
-            keychain: Arc::new(SystemKeychain),
+            keychain,
             data: data.into(),
             catalog,
             language: language.into(),

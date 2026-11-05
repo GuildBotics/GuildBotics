@@ -8,11 +8,6 @@ use gb_environment::gateway::{Policy, Provider};
 use recorder::{HOST, Recorder, Seen, reply};
 
 const STAND_IN_SUFFIX: &str = "53594e544845544943343539";
-const ANTIGRAVITY_HOSTS: &[&str] = &[
-    "www.googleapis.com",
-    "lh3.googleusercontent.com",
-    "oauth2.googleapis.com",
-];
 const COPILOT_MODELS: &[(&str, &str, &str)] = &[
     ("gpt-5.2-codex", "/responses", "OpenAI"),
     ("claude-sonnet-4.5", "/v1/messages", "Anthropic"),
@@ -28,7 +23,6 @@ struct Probe {
 impl Probe {
     async fn start(
         tool: &str,
-        names: &[&str],
         answer: impl Fn(&Seen) -> Option<hyper::Response<axum::body::Body>> + Send + Sync + 'static,
     ) -> Self {
         let device = Device::new();
@@ -37,7 +31,7 @@ impl Probe {
             .into_iter()
             .find(|entry| entry["name"] == tool)
             .unwrap();
-        let recorder = Recorder::start(names, answer).await;
+        let recorder = Recorder::start(answer).await;
         Self {
             device,
             catalog,
@@ -107,7 +101,7 @@ impl Probe {
                     }
                 });
                 document["tokens"]["account_id"] = json!("account-459");
-                document["last_refresh"] = json!(chrono::Utc::now().to_rfc3339());
+                document["last_refresh"] = json!("2026-01-01T00:00:00Z");
                 document["tokens"]["id_token"] = json!(format!(
                     "{}.{}.synthetic",
                     URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#),
@@ -243,7 +237,7 @@ fn json_reply(status: u16, body: Value) -> hyper::Response<axum::body::Body> {
 #[tokio::test]
 #[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
 async fn real_device_claude_separates_inference_and_account_traffic() {
-    let probe = Probe::start("claude", &["api.anthropic.com"], |_| None).await;
+    let probe = Probe::start("claude", |_| None).await;
     let (plan, token) = probe.turn("claude", true);
     probe.run(plan).await;
     let seen = probe.recorder.seen();
@@ -280,7 +274,7 @@ async fn real_device_claude_separates_inference_and_account_traffic() {
 #[tokio::test]
 #[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
 async fn real_device_grok_uses_external_auth_and_refuses_billing() {
-    let probe = Probe::start("grok", &[], |_| None).await;
+    let probe = Probe::start("grok", |_| None).await;
     let (plan, token) = probe.turn("grok", true);
     let (out, _) = probe.run(plan).await;
     assert_eq!(out["billing"], "Authentication required");
@@ -300,7 +294,7 @@ async fn real_device_grok_uses_external_auth_and_refuses_billing() {
 #[tokio::test]
 #[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
 async fn real_device_codex_uses_its_model_provider_and_chatgpt_base() {
-    let probe = Probe::start("codex", &[], |r| {
+    let probe = Probe::start("codex", |r| {
         (r.path == "/backend-api/wham/accounts/check").then(|| json_reply(200, json!({
             "accounts": [{
                 "id": "account-459", "name": null, "plan_type": "plus", "structure": "personal",
@@ -332,10 +326,8 @@ async fn real_device_codex_uses_its_model_provider_and_chatgpt_base() {
         assert_eq!(request.kind, "tls");
         if !request.path.contains("analytics")
             && (request.path.starts_with("/backend-api/codex/")
-                || matches!(
-                    request.path.as_str(),
-                    "/backend-api/wham/usage" | "/backend-api/wham/accounts/check"
-                ))
+                || request.path.starts_with("/backend-api/wham/accounts/")
+                || request.path == "/backend-api/wham/usage")
         {
             assert!(
                 policy.target(&request.method, &request.path).is_ok(),
@@ -381,7 +373,7 @@ fn copilot_answer(request: &Seen) -> Option<hyper::Response<axum::body::Body>> {
 #[tokio::test]
 #[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
 async fn real_device_copilot_uses_github_and_all_three_inference_routes() {
-    let probe = Probe::start("copilot", &[], copilot_answer).await;
+    let probe = Probe::start("copilot", copilot_answer).await;
     let (mut plan, token) = probe.turn("copilot", true);
     plan.argv
         .extend(COPILOT_MODELS.iter().map(|(model, _, _)| (*model).into()));
@@ -471,7 +463,7 @@ async fn real_device_antigravity_reports_quota_without_waiting_for_retry() {
         .iter_mut()
         .find(|detail| detail["@type"] == "type.googleapis.com/google.rpc.ErrorInfo")
         .unwrap()["metadata"]["quotaResetTimeStamp"] = json!(reset.to_rfc3339());
-    let probe = Probe::start("antigravity", ANTIGRAVITY_HOSTS, move |r| {
+    let probe = Probe::start("antigravity", move |r| {
         if r.path == "/v1internal:streamGenerateContent" {
             Some(json_reply(429, upstream.clone()))
         } else {
@@ -507,10 +499,11 @@ async fn real_device_antigravity_reports_quota_without_waiting_for_retry() {
     let policy = probe.policy();
     for request in seen.iter().filter(|r| !r.authorization.is_empty()) {
         let target = policy.target(&request.method, &request.path).unwrap();
-        let expected = if target.starts_with(&policy.origin) {
+        let origin = reqwest::Url::parse(&target).unwrap();
+        let expected = if origin.origin().ascii_serialization() == policy.origin {
             HOST
         } else {
-            "www.googleapis.com"
+            origin.host_str().unwrap()
         };
         assert_eq!(request.host, expected, "{request:?}");
         assert_eq!(request.kind, "tls", "{request:?}");
@@ -520,7 +513,7 @@ async fn real_device_antigravity_reports_quota_without_waiting_for_retry() {
 #[tokio::test]
 #[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
 async fn real_device_antigravity_refreshes_expired_login_when_reading_usage() {
-    let probe = Probe::start("antigravity", ANTIGRAVITY_HOSTS, antigravity_answer).await;
+    let probe = Probe::start("antigravity", antigravity_answer).await;
     let files = expire(credentials_for(&probe.catalog), &probe.catalog).unwrap();
     assert!(expiring(&files, &probe.catalog));
     let mut plan = probe.prepare("antigravity-refresh", files, true);

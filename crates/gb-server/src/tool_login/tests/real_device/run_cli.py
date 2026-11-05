@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+from guildbotics.guest.acp import config_values
 from guildbotics.guest.codex import _config_arguments, _gateway_overrides
 from guildbotics.guest.gateway_relays import relays, trust_turn
 from guildbotics.guest.usage_probe import EnvironmentProcess
@@ -18,10 +19,10 @@ from guildbotics.guest.usage_probe import EnvironmentProcess
 PROMPT = "Synthetic fixture."
 
 
-async def run(*argv, timeout=25, stderr=None):
+async def run(*argv, timeout=25):
     child = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=stderr, start_new_session=True,
+        stdout=asyncio.subprocess.PIPE, start_new_session=True,
     )
     process = EnvironmentProcess(child)
     try:
@@ -120,17 +121,22 @@ async def codex(_):
 
 async def copilot(models):
     output = {}
-    for model in models:
-        stdout = await run(
-            "copilot", "--no-auto-update", "-p", PROMPT,
-            "--allow-all-tools", "--model", model, timeout=18,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        output[model] = stdout[-4000:]
-    async with rpc("copilot", "--acp", "--no-auto-update") as request:
+    async with rpc("copilot", "--acp", "--no-auto-update", "--no-remote-export") as request:
         result(await request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}))
         result(await request("authenticate", {"methodId": "copilot-login"}))
-        result(await request("session/new", {"cwd": os.getcwd(), "mcpServers": []}))
+        for model in models:
+            session = result(await request("session/new", {"cwd": os.getcwd(), "mcpServers": []}))
+            session_id = session["sessionId"]
+            if config_values(session).get("model") != model:
+                configured = result(await request(
+                    "session/set_config_option",
+                    {"sessionId": session_id, "configId": "model", "value": model},
+                ))
+                assert config_values(configured).get("model") == model, configured
+            output[model] = await request(
+                "session/prompt",
+                {"sessionId": session_id, "prompt": [{"type": "text", "text": PROMPT}]},
+            )
     return output
 
 

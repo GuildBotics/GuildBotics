@@ -122,39 +122,6 @@ def main():
 
 #[tokio::test]
 #[ignore = "real_device: owner approval and GUILDBOTICS_REAL_DEVICE_ROOT required"]
-async fn real_device_checkout_and_code_mount_are_distinct() {
-    let device = Device::new();
-    let checkout = device.workspace.join("checkout");
-    fs::create_dir_all(checkout.join("guildbotics")).unwrap();
-    fixture_git(&checkout, &["init", "-q", "--template="]);
-    fs::write(checkout.join("guildbotics/original"), "before").unwrap();
-    fixture_git(&checkout, &["add", "guildbotics/original"]);
-    let (output, _) = device
-        .python(
-            r#"
-from pathlib import Path
-import guildbotics
-
-def main():
-    assert Path(guildbotics.__file__).parent == Path("/opt/guildbotics/code/guildbotics")
-    target = Path("guildbotics/original")
-    assert target.read_text() == "before"
-    target.write_text("changed in the VM")
-    return "writable checkout"
-"#,
-            &checkout,
-            "",
-        )
-        .await;
-    assert_eq!(output, "writable checkout");
-    assert_eq!(
-        fs::read_to_string(checkout.join("guildbotics/original")).unwrap(),
-        "changed in the VM"
-    );
-}
-
-#[tokio::test]
-#[ignore = "real_device: owner approval and GUILDBOTICS_REAL_DEVICE_ROOT required"]
 async fn real_device_to_pdf_draws_japanese() {
     let device = Device::new();
     let (output, _) = device
@@ -525,6 +492,58 @@ fn smoke_options(tool: &str) -> Value {
         "antigravity" => json!({"model": "gemini-3.6-flash-low"}),
         _ => json!({}),
     }
+}
+
+async fn single_turn(tool: &str, prompt: &str, expected: &str) -> Value {
+    let device = Device::account(tool);
+    let cwd = device.workspace.join("work");
+    fs::create_dir(&cwd).unwrap();
+    let turns = device
+        .turns(tool, &cwd, "", json!({}), &[prompt], false)
+        .await;
+    let turn = turns.into_iter().next().unwrap();
+    assert_eq!(turn["output"], expected);
+    turn
+}
+
+#[tokio::test]
+#[ignore = "real_device: attended Codex inference with a verification account"]
+async fn real_device_codex_pong() {
+    single_turn(
+        "codex",
+        "Reply with exactly the word pong. Do not run any tools.",
+        "pong",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "real_device: attended Claude Code inference with a verification account"]
+async fn real_device_claude_pong() {
+    single_turn(
+        "claude",
+        "Reply with exactly the word pong. Do not run any tools.",
+        "pong",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "real_device: attended Codex inference with a verification account"]
+async fn real_device_codex_sandbox() {
+    let turn = single_turn(
+        "codex",
+        "Run this shell command and reply with its output only: sh -c 'echo x > /dev/null && touch /opt/.probe && ! test -r ~/.codex/auth.json && echo sandbox-ok'",
+        "sandbox-ok",
+    ).await;
+    assert!(
+        turn["command_outputs"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("sandbox-ok")),
+        "{turn}"
+    );
+    assert_eq!(turn["codex_probe_created"], true);
 }
 
 async fn resume(tool: &str) {

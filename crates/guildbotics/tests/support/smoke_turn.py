@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 
 from guildbotics.guest.antigravity import AntigravityStreamJsonAdapter
+from guildbotics.guest.claude import ClaudeStreamJsonAdapter
+from guildbotics.guest.codex import CodexAppServerAdapter
 from guildbotics.guest.copilot import CopilotAcpAdapter
 from guildbotics.guest.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
@@ -18,6 +20,8 @@ from guildbotics.intelligences.agent_runtime.wire import CommandFacts
 
 _ADAPTERS = {
     "antigravity": AntigravityStreamJsonAdapter,
+    "claude": ClaudeStreamJsonAdapter,
+    "codex": CodexAppServerAdapter,
     "copilot": CopilotAcpAdapter,
     "grok": GrokAcpAdapter,
 }
@@ -60,6 +64,12 @@ async def main(context):
                 "output": reply.output.strip(),
                 "session": reply.provider_session_id,
                 "usage": reply.usage,
+                "command_outputs": [
+                    event.message.strip()
+                    for event in events
+                    if event.kind == "command" and event.name == "completed"
+                ],
+                "codex_probe_created": tool == "codex" and Path("/opt/.probe").is_file(),
                 "model": reply.model,
                 "settings": next(
                     (event.details for event in events if event.name == "settings"), {}

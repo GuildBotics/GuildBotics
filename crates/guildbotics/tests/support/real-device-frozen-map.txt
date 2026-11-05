@@ -1,11 +1,12 @@
-#95 凍結版テスト対応表（作業中）
+#95 凍結版テスト対応表
 凍結点: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0。
 実機の実行はオーナーの承認と立ち会いのもとで記録する。実アカウントのスモークと usage はテストを用意し、ログインの更新や認証を伴う実行を #108 へ回す。
 実機を確認するホストは macOS。テストは Unix 対象。Windows 実機での確認は #108 に回す。
+旧検証手順にあった Codex と Claude Code の実ターン、および Codex の権限プロファイル確認も Rust の実機テストにした。実アカウントでの実行は #108 に回す。
 
 tests/guildbotics/environment/test_guildbotics_in_environment.py::test_the_snapshot_python_loads_guildbotics_from_the_mount -> crates/guildbotics/tests/support/real_device.rs::real_device_snapshot_loads_the_read_only_guest_package
 tests/guildbotics/environment/test_guildbotics_in_environment.py::test_the_code_mount_is_read_only -> crates/guildbotics/tests/support/real_device.rs::real_device_snapshot_loads_the_read_only_guest_package
-tests/guildbotics/environment/test_guildbotics_in_environment.py::test_a_turn_working_in_the_checkout_still_writes_its_package -> crates/guildbotics/tests/support/real_device.rs::real_device_checkout_and_code_mount_are_distinct
+tests/guildbotics/environment/test_guildbotics_in_environment.py::test_a_turn_working_in_the_checkout_still_writes_its_package -> crates/gb-server/src/tool_login/tests/real_device.rs::real_device_checkout_and_code_mount_are_distinct
 tests/guildbotics/environment/test_guildbotics_in_environment.py::test_to_pdf_draws_a_pdf_with_japanese_fonts -> crates/guildbotics/tests/support/real_device.rs::real_device_to_pdf_draws_japanese
 tests/guildbotics/environment/test_guildbotics_in_environment.py::test_an_artifact_is_unpacked_by_the_code_in_the_microvm -> crates/guildbotics/tests/support/real_device.rs::real_device_artifact_extraction_cannot_write_through_a_guest_link
 tests/guildbotics/environment/test_guildbotics_in_environment.py::test_a_command_runs_in_the_microvm_the_host_boots_for_it -> crates/guildbotics/tests/support/real_device.rs::real_device_command_runs_with_only_the_mounted_context

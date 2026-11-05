@@ -1383,6 +1383,13 @@ impl CommandServices {
         self._host.broker.settle().await;
     }
 }
+#[cfg(test)]
+pub struct CommandTestServices {
+    pub catalog: Value,
+    pub keychain: Arc<dyn gb_config::secrets::Keychain>,
+    pub recorder_port: Option<u16>,
+}
+
 pub async fn prepare_command(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
@@ -1390,6 +1397,7 @@ pub async fn prepare_command(
     roots: &gb_config::commands::CommandRoots,
     preflight: &gb_environment::device::Device,
     member: Option<&crate::member::Backend>,
+    #[cfg(test)] test: Option<&CommandTestServices>,
 ) -> Result<CommandServices, String> {
     if !command.access.read_only {
         gb_base::host_path::open_directory(
@@ -1448,7 +1456,11 @@ pub async fn prepare_command(
         .filter_map(|brain| brain["definition"]["adapter"].as_str())
         .map(str::to_owned)
         .collect();
-    let redactor = command_redactor(host, workspace, &gb_config::secrets::SystemKeychain)?;
+    let keychain: Arc<dyn gb_config::secrets::Keychain> =
+        Arc::new(gb_config::secrets::SystemKeychain);
+    #[cfg(test)]
+    let keychain = test.map_or(keychain, |test| test.keychain.clone());
+    let redactor = command_redactor(host, workspace, keychain.as_ref())?;
     let diagnostics = gb_observability::Diagnostics::open(workspace);
     let trace_id = command.trace_id.clone();
     let person_id = command.person_id.clone();
@@ -1483,9 +1495,15 @@ pub async fn prepare_command(
         .map_err(|_| "Tool catalog unavailable.")?,
     )
     .map_err(|_| "Tool catalog invalid.")?;
+    #[cfg(test)]
+    let catalog = test.map_or(catalog, |test| test.catalog.clone());
     let mut loans = BTreeMap::new();
     let mut tool_mounts = vec![];
     let mut tool_ports = vec![];
+    #[cfg(test)]
+    if let Some(port) = test.and_then(|test| test.recorder_port) {
+        tool_ports.push(port);
+    }
     let mut relays = vec![];
     let mut turn_domains = vec![];
     for tool in catalog.as_array().into_iter().flatten() {
@@ -1493,7 +1511,7 @@ pub async fn prepare_command(
         if !tools.contains(name) {
             continue;
         }
-        let loan = crate::tool_login::ToolLogin::prepare(
+        let loan = crate::tool_login::ToolLogin::prepare_with_keychain(
             &host.data,
             &host.home,
             tool.clone(),
@@ -1516,6 +1534,7 @@ pub async fn prepare_command(
                     .map(str::to_owned)
                     .collect(),
             },
+            keychain.clone(),
         )
         .await?;
         tool_mounts.push(gb_environment::Mount {
