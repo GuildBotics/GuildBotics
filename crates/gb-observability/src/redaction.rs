@@ -17,10 +17,16 @@ impl Redactor {
         Self::new(keys.into_iter().filter_map(|key| std::env::var(key).ok()))
     }
 
+    /// Shared records ignore short values to avoid masking common words and IDs.
     pub fn new(values: impl IntoIterator<Item = String>) -> Self {
+        Self::with_min_length(values, 8)
+    }
+
+    /// Use a boundary-specific minimum, such as four characters for memory.
+    pub fn with_min_length(values: impl IntoIterator<Item = String>, minimum_chars: usize) -> Self {
         let mut values: Vec<_> = values
             .into_iter()
-            .filter(|v| v.chars().count() >= 8)
+            .filter(|v| v.chars().count() >= minimum_chars)
             .collect();
         values.sort_by_key(|v| std::cmp::Reverse(v.chars().count()));
         values.dedup();

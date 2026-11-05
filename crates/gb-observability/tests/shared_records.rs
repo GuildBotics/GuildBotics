@@ -569,3 +569,24 @@ fn evidence_creating_a_run_applies_the_same_attribute_boundary() {
         })
         .unwrap();
 }
+
+#[test]
+fn shared_redaction_preserves_short_values_at_the_eight_character_boundary() {
+    let values = [
+        "main",
+        "five5",
+        "sixsix",
+        "seven77",
+        "eight888",
+        "界界界界界界界",
+        "界界界界界界界界",
+    ];
+    let redactor = Redactor::new(values.map(String::from));
+    let input = values.join(" / ");
+    let expected = "main / five5 / sixsix / seven77 / *** / 界界界界界界界 / ***";
+    assert_eq!(redactor.text(&input), expected);
+    assert_eq!(
+        redactor.local(json!({"field": input})),
+        json!({"field": expected})
+    );
+}

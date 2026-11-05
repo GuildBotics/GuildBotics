@@ -1,0 +1,367 @@
+Frozen host: origin/python-host / fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
+各行は凍結テスト1関数。既存providerテストを示す行は #88 の実装・契約を再利用し、member側の承認・更新確認・サービスエラー保持は capabilities.rs で別に固定する。
+パラメータ条件: 承認は作成・open/closed・interactive真偽、rosterはhuman/agent・設定有無・3 provider、chat資格情報は空/未設定/混在/失敗、rangeは全8拒否枝、artifactは不正/重複/サイズ/リンク、attachmentは正常/空/相対パス/既存、memoryは全device・policy承認/自律拒否・I/O/非I/O監査失敗。
+GitHub固有のproviderは #88 で削除済み。現在のhostが提供する local/branvil/slack を対象とする。
+CLIとguest間の転送、実行主体の選択、task run完了の保存は、人が分割した #127 のバックエンドに渡す。
+
+test_activity_events.py::test_closed_board_work_is_recorded_once_with_its_activity -> crates/gb-member/tests/capabilities.rs::closed_board_imports_are_idempotent_and_keep_merge_identity
+test_activity_events.py::test_the_github_board_is_read_with_a_credential_alone -> 移さない：#88でGitHub providerを削除済み。
+test_activity_events.py::test_without_a_board_nothing_is_read -> crates/gb-member/tests/capabilities.rs::closed_board_imports_are_idempotent_and_keep_merge_identity
+test_activity_events.py::test_existing_activity_ids_reads_shared_activity_events -> crates/gb-member/tests/records.rs::domain_recording_uses_existing_storage_redaction_and_correlation
+test_artifact_archive.py::test_the_environment_unpacks_the_archive_it_is_given -> crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_artifact_archive.py::test_an_unsafe_archive_is_refused_with_the_reason -> crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_artifact_archive.py::test_an_archive_above_the_limit_is_refused -> crates/gb-member/tests/records.rs::archive_checks_the_expanded_size_and_duplicate_names_before_writing
+test_artifact_archive.py::test_an_archive_naming_its_destination_itself_is_refused -> crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_artifact_archive.py::test_the_environment_writes_an_attachment_as_one_file -> crates/gb-member/tests/records.rs::attachment_names_fall_back_to_ids_and_never_replace_a_file
+test_artifact_archive.py::test_an_attachment_not_named_by_one_plain_file_name_is_written_by_its_id -> crates/gb-member/tests/records.rs::attachment_names_fall_back_to_ids_and_never_replace_a_file
+test_artifact_archive.py::test_an_attachment_with_no_plain_file_name_at_all_is_refused -> crates/gb-member/tests/records.rs::attachment_names_fall_back_to_ids_and_never_replace_a_file
+test_member_activity_events.py::test_record_member_work_target_names_the_item_and_marks_reads -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_a_ticket_target_is_recorded_as_an_issue_by_its_label -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_pr_create_event_records_the_created_target -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_pr_create_event_ignores_a_reused_pull_request -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_issue_create_event_builds_github_domain_payload -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_issue_close_event_reports_the_close_as_activity -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_issue_close_event_ignores_updates_that_close_nothing -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_activity_events.py::test_record_member_issue_comment_event_keeps_comment_diagnostics_url -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_member_chat.py::test_identity_returns_stable_member_payload -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_post_resolves_channel_name_and_returns_evidence_payload -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_post_renders_participant_labels_from_workflow_context -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_inspect_channel_resolves_name_and_returns_messages_in_time_order -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_inspect_thread_reads_by_id_or_by_message_url -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_inspect_thread_needs_a_thread -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_reply_posts_to_the_thread_a_message_url_names -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_reply_resolves_channel_name_and_renders_labels -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_reaction_add_adds_a_semantic_reaction_and_the_chat_refuses_others -> crates/gb-member/tests/chat.rs::member_chat_identity_posts_replies_reactions_and_sorted_inspections
+test_member_chat.py::test_check_credentials_reports_each_credential_and_the_whole -> crates/gb-member/tests/chat.rs::credential_status_handles_empty_unconfigured_mixed_and_failed_checks
+test_member_chat.py::test_a_service_error_reaches_the_member_as_the_service_wrote_it -> crates/gb-member/tests/chat.rs::chat_service_errors_are_preserved
+test_member_context.py::test_ensure_execution_subject_accepts_agent -> #127 に回す：member CLIの実行主体の選択とhuman拒否。
+test_member_context.py::test_ensure_execution_subject_rejects_human -> #127 に回す：member CLIの実行主体の選択とhuman拒否。
+test_member_directory.py::test_roster_only_exposes_usable_service_identities -> crates/gb-member/tests/records.rs::context_roster_exposes_all_members_and_only_public_configured_accounts
+test_member_directory.py::test_context_roster_includes_every_member_and_configured_service -> crates/gb-member/tests/records.rs::context_roster_exposes_all_members_and_only_public_configured_accounts
+test_member_directory.py::test_github_directory_resolves_rest_and_graphql_bot_names -> 移さない：#88でGitHub providerを削除済み。
+test_member_memory.py::test_record_recall_get_and_digest_redact_secret -> crates/gb-member/tests/documents.rs::logical_paths_and_all_metadata_fields_are_redacted_on_each_device
+test_member_memory.py::test_record_redacts_secret_store_values_without_marker_names -> crates/gb-member/tests/documents.rs::logical_paths_and_all_metadata_fields_are_redacted_on_each_device
+test_member_memory.py::test_record_rejects_set_for_note -> crates/gb-member/tests/documents.rs::size_and_identifier_rejection_preserve_the_document
+test_member_memory.py::test_team_memory_tracks_creator_and_updater -> crates/gb-member/tests/documents.rs::team_creator_and_updater_and_legacy_metadata
+test_member_memory.py::test_updating_legacy_memory_does_not_fabricate_creator -> crates/gb-member/tests/documents.rs::team_creator_and_updater_and_legacy_metadata
+test_member_memory.py::test_recall_strips_blank_queries -> crates/gb-member/tests/documents.rs::document_lifecycle_redaction_search_and_recency
+test_member_memory.py::test_recall_uses_rg_for_meta_only -> crates/gb-member/tests/documents.rs::document_lifecycle_redaction_search_and_recency
+test_member_memory.py::test_recall_decodes_rg_json_as_utf8_with_cp932_default -> crates/gb-member/tests/documents.rs::document_lifecycle_redaction_search_and_recency
+test_member_memory.py::test_recall_warns_when_rg_is_missing -> 移さない：Rustの検索は常にネイティブであり、Pythonの外部プロセス探索とfallback警告を廃止。検索結果とUnicodeは移植。
+test_member_memory.py::test_update_touch_archive_and_promote_manage_recency -> crates/gb-member/tests/documents.rs::document_lifecycle_redaction_search_and_recency
+test_member_memory.py::test_memory_mutations_write_audit_events -> crates/gb-member/tests/documents.rs::audit_payloads_keep_correlation_and_emit_each_action_once
+test_member_memory.py::test_memory_recall_and_get_write_audit_events -> crates/gb-member/tests/documents.rs::audit_payloads_keep_correlation_and_emit_each_action_once
+test_member_memory.py::test_memory_audit_filters_timestamps_by_instant -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_memory_audit_rewrites_to_bounded_newest_rows -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_memory_audit_compacts_oversized_newest_record -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_memory_audit_preserves_file_when_no_record_fits -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_memory_audit_path_matches_the_path_the_caller_is_given -> crates/gb-member/tests/documents.rs::audits_keep_scoped_snapshots_and_corrupt_neighbors_do_not_break_discovery
+test_member_memory.py::test_memory_audit_writes_and_trims_only_this_devices_journal -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_memory_audit_usage_is_empty_without_journals -> crates/gb-member/tests/records.rs::audit_bounds_only_its_device_and_compares_timestamps_as_instants
+test_member_memory.py::test_digest_orders_documents_by_latest_use_on_any_device -> crates/gb-member/tests/documents.rs::digest_merges_device_recency_without_relying_on_audit_retention
+test_member_memory.py::test_the_digest_keeps_uses_the_audit_journal_trimmed_away -> crates/gb-member/tests/documents.rs::digest_merges_device_recency_without_relying_on_audit_retention
+test_member_memory.py::test_an_unreadable_device_identity_fails_before_any_document_is_written -> crates/gb-member/tests/documents.rs::unreadable_device_identity_prevents_service_construction_and_document_writes
+test_member_memory.py::test_baseline_policy_defines_memory_scope -> crates/gb-member/tests/documents.rs::document_lifecycle_redaction_search_and_recency
+test_member_memory.py::test_policy_memory_requires_approval_and_controls_context -> crates/gb-member/tests/documents.rs::policy_approval_replacement_and_autonomous_rejection
+test_member_memory.py::test_document_path_is_posix_on_every_device -> crates/gb-member/tests/documents.rs::logical_paths_and_all_metadata_fields_are_redacted_on_each_device
+test_member_memory_concurrency.py::test_the_team_policy_lookup_happens_inside_the_span -> crates/gb-member/tests/documents.rs::concurrent_policy_records_share_one_document_without_reentrant_locking
+test_member_memory_concurrency.py::test_replacing_the_team_policy_does_not_deadlock_against_itself -> crates/gb-member/tests/documents.rs::concurrent_policy_records_share_one_document_without_reentrant_locking
+test_member_memory_concurrency.py::test_a_busy_audit_journal_does_not_undo_the_document -> crates/gb-member/tests/documents.rs::busy_audit_is_best_effort_and_invalid_identity_fails_before_writing
+test_member_memory_concurrency.py::test_a_busy_audit_journal_does_not_undo_an_update -> crates/gb-member/tests/documents.rs::busy_audit_is_best_effort_and_invalid_identity_fails_before_writing
+test_member_memory_concurrency.py::test_nothing_can_replace_the_journal_between_the_check_and_the_completion -> #127 に回す：task run完了の証拠確認と保存を行うCLIバックエンド。
+test_member_memory_concurrency.py::test_a_completion_without_evidence_is_still_refused -> #127 に回す：task run完了の証拠確認と保存を行うCLIバックエンド。
+test_member_reference.py::test_command_summary_comes_from_the_catalog -> crates/gb-member/tests/reference.rs::command_summary_comes_from_the_catalog
+test_member_reference.py::test_command_summary_rejects_unknown_command_path -> crates/gb-member/tests/reference.rs::command_summary_rejects_unknown_command_path
+test_member_reference.py::test_reference_covers_every_member_domain -> crates/gb-member/tests/reference.rs::reference_covers_every_member_domain
+test_member_reference.py::test_reference_prepare_allows_issue_and_pr_url_together -> crates/gb-member/tests/reference.rs::reference_prepare_allows_issue_and_pr_url_together
+test_member_reference.py::test_reference_includes_standard_work_procedure -> crates/gb-member/tests/reference.rs::reference_includes_standard_work_procedure
+test_member_reference.py::test_reference_grounds_repository_judgments_in_guidelines -> crates/gb-member/tests/reference.rs::reference_grounds_repository_judgments_in_guidelines
+test_member_reference.py::test_reference_states_pr_work_record_contract -> crates/gb-member/tests/reference.rs::reference_states_pr_work_record_contract
+test_member_reference.py::test_reference_maps_communication_style_output_kinds -> crates/gb-member/tests/reference.rs::reference_maps_communication_style_output_kinds
+test_member_reference.py::test_reference_states_cross_cutting_rules -> crates/gb-member/tests/reference.rs::reference_states_cross_cutting_rules
+test_member_reference.py::test_reference_states_which_code_host_writes_stay_human_decisions -> crates/gb-member/tests/reference.rs::reference_states_which_code_host_writes_stay_human_decisions
+test_member_reference.py::test_reference_standardizes_free_form_input_with_utf8_files -> crates/gb-member/tests/reference.rs::reference_standardizes_free_form_input_with_utf8_files
+test_member_reference.py::test_reference_documents_complete_content_command_usage -> crates/gb-member/tests/reference.rs::reference_documents_complete_content_command_usage
+test_member_reference.py::test_reference_excludes_task_contract -> crates/gb-member/tests/reference.rs::reference_excludes_task_contract
+test_member_reference.py::test_reference_excludes_ticket_specific_issue_comment_rule -> crates/gb-member/tests/reference.rs::reference_excludes_ticket_specific_issue_comment_rule
+test_member_repository.py::test_mention_completion_needs_no_code_host_or_linked_pr_readiness -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_ticket_create_needs_a_human_and_lands_on_the_board -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_ticket_create_off_the_board -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_ticket_approval_is_localized_before_service_access -> crates/gb-member/tests/capabilities.rs::approval_diagnostics_are_localized_before_service_access
+test_member_repository.py::test_ticket_create_resolves_roster_assignment_and_sets_initial_state -> crates/gb-member/tests/capabilities.rs::roster_assignment_and_initial_ticket_state_reach_the_provider
+test_member_repository.py::test_ticket_create_refuses_unknown_roster_member_before_writing -> crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_ticket_update_and_comment_report_what_they_changed -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_ticket_interactive_update_requires_human_approval -> crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_ticket_update_changes_relations_alone -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_removing_a_label_the_ticket_does_not_carry_changes_nothing -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_pull_request_work_reports_its_target -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts
+test_member_repository.py::test_a_review_on_a_head_that_moved_writes_nothing -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts
+test_member_repository.py::test_pr_reaction_reacts_to_each_kind_of_entry -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts
+test_member_repository.py::test_ticket_reaction_reacts_to_a_comment_of_the_ticket -> crates/gb-integrations/src/factory/local/tests.rs::ticket_shared_contract + crates/gb-member/tests/capabilities.rs::human_approval_precedes_service_and_chat_access
+test_member_repository.py::test_a_reaction_looks_only_in_the_item_the_url_names -> crates/gb-integrations/src/factory/local/tests.rs::full_shared_code_state_and_link_contracts
+test_member_repository.py::test_a_ticket_and_a_pull_request_of_one_number_are_two_items -> crates/gb-integrations/src/factory/local/tests.rs::full_shared_code_state_and_link_contracts
+test_member_repository.py::test_artifact_download_reads_only_the_heads_artifacts -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts + crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_member_repository.py::test_artifact_download_refuses_a_path_as_the_name -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts + crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_member_repository.py::test_artifact_download_extracts_the_heads_artifact -> crates/gb-integrations/src/factory/local/tests.rs::pull_request_git_unicode_files_reviews_threads_checks_and_artifacts + crates/gb-member/tests/records.rs::archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files
+test_member_repository.py::test_attachment_download_writes_the_file_by_its_name -> crates/gb-member/tests/records.rs::attachment_names_fall_back_to_ids_and_never_replace_a_file
+test_member_repository.py::test_attachment_download_leaves_a_file_already_there -> crates/gb-member/tests/records.rs::attachment_names_fall_back_to_ids_and_never_replace_a_file
+test_member_repository.py::test_a_command_of_an_environment_has_its_attachment_written_there -> #127 に回す：member CLIからguestへのダウンロード転送。
+test_member_repository.py::test_task_completion_revalidates_what_the_run_answers_for -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_task_completion_takes_the_pull_requests_the_run_wrote_to -> crates/gb-member/tests/capabilities.rs::evidence_includes_written_pushed_and_resumed_prs_once
+test_member_repository.py::test_task_completion_of_a_pull_request_revalidates_it -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_task_completion_of_another_services_ticket_has_no_pull_requests -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_task_completion_refuses_a_blocked_pull_request -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_a_run_awaits_its_pull_requests_pending_checks -> crates/gb-member/tests/capabilities.rs::waits_record_each_success_and_retain_all_work_status_fields
+test_member_repository.py::test_a_run_of_any_work_awaits_its_pull_requests_for_that_work -> crates/gb-member/tests/capabilities.rs::waits_record_each_success_and_retain_all_work_status_fields
+test_member_repository.py::test_a_run_that_names_no_pull_request_has_none_to_await -> crates/gb-member/tests/capabilities.rs::only_pending_checks_of_nondraft_prs_can_be_awaited
+test_member_repository.py::test_a_run_awaits_checks_only_when_nothing_else_blocks -> crates/gb-member/tests/capabilities.rs::only_pending_checks_of_nondraft_prs_can_be_awaited
+test_member_repository.py::test_a_reviewer_neither_awaits_nor_waits_for_the_checks_it_reviewed -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_open_pull_request_readiness_skips_what_is_not_open -> crates/gb-member/tests/capabilities.rs::open_readiness_skips_closed_results
+test_member_repository.py::test_a_remote_git_cannot_read_is_a_failure_not_an_answer -> crates/gb-integrations/src/factory/local/tests.rs::full_shared_code_state_and_link_contracts
+test_member_repository.py::test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled -> crates/gb-integrations/src/factory/local/tests.rs::full_shared_code_state_and_link_contracts
+test_workflow_completion_events.py::test_abandoned_caps_attempt_count_at_max_attempts -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_workflow_completion_events.py::test_abandoned_keeps_attempt_count_within_budget -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
+test_workflow_rate_limits.py::test_workflow_rate_limit_from_exception_extracts_from_cli_agent_error -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_workflow_rate_limit_from_exception_extracts_from_exhausted_turn_last_error -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_workflow_rate_limit_from_exception_returns_none_for_different_category -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_workflow_rate_limit_from_exception_returns_none_for_plain_exception -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_notice_explains_the_workflow_retry -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_notice_selects_reset_information -> #90 に回す：workflow の例外分類と利用者向け再試行案内。
+test_workflow_rate_limits.py::test_record_workflow_rate_limited -> crates/gb-member/tests/records.rs::rate_limit_and_review_limit_payloads_preserve_each_field
+test_chat_selection.py::test_workflow_delegates_to_handle_chat_event_and_updates_reply_state -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_redispatch_of_completed_run_skips_agent_and_reuses_evidence -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_two_messages_in_one_thread_share_conversation_and_advance_cursor -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_live_thread_snapshot_paginates_and_keeps_latest_bound -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_reaction_only_completion_processes_without_bot_message -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_noop_completion_processes_without_visible_action -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_taking_a_batch_records_the_runs_start_under_its_trace -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_declined_batch_leaves_no_run_record -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_unmentioned_new_thread_is_processed_without_agent -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_social_unmentioned_new_thread_delegates -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_unmentioned_followup_after_prior_mention_delegates -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_muted_unmentioned_followup_after_prior_mention_skips -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_empty_cache_followup_participates_via_provider_snapshot -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_snapshot_is_fetched_once_and_persisted_to_cache -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_provider_unavailable_without_cache_keeps_event_unprocessed -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_provider_unavailable_with_cached_mention_waits_for_fresh_input -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_followup_mentioning_other_member_skips_even_after_prior_mention -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_author_labels_include_mentionable_team_members_not_in_thread -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_handoff_candidates_include_only_mentionable_other_members_with_roles -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_chat_user_to_person_labels_uses_each_members_chat_user -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_an_agent_without_a_configured_chat_user_is_its_credentials_user -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_record_handoffs_saves_mentions_to_known_members -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_record_handoffs_ignores_non_team_participant_labels -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_prompt_payload_includes_existing_handoffs -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_incomplete_turns_retry_then_escalate -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_agent_run_failure_escalates_and_stops -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_non_final_agent_run_failure_bubbles_for_pending_backoff -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_rate_limit_posts_notice_and_leaves_event_pending -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_duplicate_system_notice_is_not_posted_again -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_final_notice_post_failure_marks_processed_without_notice_state -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_non_final_prerun_identity_failure_bubbles -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_completion_on_retry_stops_early -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_obvious_self_message_is_marked_processed_without_agent -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_final_attempt_abandon_records_dispatch_abandoned_event -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_recovered_completion_records_workflow_completed_event -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_judgment_without_effort_preserves_response_settings -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_response_effort_is_promoted_and_persisted -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_no_invoked_command_inherits_another_command_output_as_input -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_judgment_runs_once_per_event_not_per_retry -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_failed_batch_is_refreshed_on_retry_without_losing_action_evidence -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_completed_batch_recovery_does_not_consume_new_messages -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_batch_keeps_unread_messages_beyond_historical_context_bound -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_dispatcher_consumes_one_batch_and_skips_its_queued_followers -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_dispatcher_retries_a_crashed_run_with_the_agent -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_batch_includes_members_own_reply_without_using_it_as_reaction_target -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection.py::test_updates_read_during_turn_are_consumed_only_on_completion -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_fast_path_records_evidence_before_completing -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_unavailable_receiver_never_confirms_a_fast_path -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_new_input_during_evaluation_is_reconsidered -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_reaction_failure_never_completes -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_reaction_recovers_without_duplicate_visible_action -> #90 に回す：workflow の選択・判断・通知。
+test_chat_selection_fast_path.py::test_failed_judgment_agent_fallback_escalates_on_final_attempt -> #90 に回す：workflow の選択・判断・通知。
+test_chat_updates.py::test_a_message_carrying_a_workflow_status_is_no_new_input -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_check_delivers_all_new_input_without_consuming_queue -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_only_source_thread_external_unprocessed_input_is_new -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_unavailable_is_never_no_new_messages -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_the_source_thread_is_the_runs_work_not_what_its_record_says -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_only_a_chat_run_has_updates_to_check -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_new_batch_resets_checked_membership -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_chat_write_checks_source_even_for_another_destination -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_a_comment_checks_original_chat -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_awaiting_checks_checks_original_chat -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_the_member_writes_to_a_service_only_through_the_chat_check -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_interactive_and_ticket_runs_have_no_chat_precondition -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_pending_reads_the_processed_cursor_once -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_heartbeat_throttles_idle_writes_but_publishes_transitions -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_chat_updates.py::test_acknowledgement_requires_action_after_delivery -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_decisions.py::test_adoption -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_definite_obligations_precede_uncertainty -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_invalid_evaluation_precedes_a_definite_request -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_unrelated_unknowns_do_not_prevent_safe_reaction -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_response_effort_depends_on_required_work_not_route_reason -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_three_valued_algebra -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_jev_noul_thresholds -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_choice_adopts_top_option_without_a_confidence_threshold -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_top_reaction_only_applies_after_noul_obligations_are_excluded -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_choice_rejects_an_option_below_the_maximum_probability -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_invalid_probability_is_not_adopted -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_self_reported_confidence_does_not_change_assertion -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_failed_judgment_delegates_without_execution_settings -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_snapshot_is_full_and_replayable_even_without_transcripts -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_record_failure_cannot_skip_agent -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_a_selection_carries_only_a_semantic_reaction -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_generic_choice_is_not_restricted_to_chat_reactions -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_recorded_response_effort_is_separate_from_judgment_settings -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_public_provider_thinking_settings_exclude_credentials -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_jev_uses_latest_and_records_the_returned_version -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_jev_rejects_other_models -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_jev_one_request_and_failure_is_sanitized -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_common_factory_run_and_execution_metadata -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_resolved_configuration_is_durable_before_failed_call -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_failed_configuration_record_does_not_call_model -> #90 に回す：workflow の選択・判断・通知。
+test_decisions.py::test_jev_credentials_are_fresh_and_never_fall_back_to_environment -> #90 に回す：workflow の選択・判断・通知。
+test_member_git.py::test_auth_environment_appends_credential_reset_to_command_config -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_member_auth_environment_passes_provider_credentials_and_resets_helpers -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_auth_environment_removes_askpass_after_failure -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_local_git_needs_no_authentication -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_reads_fresh_default_branch_without_guest_or_checkout -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_uses_changed_default_branch_and_ignores_checkout -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_failed_fetch_does_not_report_missing -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_respects_invocation_deadline -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_literal_paths_binary_limits_and_link_kinds -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_refuses_paths_outside_the_repository -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_refuses_unbounded_requests -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_omits_large_trees_and_blobs_before_reading_contents -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_bounds_serialized_content_with_escaping_and_many_paths -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_show_keeps_metadata_only_items_within_reserved_budget -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_does_not_push -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_without_staged_changes_is_a_no_op -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_during_merge_creates_merge_commit_and_clears_merge_state -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_during_merge_with_ours_tree_creates_merge_commit -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_succeeds_when_repository_requires_gpg_sign -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_commit_consumes_sequencer_head_after_conflict_resolution -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_failing_hook_runs_in_the_environment_and_is_reported -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_publish_rejects_empty_commit_message -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_publish_rejects_repo_outside_member_workspace -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_publish_commits_pushes_and_preserves_worktree -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_without_local_commits_reports_up_to_date -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_includes_readiness_for_open_prs_on_the_branch -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_stays_successful_when_pr_readiness_lookup_fails -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_rejected_by_remote_raises -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_to_a_remote_that_is_gone_raises -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_clone_prepare_did_not_check_out_is_not_pushed -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_bundle_over_the_limit_is_refused -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_chat_run_cannot_push_unchecked_work -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_checks_out_a_new_ticket_branch_from_the_default -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_pull_request_review_checks_out_the_fork_head -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_branch_mode_checks_out_ad_hoc_branch -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_preserves_uncommitted_work_on_the_same_branch -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_updates_a_clean_checkout_to_the_new_remote_head -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_idle_checkout_follows_remote_changes -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_clean_checkouts_are_reused_with_their_build_cache -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_idle_clones_are_pruned_after_parallel_work_finishes -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_published_clone_can_be_reused_after_squash_and_branch_deletion -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_reassigned_same_branch_starts_at_the_current_remote_or_default -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_remote_tracking_refs_are_not_unpublished_local_work -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_fetched_tag_history_remains_public_after_remote_tag_deletion -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_every_unfinished_git_state_keeps_its_slot -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_member_writes_reject_a_reassigned_checkout -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_failed_initialization_resumes_its_registered_slot -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_failed_reassignment_keeps_the_previous_owner -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_failed_push_does_not_make_local_history_reusable -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_failed_idle_cleanup_keeps_its_record_for_the_next_prepare -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_unfinished_work_survives_other_work_in_the_same_repository -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_preparing_again_keeps_a_dirty_branch_the_agent_created -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_ticket_resumed_for_its_prs_checks_reuses_its_checkout -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_slot_and_work_ids_are_bounded_and_keep_distinct_inputs_separate -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_requires_the_hosts_work_context -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_keeps_divergent_unpublished_work_on_its_branch -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_preparing_another_branch_keeps_unpushed_default_branch_commits -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_requires_an_anchor -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_prepare_rejects_malformed_repo -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_ticket_of_no_repository_is_prepared_in_the_one_named -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_repository_other_than_the_tickets_own_is_refused -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_repositories_of_one_name_have_a_clone_each -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_fork_is_prepared_but_only_its_upstream_is_pushed_to -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_worktree_and_a_submodule_of_a_clone_commit_and_push -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_member_mode_git_is_refused_outside_a_command -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_member_git_starts_processes_only_through_subprocess_run -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_branch_name_git_would_not_take_as_one_is_refused -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_the_host_takes_only_the_branch_of_what_a_clone_sends -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_prepare_that_failed_leaves_where_the_clone_pushes -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_the_environment_is_given_nothing_but_git_identity -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_git_connects_to_origin_only_after_the_credential_is_asked -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_publish_current_workspace_commits_with_the_users_hooks_and_pushes_from_the_host -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_current_workspace_goes_where_git_would_push -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_current_workspace_publishes_a_branch_new_to_the_remote -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_current_workspace_behind_the_remote_is_rejected_with_origin_fetched -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_current_workspace_of_a_branch_without_commits_is_refused -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_current_workspace_exchanges_bundles_and_reports_readiness -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_current_workspace_retries_a_bundle_with_missing_prerequisites -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_returned_bundles_exclude_the_receivers_history -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_shallow_receiver_does_not_advertise_missing_ancestors_as_known -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_current_push_of_an_existing_ancestor_needs_no_bundle -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_returned_bundle_retries_missing_prerequisites_once -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_tracking_return_failure_preserves_the_push_failure -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_git_configuration_that_moves_origin_is_never_given_the_token -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_a_rewrite_of_another_url_leaves_the_push_alone -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_push_current_workspace_outside_the_owner_never_reaches_the_remote -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_member_git.py::test_publish_current_workspace_rejects_repo_that_is_not_current_workspace -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_deferred_existing_run_is_written_with_current_schema -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_complete_requires_write_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_complete_and_status -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_completion_keeps_the_input_identity_fixed -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_accepts_pr_update_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_done_with_code_publish_requires_pr_create -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_accepts_pr_review_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_task_run_enforces_shared_boundary_guarantees -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_chat_run_done_accepts_noop_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_summaries_by_subject_keys_on_subject_and_person -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_summaries_by_subject_ignores_incomplete_runs -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_chat_run_asking_requires_post_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_chat_run_blocked_requires_summary_but_no_evidence -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_ticket_run_waiting_for_a_person_requires_a_comment_on_the_item -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_a_run_its_boundary_finished_recorded_no_completion -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_start_record_reopens_a_run_that_left_its_work_undone -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_start_record_never_restarts_a_completed_run -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_start_record_never_restarts_a_run_whose_outcome_is_unknown -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_finish_record_without_a_start_creates_nothing -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_start_record_keeps_the_first_seen_attributes_across_attempts -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_records_between_returns_runs_active_in_the_window -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_any_run_ends_awaiting_checks_on_the_notices_alone -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_task_runs.py::test_a_run_resumed_in_a_chat_threads_work_completes_as_an_item_does -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_ticket_draft_instructions.py::test_draft_instructions_define_search_and_unavailable_search_outcomes -> crates/gb-member/tests/reference.rs::draft_instructions_keep_duplicate_search_and_unavailable_outcomes （参照カタログ条件。その他資料の条件は呼び出し側の資料検査。）
+test_waiting_for.py::test_waiting_request_is_dispatched_recorded_and_not_announced -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_unreachable_recipients_are_rejected -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_the_author_can_wait_for_an_existing_reviewers_answer -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_no_recipients_keeps_the_human_wait_default -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_ticket_run_can_wait_on_its_pr_without_a_resumed_marker -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_only_comment_targets_authorize_a_wait -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_each_recipient_can_receive_a_different_commented_item -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_the_run_item_does_not_authorize_a_wait_without_a_comment_on_it -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_cli_announces_the_owner_notification_when_no_recipient_is_named -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_human_recipients_need_no_routine_or_service_identity -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_reviewer_finishes_done_without_a_stop_notice -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_resumed_pr_uses_its_host_recorded_target_without_replacing_the_source -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_a_ticket_only_project_can_wait_for_its_human_assignee -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_human_unknown_and_inactive_recipients_still_notify -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_waiting_for.py::test_a_diagnostics_failure_does_not_change_the_completed_stop -> #127 に回す：member CLI の実行・転送・完了記録・待ち先検証。
+test_work_stops.py::test_comment_url_of_names_the_members_latest_comment -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_the_notice_is_posted_once_only_in_selected_channels -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_stop_without_a_comment_address_links_only_its_item -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_channel_named_only_by_its_name_is_resolved -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_channel_that_cannot_be_resolved_is_recorded_undelivered -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_member_with_nowhere_to_say_it_posts_nothing -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_existing_channels_without_a_notification_setting_post_nothing -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_selected_name_and_id_resolving_to_the_same_channel_post_once -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_failed_post_is_recorded_and_not_raised -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_an_unexpected_failure_records_only_its_kind -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_record_that_cannot_be_written_does_not_raise -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_every_completion_and_status_is_classified -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_completion_is_a_stop_only_when_it_waits_for_a_person -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_a_run_that_recorded_no_completion_is_no_stop -> #90 に回す：workflow の選択・判断・通知。
+test_work_stops.py::test_only_the_ticket_selector_announces_a_stop -> #90 に回す：workflow の選択・判断・通知。
