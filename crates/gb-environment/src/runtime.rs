@@ -21,6 +21,9 @@ const NAME_PREFIX: &str = "guildbotics-";
 /// Size of an empty directory of the microVM's own: a read-only command's
 /// working directory.
 const SCRATCH_MIB: u32 = 64;
+/// The private HOME also holds bundled tools' extracted code and caches.
+/// Keep it in memory along with the credentials.
+const PRIVATE_HOME_MIB: u32 = 512;
 /// The most of the entry's reply the host reads.
 const REPLY_LIMIT: usize = 10 * 1024 * 1024;
 /// How long the entry's log is read after its reply: a process the command
@@ -512,7 +515,7 @@ pub async fn run_once_with_guest(
     channel: &crate::guest_process::Channel,
 ) -> Result<gb_wire::CommandReply, Failure> {
     let mut jobs = channel.take().await?;
-    let sandbox = create_vm(boot).await?;
+    let sandbox = create_vm(boot, SCRATCH_MIB).await?;
     let stopped = tokio_util::sync::CancellationToken::new();
     let guest = async {
         loop {
@@ -1963,7 +1966,7 @@ async fn capture_events(
     Ok(output)
 }
 
-async fn create_vm(boot: &Boot<'_>) -> Result<OwnedVm, Failure> {
+async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure> {
     backend(boot.home).await?;
     let name = format!(
         "{NAME_PREFIX}{}",
@@ -1996,7 +1999,7 @@ async fn create_vm(boot: &Boot<'_>) -> Result<OwnedVm, Failure> {
         builder = builder.volume(mount.guest.clone(), move |m| {
             let m = match &mount.host {
                 Some(host) => m.bind(host),
-                None => m.tmpfs().size(SCRATCH_MIB),
+                None => m.tmpfs().size(scratch_mib),
             };
             if mount.readonly { m.readonly() } else { m }
         });
@@ -2036,7 +2039,7 @@ async fn stop_vm(sandbox: &Sandbox) {
 /// Login/probe output is private and is never passed to the host's logger.
 /// State mounts remain owned by the caller through shutdown and resealing.
 pub async fn run_private(boot: &Boot<'_>, process: &Process<'_>) -> Result<Ended, Failure> {
-    let sandbox = create_vm(boot).await?;
+    let sandbox = create_vm(boot, SCRATCH_MIB).await?;
     let result = execute_private(&sandbox, process, |_| {}).await;
     sandbox.close().await;
     result
@@ -2341,7 +2344,7 @@ async fn private_session_inner(
     cancelled: impl Future<Output = ()> + Send,
 ) -> Result<PrivateSession, Failure> {
     use base64::{Engine, engine::general_purpose::STANDARD};
-    let vm = create_vm(boot).await?;
+    let vm = create_vm(boot, PRIVATE_HOME_MIB).await?;
     let failed = || Failure::Runtime(Sentence::Text("Private credential transfer failed".into()));
     let argv = vec![
         "/opt/guildbotics/venv/bin/python".into(),
@@ -2650,3 +2653,6 @@ mod private_files_tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod real_device;

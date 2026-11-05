@@ -193,9 +193,9 @@ pub async fn run(
         std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
     )
     .map_err(|e| Failure::Command(Sentence::Text(e)))?;
-    for mount in &shape.mounts {
-        if let Some(source) = &mount.host {
-            contract::validate_mount_source(source, &access)
+    for mount in &mut shape.mounts {
+        if let Some(source) = &mut mount.host {
+            *source = contract::validate_mount_source(source, &access)
                 .map_err(|e| Failure::Command(Sentence::Text(e)))?;
         }
     }

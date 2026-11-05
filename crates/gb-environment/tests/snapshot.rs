@@ -72,6 +72,21 @@ fn current_recipe_wins_over_old_snapshots_and_failures() {
 }
 
 #[test]
+fn a_status_reader_does_not_look_like_a_snapshot_writer() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let directory = snapshots_dir(root);
+    std::fs::create_dir_all(directory.join(NAME)).unwrap();
+    let lock_path = directory.join("build.lock");
+    std::fs::File::create(&lock_path).unwrap();
+    let reader = std::fs::File::open(&lock_path).unwrap();
+    reader.try_lock_shared().unwrap();
+
+    assert_eq!(ready(root, NAME).unwrap(), directory.join(NAME));
+    assert!(FileLock::try_hold(&lock_path).unwrap().is_none());
+}
+
+#[test]
 fn non_snapshot_entries_do_not_make_a_stale_recipe() {
     let workspace = tempfile::tempdir().unwrap();
     let directory = snapshots_dir(workspace.path());

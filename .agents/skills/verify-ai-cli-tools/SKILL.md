@@ -1,211 +1,69 @@
 ---
 name: verify-ai-cli-tools
-description: Verify AI CLI releases on an existing GuildBotics update PR when a human requests real-device checks during review, with approval and observation for each execution.
+description: Verify pinned AI CLI releases on an existing GuildBotics update PR. Run selected Rust real-device tests with the owner's approval and observation for each execution.
 ---
 
-# Verifying the AI CLI tools on an update PR
+# Verify AI CLI releases on an update PR
 
-Until the Rust switch in #97, verify production updates from the production
-checkout using its own copy of these instructions. The main branch's Python
-host is being removed in #122; its replacement build and verification
-procedures will be rewritten in #87, #95, and #96. Do not apply the Python
-host commands below to main after that removal.
+Inspect the PR's current head, changed pins, and verification already reported. Work in a separate checkout of that exact head. During the transition in #97, use the production checkout's own instructions for an update to the Python version.
 
-Invoke with `$verify-ai-cli-tools` and an existing update PR, or use the PR
-already identified in the conversation. If the target is unknown, ask which
-PR to verify. This is optional, human-attended verification; the unattended
-[update skill](../update-dependencies/SKILL.md) does not call it.
+## Prepare an isolated snapshot
 
-Inspect the PR's current head, changed pins, and existing verification results.
-Use that PR's branch and checkout, normally `codex/update-dependencies`, in a
-dedicated worktree. Do not verify the remote default branch or a different
-revision, switch the user's shared checkout, create a new update PR, or merge.
-Choose the affected tools and checks from the human's request and PR diff.
-
-## 1. Obtain approval and build in a separate workspace
-
-Before each build or real-device test command, show its exact target and
-command, what leaves the device, how it affects saved authentication, and
-what provider quota it spends. Obtain explicit approval for that execution
-and run only while the human can watch. A request to use this skill does not
-replace execution-specific approval. Run checks one at a time without
-pytest-xdist (`-p no:xdist`), as AGENTS.md requires.
-
-| Execution | External traffic and authentication | Quota |
-| --- | --- | --- |
-| Snapshot build | Downloads packages from npm, `x.ai`, `storage.googleapis.com`, and the image's package sources; no provider login is used | No inference quota |
-| Contract suite | Synthetic credentials and local recorders; no real provider login and nothing sent off the device | None |
-| Grok Build, Copilot, Antigravity smoke | Saved device login, provider requests, a turn and resume; Copilot quota and Antigravity usage probes | Spends provider quota |
-| Codex or Claude Code one turn | Saved device login and provider requests through the product command path | Spends provider quota |
-
-Snapshot names hash `build_steps()`, so changed pins change the snapshot.
-Build in a new verification workspace, never the one a running GuildBotics
-server has selected: a build removes that workspace's other snapshots, and
-a service running old code can rebuild its own snapshot and remove yours.
-Saved logins are device-wide, so a separate workspace still uses the device's
-logins. Do not log in, reset, or replace them as part of verification.
-
-After build approval, run from the target PR checkout with Python 3.15 and
-its dependencies. This creates a disposable workspace outside the repository:
+Compile the Rust binary and test targets with the checkout's pinned toolchain:
 
 ```bash
-VERIFICATION_WS="$(mktemp -d "${TMPDIR:-/tmp}/guildbotics-verify.XXXXXX")"
-mkdir -p "$VERIFICATION_WS/.guildbotics/config"
-export GUILDBOTICS_WORKSPACE_ROOT="$VERIFICATION_WS"
-export GUILDBOTICS_CONFIG_DIR="$VERIFICATION_WS/.guildbotics/config"
-export GUILDBOTICS_IDENTITY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/guildbotics-verify-identity.XXXXXX")"
-C="$GUILDBOTICS_CONFIG_DIR"
-I="$GUILDBOTICS_IDENTITY_ROOT/.guildbotics/config"
-mkdir -p "$C/team/members/tester" "$I/team/members/tester" "$C/commands" "$C/intelligences" "$VERIFICATION_WS/work"
-printf 'language: en\ndefault_person_id: tester\n' > "$C/team/project.yml"
-printf 'person_id: tester\nname: Tester\nperson_type: agent\n' \
-  > "$I/team/members/tester/identity.yml"
-printf 'is_active: false\n' > "$C/team/members/tester/member.yml"
-uv run --no-sync guildbotics environment build
+cargo build --locked -p guildbotics
+cargo test --locked -p guildbotics --test server --no-run
+cargo test --locked -p gb-server --lib --no-run
+cargo test --locked -p gb-environment --lib --no-run
 ```
 
-Keep the three variables set for every command below. The workspace
-root takes precedence over the config directory; an inherited root must not
-redirect the build or checks to a live workspace. The identity root keeps the
-`tester` member out of this machine's members (`~/.guildbotics/identity`). The `tester` member is
-needed by the contract product-path tests and every tool's turn checks.
-No running server has this workspace selected, so its `guildbotics run`
-commands execute locally.
-The build log shows `grok --version` and `agy --version`. A failed build is
-remembered as `<snapshot>.failed` until the pins change or a build runs again;
-the service does not retry it.
-
-## 2. Run the approved checks and diagnose failures
-
-The contract suite checks the gateway routes, stand-in formats, refresh,
-credential protection, GuildBotics, and member git inside the microVM:
+On macOS or Linux, create a short disposable root to fit the microVM runtime's Unix socket paths:
 
 ```bash
-D=tests/guildbotics/environment
-GUILDBOTICS_CONTRACT_PROBE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
-  $D/test_provider_contracts.py $D/test_credential_boundary.py \
-  $D/test_guildbotics_in_environment.py $D/test_member_git_in_environment.py
+export GUILDBOTICS_REAL_DEVICE_ROOT="$(mktemp -d /tmp/gbv.XXXXXX)"
+GUILDBOTICS_REAL_DEVICE_ROOT="$(cd "$GUILDBOTICS_REAL_DEVICE_ROOT" && pwd -P)"
+ROOT="$GUILDBOTICS_REAL_DEVICE_ROOT"
+mkdir -p "$ROOT/guest-home" "$ROOT/machine" "$ROOT/workspace/.guildbotics/config"
 ```
 
-The smoke commands check a turn and resume for each selected tool. Copilot's
-checks also observe `account.getQuota`; Antigravity's observe `/usage`:
+Before **each** snapshot build, login, or real-device test, show the owner the exact command and revision, what traffic can leave the device, the effect on authentication, and the quota it can spend. Obtain explicit approval and run only while the owner can observe. The ignored-test flag merely selects the test.
+
+After build approval:
 
 ```bash
-S=tests/guildbotics/guest/smoke
-GUILDBOTICS_GROK_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs $S/test_grok_smoke.py
-GUILDBOTICS_COPILOT_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
-  $S/test_copilot_smoke.py $S/test_copilot_usage_smoke.py
-GUILDBOTICS_ANTIGRAVITY_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs $S/test_antigravity_smoke.py
+HOME="$ROOT/guest-home" GUILDBOTICS_HOME="$ROOT/machine" \
+  target/debug/guildbotics environment build --workspace "$ROOT/workspace"
 ```
 
-Execute only the command approved for the selected tool, then report its
-result before obtaining approval for the next one.
+The build downloads the base image and packages. It uses no provider login or inference quota. The build's recipe includes the pins. Rebuild after changing pins or the recipe. The same disposable guest HOME must be used for the snapshot and its tests.
 
-Codex and Claude Code have no smoke test. For either selected tool, add this
-minimal product-path command to the shared verification setup above:
+## Run one approved test at a time
+
+The `real_device` tests are marked `#[ignore]`, so regular Cargo and nextest runs compile them and skip their bodies. To inspect names, use `-- --list` with the test targets above. Substitute one complete name in an exact-match invocation and check that the output says it ran one test:
 
 ```bash
-printf -- '---\nbrain: agent\n---\n\nReply with exactly the word pong. Do not run any tools.\n' \
-  > "$C/commands/ping.md"
+cargo test --locked -p guildbotics --test server \
+  real_device::real_device_snapshot_loads_the_read_only_guest_package \
+  -- --ignored --exact --nocapture
+
+NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 cargo test --locked -p gb-server --lib \
+  tool_login::tests::real_device::real_device_provider_turn_keeps_the_login_on_the_host \
+  -- --ignored --exact --nocapture
 ```
 
-Select `codex` or `claude`, then obtain approval for that tool's single turn:
+- The server tests for code mounting, commands, PDF, artifact extraction, and member git use a disposable workspace, runtime, and local Git repository. They use no provider login or inference quota.
+- The server crate's synthetic login tests exercise the installed snapshot, credential loans, and private guest memory. The environment crate's owner-exit test kills the test-owned process and checks that its VM is removed. The fixture reclaims its named scratch disk. The gateway case forwards only to a loopback recorder. It uses synthetic credentials and has no inference quota cost.
+- The server crate's `tool_login::tests::real_device::provider_contracts` tests run the pinned CLIs with synthetic credentials. Select the affected CLI's exact test name. A loopback HTTP and TLS recorder supplies scripted responses and captures direct provider destinations. These tests use no provider login or inference quota.
+- The `real_device_{copilot,grok,antigravity}_resume` tests make provider requests and spend inference quota. The Antigravity working-directory and read-only tests and Copilot read-only test also make inference requests. Antigravity's read-only test attempts `example.com` and expects the VM to block it.
+- The `real_device_copilot_usage` and `real_device_antigravity_usage` tests contact the provider for quota information. They start no inference turn. A provider may rotate authentication during a turn or usage probe.
 
-```bash
-CLI_TOOL=codex
-printf 'default: cli_agents/%s/default.yml\n' "$CLI_TOOL" > "$C/intelligences/cli_agent_mapping.yml"
-uv run --no-sync guildbotics run ping --person tester --cwd "$VERIFICATION_WS/work"
-```
+For account tests, use a separate OS account with a dedicated keychain and provider test accounts. On that OS account, get approval for each `environment login TOOL` using the same `HOME`, `GUILDBOTICS_HOME`, and `--workspace` as the build. A login contacts that provider and saves a sealed login under the disposable machine root. Only then add `GUILDBOTICS_REAL_DEVICE_ACCOUNT=1` to the exact test command. The tests copy that tool's sealed login to their own temporary machine state. Refresh may invalidate a provider token even when local files are separate, so use test accounts throughout.
 
-A successful turn prints `pong`. For Codex, the default image has no
-bubblewrap, so this turn tests its bundled helper; the log says "Codex could
-not find bubblewrap on PATH". Keep the image's bubblewrap exclusion.
+## Record the result
 
-The `pong` turn runs no command under Codex's permission profile. For Codex,
-obtain approval for one more turn that does:
+Report each approved command and its result before asking to run another. On the same PR, record the tested revision and pins, executed commands, pass/fail/skip counts, and which behaviors remain unverified. Zero executed tests, a missing snapshot, and an unmet login prerequisite provide no verification.
 
-```bash
-printf -- '---\nbrain: agent\n---\n\nRun this shell command and reply with its output only: %s\n' \
-  "sh -c 'echo x > /dev/null && touch /opt/.probe && ! test -r ~/.codex/auth.json && echo sandbox-ok'" \
-  > "$C/commands/sandbox_probe.md"
-uv run --no-sync guildbotics run sandbox_probe --person tester --cwd "$VERIFICATION_WS/work"
-```
+Compare a failed contract with the pinned tool's observed requests and the broker routes or credential format. Keep credentials out of logs and fixtures. Follow AGENTS.md for failures already present on the base. After a pin, adapter, or recipe correction, rerun the affected check with fresh approval and attribute only observations from that revision.
 
-It prints `sandbox-ok` when the profile keeps `/dev/null` usable, lets the
-command write the microVM's own disk, and still hides `~/.codex`.
-
-Record passed, failed, and skipped tests with their reasons. Exit code zero
-does not prove a requested check ran: missing snapshots or unmet prerequisites
-can skip real-device tests. Mark skipped or unexecuted checks as unverified.
-
-A contract failure can mean a provider contract changed. With separate
-approval, rerun the failed test with `-l -vv` and temporarily inspect
-`recorder.seen` in the synthetic-credential contract test. Remove temporary
-instrumentation before publishing. When the observed change fits the gateway,
-fix `credential_broker` (`routes`, `base_url_env`, `refresh`, `stand_in_*`) and
-its regression tests. Never weaken the authentication boundary to pass.
-To locate the release that introduced a change, inspect downloaded binaries
-with `npm pack @openai/codex@<version>-linux-arm64` and `strings` in a temporary
-directory; do not run those binaries or store credentials in the evidence.
-
-For a failed tool, restore its pin to the PR base version and its associated
-changes, or ask the human to decide when the remedy is unclear. Diagnose
-pre-existing failures under AGENTS.md: before writing an Issue draft, search
-the same tracker using
-`member ticket read --resource tracker_tickets --subject <tracker>
---params '{"text":"<terms>","state":"all"}'`. Search with a few short term
-sets (component or command plus symptom), including synonyms and
-English/Japanese variants, rather than one long phrase: `text` requires all
-terms to match. Follow every continuation with identical conditions for each
-term set. A failed or incomplete search is not no matches. If an open ticket covers the issue,
-comment there with the new findings and report its URL instead of a draft.
-If only a closed ticket matches, do not reopen or comment on it; reference it
-in Related in a complete new draft. If no open match was found and the search
-fails or is incomplete, still present the complete draft, stating the
-conditions tried and that duplicates could not be ruled out; reference any
-closed match in Related. If a completed search finds no match, prepare the
-draft as before. Do not publish an Issue without human authorization. After changing a pin, adapter,
-or build recipe, rebuild and rerun affected checks with fresh approval on
-the final configuration. A prior passing result is not evidence for that revision.
-
-## 3. Record only observed behavior on the same PR
-
-Use the version searches and distinctions in the update skill's
-[version-dependent documentation section](../update-dependencies/SKILL.md#2-update-what-depends-on-the-version).
-Advance measured descriptions, verified baselines, and fixtures only when a
-check observed that exact behavior on the final pin. Rename a newly recorded
-fixture and its references together; retain earlier evidence that remains useful.
-One `pong` response does not verify refresh, quota, usage payloads, or resume.
-Keep Japanese and English documentation aligned and check the documented
-limitations against the observations. Do not advance unobserved claims.
-
-Run the update skill's non-device quality checks for changes made here and
-AGENTS.md's Markdown link checks. Commit and push the verified changes to
-the same PR through the project's publishing procedure.
-
-Replace the PR's unattended "not performed" statement with the actual
-results: tested revision and final pins, exact commands, passed/failed/skipped
-counts and reasons, observations recorded, held pins, and checks still
-unverified. Keep untested tools and behaviors explicitly unverified. If the
-PR head changed during verification, establish which results still apply;
-never attribute results from an earlier pin or adapter to the new one.
-Inspect CI and current-head/base readiness after the final push, and leave
-the PR for human review and merge.
-
-## 4. Remove the verification workspace
-
-After recording results and diagnostic evidence, wait for every build and
-check to finish, including failed or cancelled runs. From the PR checkout,
-remove the disposable workspace's snapshots through the product command,
-then remove the directory created by `mktemp` above. Device-wide logins are kept.
-
-```bash
-GUILDBOTICS_WORKSPACE_ROOT="${VERIFICATION_WS:?}" \
-GUILDBOTICS_CONFIG_DIR="$VERIFICATION_WS/.guildbotics/config" \
-  uv run --no-sync guildbotics environment remove &&
-  rm -rf -- "$VERIFICATION_WS" &&
-  unset GUILDBOTICS_WORKSPACE_ROOT GUILDBOTICS_CONFIG_DIR VERIFICATION_WS C
-```
-
-If snapshot removal fails or is interrupted, keep the workspace and its
-variables for diagnosis; do not delete its directory directly.
+When all builds and tests have ended, remove the disposable snapshots with `environment remove --workspace "$ROOT/workspace"` using the same two home variables. Remove the disposable root after snapshot removal succeeds. The OS account's keychain is separate from that root.
