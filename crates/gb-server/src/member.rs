@@ -211,12 +211,9 @@ async fn start(
     exchange: Option<Exchange>,
 ) -> Response {
     let Some(backend) = api.member.clone() else {
-        return ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "member_backend_closing",
-            &headers,
-        )
-        .into_response();
+        return ApiError::new(StatusCode::CONFLICT, "member_workspace_mismatch", &headers)
+            .key("member_workspace_mismatch", vec![("workspace", "—".into())])
+            .into_response();
     };
     if api.cancelled.is_cancelled() || api.work.is_closed() {
         return ApiError::new(StatusCode::CONFLICT, "member_backend_closing", &headers)
@@ -227,7 +224,13 @@ async fn start(
             .key(
                 key,
                 if key == "member_workspace_mismatch" {
-                    vec![("workspace", backend.workspace_id.clone())]
+                    vec![(
+                        "workspace",
+                        api.workspace
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "—".into()),
+                    )]
                 } else {
                     vec![]
                 },
@@ -544,7 +547,9 @@ mod tests {
     async fn mismatched_workspace_and_shutdown_return_localized_restart_guidance() {
         for language in ["en", "ja"] {
             let temp = tempfile::tempdir().unwrap();
-            let (api, _) = api(temp.path(), false);
+            let (mut api, _) = api(temp.path(), false);
+            let selected = temp.path().join("selected-workspace");
+            Arc::get_mut(&mut api).unwrap().workspace = Some(selected.clone());
             let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
             let body = json!({"version":"build-1","workspace_id":"other","arguments":["help"]});
             let response = crate::api::router(api.clone())
@@ -565,15 +570,59 @@ mod tests {
             let payload: Value = serde_json::from_slice(&bytes(response).await).unwrap();
             assert_eq!(payload["code"], "member_workspace_mismatch");
             let message = payload["message"].as_str().unwrap();
-            assert!(message.contains("workspace"));
+            assert!(message.contains(selected.to_str().unwrap()));
             assert!(!message.contains("%{"));
-            assert!(message.contains("guildbotics server stop"));
+            assert!(!message.contains("guildbotics server stop"));
             api.cancelled.cancel();
             let response =
                 request(api, "/api/member/run", body.to_string().into_bytes(), true).await;
             assert_eq!(response.status(), StatusCode::CONFLICT);
             let payload: Value = serde_json::from_slice(&bytes(response).await).unwrap();
             assert_eq!(payload["code"], "member_backend_closing");
+        }
+    }
+    #[tokio::test]
+    async fn missing_member_backend_guides_workspace_recovery_in_both_languages() {
+        for language in ["en", "ja"] {
+            for path in ["/api/member/plan", "/api/member/run"] {
+                let temp = tempfile::tempdir().unwrap();
+                let (mut api, _) = api(temp.path(), false);
+                Arc::get_mut(&mut api).unwrap().member = None;
+                let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+                let response = crate::api::router(api)
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .header("host", "127.0.0.1:8765")
+                            .header("authorization", format!("Bearer {}", token.trim()))
+                            .header("content-type", "application/json")
+                            .header("x-guildbotics-language", language)
+                            .body(Body::from(body().to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CONFLICT);
+                let result: Value = serde_json::from_slice(&bytes(response).await).unwrap();
+                assert_eq!(result["code"], "member_workspace_mismatch");
+                let message = result["message"].as_str().unwrap();
+                assert!(message.contains("—"));
+                assert!(!message.contains("%{"));
+                assert!(!message.contains("guildbotics server stop"));
+                assert!(!message.contains("guildbotics workspace use"));
+            }
+        }
+    }
+    #[test]
+    fn timeout_guidance_warns_of_late_completion_before_retrying() {
+        for (language, late, retry) in [
+            ("en", "it may still complete", "Before running it again"),
+            ("ja", "このあと完了する可能性", "再実行する前に"),
+        ] {
+            let message = crate::i18n::t(language, "app_api.errors.member_timed_out", &[]);
+            assert!(message.contains(late));
+            assert!(message.contains(retry));
         }
     }
 }

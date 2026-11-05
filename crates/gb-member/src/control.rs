@@ -40,8 +40,12 @@ pub struct RunControl<'a> {
     pub render_notice: &'a (dyn Fn(&str) -> String + Send + Sync),
     pub render_wait: &'a (dyn Fn(&gb_ports::Readiness) -> String + Send + Sync),
 }
-fn failed(_: anyhow::Error) -> MemberError {
-    MemberError::Capability("capabilities.task_runs.store_failed")
+fn failed(error: anyhow::Error) -> MemberError {
+    error
+        .downcast::<MemberError>()
+        .unwrap_or(MemberError::Capability(
+            "capabilities.task_runs.store_failed",
+        ))
 }
 fn comment_type(kind: &str) -> bool {
     matches!(
@@ -61,7 +65,9 @@ fn evidence_kind(command: &str) -> Option<&'static str> {
         "pr review-comment" => "pr_review_comment",
         "pr reply" => "pr_reply",
         "ticket reaction add" | "pr reaction add" => "reaction_add",
-        "git push" | "git publish" => "git_publish",
+        "git commit" => "git_commit",
+        "git push" => "git_push",
+        "git publish" => "git_publish",
         "chat post" => "chat_post",
         "chat reply" => "chat_reply",
         "chat reaction add" => "chat_reaction",
@@ -172,8 +178,9 @@ impl RunControl<'_> {
                 });
                 let code = record.provider_evidence.iter().any(|v| {
                     v["type"] == "git_publish"
-                        && (v["payload"]["pushed"] == true
-                            || v["payload"]["commit_sha"].is_string())
+                        && v["payload"]["commit_sha"]
+                            .as_str()
+                            .is_some_and(|sha| !sha.is_empty())
                 });
                 write && (!code || present.contains("pr_create"))
             }
@@ -277,7 +284,9 @@ impl RunControl<'_> {
                 _ => return Err(MemberError::Capability("cli.member.option_choice")),
             }
         };
-        self.repository.guard.ensure_current()?;
+        if p.command == "checks await" {
+            self.repository.guard.ensure_current()?;
+        }
         let mut snapshot = self.snapshot()?;
         let recipients = self.waiting(p, &snapshot, status).await?;
         let mut readiness = vec![];
@@ -320,10 +329,11 @@ impl RunControl<'_> {
             .writes
             .transaction(|writer| {
                 let current = self.snapshot()?;
-                anyhow::ensure!(
-                    current == snapshot,
-                    "capabilities.task_runs.identity_changed"
-                );
+                if current != snapshot {
+                    return Err(
+                        MemberError::Capability("capabilities.task_runs.identity_changed").into(),
+                    );
+                }
                 self.check_evidence(&current, status, summary)?;
                 store.record_completion(
                     writer,
@@ -345,7 +355,7 @@ impl RunControl<'_> {
             })
             .map_err(failed)?;
         let mut payload = self.status(&completed)?;
-        if status == Completion::Done {
+        if matches!(status, Completion::Done | Completion::AwaitingChecks) {
             payload["pr_readiness"] = serde_json::to_value(readiness)
                 .map_err(|_| MemberError::Capability("capabilities.task_runs.store_failed"))?;
         }
@@ -365,6 +375,9 @@ impl Control for RunControl<'_> {
     fn command<'a>(&'a self, p: &'a Parsed, content: &'a str) -> crate::git::Pending<'a, Value> {
         Box::pin(async move {
             if p.command == "task status" {
+                if self.identity.subject_type == "chat" {
+                    return Err(MemberError::Capability("cli.member.run.chat_event"));
+                }
                 let record = self.snapshot()?;
                 return self.status(&record);
             }

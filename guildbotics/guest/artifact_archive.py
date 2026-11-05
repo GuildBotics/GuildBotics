@@ -96,6 +96,26 @@ def extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:
                     )
                 seen.add(target)
                 targets.append((member, target))
+            file_targets = {target for member, target in targets if not member.is_dir()}
+            directories = {destination}
+            for member, target in targets:
+                directories.update(target.parents)
+                if member.is_dir():
+                    directories.add(target)
+            conflicts = file_targets & directories
+            if conflicts:
+                raise ArtifactError(
+                    t("cli.member.artifact_duplicate", path=str(sorted(conflicts)[0]))
+                )
+            blocked = sorted(
+                directory
+                for directory in directories
+                if directory.exists() and not directory.is_dir()
+            )
+            if blocked:
+                raise ArtifactError(
+                    t("cli.member.artifact_exists", path=str(blocked[0]))
+                )
             collisions = [
                 target
                 for member, target in targets
@@ -105,17 +125,26 @@ def extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:
                 raise ArtifactError(
                     t("cli.member.artifact_exists", path=str(collisions[0]))
                 )
-            destination.mkdir(parents=True, exist_ok=True)
-            files: list[Path] = []
-            for member, target in targets:
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with bundle.open(member) as source, target.open("xb") as output:
-                    copyfileobj(source, output)
-                files.append(target)
-            return files
+            conflict_path = destination
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+                files: list[Path] = []
+                for member, target in targets:
+                    conflict_path = target
+                    if member.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    conflict_path = target.parent
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    conflict_path = target
+                    with bundle.open(member) as source, target.open("xb") as output:
+                        copyfileobj(source, output)
+                    files.append(target)
+                return files
+            except (FileExistsError, NotADirectoryError) as exc:
+                raise ArtifactError(
+                    t("cli.member.artifact_exists", path=str(conflict_path))
+                ) from exc
     except BadZipFile as exc:
         raise ArtifactError(t("cli.member.artifact_invalid")) from exc
 

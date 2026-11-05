@@ -1,6 +1,6 @@
 ja:
-  member_timed_out: "member コマンドの応答待ちが時間切れになりました。処理が終了するまで worker を保持します。"
-  member_workspace_mismatch: "この CLI が使うワークスペースは、動いているサーバーの選択 (%{workspace}) と異なります。「サービス実行」画面でサービスを止めてから「設定 → プロジェクト」で選択してください。または、`guildbotics server stop` でサーバーを止め、`guildbotics workspace use <パス>` を実行してから、サーバーを起動し直してください。"
+  member_timed_out: "member コマンドの応答待ちが時間切れになりました。処理はこのあと完了する可能性があります。再実行する前に、対象のチケットや PR などを読み直して結果を確かめてください。"
+  member_workspace_mismatch: "この CLI が使うワークスペースは、動いているサーバーの選択 (%{workspace}) と異なります。「サービス実行」画面でサービスを止めてから「設定 → プロジェクト」で選択してください。"
   member_backend_closing: "GuildBotics のサーバーは終了中です。終了後にサーバーを起動し直してから、コマンドを実行してください。"
   member_invalid_request: "member の要求形式が正しくありません。"
   member_version_mismatch: "CLI とサーバーの版が異なります。チェックアウトを更新したらサーバーを起動し直し、同じチェックアウトの CLI を使ってください。"

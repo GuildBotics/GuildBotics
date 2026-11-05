@@ -201,7 +201,11 @@ async fn publishing_code_needs_a_pr_receipt_and_failed_operations_provide_no_evi
     control.identity.subject_id = "command-identity";
     control.identity.person_id = "aiko";
     control
-        .record("git publish", false, &json!({"pushed":true}))
+        .record(
+            "git publish",
+            false,
+            &json!({"pushed":true,"commit_sha":"head"}),
+        )
         .unwrap();
     let p = parsed(&[
         "task",
@@ -414,7 +418,10 @@ async fn a_journal_changed_during_async_recipient_validation_cannot_complete() {
             "question",
         )
         .await;
-    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "capabilities.task_runs.identity_changed"
+    );
     assert!(
         RunStore::open(&workspace)
             .read("run")
@@ -471,4 +478,221 @@ async fn completion_evidence_rules_cover_chat_events_threads_and_all_completion_
         let result = control.command(&parsed(&args), "safe summary").await;
         assert_eq!(result.is_ok(), accepted, "{subject}/{status}/{evidence}");
     }
+}
+
+struct UnavailableGuard;
+impl WriteGuard for UnavailableGuard {
+    fn ensure_current(&self) -> gb_member::Result<()> {
+        Err(MemberError::Capability("cli.member.chat_updates.required"))
+    }
+}
+#[tokio::test]
+async fn chat_completion_can_record_blocked_without_reception_and_task_status_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::default();
+    seed(&writes, &workspace, &redactor);
+    let services = Services(support::Probe::new(None));
+    let roster = BTreeMap::new();
+    let repository = Repository {
+        services: &services,
+        guard: &UnavailableGuard,
+        roster: &roster,
+    };
+    let mut control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+    control.identity.subject_type = "chat";
+    let answer = control
+        .command(
+            &parsed(&[
+                "chat",
+                "complete",
+                "--person",
+                "aiko",
+                "--status",
+                "blocked",
+                "--content-stdin",
+            ]),
+            "reception unavailable",
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer["status"], "blocked");
+    assert_eq!(
+        control
+            .command(&parsed(&["task", "status"]), "")
+            .await
+            .unwrap_err()
+            .to_string(),
+        "cli.member.run.chat_event"
+    );
+}
+#[tokio::test]
+async fn git_evidence_distinguishes_committing_pushing_and_publishing() {
+    for (operation, payload, comment, accepted) in [
+        ("git commit", json!({"commit_sha":"head"}), false, false),
+        ("git push", json!({"pushed":true}), false, false),
+        ("git push", json!({"pushed":true}), true, true),
+        (
+            "git publish",
+            json!({"pushed":true,"commit_sha":null}),
+            true,
+            true,
+        ),
+        (
+            "git publish",
+            json!({"pushed":true,"commit_sha":"head"}),
+            true,
+            false,
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+        let redactor = Redactor::default();
+        seed(&writes, &workspace, &redactor);
+        let services = Services(support::Probe::new(None));
+        let roster = BTreeMap::new();
+        let repository = Repository {
+            services: &services,
+            guard: &Current,
+            roster: &roster,
+        };
+        let control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+        control.record(operation, false, &payload).unwrap();
+        if comment {
+            control.record("pr comment", false, &json!({})).unwrap();
+        }
+        let result = control
+            .command(
+                &parsed(&[
+                    "task",
+                    "complete",
+                    "--person",
+                    "aiko",
+                    "--status",
+                    "done",
+                    "--content-stdin",
+                ]),
+                "summary",
+            )
+            .await;
+        assert_eq!(result.is_ok(), accepted, "{operation}/{payload}/{comment}");
+        let record = RunStore::open(&workspace).read("run").unwrap().unwrap();
+        assert_eq!(
+            record.provider_evidence[0]["type"],
+            operation.replace(' ', "_")
+        );
+    }
+}
+#[tokio::test]
+async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::default();
+    seed(&writes, &workspace, &redactor);
+    let mut provider = support::Probe::new(None);
+    for (url, blocked) in [("pending", true), ("ready", false)] {
+        provider.pages.insert(format!("pull_requests|{url}|"),Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":url,"title":"T","label":"!1","repository":"repo","body":"","state":"open","assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"Assistant","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
+        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"base_sha":"base","head_sha":"head","behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":if blocked{"pending"}else{"success"},"checks":[],"checks_expected":true,"readiness":if blocked{"blocked"}else{"ready"},"completion_blockers":if blocked{vec![json!({"code":"checks_pending","message":"wait","next_action":"wait"})]}else{vec![]}})).unwrap();
+        provider.checks.insert(url.into(), readiness);
+    }
+    let services = Services(provider);
+    let roster = BTreeMap::new();
+    let mut repository = Repository {
+        services: &services,
+        guard: &UnavailableGuard,
+        roster: &roster,
+    };
+    let p = parsed(&["checks", "await", "--person", "aiko", "--content-stdin"]);
+    {
+        let control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+        assert_eq!(
+            control
+                .command(&p, "summary")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "cli.member.chat_updates.required"
+        );
+    }
+    repository.guard = &Current;
+    let control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+    for url in ["pending", "ready"] {
+        control
+            .record(
+                "pr comment",
+                false,
+                &json!({"target":{"kind":"pull_request","url":url}}),
+            )
+            .unwrap();
+    }
+    let result = control.command(&p, "summary").await.unwrap();
+    assert_eq!(result["pr_readiness"].as_array().unwrap().len(), 2);
+    assert_eq!(result["pr_readiness"][0]["target"]["url"], "pending");
+    assert_eq!(result["pr_readiness"][1]["target"]["url"], "ready");
+    assert_eq!(services.0.notices.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn recipient_service_failures_propagate_without_completing() {
+    struct Failed;
+    impl Recipients for Failed {
+        fn receives<'a>(&'a self, _: &'a str, _: &'a str) -> gb_member::git::Pending<'a, bool> {
+            Box::pin(async { Err(ServiceError::Unavailable.into()) })
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::default();
+    seed(&writes, &workspace, &redactor);
+    let services = Services(support::Probe::new(None));
+    let accounts = BTreeMap::new();
+    let repository = Repository {
+        services: &services,
+        guard: &Current,
+        roster: &accounts,
+    };
+    let roster = [member("bot", "agent", true)];
+    let control = control(
+        &workspace,
+        &writes,
+        &repository,
+        &redactor,
+        &Failed,
+        &roster,
+    );
+    control
+        .record("pr comment", false, &json!({"target":{"url":"item"}}))
+        .unwrap();
+    let result = control
+        .command(
+            &parsed(&[
+                "task",
+                "complete",
+                "--person",
+                "aiko",
+                "--status",
+                "asking",
+                "--waiting-for",
+                "bot",
+                "--content-stdin",
+            ]),
+            "question",
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(MemberError::Service(ServiceError::Unavailable))
+    ));
+    assert!(
+        RunStore::open(&workspace)
+            .read("run")
+            .unwrap()
+            .unwrap()
+            .result
+            .is_none()
+    );
 }

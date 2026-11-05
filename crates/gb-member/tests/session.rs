@@ -290,3 +290,32 @@ async fn run_commands_dispatch_only_through_the_bound_control_and_reject_caller_
     );
     assert_eq!(records.0.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn context_without_a_code_host_keeps_credentials_unchecked() {
+    struct Absent;
+    impl RepositoryServices for Absent {
+        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+            panic!("absent code host must not be consulted")
+        }
+        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+            panic!("no ticket access")
+        }
+        fn code_configured(&self) -> bool {
+            false
+        }
+    }
+    let services = Services(support::Probe::new(None));
+    let roster = BTreeMap::new();
+    let records = Records::default();
+    let mut session = session(&services, &roster, &records);
+    session.repository.services = &Absent;
+    let result = session
+        .execute(
+            &args(&["context", "--person", "aiko", "--check-credentials"]),
+            "",
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.payload["credential_status"], "unchecked");
+}

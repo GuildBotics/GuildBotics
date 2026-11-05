@@ -61,6 +61,27 @@ fn title(value: &str) -> anyhow::Result<String> {
         Ok(value.trim().into())
     }
 }
+fn iso_time(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
+    if let Ok(moment) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(moment.to_utc());
+    }
+    let moment = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"))
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M"))
+        .or_else(|_| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .map(|date| date.and_hms_opt(0, 0, 0).unwrap())
+        })
+        .map_err(|_| invalid("cli.member.time_invalid"))?;
+    Local
+        .from_local_datetime(&moment)
+        .earliest()
+        .map(|date| date.to_utc())
+        .ok_or_else(|| invalid("cli.member.time_invalid"))
+}
+
 impl Session<'_> {
     pub async fn execute(&self, arguments: &[String], stdin: &str) -> anyhow::Result<Answer> {
         let p = command::parse(arguments)?;
@@ -118,7 +139,7 @@ impl Session<'_> {
                             .extend(identity.into_iter().map(|(k, v)| (k, v.into())));
                         context["credential_status"] = "ok".into();
                     } else {
-                        context["credential_status"] = "not_configured".into();
+                        context["credential_status"] = "unchecked".into();
                     }
                     if let Some(chat) = &self.chat
                         && let Ok(status) = chat.check_credentials().await
@@ -455,15 +476,7 @@ impl Session<'_> {
                     }
                     "chat inspect channel" => {
                         let date =
-                            |key: &str| -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
-                                p.optional(key)
-                                    .map(|v| {
-                                        chrono::DateTime::parse_from_rfc3339(&v)
-                                            .map(|v| v.to_utc())
-                                            .map_err(|_| invalid("cli.member.time_invalid"))
-                                    })
-                                    .transpose()
-                            };
+                            |key: &str| p.optional(key).map(|value| iso_time(&value)).transpose();
                         chat.inspect_channel(
                             &reference,
                             ChannelEventsQuery {
@@ -538,5 +551,56 @@ impl Session<'_> {
             kind: p.optional("kind"),
             params,
         })
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+    #[test]
+    fn channel_times_accept_local_dates_and_datetimes_and_preserve_offsets() {
+        use chrono::TimeZone;
+        for value in [
+            "2026-05-01",
+            "2026-05-01T09:00:00",
+            "2026-05-01 09:00:00",
+            "2026-05-01T09:00",
+            "2026-05-01 09:00",
+        ] {
+            let result = iso_time(value).unwrap();
+            let hour = if value.len() == 10 { 0 } else { 9 };
+            assert_eq!(
+                result,
+                chrono::Local
+                    .with_ymd_and_hms(2026, 5, 1, hour, 0, 0)
+                    .earliest()
+                    .unwrap()
+                    .to_utc()
+            );
+        }
+        assert_eq!(
+            iso_time("2026-05-01T09:00:00+09:00").unwrap().to_rfc3339(),
+            "2026-05-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            iso_time("invalid").unwrap_err().to_string(),
+            "cli.member.time_invalid"
+        );
+    }
+    #[test]
+    fn usage_failures_have_the_usage_exit_code() {
+        for key in [
+            "cli.member.prepare_repo_pr",
+            "cli.member.prepare_branch_anchor",
+            "cli.member.ticket_update_empty",
+            "cli.member.pr_update_empty",
+            "cli.member.time_invalid",
+        ] {
+            assert_eq!(MemberError::Capability(key).exit_code(), 2, "{key}");
+        }
+        assert_eq!(
+            MemberError::Capability("capabilities.task_runs.store_failed").exit_code(),
+            1
+        );
     }
 }

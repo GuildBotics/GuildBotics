@@ -39,6 +39,17 @@ impl Guest for LocalGuest {
                 .lock()
                 .unwrap()
                 .push((cwd.to_owned(), argv.clone(), env.clone()));
+            if argv.first().is_some_and(|v| v == "rm")
+                && self.fail.lock().unwrap().as_deref() == Some("partial-rm")
+            {
+                let slot = cwd.join(argv.last().unwrap());
+                if slot.join(".git").exists() {
+                    std::fs::remove_dir_all(slot.join(".git")).unwrap();
+                }
+                return Err(gb_member::MemberError::Capability(
+                    "injected.partial_removal",
+                ));
+            }
             if self
                 .fail
                 .lock()
@@ -155,6 +166,14 @@ impl Fixture {
             name: "Member",
             email: "member@example.invalid",
             deadline: Instant::now() + Duration::from_secs(30),
+            render_error: &|error| match error {
+                gb_member::MemberError::Service(error) => format!(
+                    "Rendered: {} {:?}",
+                    error.translation_key(),
+                    error.translation_args()
+                ),
+                other => format!("Rendered: {other}"),
+            },
         }
     }
     async fn prepare(&self, work: &str, branch: &str) -> PathBuf {
@@ -301,7 +320,9 @@ async fn unfinished_population_keeps_owner_index_bytes_and_chosen_branch() {
 #[tokio::test]
 async fn publish_is_branch_only_keeps_unstaged_work_and_returns_readiness() {
     let mut f = Fixture::new();
-    f.services.error = Some(ServiceError::Unavailable);
+    f.services.error = Some(ServiceError::MissingCredential {
+        name: "fixture-readiness".into(),
+    });
     let path = f.prepare("one", "ticket/1").await;
     f.stage(&path, "ours\n");
     std::fs::write(path.join("untracked"), "keep").unwrap();
@@ -313,7 +334,11 @@ async fn publish_is_branch_only_keeps_unstaged_work_and_returns_readiness() {
         .await
         .unwrap();
     assert_eq!(result["status"], "published");
-    assert!(result["pull_requests_error"].is_string());
+    assert_eq!(
+        result["pull_requests_error"],
+        r#"Rendered: integrations.resources.missing_credential {"name": "fixture-readiness"}"#
+    );
+
     assert_eq!(
         git(&f.remote, &["rev-parse", "refs/heads/ticket/1"]),
         result["commit_sha"]
@@ -340,7 +365,12 @@ async fn failed_push_keeps_history_and_remote_rejection_is_reported() {
     let expected = git(&path, &["rev-parse", "HEAD"]);
     f.advance("diverged\n");
     let error = f.workspace("one").push(&path).await.unwrap_err();
-    assert!(error.to_string().contains("git_failed_reason"));
+    assert_eq!(error.to_string(), "capabilities.member_git.push_failed");
+    let gb_member::MemberError::CapabilityArgs { args, .. } = error else {
+        panic!()
+    };
+    assert_eq!(args["branch"], "main");
+    assert!(args["reason"].contains("non-fast-forward"));
     let other = f.prepare("two", "other").await;
     assert_ne!(other, path);
     assert_eq!(git(&path, &["rev-parse", "HEAD"]), expected);
@@ -443,7 +473,14 @@ async fn unregistered_commit_worktree_push_and_scope_boundaries() {
             .unwrap()
             .has_changes
     );
-    assert!(f.workspace("one").push(&manual).await.is_err());
+    assert_eq!(
+        f.workspace("one")
+            .push(&manual)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "capabilities.member_git.checkout_required"
+    );
     assert!(
         f.workspace("one")
             .publish(&f.seed, "outside")
@@ -1149,5 +1186,60 @@ async fn push_reports_readiness_for_open_prs_without_waiting_for_checks() {
     assert_eq!(
         result["pull_requests"][0]["completion_blockers"][0]["code"],
         "checks_pending"
+    );
+}
+
+#[tokio::test]
+async fn dirty_selected_checkout_keeps_one_warm_idle_slot() {
+    let f = Fixture::new();
+    let first = f.prepare("one", "ticket/1").await;
+    f.stage(&first, "dirty one\n");
+    let second = f.prepare("two", "ticket/2").await;
+    f.stage(&second, "dirty two\n");
+    let third = f.prepare("three", "ticket/3").await;
+    git(&second, &["reset", "--hard"]);
+    assert_eq!(f.prepare("one", "ticket/1").await, first);
+    assert_eq!(
+        usize::from(second.exists()) + usize::from(third.exists()),
+        1
+    );
+    let warm = if second.exists() { second } else { third };
+    assert_eq!(f.prepare("four", "ticket/4").await, warm);
+}
+#[tokio::test]
+async fn partial_cleanup_retries_without_reading_missing_git_metadata() {
+    let f = Fixture::new();
+    let first = f.prepare("one", "ticket/1").await;
+    f.stage(&first, "dirty\n");
+    let second = f.prepare("two", "ticket/2").await;
+    git(&first, &["reset", "--hard"]);
+    *f.guest.fail.lock().unwrap() = Some("partial-rm".into());
+    assert_eq!(f.prepare("two", "ticket/2").await, second);
+    assert!(first.exists());
+    assert!(!first.join(".git").exists());
+    *f.guest.fail.lock().unwrap() = None;
+    assert_eq!(f.prepare("two", "ticket/2").await, second);
+    assert!(!first.exists());
+}
+#[tokio::test]
+async fn detached_and_unprepared_pushes_have_actionable_diagnostics() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.workspace("one")
+            .push(&f.seed)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "capabilities.member_git.invalid_path"
+    );
+    let path = f.prepare("one", "ticket/1").await;
+    git(&path, &["checkout", "--detach"]);
+    assert_eq!(
+        f.workspace("one")
+            .push(&path)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "capabilities.member_git.detached"
     );
 }

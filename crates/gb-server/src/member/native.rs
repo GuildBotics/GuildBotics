@@ -337,15 +337,8 @@ impl Native {
                 })
                 .map_err(|_|MemberError::Capability("capabilities.task_runs.store_failed"))
         };
-        let render_wait = |readiness: &Readiness| {
-            crate::i18n::t(
-                &team.language,
-                "cli.member.checks_wait",
-                &[
-                    ("url", readiness.target.url.as_str()),
-                    ("head", readiness.head_sha.as_str()),
-                ],
-            )
+        let render_wait = |_: &Readiness| {
+            crate::i18n::t(&team.language, "integrations.pull_request_patrol.awaiting_checks", &[])
         };
         let subject_id=self.chat_subject.as_ref().map(|s|s.id()).unwrap_or_else(||work_identity.into());
         let control = RunControl {
@@ -357,7 +350,7 @@ impl Native {
                 work_identity,
                 subject_type,
                 subject_id: &subject_id,
-                subject_url: if matches!(kind, "ticket" | "pull_request") {
+                subject_url: if matches!(kind, "ticket" | "ticket_mention") {
                     work_identity
                 } else {
                     ""
@@ -409,6 +402,9 @@ impl Native {
             .join(".guildbotics/local/member_git")
             .join(&person.person_id);
         let fallback_email = format!("{}@guildbotics.local",person.person_id);
+        let render_git_error = |error: &MemberError| {
+            error.render(|key, args| crate::i18n::t(&team.language, key, &args.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect::<Vec<_>>()))
+        };
         let git = if parsed.command.starts_with("git ") || request.phase.is_some() {
             Some(gb_member::git::Workspace {
                 host_root: git_root.clone(),
@@ -430,6 +426,7 @@ impl Native {
                     .filter(|v| !v.is_empty())
                     .unwrap_or(&fallback_email),
                 deadline,
+                render_error: &render_git_error,
             })
         } else {
             None
@@ -1217,6 +1214,152 @@ mod tests {
         assert_eq!(result["plan"]["arguments"][6], "--content-stdin");
     }
     #[tokio::test]
+    async fn waiting_recipients_need_patrol_and_fall_back_from_code_to_tickets() {
+        let temp = tempfile::tempdir().unwrap();
+        let native = fixture(temp.path());
+        let writes =
+            SharedWrites::new(native.identity_root.clone(), Some(native.workspace.clone()));
+        let secrets = SecretStore::new(
+            &writes,
+            Scope::Identity,
+            DeviceKey {
+                machine_root: native.data.parent().unwrap().into(),
+                keychain: native.keychain.as_ref(),
+            },
+        )
+        .unwrap();
+        let config = IntegrationConfig {
+            local_root: temp.path().join("services"),
+            identity_root: native.identity_root.clone(),
+            person_id: "aiko".into(),
+            display_name: "Aiko".into(),
+            accounts: Default::default(),
+            branvil_members: Default::default(),
+            ticket_provider: "local".into(),
+            code_provider: "local".into(),
+            chat_provider: "local".into(),
+            ticket_scope: "acme".into(),
+            code_scope: "acme".into(),
+            checks: String::new(),
+            slack_base_url: String::new(),
+        };
+        write_json(
+            &config.local_root.join("tickets/acme%2Fdemo/tracker.json"),
+            json!({"repository":"acme/demo","labels":[]}),
+        );
+        let factory =
+            ServiceIntegrationFactory::new(config.clone(), &secrets, None, Arc::new(|_| {}))
+                .unwrap();
+        let tickets = factory.create_ticket_service().unwrap();
+        let ticket = tickets
+            .create_ticket(CreateTicket {
+                tracker: "acme/demo".into(),
+                title: "assigned".into(),
+                body: String::new(),
+                labels: vec![],
+                add_to_board: true,
+                interactive: false,
+                assignee: Some(ActorName("local-aiko".into())),
+                lane: Some(CreateLane::Ready),
+                parent: None,
+                blocked_by: vec![],
+            })
+            .await
+            .unwrap();
+        let roster = [PublicMember {
+            person_id: "aiko".into(),
+            name: "Aiko".into(),
+            person_type: "agent".into(),
+            is_active: true,
+            roles: json!({}),
+            profile: json!({}),
+            speaking_style: String::new(),
+            accounts: Default::default(),
+        }];
+        let mut peers = Peers {
+            config: &config,
+            secrets: &secrets,
+            branvil: None,
+            roster: &roster,
+            eligible: Default::default(),
+        };
+        assert!(!peers.receives("aiko", &ticket.target.url).await.unwrap());
+        peers.eligible.insert("aiko".into());
+        assert!(peers.receives("aiko", &ticket.target.url).await.unwrap());
+    }
+    #[tokio::test]
+    async fn ticket_mentions_keep_their_origin_in_completion_and_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut native = fixture(temp.path());
+        write_json(
+            &native
+                .workspace
+                .join(".guildbotics/local/services/tickets/acme%2Fdemo/tracker.json"),
+            json!({"repository":"acme/demo","labels":[]}),
+        );
+        let ticket = command(
+            &native,
+            &[
+                "ticket",
+                "create",
+                "--person",
+                "aiko",
+                "--tracker",
+                "acme/demo",
+                "--title",
+                "T",
+                "--human-approved",
+                "--content-stdin",
+            ],
+            "body",
+        )
+        .await;
+        let url = ticket["target"]["url"].as_str().unwrap();
+        native.invocation = Some(gb_environment::broker::Invocation {
+            person_id: "aiko".into(),
+            run_id: "mention".into(),
+            trace_id: "mention".into(),
+            work_kind: "ticket_mention".into(),
+            work_identity: url.into(),
+            cwd: native.workspace.clone(),
+            access: gb_wire::CommandAccess {
+                read_only: false,
+                inspects: vec![],
+            },
+        });
+        command(
+            &native,
+            &[
+                "ticket",
+                "comment",
+                "--person",
+                "aiko",
+                "--url",
+                url,
+                "--content-stdin",
+            ],
+            "answered",
+        )
+        .await;
+        let answer = command(
+            &native,
+            &[
+                "task",
+                "complete",
+                "--person",
+                "aiko",
+                "--status",
+                "blocked",
+                "--content-stdin",
+            ],
+            "reason",
+        )
+        .await;
+        assert_eq!(answer["subject_url"], url);
+        let status = command(&native, &["task", "status", "--person", "aiko"], "").await;
+        assert_eq!(status["subject_url"], url);
+    }
+    #[tokio::test]
     async fn native_assembly_uses_four_character_memory_redaction_without_disclosing_secrets_in_context()
      {
         let temp = tempfile::tempdir().unwrap();
@@ -1232,7 +1375,14 @@ mod tests {
             },
         )
         .unwrap();
-        store.set("TEST_SENTINEL", "FOUR").unwrap();
+        for (key, value) in [
+            ("TEST_SENTINEL", "FOUR"),
+            ("TEST_FIVE", "FIVES"),
+            ("TEST_SIX", "SIXVAL"),
+            ("TEST_SEVEN", "SEVENIT"),
+        ] {
+            store.set(key, value).unwrap();
+        }
         let output = temp.path().join("out");
         let reply = native
             .execute(
@@ -1246,7 +1396,7 @@ mod tests {
                         "FOUR",
                         "--content-stdin",
                     ],
-                    "prefix FOUR suffix",
+                    "prefix FOUR FIVES SIXVAL SEVENIT suffix",
                 ),
                 false,
                 None,
@@ -1254,7 +1404,9 @@ mod tests {
             )
             .await;
         assert_eq!(reply.exit_code, 0, "{}", reply.stderr);
-        assert!(!reply.stdout.contains("FOUR"));
+        for sentinel in ["FOUR", "FIVES", "SIXVAL", "SEVENIT"] {
+            assert!(!reply.stdout.contains(sentinel));
+        }
         let context = native
             .execute(
                 request(&["context", "--person", "aiko"], ""),
@@ -1277,7 +1429,9 @@ mod tests {
             )
             .await;
         assert_eq!(reply.exit_code, 0, "{}", reply.stderr);
-        assert!(!reply.stdout.contains("FOUR"));
+        for sentinel in ["FOUR", "FIVES", "SIXVAL", "SEVENIT"] {
+            assert!(!reply.stdout.contains(sentinel));
+        }
         assert!(reply.stdout.contains("prefix"));
     }
     #[tokio::test]

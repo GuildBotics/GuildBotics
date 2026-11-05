@@ -32,11 +32,11 @@ impl Output {
         if self.code == 0 {
             Ok(self)
         } else {
-            let reason = String::from_utf8_lossy(if self.stderr.is_empty() {
-                &self.stdout
-            } else {
-                &self.stderr
-            })
+            let reason = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&self.stdout),
+                String::from_utf8_lossy(&self.stderr)
+            )
             .trim()
             .to_owned();
             Err(MemberError::CapabilityArgs {
@@ -49,8 +49,10 @@ impl Output {
 fn failure(key: &'static str) -> MemberError {
     MemberError::Capability(match key {
         "git_failed" => "capabilities.member_git.git_failed",
-        "timeout" => "capabilities.member_git.show_timeout",
-        "branch" => "capabilities.member_git.invalid_branch",
+        "timeout" => "capabilities.member_git.operation_timeout",
+        "redirect" => "capabilities.member_git.redirect",
+        "unprepared" => "capabilities.member_git.checkout_required",
+        "detached" => "capabilities.member_git.detached",
         "bundle" => "capabilities.member_git.invalid_bundle",
         "path" => "capabilities.member_git.invalid_path",
         "work" => "capabilities.member_git.work_required",
@@ -59,6 +61,19 @@ fn failure(key: &'static str) -> MemberError {
 }
 fn io_error<E>(_: E) -> MemberError {
     failure("git_failed")
+}
+fn lock_error(error: std::io::Error) -> MemberError {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        MemberError::Capability("capabilities.member_git.lock_timeout")
+    } else {
+        io_error(error)
+    }
+}
+fn branch_error(key: &'static str, branch: &str) -> MemberError {
+    MemberError::CapabilityArgs {
+        key,
+        args: [("branch".into(), branch.into())].into(),
+    }
 }
 fn remaining(deadline: Instant) -> Result<Duration> {
     deadline
@@ -311,7 +326,10 @@ impl Origin {
             )
             .await?;
         if result.code != 0 || branch.starts_with('-') || result.text() != branch {
-            return Err(failure("branch"));
+            return Err(branch_error(
+                "capabilities.member_git.invalid_branch",
+                branch,
+            ));
         }
         Ok(())
     }
@@ -329,7 +347,7 @@ impl Origin {
             vec!["remote", "get-url", "--push", "--all", "origin"],
         ] {
             if self.git(&args, vec![]).await?.text() != self.url {
-                return Err(failure("path"));
+                return Err(failure("redirect"));
             }
         }
         let authentication = Authentication::new(
@@ -453,7 +471,9 @@ impl Origin {
         let reference = format!("refs/heads/{branch}");
         let remote = format!("refs/remotes/origin/{branch}");
         let refs = self.refs(&[&reference, &remote]).await?;
-        let head = refs.get(&reference).ok_or_else(|| failure("branch"))?;
+        let head = refs
+            .get(&reference)
+            .ok_or_else(|| branch_error("capabilities.member_git.branch_empty", branch))?;
         if refs.get(&remote) == Some(head) {
             return Ok(false);
         }
@@ -467,7 +487,20 @@ impl Origin {
             ],
             credential,
         )
-        .await?;
+        .await
+        .map_err(|error| match error {
+            MemberError::CapabilityArgs {
+                key: "capabilities.member_git.git_failed_reason",
+                mut args,
+            } => {
+                args.insert("branch".into(), branch.into());
+                MemberError::CapabilityArgs {
+                    key: "capabilities.member_git.push_failed",
+                    args,
+                }
+            }
+            other => other,
+        })?;
         self.remember(vec![head.clone()]).await?;
         self.git(&["update-ref", &remote, head], vec![]).await?;
         Ok(true)
@@ -583,6 +616,7 @@ pub struct Workspace<'a> {
     pub name: &'a str,
     pub email: &'a str,
     pub deadline: Instant,
+    pub render_error: &'a (dyn Fn(&MemberError) -> String + Send + Sync),
 }
 fn digest(value: impl Serialize) -> String {
     use sha2::{Digest, Sha256};
@@ -646,7 +680,7 @@ impl Workspace<'_> {
         let root = self.host_root.join("current");
         let _lock =
             gb_base::files::FileLock::hold(&root.join("git.lock"), remaining(self.deadline)?)
-                .map_err(io_error)?;
+                .map_err(lock_error)?;
         let origin = Origin::open(
             &root,
             &repository,
@@ -722,7 +756,7 @@ impl Workspace<'_> {
             return Ok((json!({"refs":refs}), bundle.stdout));
         }
         self.guard.ensure_current()?;
-        let branch = data["branch"].as_str().ok_or_else(|| failure("branch"))?;
+        let branch = data["branch"].as_str().ok_or_else(|| failure("bundle"))?;
         let head = object(data["head"].as_str().ok_or_else(|| failure("bundle"))?)?;
         if !origin.receive(branch, head, incoming).await? {
             return Ok((json!({"retry":true}), vec![]));
@@ -763,7 +797,7 @@ impl Workspace<'_> {
                 receipt["pull_requests"] =
                     serde_json::to_value(prs).map_err(|_| failure("bundle"))?
             }
-            Err(error) => receipt["pull_requests_error"] = error.to_string().into(),
+            Err(error) => receipt["pull_requests_error"] = (self.render_error)(&error).into(),
         }
         Ok((receipt, vec![]))
     }
@@ -1074,7 +1108,7 @@ impl Workspace<'_> {
             &self.host_root.join("git.lock"),
             remaining(self.deadline)?,
         )
-        .map_err(io_error)?;
+        .map_err(lock_error)?;
         let origin = self.origin(repository).await?;
         origin.branch(requested).await?;
         let default = self.code()?.default_branch(repository).await?;
@@ -1200,8 +1234,25 @@ impl Workspace<'_> {
             .await?;
         }
         self.save(&slot, &record)?;
-        for other in idle.into_iter().filter(|v| v != &slot) {
-            let result = self
+        let mut retired = records.clone();
+        let warm = (!idle.contains(&slot))
+            .then(|| idle.first().cloned())
+            .flatten();
+        for other in idle
+            .into_iter()
+            .filter(|v| v != &slot && Some(v) != warm.as_ref())
+        {
+            let record = retired.get_mut(&other).unwrap();
+            record.discarded = true;
+            self.save(&other, record)?;
+        }
+        for (other, record) in &retired {
+            if !record.discarded || record.repository != repository {
+                continue;
+            }
+            // Discarded IDs remain reserved even after deletion. Never inspect
+            // partially removed Git metadata when retrying cleanup.
+            let _ = self
                 .guest
                 .run(
                     &self.clones,
@@ -1211,11 +1262,6 @@ impl Workspace<'_> {
                     MAX_OUTPUT,
                 )
                 .await;
-            if result.is_ok_and(|r| r.code == 0) {
-                let mut retired = records[&other].clone();
-                retired.discarded = true;
-                self.save(&other, &retired)?;
-            }
         }
         let branch = self
             .run(
@@ -1235,7 +1281,7 @@ impl Workspace<'_> {
             &self.host_root.join("git.lock"),
             remaining(self.deadline)?,
         )
-        .map_err(io_error)?;
+        .map_err(lock_error)?;
         self.assignment(path).await?;
         commit(self.guest, path, message, self.name, self.email, self.guard).await
     }
@@ -1244,29 +1290,44 @@ impl Workspace<'_> {
             &self.host_root.join("git.lock"),
             remaining(self.deadline)?,
         )
-        .map_err(io_error)?;
+        .map_err(lock_error)?;
         let assignment = self
             .assignment(path)
             .await?
-            .ok_or_else(|| failure("assignment"))?;
+            .ok_or_else(|| failure("unprepared"))?;
         self.code()?.check_push(&assignment.repository)?;
         let branch = self
-            .git(path, &["symbolic-ref", "-q", "--short", "HEAD"], vec![])
-            .await?
-            .text();
+            .run(
+                path,
+                &["symbolic-ref", "-q", "--short", "HEAD"],
+                vec![],
+                MAX_OUTPUT,
+            )
+            .await?;
+        if branch.code != 0 {
+            return Err(failure("detached"));
+        }
+        let branch = branch.text();
         let origin = self.origin(&assignment.repository).await?;
         origin.branch(&branch).await?;
         self.guard.ensure_current()?;
         origin.fetch(self.code()?.git_credential().await?).await?;
         let reference = format!("refs/heads/{branch}");
         let head = self
-            .git(
+            .run(
                 path,
                 &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
                 vec![],
+                MAX_OUTPUT,
             )
-            .await?
-            .text();
+            .await?;
+        if head.code != 0 {
+            return Err(branch_error(
+                "capabilities.member_git.branch_empty",
+                &branch,
+            ));
+        }
+        let head = head.text();
         object(&head)?;
         let known = origin.refs(&[]).await?;
         let mut revisions = vec![reference.clone()];
@@ -1345,7 +1406,7 @@ impl Workspace<'_> {
                 result["pull_requests"] =
                     serde_json::to_value(prs).map_err(|_| failure("bundle"))?
             }
-            Err(error) => result["pull_requests_error"] = error.to_string().into(),
+            Err(error) => result["pull_requests_error"] = (self.render_error)(&error).into(),
         }
         Ok(result)
     }
@@ -1365,6 +1426,22 @@ impl Workspace<'_> {
 }
 
 pub async fn show(
+    root: &Path,
+    code: &dyn CodeHostingService,
+    repository: &str,
+    paths: &[String],
+    deadline: Instant,
+) -> Result<Value> {
+    show_default(root, code, repository, paths, deadline)
+        .await
+        .map_err(|error| match error {
+            MemberError::Capability("capabilities.member_git.operation_timeout") => {
+                MemberError::Capability("capabilities.member_git.show_timeout")
+            }
+            other => other,
+        })
+}
+async fn show_default(
     root: &Path,
     code: &dyn CodeHostingService,
     repository: &str,
@@ -1395,7 +1472,7 @@ pub async fn show(
     let branch = code.default_branch(repository).await?;
     let credential = code.git_credential().await?;
     let _lock = gb_base::files::FileLock::hold(&root.join("git.lock"), remaining(deadline)?)
-        .map_err(io_error)?;
+        .map_err(lock_error)?;
     let origin = Origin::open(
         root,
         repository,
@@ -1477,25 +1554,40 @@ pub async fn commit(
     }
     let git = |mut args: Vec<String>, stdin: Vec<u8>| {
         args.insert(0, "git".into());
-        guest.run(path, args, BTreeMap::new(), stdin, MAX_OUTPUT)
+        guest.run(
+            path,
+            args,
+            [
+                ("GIT_AUTHOR_NAME".into(), name.into()),
+                ("GIT_AUTHOR_EMAIL".into(), email.into()),
+                ("GIT_COMMITTER_NAME".into(), name.into()),
+                ("GIT_COMMITTER_EMAIL".into(), email.into()),
+            ]
+            .into(),
+            stdin,
+            MAX_OUTPUT,
+        )
     };
     let branch = git(
         vec!["symbolic-ref".into(), "-q".into(), "HEAD".into()],
         vec![],
     )
-    .await?
-    .checked()?
-    .text()
-    .strip_prefix("refs/heads/")
-    .ok_or_else(|| failure("branch"))?
-    .to_owned();
+    .await?;
+    if branch.code != 0 {
+        return Err(failure("detached"));
+    }
+    let branch = branch
+        .text()
+        .strip_prefix("refs/heads/")
+        .ok_or_else(|| failure("detached"))?
+        .to_owned();
     git(
         vec!["check-ref-format".into(), "--branch".into(), branch.clone()],
         vec![],
     )
     .await?
     .checked()
-    .map_err(|_| failure("branch"))?;
+    .map_err(|_| branch_error("capabilities.member_git.invalid_branch", &branch))?;
     let staged = git(
         vec![
             "diff".into(),
@@ -1530,7 +1622,9 @@ pub async fn commit(
             "--no-gpg-sign".into(),
             "--file=-".into(),
         ];
-        git(args, message.as_bytes().to_vec()).await?.checked()?;
+        git(args, format!("{}\n", message.trim()).into_bytes())
+            .await?
+            .checked()?;
         let value = git(
             vec!["rev-parse".into(), "--verify".into(), "HEAD".into()],
             vec![],
@@ -1551,7 +1645,7 @@ pub async fn commit(
         status: if changed {
             "committed"
         } else {
-            "no_staged_changes"
+            "nothing_staged"
         }
         .into(),
     })
@@ -1644,6 +1738,32 @@ mod tests {
         let remembered = origin.refs(&[PUBLIC]).await.unwrap();
         assert!(remembered.values().any(|v| v == &head));
     }
+    #[test]
+    fn git_diagnostics_keep_both_streams_and_distinguish_lock_timeout() {
+        let error = Output {
+            code: 1,
+            stdout: b"branch rejected non-fast-forward".to_vec(),
+            stderr: b"remote unavailable".to_vec(),
+        }
+        .checked()
+        .err()
+        .unwrap();
+        let MemberError::CapabilityArgs { args, .. } = error else {
+            panic!()
+        };
+        assert!(args["reason"].contains("non-fast-forward"));
+        assert!(args["reason"].contains("remote unavailable"));
+        assert_eq!(
+            lock_error(std::io::Error::from(std::io::ErrorKind::TimedOut)).to_string(),
+            "capabilities.member_git.lock_timeout"
+        );
+        assert_eq!(
+            remaining(Instant::now() - Duration::from_secs(1))
+                .unwrap_err()
+                .to_string(),
+            "capabilities.member_git.operation_timeout"
+        );
+    }
     #[tokio::test]
     async fn invalid_repositories_branches_and_object_names_are_refused() {
         let temp = tempfile::tempdir().unwrap();
@@ -1662,7 +1782,12 @@ mod tests {
         let upstream = seeded(temp.path());
         let origin = origin(temp.path(), &upstream).await;
         for branch in ["-x", "HEAD", "a..b", "a:b", "refs/heads/../x", "a\nb"] {
-            assert!(origin.branch(branch).await.is_err(), "{branch}");
+            let error = origin.branch(branch).await.unwrap_err();
+            let MemberError::CapabilityArgs { key, args } = error else {
+                panic!("missing branch diagnostic")
+            };
+            assert_eq!(key, "capabilities.member_git.invalid_branch");
+            assert_eq!(args["branch"], branch);
         }
         for sha in ["--all", "HEAD", "0000", &"A".repeat(40)] {
             assert!(object(sha).is_err());
@@ -1687,7 +1812,7 @@ mod tests {
             .await
             .unwrap();
         let err = origin.fetch(None).await.unwrap_err();
-        assert_eq!(err.to_string(), "capabilities.member_git.invalid_path");
+        assert_eq!(err.to_string(), "capabilities.member_git.redirect");
     }
     #[tokio::test]
     async fn bundle_receive_verifies_prerequisites_head_and_only_imports_requested_branch() {
@@ -1728,7 +1853,7 @@ mod tests {
         origin.deadline = Instant::now() - Duration::from_secs(1);
         assert_eq!(
             origin.fetch(None).await.unwrap_err().to_string(),
-            "capabilities.member_git.show_timeout"
+            "capabilities.member_git.operation_timeout"
         );
         origin.deadline = Instant::now() + Duration::from_secs(10);
         std::fs::remove_dir_all(upstream).unwrap();
@@ -1783,6 +1908,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let upstream = seeded(temp.path());
         git(&upstream, &["config", "user.name", "Original"]);
+        for key in ["author.name", "committer.name"] {
+            git(&upstream, &["config", key, "Override"]);
+        }
+        for key in ["author.email", "committer.email"] {
+            git(&upstream, &["config", key, "override@example.invalid"]);
+        }
         git(&upstream, &["config", "commit.gpgsign", "true"]);
         let first = git(&upstream, &["rev-parse", "HEAD"]);
         let unchanged = commit(
@@ -1797,13 +1928,14 @@ mod tests {
         .unwrap();
         assert!(!unchanged.has_changes);
         assert!(unchanged.commit_sha.is_none());
+        assert_eq!(unchanged.status, "nothing_staged");
         std::fs::write(upstream.join("readme"), "staged").unwrap();
         git(&upstream, &["add", "readme"]);
         std::fs::write(upstream.join("unstaged"), "keep").unwrap();
         let result = commit(
             &LocalGuest,
             &upstream,
-            "message",
+            "  message  ",
             "Member",
             "member@example.invalid",
             &Current,
@@ -1816,6 +1948,15 @@ mod tests {
             git(&upstream, &["show", "-s", "--format=%an <%ae>", "HEAD"]),
             "Member <member@example.invalid>"
         );
+        assert_eq!(
+            git(&upstream, &["show", "-s", "--format=%cn <%ce>", "HEAD"]),
+            "Member <member@example.invalid>"
+        );
+        assert_eq!(
+            git(&upstream, &["show", "-s", "--format=%s", "HEAD"]),
+            "message"
+        );
+        assert_eq!(git(&upstream, &["config", "author.name"]), "Override");
         assert_eq!(git(&upstream, &["config", "user.name"]), "Original");
         assert!(git(&upstream, &["status", "--porcelain"]).contains("unstaged"));
         assert!(

@@ -1,6 +1,6 @@
 #127 凍結版テスト対応表
 凍結点: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0。
-主要5ファイル233関数と #89 引継ぎ、!98 の2関数。各行は独立した関数を示す。
+主要5ファイル233関数と #89 引継ぎ、!98 の2関数、追加4ファイル29関数。各行は独立した関数を示す。
 OS条件: ローカルGitの共通条件は Linux の実Gitで検証。Windows専用の実行環境の検証は #95。
 current mode: host の bundle/認可/結果は本変更、ローカルGit・ファイル転送・再試行を起動するクライアントは #92。
 エラー形: 予期した capability/service の分類を保持し、表示は翻訳キーから生成。Python固有の例外名・Click usageレイアウトは保持せず、構文エラー2・処理失敗1・応答期限124を返す。
@@ -299,3 +299,34 @@ tests/guildbotics/capabilities/test_waiting_for.py::test_human_unknown_and_inact
 tests/guildbotics/capabilities/test_waiting_for.py::test_a_diagnostics_failure_does_not_change_the_completed_stop -> crates/gb-member/tests/control.rs::completion_requires_its_own_evidence_and_stores_a_redacted_summary
 tests/guildbotics/integrations/test_branvil_code_hosting.py::test_the_alert_command_shows_the_upstreams_alerts -> crates/gb-integrations/tests/branvil/alerts.rs::member_alert_command_shows_the_upstreams_alerts
 tests/guildbotics/integrations/contracts/test_code_hosting_contract.py::test_member_show_reads_default_branch_for_every_provider -> crates/gb-integrations/tests/support/contracts.rs::member_show_contract
+
+# レビューで追加した隣接範囲（実機・invocation・broker・credential helper）
+tests/guildbotics/environment/test_member_git_in_environment.py::test_prepare_commit_and_push_run_the_clone_in_the_microvm -> #95 に回す：実機 microVM の起動・snapshot・hook の実環境確認。host/guest のプロセス境界は Rust の隔離 Git テスト で検証し、実機 opt-in は #95。
+tests/guildbotics/runtime/test_member_invocation.py::test_member_invocations_are_isolated_between_async_tasks -> crates/gb-server/src/member/native.rs::simultaneous_interactive_and_bound_calls_keep_their_outputs_and_invocations_separate
+tests/guildbotics/runtime/test_member_invocation.py::test_member_invocation_scope_restores_the_default -> 移さない：Python contextvars の scope 復元。Rust は invocation を明示的な不変値として渡し ambient/default invocation state を持たない。
+tests/guildbotics/runtime/test_member_invocation.py::test_a_chat_threads_work_names_its_channel_and_thread -> #90 に回す：chat work identity から channel/thread を復元する workflow selector。member backend は host から渡された固定 chat subject を使用する。
+tests/guildbotics/environment/test_member_broker.py::test_execute_runs_the_member_command_in_this_process_for_the_turn -> crates/gb-server/src/member/native.rs::bound_read_only_invocations_cannot_write_and_no_caller_file_is_read
+tests/guildbotics/environment/test_member_broker.py::test_each_member_command_is_handed_the_commands_environment -> crates/gb-environment/src/broker.rs::every_member_request_gets_the_host_invocation_and_never_another_turns_authority
+tests/guildbotics/environment/test_member_broker.py::test_member_command_starts_from_an_empty_context -> 移さない：Python contextvars の空 context。Rust broker は呼出しごとに固定 Invocation を明示引数で渡し ambient context を持たない。
+tests/guildbotics/environment/test_member_broker.py::test_a_command_that_times_out_is_reported_and_frees_the_turn -> crates/gb-environment/src/broker.rs::member_timeout_and_request_cancellation_release_the_serial_slot
+tests/guildbotics/environment/test_member_broker.py::test_abandon_waits_for_member_writes_even_after_timeout -> crates/gb-environment/src/broker.rs::native_timeout_retains_serialization_and_shutdown_waits_for_the_accepted_write
+tests/guildbotics/environment/test_member_broker.py::test_queued_member_writes_follow_request_lifetime -> crates/gb-environment/src/broker.rs::member_timeout_and_request_cancellation_release_the_serial_slot
+tests/guildbotics/environment/test_member_broker.py::test_cancel_calls_stops_all_queued_workers_before_yielding -> crates/gb-environment/src/broker.rs::member_timeout_and_request_cancellation_release_the_serial_slot
+tests/guildbotics/environment/test_member_broker.py::test_output_beyond_the_limit_is_truncated -> crates/gb-environment/src/broker.rs::oversized_output_is_bounded_without_waiting_for_a_blocked_child
+tests/guildbotics/environment/test_member_broker.py::test_arguments_are_scoped_to_active_person_and_workspace -> crates/gb-environment/src/broker.rs::all_person_spellings_and_workspace_overrides_are_checked
+tests/guildbotics/environment/test_member_broker.py::test_help_is_the_only_command_that_does_not_require_a_person -> crates/gb-environment/src/broker.rs::all_person_spellings_and_workspace_overrides_are_checked
+tests/guildbotics/environment/test_member_broker.py::test_brokers_run_member_commands_only_with_an_installed_member_cli -> 移さない：Python の process-global CLI 登録。Rust は Broker::native へ handler を明示注入し、未登録 global slot を持たない。
+tests/guildbotics/environment/test_member_broker.py::test_broker_rejects_commands_outside_an_active_turn -> crates/gb-environment/src/broker.rs::expired_grant_never_starts_the_program
+tests/guildbotics/environment/test_member_broker.py::test_broker_rejects_an_expired_turn_grant -> crates/gb-environment/src/broker.rs::expired_grant_never_starts_the_program
+tests/guildbotics/environment/test_member_broker.py::test_activate_normalizes_start_failure -> 移さない：broker ごとの Python loopback server は廃止。Rust は既存 host gateway に MCP route を組み立て、broker.activate は grant を生成するだけ。
+tests/guildbotics/environment/test_member_broker.py::test_activate_normalizes_failed_server_task -> 移さない：broker ごとの Python loopback server task は廃止。既存 host gateway の寿命へ統合した。
+tests/guildbotics/environment/test_member_broker.py::test_the_broker_leaves_the_process_logging_as_it_was -> 移さない：Python MCPServer が root logging を再構成する機構は廃止。Rust broker は subscriber を設定しない。
+tests/guildbotics/environment/test_member_broker.py::test_brokers_starting_at_once_leave_the_process_logging_as_it_was -> 移さない：Python MCPServer が root logging を再構成する機構は廃止。Rust broker は subscriber を設定しない。
+tests/guildbotics/environment/test_member_broker.py::test_http_mcp_requires_bearer_and_dispatches_the_member_tool -> crates/gb-server/src/gateway_tests.rs::mcp_requires_exact_bearer_and_local_host_and_dispatches_scoped_member_calls
+tests/guildbotics/environment/test_member_broker.py::test_bearer_token_is_exact_and_scoped -> crates/gb-server/src/gateway_tests.rs::mcp_requires_exact_bearer_and_local_host_and_dispatches_scoped_member_calls
+tests/guildbotics/cli/test_git_credential.py::test_get_hands_the_credential_for_the_remote_s_origin -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。
+tests/guildbotics/cli/test_git_credential.py::test_a_request_that_ends_without_a_blank_line_is_read -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。
+tests/guildbotics/cli/test_git_credential.py::test_a_remote_no_provider_serves_gets_no_answer -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。
+tests/guildbotics/cli/test_git_credential.py::test_actions_other_than_get_keep_and_ask_nothing -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。
+tests/guildbotics/cli/test_git_credential.py::test_a_failure_is_said_and_ends_git_s_search -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。
+tests/guildbotics/cli/test_git_credential.py::test_git_asks_only_the_helper_for_the_remote_and_reads_its_answer -> #92 に回す：人が起動する git credential helper の CLI、stdin protocol、provider 選択。

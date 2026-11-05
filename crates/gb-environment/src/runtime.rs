@@ -521,7 +521,8 @@ pub async fn run_once_with_guest(
                 ()=stopped.cancelled()=>{jobs.close();jobs.recv().await},
             };
             let Some(job) = job else { break };
-            let result = execute_guest_process(&sandbox, &job.process, job.deadline).await;
+            let result =
+                execute_guest_process(&sandbox, &job.process, process.env, job.deadline).await;
             let _ = job.reply.send(result);
         }
     };
@@ -580,9 +581,95 @@ pub async fn run_once_with_guest(
     ran
 }
 
+fn guest_process_environment(
+    base: &[(String, String)],
+    overrides: &[(String, String)],
+) -> std::collections::BTreeMap<String, String> {
+    base.iter().chain(overrides).cloned().collect()
+}
+
+#[cfg(all(test, unix))]
+mod guest_environment_tests {
+    use super::guest_process_environment;
+
+    #[test]
+    fn member_process_inherits_home_timezone_and_language_with_explicit_overrides() {
+        let base = vec![
+            ("HOME".into(), "/guest/member".into()),
+            ("TZ".into(), "Asia/Tokyo".into()),
+            ("LANGUAGE".into(), "ja".into()),
+        ];
+        let overrides = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
+        let env = guest_process_environment(&base, &overrides);
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"printf '%s\n' "$HOME" "$TZ" "$LANGUAGE" "$GIT_TERMINAL_PROMPT"; date +%z"#,
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .envs(&env)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "/guest/member\nAsia/Tokyo\nja\n0\n+0900\n"
+        );
+        let repo = tempfile::tempdir().unwrap();
+        for arguments in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Member",
+                "-c",
+                "user.email=member@example.test",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "environment",
+            ],
+        ] {
+            let result = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(repo.path())
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .envs(&env)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let dated = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%ai"])
+            .current_dir(repo.path())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .envs(&env)
+            .output()
+            .unwrap();
+        assert!(dated.status.success());
+        assert!(
+            String::from_utf8(dated.stdout)
+                .unwrap()
+                .trim()
+                .ends_with("+0900")
+        );
+        let changed = guest_process_environment(&base, &[("TZ".into(), "UTC".into())]);
+        assert_eq!(changed["TZ"], "UTC");
+        assert_eq!(changed["HOME"], "/guest/member");
+    }
+}
+
 async fn execute_guest_process(
     vm: &Sandbox,
     process: &crate::guest_process::Process,
+    base_env: &[(String, String)],
     deadline: std::time::Instant,
 ) -> Result<crate::guest_process::Output, Failure> {
     let (program, args) = process.argv.split_first().expect("validated guest process");
@@ -591,7 +678,7 @@ async fn execute_guest_process(
         .exec_stream_with(program, |e| {
             e.args(args.iter().cloned())
                 .cwd(&process.cwd)
-                .envs(process.env.iter().cloned())
+                .envs(guest_process_environment(base_env, &process.env))
                 .stdin_pipe()
         })
         .await

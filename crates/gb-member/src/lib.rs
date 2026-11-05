@@ -74,6 +74,11 @@ impl MemberError {
                 | "cli.member.ticket_links_required"
                 | "cli.member.ticket_links_invalid"
                 | "capabilities.member_git.prepare_anchor"
+                | "cli.member.prepare_repo_pr"
+                | "cli.member.prepare_branch_anchor"
+                | "cli.member.ticket_update_empty"
+                | "cli.member.pr_update_empty"
+                | "cli.member.time_invalid"
         ) {
             2
         } else {

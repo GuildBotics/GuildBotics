@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from zipfile import ZipFile
 import pytest
 
 from guildbotics.guest import artifact_archive
+from guildbotics.utils.i18n_tool import t
 
 
 def _archive(files: dict[str, bytes]) -> bytes:
@@ -96,7 +98,7 @@ def test_the_environment_writes_an_attachment_as_one_file(tmp_path) -> None:
         "files": [str(written)],
     }
     assert (again.returncode, written.read_bytes()) == (1, b"png")
-    assert b"screen.png" in again.stderr
+    assert t("cli.member.attachment_exists", path=str(written)).encode() in again.stderr
 
 
 @pytest.mark.parametrize(
@@ -111,10 +113,102 @@ def test_an_attachment_not_named_by_one_plain_file_name_is_written_by_its_id(
 
     assert written == (tmp_path / "out" / "atc_1").resolve()
     assert [path.name for path in tmp_path.rglob("*")] == ["out", "atc_1"]
+    assert written.read_bytes() == b"png"
 
 
 def test_an_attachment_with_no_plain_file_name_at_all_is_refused(tmp_path) -> None:
-    with pytest.raises(artifact_archive.ArtifactError, match=".+"):
+    with pytest.raises(
+        artifact_archive.ArtifactError,
+        match=re.escape(t("cli.member.attachment_name")),
+    ):
         artifact_archive.place_attachment(
             io.BytesIO(b"png"), tmp_path, "../a.png", "../b"
         )
+
+
+def test_case_alias_collision_is_translated_and_preserves_the_first_file(
+    monkeypatch, tmp_path
+) -> None:
+    original = Path.open
+    original_exists = Path.exists
+    destination = tmp_path / "artifact"
+    destination.mkdir()
+    (destination / "A.txt").write_bytes(b"first")
+
+    def absent_during_preflight(path):
+        return False if path.name == "a.txt" else original_exists(path)
+
+    def insensitive_open(path, mode="r", *args, **kwargs):
+        if mode == "xb" and path.name == "a.txt":
+            path = path.with_name("A.txt")
+        return original(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", insensitive_open)
+    monkeypatch.setattr(Path, "exists", absent_during_preflight)
+    target = destination / "a.txt"
+    with pytest.raises(
+        artifact_archive.ArtifactError,
+        match=re.escape(t("cli.member.artifact_exists", path=str(target))),
+    ):
+        artifact_archive.extract_artifact(
+            io.BytesIO(_archive({"a.txt": b"second"})), destination
+        )
+    assert (destination / "A.txt").read_bytes() == b"first"
+    assert [entry.name for entry in destination.iterdir()] == ["A.txt"]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"a": b"file", "a/child": b"child"},
+        {"a/child": b"child", "a": b"file"},
+        {"a": b"file", "a/": b""},
+        {"a/": b"", "a": b"file"},
+    ],
+)
+def test_archive_file_directory_conflicts_are_refused_before_writing(tmp_path, files):
+    destination = tmp_path / "artifact"
+    with pytest.raises(artifact_archive.ArtifactError):
+        artifact_archive.extract_artifact(io.BytesIO(_archive(files)), destination)
+    assert not destination.exists()
+
+
+def test_existing_parent_file_is_refused_before_writing(tmp_path):
+    destination = tmp_path / "artifact"
+    destination.mkdir()
+    (destination / "a").write_bytes(b"keep")
+    with pytest.raises(
+        artifact_archive.ArtifactError,
+        match=re.escape(t("cli.member.artifact_exists", path=str(destination / "a"))),
+    ):
+        artifact_archive.extract_artifact(
+            io.BytesIO(_archive({"good": b"good", "a/child": b"child"})), destination
+        )
+    assert [entry.name for entry in destination.iterdir()] == ["a"]
+    assert (destination / "a").read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("second", ["a/", "a/child"])
+def test_case_alias_parent_collision_is_translated(monkeypatch, tmp_path, second):
+    original = Path.mkdir
+    original_exists = Path.exists
+    destination = tmp_path / "artifact"
+    destination.mkdir()
+    (destination / "A").write_bytes(b"first")
+
+    def absent_during_preflight(path):
+        return False if path.name == "a" else original_exists(path)
+
+    def insensitive_mkdir(path, *args, **kwargs):
+        if path.name == "a" and path.with_name("A").is_file():
+            raise FileExistsError(str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", insensitive_mkdir)
+    monkeypatch.setattr(Path, "exists", absent_during_preflight)
+    with pytest.raises(artifact_archive.ArtifactError):
+        artifact_archive.extract_artifact(
+            io.BytesIO(_archive({second: b"second"})), destination
+        )
+    assert [entry.name for entry in destination.iterdir()] == ["A"]
+    assert (destination / "A").read_bytes() == b"first"
