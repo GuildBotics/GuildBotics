@@ -328,14 +328,10 @@ async fn member_alert_command_shows_the_upstreams_alerts(c: &dyn CodeHostingServ
     let answer = session.execute(&arguments, "").await.unwrap();
     let expected = json!({"repo":REPO,"alerts":answer.payload["items"],"continuation":answer.payload["continuation"]});
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let recipe: Value = serde_json::from_str(
-        &std::fs::read_to_string(repo.join("guildbotics/templates/environment/recipe.json"))
-            .unwrap(),
-    )
-    .unwrap();
-    let python = Path::new(recipe["venv"].as_str().unwrap()).join("bin/python");
-    let mut child = Command::new(python)
+    let mut child = Command::new("uv")
+        .args(["run", "--locked", "python"])
         .arg(repo.join("tests/guildbotics/guest/alert_command_fixture.py"))
+        .current_dir(&repo)
         .env("PYTHONPATH", &repo)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

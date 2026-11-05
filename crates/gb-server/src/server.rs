@@ -136,7 +136,7 @@ impl Server {
             api,
         })
     }
-    pub fn with_branvil(mut self, branvil: branvil::api::DataApi) -> anyhow::Result<Self> {
+    pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
         let api =
             Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
         if let Some(workspace) = &api.workspace {
@@ -146,7 +146,7 @@ impl Server {
             native.runtime_work = Some(api.work.clone());
             api.member = Some(native.backend()?);
         }
-        Ok(self)
+        Ok(())
     }
 
     /// Serves until `stop`, then waits for the work it started, and hands
