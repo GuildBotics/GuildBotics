@@ -498,6 +498,19 @@ async fn scenario() {
     assert_eq!(again.rollup, ReadinessRollup::Pending);
     let artifact = b"PK\x03\x04synthetic test artifact";
     finish_artifact(&base, &runner.token, &moved, "success", Some(artifact)).await;
+    let too_large = c.artifact(&next.target.url, "report", 1).await.unwrap_err();
+    assert_eq!(
+        too_large.translation_key(),
+        "integrations.branvil.api.artifact_too_large"
+    );
+    assert_eq!(
+        too_large.translation_args(),
+        [
+            ("name".into(), "report".into()),
+            ("limit".into(), "1".into())
+        ]
+        .into()
+    );
     contracts::code_artifact_contract(c.as_ref(), &next.target.url, &moved, artifact).await;
     assert_eq!(
         c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)

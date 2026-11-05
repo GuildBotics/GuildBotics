@@ -278,9 +278,18 @@ impl TicketService for LocalService {
                 .attachments(&r, &self.store.load(&r)?)?
                 .into_iter()
                 .find(|a| a.id == id)
-                .ok_or(ServiceError::NotFound)?;
-            if a.size < 0 || a.size as usize > limit {
-                return Err(ServiceError::InvalidParameters);
+                .ok_or_else(|| ServiceError::AttachmentMissing {
+                    url: u.into(),
+                    id: id.into(),
+                })?;
+            if a.size < 0 {
+                return Err(ServiceError::InvalidResult);
+            }
+            if a.size as usize > limit {
+                return Err(ServiceError::AttachmentTooLarge {
+                    name: a.name.clone(),
+                    limit,
+                });
             }
             let content = fs::read(
                 self.store
@@ -290,7 +299,10 @@ impl TicketService for LocalService {
             )
             .map_err(|_| ServiceError::Failed)?;
             if content.len() > limit {
-                return Err(ServiceError::InvalidResult);
+                return Err(ServiceError::AttachmentTooLarge {
+                    name: a.name.clone(),
+                    limit,
+                });
             }
             Ok(Download {
                 metadata: a,

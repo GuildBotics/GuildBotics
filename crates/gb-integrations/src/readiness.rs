@@ -222,7 +222,7 @@ fn fit_log_tails(result: &mut Readiness) -> Result<(), ServiceError> {
         .collect();
     let budget = MAX_PAGE_BYTES
         .checked_sub(page_bytes(result)?)
-        .ok_or(ServiceError::InvalidResult)?
+        .ok_or(ServiceError::ResponseTooLarge)?
         / tails.len();
     for (log, tail) in result
         .failed_logs
@@ -254,7 +254,7 @@ fn fit_log_tails(result: &mut Readiness) -> Result<(), ServiceError> {
         }
     }
     if page_bytes(result)? > MAX_PAGE_BYTES {
-        return Err(ServiceError::InvalidResult);
+        return Err(ServiceError::ResponseTooLarge);
     }
     Ok(())
 }

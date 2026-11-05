@@ -3,28 +3,83 @@ use super::*;
 use branvil::api::{Running, initialize};
 
 #[test]
-fn frozen_error_classifications_are_provider_owned_and_sanitized() {
-    for (code, expected) in [
-        ("not_found", ServiceError::NotFound),
-        ("invalid_cursor", ServiceError::InvalidContinuation),
-        ("invalid", ServiceError::InvalidParameters),
-        ("label_undefined", ServiceError::InvalidParameters),
-        ("unsupported", ServiceError::Unsupported),
-        ("unavailable", ServiceError::Unavailable),
-        ("unauthorized", ServiceError::Failed),
-        ("unknown", ServiceError::Failed),
-        ("head_moved", ServiceError::Failed),
-        ("conflict", ServiceError::Failed),
-        ("no_account", ServiceError::Failed),
-        ("upstream_refused", ServiceError::Failed),
+fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {
+    let stopped = error(
+        AppError::unavailable("integrations.branvil.api.stopped"),
+        "authenticate",
+    );
+    assert_eq!(stopped, diagnostic("integrations.branvil.api.stopped", []));
+    let internal = error(AppError::internal("private storage detail"), "pulls_review");
+    assert!(!internal.translation_args()["message"].contains("private storage detail"));
+    for (failure, key, args) in [
+        (
+            AppError::unauthorized(),
+            "integrations.branvil.api.authentication",
+            vec![],
+        ),
+        (
+            AppError::not_found("No such ticket."),
+            "integrations.branvil.api.not_found",
+            vec![("message", "No such ticket.")],
+        ),
+        (
+            AppError::unsupported("No upstream."),
+            "integrations.branvil.api.unsupported",
+            vec![("message", "No upstream.")],
+        ),
+        (
+            AppError::conflict_code("head_moved", "Changed."),
+            "integrations.branvil.api.head_moved",
+            vec![],
+        ),
+        (
+            AppError::conflict_code("label_undefined", "Label bug."),
+            "integrations.branvil.api.label_undefined",
+            vec![("message", "Label bug.")],
+        ),
+        (
+            AppError::forbidden("Permission denied."),
+            "integrations.branvil.api.refused",
+            vec![
+                ("operation", "pulls_review"),
+                ("status", "403"),
+                ("code", "forbidden"),
+                ("message", "Permission denied."),
+            ],
+        ),
+        (
+            AppError::invalid("Invalid title."),
+            "integrations.branvil.api.refused",
+            vec![
+                ("operation", "pulls_review"),
+                ("status", "400"),
+                ("code", "invalid"),
+                ("message", "Invalid title."),
+            ],
+        ),
     ] {
-        let mut failure = AppError::not_found("provider-detail");
-        failure.code = code;
-        let mapped = error(failure);
-        assert_eq!(mapped, expected);
-        assert!(!mapped.to_string().contains("provider-detail"));
-        assert!(mapped.translation_args().is_empty());
+        let mapped = error(failure, "pulls_review");
+        assert_eq!(mapped.translation_key(), key);
+        assert_eq!(
+            mapped.translation_args(),
+            args.into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect()
+        );
     }
+    assert_eq!(
+        error(AppError::invalid_cursor(), "page"),
+        ServiceError::InvalidContinuation
+    );
+    assert_eq!(
+        error(AppError::not_found("x".repeat(600)), "pulls_get").translation_args()["message"]
+            .len(),
+        500
+    );
+    assert_eq!(
+        decode::<u64>(json!("bad")).unwrap_err(),
+        diagnostic("integrations.branvil.api.invalid", [])
+    );
 }
 #[tokio::test]
 async fn frozen_remote_and_pull_address_population() {
@@ -71,7 +126,10 @@ async fn frozen_remote_and_pull_address_population() {
             CodeHostingService::comment(&service, &url, "Hi", None)
                 .await
                 .unwrap_err(),
-            ServiceError::NotFound,
+            diagnostic(
+                "integrations.branvil.api.not_pull_request",
+                [("url", url.clone())]
+            ),
             "{url}"
         );
     }

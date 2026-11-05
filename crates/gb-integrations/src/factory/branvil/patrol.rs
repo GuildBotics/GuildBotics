@@ -31,7 +31,7 @@ impl BranvilService {
                     Some(100),
                     cursor.as_deref(),
                 )
-                .map_err(error)?;
+                .map_err(|e| error(e, "page"))?;
             let (items, next) = if mentioned {
                 let page = m
                     .tickets_mentioned(
@@ -44,7 +44,7 @@ impl BranvilService {
                         p,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "tickets_mentioned"))?;
                 (page.items, page.next_cursor)
             } else {
                 let page = m
@@ -59,7 +59,7 @@ impl BranvilService {
                         p,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "tickets_cards"))?;
                 (page.items, page.next_cursor)
             };
             for item in items {
@@ -81,8 +81,11 @@ impl BranvilService {
         loop {
             let p = m
                 .page(format!("gb:comments:{url}"), Some(100), cursor.as_deref())
-                .map_err(error)?;
-            let page = m.tickets_list_comments(&r, &k, p).await.map_err(error)?;
+                .map_err(|e| error(e, "page"))?;
+            let page = m
+                .tickets_list_comments(&r, &k, p)
+                .await
+                .map_err(|e| error(e, "tickets_list_comments"))?;
             for c in page.items {
                 comments.push(value(c)?)
             }
@@ -96,8 +99,11 @@ impl BranvilService {
         loop {
             let p = m
                 .page(format!("gb:links:{url}"), Some(100), cursor.as_deref())
-                .map_err(error)?;
-            let page = m.tickets_ticket_pulls(&r, &k, p).await.map_err(error)?;
+                .map_err(|e| error(e, "page"))?;
+            let page = m
+                .tickets_ticket_pulls(&r, &k, p)
+                .await
+                .map_err(|e| error(e, "tickets_ticket_pulls"))?;
             for c in page.items {
                 pulls.push(value(c)?)
             }
@@ -290,7 +296,7 @@ impl BranvilService {
                 },
             )
             .await
-            .map_err(error)?;
+            .map_err(|e| error(e, "tickets_put_on_board"))?;
         Ok(true)
     }
     pub(super) async fn ticket_closed(
@@ -308,7 +314,7 @@ impl BranvilService {
                     Some(100),
                     cursor.as_deref(),
                 )
-                .map_err(error)?;
+                .map_err(|e| error(e, "page"))?;
             let page = m
                 .tickets_closed(
                     &self.workspace,
@@ -319,7 +325,7 @@ impl BranvilService {
                     p,
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "tickets_closed"))?;
             for i in page.items {
                 out.push(decode(value(i)?)?)
             }
@@ -441,7 +447,7 @@ impl BranvilService {
         loop {
             let p = m
                 .page("gb:patrol".into(), Some(100), cursor.as_deref())
-                .map_err(error)?;
+                .map_err(|e| error(e, "page"))?;
             let page = m
                 .pulls_patrol(
                     pulls::PatrolQuery {
@@ -452,7 +458,7 @@ impl BranvilService {
                     p,
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "pulls_patrol"))?;
             for p in page.items {
                 let v = value(p)?;
                 if let Some(t) = self.pull_work(&v, &v["activity"]).await? {
@@ -479,7 +485,7 @@ impl BranvilService {
                     .await?
                     .pulls_activity(&r, number(&k)?)
                     .await
-                    .map_err(error)?,
+                    .map_err(|e| error(e, "pulls_activity"))?,
             )?,
         )
         .await
@@ -501,7 +507,7 @@ impl BranvilService {
                 .await?
                 .pulls_activity(&r, number(&k)?)
                 .await
-                .map_err(error)?,
+                .map_err(|e| error(e, "pulls_activity"))?,
         )?;
         Ok(matches!(
             crate::pull_request_work(&self.snapshot(&p, &a), &me, Utc::now()),
@@ -537,7 +543,7 @@ impl BranvilService {
                     {
                         Ok(_) => Ok(true),
                         Err(e) if e.code == "conflict" => Ok(false),
-                        Err(e) => Err(error(e)),
+                        Err(e) => Err(error(e, "pulls_patch")),
                     }
                 })
             },

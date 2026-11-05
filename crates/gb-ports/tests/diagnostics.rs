@@ -11,6 +11,7 @@ fn port_owned_locale_keys_are_provider_neutral() {
 #[test]
 fn diagnostic_carries_the_providers_key_and_safe_arguments_without_interpreting_them() {
     let error = gb_ports::ServiceError::Diagnostic {
+        class: gb_ports::ServiceErrorClass::Failure,
         key: "example.credentials.missing",
         args: [("setting".into(), "MEMBER_KEY".into())].into(),
     };
@@ -21,4 +22,43 @@ fn diagnostic_carries_the_providers_key_and_safe_arguments_without_interpreting_
     copy.clear();
     assert_eq!(error.translation_args().len(), 1);
     assert!(std::error::Error::source(&error).is_none());
+}
+
+#[test]
+fn resource_diagnostics_preserve_recovery_arguments_and_categories() {
+    use gb_ports::ServiceError;
+    for (error, key, args, missing) in [
+        (ServiceError::ResponseTooLarge, "too_large", vec![], false),
+        (
+            ServiceError::AttachmentMissing {
+                url: "local://tickets/acme/1".into(),
+                id: "report".into(),
+            },
+            "attachment_missing",
+            vec![("url", "local://tickets/acme/1"), ("id", "report")],
+            true,
+        ),
+        (
+            ServiceError::AttachmentTooLarge {
+                name: "report.txt".into(),
+                limit: 1024,
+            },
+            "attachment_too_large",
+            vec![("name", "report.txt"), ("limit", "1024")],
+            false,
+        ),
+    ] {
+        let expected = format!("integrations.resources.{key}");
+        assert_eq!(error.translation_key(), expected);
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(
+            error.translation_args(),
+            args.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect()
+        );
+        assert_eq!(error.is_not_found(), missing);
+        assert!(!error.is_unsupported());
+        assert!(std::error::Error::source(&error).is_none());
+    }
 }

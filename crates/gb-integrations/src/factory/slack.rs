@@ -78,6 +78,7 @@ impl SlackFailure {
             Self::ThreadMissing => ServiceError::NotFound,
             Self::MissingCredential(name) => ServiceError::MissingCredential { name },
             Self::MissingScope { needed, provided } => ServiceError::Diagnostic {
+                class: ServiceErrorClass::Failure,
                 key: "integrations.slack.chat_service.missing_scope",
                 args: [("needed".into(), needed), ("provided".into(), provided)].into(),
             },

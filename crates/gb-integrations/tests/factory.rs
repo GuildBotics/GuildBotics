@@ -101,27 +101,43 @@ fn factory_refuses_workspace_secrets_and_unknown_providers() {
         },
     )
     .unwrap();
+    identity
+        .set("AIKO_SLACK_BOT_TOKEN", "synthetic-secret-do-not-display")
+        .unwrap();
     let mut c = config(d.path());
     c.ticket_provider = "unknown".into();
     c.code_provider = "unknown".into();
     c.chat_provider = "unknown".into();
     let f = ServiceIntegrationFactory::new(c, &identity, None, Arc::new(|_| {})).unwrap();
-    assert!(matches!(
-        f.create_ticket_service(),
-        Err(ServiceError::Unsupported)
-    ));
-    assert!(matches!(
-        f.create_code_hosting_service(),
-        Err(ServiceError::Unsupported)
-    ));
-    assert!(matches!(
-        f.create_chat_service(),
-        Err(ServiceError::Unsupported)
-    ));
-    assert!(matches!(
-        f.create_event_listener(Arc::new(|| {})),
-        Err(ServiceError::Unsupported)
-    ));
+    for (service, error) in [
+        ("ticket_service", f.create_ticket_service().err().unwrap()),
+        (
+            "code_hosting_service",
+            f.create_code_hosting_service().err().unwrap(),
+        ),
+        ("chat_service", f.create_chat_service().err().unwrap()),
+        ("chat_service", f.verify_chat_credentials().unwrap_err()),
+        ("chat_service", f.listener_key().unwrap_err()),
+        (
+            "chat_service",
+            f.create_event_listener(Arc::new(|| {})).err().unwrap(),
+        ),
+    ] {
+        assert_eq!(
+            error.translation_key(),
+            "integrations.resources.unsupported"
+        );
+        assert_eq!(
+            error.translation_args(),
+            BTreeMap::from([
+                ("service".into(), service.into()),
+                ("name".into(), "unknown".into())
+            ])
+        );
+        assert!(error.is_unsupported());
+        assert!(!error.is_not_found());
+        assert!(!format!("{error:?}").contains("synthetic-secret-do-not-display"));
+    }
 }
 #[test]
 fn member_scoped_secrets_and_collision_withholding() {

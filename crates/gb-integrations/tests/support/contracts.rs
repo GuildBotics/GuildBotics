@@ -159,11 +159,11 @@ pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str) 
         count
     );
     let other = ticket_create(t, tracker, "Reaction bound to ticket").await;
-    assert_eq!(
-        t.add_reaction(&other, &written.id, SemanticReaction::Ack)
+    assert!(
+        (t.add_reaction(&other, &written.id, SemanticReaction::Ack)
             .await
-            .unwrap_err(),
-        ServiceError::NotFound
+            .unwrap_err())
+        .is_not_found()
     );
     assert_eq!(
         t.add_reaction(url, &written.id, SemanticReaction::Ack)
@@ -371,7 +371,7 @@ pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str) 
     off.add_to_board = false;
     match t.create_ticket(off).await {
         Ok(created) => assert!(ticket_detail(t, &created.target.url).await["lane"].is_null()),
-        Err(ServiceError::Unsupported) => assert_eq!(
+        Err(error) if error.is_unsupported() => assert_eq!(
             tracker_items(t, tracker, &json!({"state":"all","page_size":100}))
                 .await
                 .len(),
@@ -993,18 +993,15 @@ pub async fn ticket_wrong_subject_contract(
     pull_url: &str,
     pull_comment: &str,
 ) {
-    assert_eq!(
-        t.comment(pull_url, "Hi", None).await.unwrap_err(),
-        ServiceError::NotFound
-    );
-    assert_eq!(
-        t.add_reaction(pull_url, pull_comment, SemanticReaction::Ack)
+    assert!((t.comment(pull_url, "Hi", None).await.unwrap_err()).is_not_found());
+    assert!(
+        (t.add_reaction(pull_url, pull_comment, SemanticReaction::Ack)
             .await
-            .unwrap_err(),
-        ServiceError::NotFound
+            .unwrap_err())
+        .is_not_found()
     );
-    assert_eq!(
-        t.update_ticket(
+    assert!(
+        (t.update_ticket(
             pull_url,
             UpdateTicket {
                 title: Some("Renamed".into()),
@@ -1013,14 +1010,11 @@ pub async fn ticket_wrong_subject_contract(
             }
         )
         .await
-        .unwrap_err(),
-        ServiceError::NotFound
+        .unwrap_err())
+        .is_not_found()
     );
     for r in [Resource::Tickets, Resource::TicketComments] {
-        assert_eq!(
-            t.read(r, pull_url, None, "").await.unwrap_err(),
-            ServiceError::NotFound
-        );
+        assert!((t.read(r, pull_url, None, "").await.unwrap_err()).is_not_found());
     }
 }
 pub struct TicketAttachmentFixture {
@@ -1089,17 +1083,36 @@ pub async fn ticket_attachment_contract(
         .attachment(&url, &f.screen_id, screen.len() - 1)
         .await
         .unwrap_err();
-    assert_ne!(too_large, ServiceError::NotFound);
+    assert_eq!(
+        too_large.translation_key(),
+        "integrations.resources.attachment_too_large"
+    );
+    assert_eq!(
+        too_large.translation_args(),
+        [
+            ("name".into(), "screen.png".into()),
+            ("limit".into(), (screen.len() - 1).to_string()),
+        ]
+        .into()
+    );
     let other = ticket_create(t, tracker, "No attachment references").await;
     for (url, id) in [
         (&other, &f.screen_id),
         (&url, &f.unused_id),
         (&url, &"missing-attachment".to_string()),
     ] {
+        let error = t.attachment(url, id, 1024).await.unwrap_err();
         assert_eq!(
-            t.attachment(url, id, 1024).await.unwrap_err(),
-            ServiceError::NotFound
+            error.translation_key(),
+            "integrations.resources.attachment_missing"
         );
+        assert_eq!(
+            error.translation_args(),
+            [("url".into(), url.clone()), ("id".into(), id.clone()),].into()
+        );
+        assert!(error.is_not_found());
+        assert!(!error.is_unsupported());
+        assert!(std::error::Error::source(&error).is_none());
     }
 }
 
@@ -1273,7 +1286,7 @@ pub async fn code_contract(
                 );
             }
         }
-        Err(ServiceError::Unsupported) => {}
+        Err(error) if error.is_unsupported() => {}
         Err(error) => panic!("dependency alerts read failed: {error:?}"),
     }
     for limit in [0, MAX_LOG_TAIL_BYTES + 1] {
@@ -1409,11 +1422,11 @@ pub async fn code_contract(
             service
                 .add_reaction(&other.target.url, id, SemanticReaction::Agree)
                 .await,
-            Err(ServiceError::NotFound)
+            Err(ref error) if error.is_not_found()
         ));
         assert!(matches!(
             service.reply(&other.target.url, id, "wrong PR").await,
-            Err(ServiceError::NotFound)
+            Err(ref error) if error.is_not_found()
         ));
         let r = service
             .add_reaction(url, id, SemanticReaction::Agree)
@@ -1464,7 +1477,7 @@ pub async fn code_contract(
             },
         )
         .await;
-    assert!(matches!(unsupported, Err(ServiceError::Unsupported)));
+    assert!(matches!(unsupported, Err(ref error) if error.is_unsupported()));
     assert_eq!(
         service
             .read(Resource::PullRequests, url, None, "")
@@ -1482,7 +1495,7 @@ pub async fn code_contract(
                 ""
             )
             .await,
-        Err(ServiceError::Unsupported)
+        Err(ref error) if error.is_unsupported()
     ));
     let (a, b) = tokio::join!(
         service.convert_pull_request_to_draft(url),
@@ -1632,7 +1645,7 @@ pub async fn code_artifact_contract(
 pub async fn code_old_artifact_contract(service: &dyn CodeHostingService, url: &str) {
     assert!(matches!(
         service.artifact(url, "report", 1024 * 1024).await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
 }
 /// The fixture includes a changed UTF-8 filename and UTF-8 patch text.
@@ -1682,20 +1695,20 @@ pub async fn code_kind_boundary_contract(
         .url;
     assert!(matches!(
         code.comment(&ticket, "wrong kind", None).await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     assert!(matches!(
         code.review(&ticket, "wrong kind", ReviewVerdict::Comment, "head")
             .await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     assert!(matches!(
         code.readiness(&ticket, false, MAX_LOG_TAIL_BYTES).await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     assert!(matches!(
         code.pull_request_head(&ticket).await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     for resource in Resource::ALL {
         if resource.is_ticket_service() {
@@ -1710,14 +1723,14 @@ pub async fn code_kind_boundary_contract(
         ) {
             assert!(matches!(
                 code.read(*resource, &ticket, None, "").await,
-                Err(ServiceError::NotFound)
+                Err(ref error) if error.is_not_found()
             ));
         }
     }
     assert!(matches!(
         code.read(Resource::TicketPullRequests, pr_url, None, "")
             .await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     let before = code
         .read(Resource::PullRequests, pr_url, None, "")
@@ -1741,7 +1754,7 @@ pub async fn code_kind_boundary_contract(
             }
         )
         .await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     for closes in [false, true] {
         let p = &before.items()[0];
@@ -1759,7 +1772,7 @@ pub async fn code_kind_boundary_contract(
                 }]
             })
             .await,
-            Err(ServiceError::NotFound)
+            Err(ref error) if error.is_not_found()
         ));
         assert!(matches!(
             code.update_pull_request(
@@ -1774,7 +1787,7 @@ pub async fn code_kind_boundary_contract(
                 }
             )
             .await,
-            Err(ServiceError::NotFound)
+            Err(ref error) if error.is_not_found()
         ));
     }
     assert_eq!(
@@ -1970,7 +1983,7 @@ pub async fn code_link_population(
                 }
             )
             .await,
-            Err(ServiceError::Unsupported)
+            Err(ref error) if error.is_unsupported()
         ));
         assert_eq!(
             code.read(Resource::PullRequests, &pr.target.url, None, "")
@@ -2069,7 +2082,7 @@ pub async fn code_cross_repo_link_contract(
             }
         )
         .await,
-        Err(ServiceError::Unsupported)
+        Err(ref error) if error.is_unsupported()
     ));
     assert_eq!(
         code.read(Resource::PullRequests, url, None, "")

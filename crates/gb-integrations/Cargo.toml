@@ -30,6 +30,8 @@ anyhow = "1"
 tracing = "0.1"
 
 [dev-dependencies]
+serde-saphyr = "2.0.0"
+syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 

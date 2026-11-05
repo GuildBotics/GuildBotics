@@ -124,18 +124,35 @@ impl<'a> ServiceIntegrationFactory<'a> {
         )
         .with_members(&self.config.branvil_members))
     }
+    fn unsupported_provider(service: &str, name: &str) -> ServiceError {
+        ServiceError::Diagnostic {
+            class: ServiceErrorClass::Unsupported,
+            key: "integrations.resources.unsupported",
+            args: [
+                ("service".into(), service.into()),
+                ("name".into(), name.into()),
+            ]
+            .into(),
+        }
+    }
     pub fn create_ticket_service(&self) -> Result<Arc<dyn TicketService>, ServiceError> {
         match self.config.ticket_provider.as_str() {
             "local" => Ok(Arc::new(self.local(&self.config.ticket_scope))),
             "branvil" => Ok(Arc::new(self.branvil(&self.config.ticket_scope)?)),
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "ticket_service",
+                &self.config.ticket_provider,
+            )),
         }
     }
     pub fn create_code_hosting_service(&self) -> Result<Arc<dyn CodeHostingService>, ServiceError> {
         match self.config.code_provider.as_str() {
             "local" => Ok(Arc::new(self.local(&self.config.code_scope))),
             "branvil" => Ok(Arc::new(self.branvil(&self.config.code_scope)?)),
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "code_hosting_service",
+                &self.config.code_provider,
+            )),
         }
     }
     pub fn create_chat_service(&self) -> Result<Arc<dyn ChatService>, ServiceError> {
@@ -159,7 +176,10 @@ impl<'a> ServiceIntegrationFactory<'a> {
                     self.config.person_id.replace('-', "_").to_uppercase()
                 )),
             )),
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "chat_service",
+                &self.config.chat_provider,
+            )),
         }
     }
     fn slack_base(&self) -> String {
@@ -179,7 +199,10 @@ impl<'a> ServiceIntegrationFactory<'a> {
                 Ok(())
             }
             "local" => Ok(()),
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "chat_service",
+                &self.config.chat_provider,
+            )),
         }
     }
     pub fn listener_key(&self) -> Result<String, ServiceError> {
@@ -195,7 +218,10 @@ impl<'a> ServiceIntegrationFactory<'a> {
                     Sha256::digest(format!("{}\0{token}", self.slack_base()).as_bytes())
                 ))
             }
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "chat_service",
+                &self.config.chat_provider,
+            )),
         }
     }
     pub fn create_event_listener(
@@ -218,7 +244,10 @@ impl<'a> ServiceIntegrationFactory<'a> {
                 )
                 .with_member(self.config.person_id.clone()),
             )),
-            _ => Err(ServiceError::Unsupported),
+            _ => Err(Self::unsupported_provider(
+                "chat_service",
+                &self.config.chat_provider,
+            )),
         }
     }
 }

@@ -111,7 +111,9 @@ fn empty_and_short_logs_and_oversized_metadata() {
     }
     let mut input = log_input("tail");
     input["failed_logs"][0]["name"] = json!("🦀".repeat(MAX_PAGE_BYTES));
-    assert!(matches!(run(&input), Err(ServiceError::InvalidResult)));
+    let error = run(&input).unwrap_err();
+    assert_eq!(error.translation_key(), "integrations.resources.too_large");
+    assert!(error.translation_args().is_empty());
     input["failed_logs"] = json!([]);
     assert_eq!(run(&input).unwrap().failed_logs, Some(vec![]));
 }

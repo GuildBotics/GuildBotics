@@ -16,23 +16,28 @@ impl TicketService for BranvilService {
             }
             let m = self.member().await?;
             if resource == Resource::TrackerTickets {
-                if !crate::valid_repository_path(subject) {
-                    return Err(ServiceError::InvalidParameters);
-                }
-                let p=m.tickets_list_tickets(subject,decode(json!({"q":c["text"],"state":c["state"],"label":c["label"].as_str().filter(|s|!s.is_empty())}))?,self.page(&m,resource,subject,&c,continuation)?).await.map_err(error)?;
+                self.repository(subject)?;
+                let p=m.tickets_list_tickets(subject,decode(json!({"q":c["text"],"state":c["state"],"label":c["label"].as_str().filter(|s|!s.is_empty())}))?,self.page(&m,resource,subject,&c,continuation)?).await.map_err(|e| error(e, "tickets_list_tickets"))?;
                 let items=p.items.into_iter().map(|t|{let v=value(t)?;let target=self.target(&v,WorkKind::Ticket);Ok(json!({"kind":"ticket","url":target.url,"title":target.title,"label":target.label,"key":v["key"],"state":v["state"],"lane":if self.on_board(&v){v["lane"].clone()}else{Value::Null},"labels":v["labels"],"updated_at":v["updated_at"]}))}).collect::<Result<Vec<_>,ServiceError>>()?;
                 return ReadPage::of(resource, items, p.next_cursor, None);
             }
             let (r, k) = self.item(subject, "tickets")?;
             if resource == Resource::Tickets {
-                let v = value(m.tickets_get_ticket(&r, &k).await.map_err(error)?)?;
+                let v = value(
+                    m.tickets_get_ticket(&r, &k)
+                        .await
+                        .map_err(|e| error(e, "tickets_get_ticket"))?,
+                )?;
                 let target = self.target(&v, WorkKind::Ticket);
                 return ReadPage::of(resource, [self.ticket_value(v)], None, Some(target));
             }
             let page = self.page(&m, resource, subject, &c, continuation)?;
             match resource {
                 Resource::TicketComments => {
-                    let p = m.tickets_list_comments(&r, &k, page).await.map_err(error)?;
+                    let p = m
+                        .tickets_list_comments(&r, &k, page)
+                        .await
+                        .map_err(|e| error(e, "tickets_list_comments"))?;
                     ReadPage::of(
                         resource,
                         p.items
@@ -44,7 +49,10 @@ impl TicketService for BranvilService {
                     )
                 }
                 Resource::TicketAttachments => {
-                    let p = m.attachments_of_ticket(&r, &k, page).await.map_err(error)?;
+                    let p = m
+                        .attachments_of_ticket(&r, &k, page)
+                        .await
+                        .map_err(|e| error(e, "attachments_of_ticket"))?;
                     ReadPage::of(resource,p.items.into_iter().map(|a|json!({"id":a.attachment.id,"name":a.attachment.name,"media_type":a.attachment.media_type,"size":a.attachment.size,"referenced_by":a.referenced_by})),p.next_cursor,None)
                 }
                 _ => Err(ServiceError::InvalidResource),
@@ -67,18 +75,27 @@ impl TicketService for BranvilService {
                         &r,
                         &k,
                         m.page(format!("attachment:{url}"), Some(100), cursor.as_deref())
-                            .map_err(error)?,
+                            .map_err(|e| error(e, "page"))?,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "attachments_of_ticket"))?;
                 for a in p.items {
                     if a.attachment.id == id {
                         if a.attachment.size > limit as u64 {
-                            return Err(ServiceError::InvalidResult);
+                            return Err(ServiceError::AttachmentTooLarge {
+                                name: a.attachment.name,
+                                limit,
+                            });
                         }
-                        let (_, content) = m.attachments_get(&r, id).await.map_err(error)?;
+                        let (_, content) = m
+                            .attachments_get(&r, id)
+                            .await
+                            .map_err(|e| error(e, "attachments_get"))?;
                         if content.len() > limit {
-                            return Err(ServiceError::InvalidResult);
+                            return Err(ServiceError::AttachmentTooLarge {
+                                name: a.attachment.name,
+                                limit,
+                            });
                         }
                         return Ok(Download {
                             metadata: Attachment {
@@ -94,7 +111,10 @@ impl TicketService for BranvilService {
                 }
                 cursor = p.next_cursor;
                 if cursor.is_none() {
-                    return Err(ServiceError::NotFound);
+                    return Err(ServiceError::AttachmentMissing {
+                        url: url.to_owned(),
+                        id: id.to_owned(),
+                    });
                 }
             }
         })
@@ -109,7 +129,11 @@ impl TicketService for BranvilService {
             let (r, k) = self.item(url, "tickets")?;
             self.writable(&r)?;
             let m = self.member().await?;
-            let t = value(m.tickets_get_ticket(&r, &k).await.map_err(error)?)?;
+            let t = value(
+                m.tickets_get_ticket(&r, &k)
+                    .await
+                    .map_err(|e| error(e, "tickets_get_ticket"))?,
+            )?;
             let c = m
                 .tickets_add_comment(
                     &r,
@@ -120,7 +144,7 @@ impl TicketService for BranvilService {
                     },
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "tickets_add_comment"))?;
             let v = value(c)?;
             Ok(CommentWritten {
                 id: text(&v, "id").into(),
@@ -134,12 +158,13 @@ impl TicketService for BranvilService {
     fn create_ticket(&self, r: CreateTicket) -> ServiceFuture<'_, TicketCreated> {
         Box::pin(async move {
             if !r.add_to_board {
-                return Err(ServiceError::Unsupported);
+                return Err(diagnostic("integrations.branvil.api.every_on_board", []));
             }
+            self.repository(&r.tracker)?;
             self.writable(&r.tracker)?;
             self.related(r.parent.iter().chain(&r.blocked_by).cloned())?;
             let lane = creation_lane(r.lane, r.parent.as_deref(), &r.blocked_by);
-            let v=value(self.member().await?.tickets_create_ticket(&r.tracker,decode(json!({"title":r.title,"body":r.body,"labels":r.labels,"lane":lane,"interactive":r.interactive,"assignee":r.assignee,"parent":r.parent,"blocked_by":r.blocked_by}))?).await.map_err(error)?)?;
+            let v=value(self.member().await?.tickets_create_ticket(&r.tracker,decode(json!({"title":r.title,"body":r.body,"labels":r.labels,"lane":lane,"interactive":r.interactive,"assignee":r.assignee,"parent":r.parent,"blocked_by":r.blocked_by}))?).await.map_err(|e| error(e, "tickets_create_ticket"))?)?;
             Ok(TicketCreated {
                 labels: decode(v["labels"].clone())?,
                 target: self.target(&v, WorkKind::Ticket),
@@ -175,7 +200,7 @@ impl TicketService for BranvilService {
                 .await?
                 .tickets_update_ticket(&repo, &key, decode(patch)?)
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "tickets_update_ticket"))?;
             let changed = t.state_changed;
             let v = value(t.ticket)?;
             Ok(TicketUpdated {
@@ -210,7 +235,7 @@ impl TicketService for BranvilService {
                     true,
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "tickets_react"))?;
             Ok(ReactionAdded {
                 reaction: r,
                 id: id.into(),

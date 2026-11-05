@@ -833,7 +833,10 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
             TicketService::comment(&f.service, &address, "Hi", None)
                 .await
                 .unwrap_err(),
-            ServiceError::NotFound
+            diagnostic(
+                "integrations.branvil.api.not_ticket",
+                [("url", address.clone())]
+            )
         );
     }
     assert!(

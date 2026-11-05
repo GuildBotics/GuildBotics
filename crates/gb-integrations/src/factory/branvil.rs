@@ -57,11 +57,12 @@ impl BranvilService {
                 code: "unauthorized",
             });
         }
-        error(e)
+        error(e, "authenticate")
     }
     async fn member(&self) -> Result<MemberApi, ServiceError> {
         if self.token.is_empty() {
             return Err(ServiceError::Diagnostic {
+                class: ServiceErrorClass::Failure,
                 key: "integrations.branvil.api.token_missing",
                 args: [(
                     "name".into(),
@@ -75,6 +76,7 @@ impl BranvilService {
         }
         if self.username.is_empty() {
             return Err(ServiceError::Diagnostic {
+                class: ServiceErrorClass::Failure,
                 key: "integrations.branvil.api.username_missing",
                 args: Default::default(),
             });
@@ -84,38 +86,50 @@ impl BranvilService {
             .authenticate(self.token.clone())
             .await
             .map_err(|e| self.api_error(e))?;
-        if !m
-            .identity()
-            .await
-            .map_err(|e| self.api_error(e))?
-            .name
-            .eq_ignore_ascii_case(&self.username)
-        {
+        let name = m.identity().await.map_err(|e| self.api_error(e))?.name;
+        if !name.eq_ignore_ascii_case(&self.username) {
             (self.observer)(IntegrationEvent::CredentialFailed {
                 provider: "branvil",
                 code: "identity_mismatch",
             });
-            return Err(ServiceError::Failed);
+            return Err(diagnostic(
+                "integrations.branvil.api.identity_mismatch",
+                [("name", name), ("username", self.username.clone())],
+            ));
         }
         Ok(m)
     }
     fn item(&self, url: &str, kind: &str) -> Result<(String, String), ServiceError> {
+        let invalid = || {
+            diagnostic(
+                if kind == "tickets" {
+                    "integrations.branvil.api.not_ticket"
+                } else {
+                    "integrations.branvil.api.not_pull_request"
+                },
+                [("url", url.to_owned())],
+            )
+        };
         let path = url
             .strip_prefix(self.api.base_url())
             .and_then(|p| p.strip_prefix('/'))
-            .ok_or(ServiceError::NotFound)?;
-        let (repo, tail) = path.split_once("/-/").ok_or(ServiceError::NotFound)?;
-        if !crate::valid_repository_path(repo) {
-            return Err(ServiceError::NotFound);
-        }
-        let (found, key) = tail.split_once('/').ok_or(ServiceError::NotFound)?;
-        if found != kind || key.is_empty() || key.contains('/') {
-            return Err(ServiceError::NotFound);
-        }
-        if kind == "pulls" && number(key).is_err() {
-            return Err(ServiceError::NotFound);
+            .ok_or_else(invalid)?;
+        let (repo, tail) = path.split_once("/-/").ok_or_else(invalid)?;
+        let (found, key) = tail.split_once('/').ok_or_else(invalid)?;
+        if !crate::valid_repository_path(repo) || found != kind || number(key).is_err() {
+            return Err(invalid());
         }
         Ok((repo.into(), key.into()))
+    }
+    fn repository(&self, path: &str) -> Result<(), ServiceError> {
+        if crate::valid_repository_path(path) {
+            Ok(())
+        } else {
+            Err(diagnostic(
+                "integrations.branvil.api.not_path",
+                [("path", path.to_owned())],
+            ))
+        }
     }
     fn writable(&self, repo: &str) -> Result<(), ServiceError> {
         self.scope.authorize(repo).map(|_| ()).inspect_err(|error| {
@@ -196,7 +210,7 @@ impl BranvilService {
             Some(conditions["page_size"].as_u64().unwrap_or(30) as usize),
             (!continuation.is_empty()).then_some(continuation),
         )
-        .map_err(error)
+        .map_err(|e| error(e, "page"))
     }
     async fn ticket(&self, url: &str) -> Result<Value, ServiceError> {
         let (r, k) = self.item(url, "tickets")?;
@@ -205,7 +219,7 @@ impl BranvilService {
                 .await?
                 .tickets_get_ticket(&r, &k)
                 .await
-                .map_err(error)?,
+                .map_err(|e| error(e, "tickets_get_ticket"))?,
         )
     }
     async fn pull(&self, url: &str) -> Result<Value, ServiceError> {
@@ -215,7 +229,7 @@ impl BranvilService {
                 .await?
                 .pulls_get(&r, number(&k)?)
                 .await
-                .map_err(error)?,
+                .map_err(|e| error(e, "pulls_get"))?,
         )
     }
 }
@@ -247,10 +261,10 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 fn value(v: impl Serialize) -> Result<Value, ServiceError> {
-    serde_json::to_value(v).map_err(|_| ServiceError::InvalidResult)
+    serde_json::to_value(v).map_err(|_| diagnostic("integrations.branvil.api.invalid", []))
 }
 fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ServiceError> {
-    serde_json::from_value(v).map_err(|_| ServiceError::InvalidResult)
+    serde_json::from_value(v).map_err(|_| diagnostic("integrations.branvil.api.invalid", []))
 }
 fn number(key: &str) -> Result<u64, ServiceError> {
     if key.is_empty()
@@ -262,14 +276,56 @@ fn number(key: &str) -> Result<u64, ServiceError> {
     }
     key.parse().map_err(|_| ServiceError::NotFound)
 }
-fn error(e: AppError) -> ServiceError {
+fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) -> ServiceError {
+    ServiceError::Diagnostic {
+        class: match key {
+            "integrations.branvil.api.not_found"
+            | "integrations.branvil.api.not_ticket"
+            | "integrations.branvil.api.not_pull_request"
+            | "integrations.branvil.api.not_path" => ServiceErrorClass::NotFound,
+            "integrations.branvil.api.unsupported"
+            | "integrations.branvil.api.foreign_ticket"
+            | "integrations.branvil.api.closes_foreign"
+            | "integrations.branvil.api.every_on_board" => ServiceErrorClass::Unsupported,
+            _ => ServiceErrorClass::Failure,
+        },
+        key,
+        args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+    }
+}
+fn error(e: AppError, operation: &str) -> ServiceError {
+    // AppError's contract guarantees secret-free messages; never substitute a raw transport body.
+    if e.code == "unavailable" && e.message == "integrations.branvil.api.stopped" {
+        return diagnostic("integrations.branvil.api.stopped", []);
+    }
+    let message = e.message.chars().take(500).collect();
+    match e.status.as_u16() {
+        401 => return diagnostic("integrations.branvil.api.authentication", []),
+        404 => return diagnostic("integrations.branvil.api.not_found", [("message", message)]),
+        422 => {
+            return diagnostic(
+                "integrations.branvil.api.unsupported",
+                [("message", message)],
+            );
+        }
+        _ => {}
+    }
     match e.code {
-        "not_found" => ServiceError::NotFound,
+        "head_moved" => diagnostic("integrations.branvil.api.head_moved", []),
+        "label_undefined" => diagnostic(
+            "integrations.branvil.api.label_undefined",
+            [("message", message)],
+        ),
         "invalid_cursor" => ServiceError::InvalidContinuation,
-        "invalid" | "label_undefined" => ServiceError::InvalidParameters,
-        "unsupported" => ServiceError::Unsupported,
-        "unavailable" => ServiceError::Unavailable,
-        _ => ServiceError::Failed,
+        _ => diagnostic(
+            "integrations.branvil.api.refused",
+            [
+                ("operation", operation.to_owned()),
+                ("status", e.status.as_u16().to_string()),
+                ("code", e.code.to_owned()),
+                ("message", message),
+            ],
+        ),
     }
 }
 fn reaction(r: SemanticReaction) -> &'static str {

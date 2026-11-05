@@ -192,6 +192,54 @@ async fn author_feedback_reactions_and_holds(f: &mut Fixture<'_>) {
 async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
     for inline in [false, true] {
         let mut p = f.open(false, vec![]).await;
+        let before = f.owner.pulls_get(REPOSITORY, p.number).await.unwrap();
+        let stale = if inline {
+            f.code
+                .review_comment(
+                    &p.url,
+                    ReviewComment {
+                        body: "Stale".into(),
+                        head: "0".repeat(40),
+                        path: "a.py".into(),
+                        line: 2,
+                        side: "RIGHT".into(),
+                        start_line: None,
+                        start_side: None,
+                    },
+                )
+                .await
+                .map(|_| ())
+        } else {
+            f.code
+                .review(&p.url, "Stale", ReviewVerdict::Approve, &"0".repeat(40))
+                .await
+                .map(|_| ())
+        };
+        let failure = stale.unwrap_err();
+        assert_eq!(
+            failure.translation_key(),
+            "integrations.branvil.api.head_moved"
+        );
+        assert!(failure.translation_args().is_empty());
+        assert_eq!(
+            serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        let page = f
+            .code
+            .read(
+                if inline {
+                    Resource::PullRequestThreads
+                } else {
+                    Resource::PullRequestReviews
+                },
+                &p.url,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        assert!(page.items().is_empty());
         f.request(&p).await;
         f.expected(&p, Some("pull_request_review"), true).await;
         if inline {
@@ -642,7 +690,7 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
                                 closes: true
                             },
                             TicketLink {
-                                url: foreign,
+                                url: foreign.clone(),
                                 closes: true
                             }
                         ])
@@ -650,7 +698,15 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
                 )
                 .await
                 .unwrap_err(),
-            ServiceError::Unsupported
+            ServiceError::Diagnostic {
+                class: ServiceErrorClass::Unsupported,
+                key: "integrations.branvil.api.closes_foreign",
+                args: [
+                    ("repository".into(), REPOSITORY.into()),
+                    ("url".into(), foreign)
+                ]
+                .into()
+            }
         );
         assert_eq!(
             f.code

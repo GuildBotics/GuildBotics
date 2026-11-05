@@ -84,5 +84,24 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
         );
         assert_eq!(normalized.failed_logs, Some(vec![]));
     }
+    let url = "http://example.invalid/test/repo/-/pulls/1";
+    for (missing, expected) in [
+        ("head", "integrations.branvil.api.no_head"),
+        ("report_base", "integrations.branvil.api.no_base"),
+        ("current_base", "integrations.branvil.api.no_base"),
+    ] {
+        let mut checks = report();
+        let mut current =
+            json!({"url":url,"state":"open","head_sha":"observed-head","base_sha":"observed-base"});
+        match missing {
+            "head" => checks.head_sha.clear(),
+            "report_base" => checks.base_sha.clear(),
+            _ => current["base_sha"] = json!(""),
+        }
+        assert_eq!(
+            service.readiness_result(checks, current, None).unwrap_err(),
+            diagnostic(expected, [("url", url.to_owned())])
+        );
+    }
     running.stop().await.unwrap();
 }

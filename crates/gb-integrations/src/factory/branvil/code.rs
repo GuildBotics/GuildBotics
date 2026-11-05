@@ -20,7 +20,13 @@ impl BranvilService {
                     .as_ref()
                     .is_none_or(|v| !text(v, "repository").eq_ignore_ascii_case(repository))
             {
-                return Err(ServiceError::Unsupported);
+                return Err(diagnostic(
+                    "integrations.branvil.api.closes_foreign",
+                    [
+                        ("repository", repository.to_owned()),
+                        ("url", link.url.clone()),
+                    ],
+                ));
             }
             result.push(TicketLink {
                 url: item
@@ -57,15 +63,13 @@ impl CodeHostingService for BranvilService {
                 return Err(ServiceError::InvalidResource);
             }
             if resource == Resource::DependencyAlerts {
-                if !crate::valid_repository_path(subject) {
-                    return Err(ServiceError::NotFound);
-                }
+                self.repository(subject)?;
                 let m = self.member().await?;
                 if let Some(id) = c["id"].as_str().filter(|s| !s.is_empty()) {
                     let alert = m
                         .upstream_dependency_alert(subject, id)
                         .await
-                        .map_err(error)?;
+                        .map_err(|e| error(e, "upstream_dependency_alert"))?;
                     return ReadPage::of(resource, [value(alert)?], None, None);
                 }
                 use branvil::api::AlertState;
@@ -81,7 +85,7 @@ impl CodeHostingService for BranvilService {
                         self.page(&m, resource, subject, &c, continuation)?,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "upstream_dependency_alerts"))?;
                 return ReadPage::of(
                     resource,
                     p.items
@@ -106,7 +110,10 @@ impl CodeHostingService for BranvilService {
             let m = self.member().await?;
             if resource == Resource::TicketPullRequests {
                 if !subject.starts_with(&format!("{}/", self.api.base_url())) {
-                    return Err(ServiceError::Unsupported);
+                    return Err(diagnostic(
+                        "integrations.branvil.api.foreign_ticket",
+                        [("url", subject.to_owned())],
+                    ));
                 }
                 let (repo, key) = self.item(subject, "tickets")?;
                 let p = m
@@ -116,20 +123,27 @@ impl CodeHostingService for BranvilService {
                         self.page(&m, resource, subject, &c, continuation)?,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "tickets_ticket_pulls"))?;
                 return ReadPage::of(resource,p.items.into_iter().map(|v|json!({"url":v.url,"title":v.title,"label":v.label,"state":v.state,"merged":v.merged})),p.next_cursor,None);
             }
             let (repo, key) = self.item(subject, "pulls")?;
             let n = number(&key)?;
             if resource == Resource::PullRequests {
-                let v = value(m.pulls_get(&repo, n).await.map_err(error)?)?;
+                let v = value(
+                    m.pulls_get(&repo, n)
+                        .await
+                        .map_err(|e| error(e, "pulls_get"))?,
+                )?;
                 let t = self.target(&v, WorkKind::PullRequest);
                 return ReadPage::of(resource, [self.pull_value(v)], None, Some(t));
             }
             let page = self.page(&m, resource, subject, &c, continuation)?;
             let (items, next) = match resource {
                 Resource::PullRequestComments => {
-                    let p = m.pulls_list_comments(&repo, n, page).await.map_err(error)?;
+                    let p = m
+                        .pulls_list_comments(&repo, n, page)
+                        .await
+                        .map_err(|e| error(e, "pulls_list_comments"))?;
                     (
                         p.items
                             .into_iter()
@@ -139,18 +153,24 @@ impl CodeHostingService for BranvilService {
                     )
                 }
                 Resource::PullRequestReviews => {
-                    let p = m.pulls_list_reviews(&repo, n, page).await.map_err(error)?;
+                    let p = m
+                        .pulls_list_reviews(&repo, n, page)
+                        .await
+                        .map_err(|e| error(e, "pulls_list_reviews"))?;
                     (p.items.into_iter().map(|v|json!({"id":v.id,"body":v.body,"author":v.author,"author_type":self.author_type(&v.author),"verdict":v.verdict,"commit":v.commit,"submitted_at":v.submitted_at,"url":v.url})).collect(),p.next_cursor)
                 }
                 Resource::PullRequestThreads => {
-                    let p = m.pulls_list_threads(&repo, n, page).await.map_err(error)?;
+                    let p = m
+                        .pulls_list_threads(&repo, n, page)
+                        .await
+                        .map_err(|e| error(e, "pulls_list_threads"))?;
                     (p.items.into_iter().map(|v|Ok(json!({"id":v.id,"resolved":v.resolved,"outdated":v.outdated,"comments":v.comments.into_iter().map(|c|value(c).map(|v|self.thread_comment(v))).collect::<Result<Vec<_>,_>>()?,"comments_complete":true}))).collect::<Result<Vec<_>,ServiceError>>()?,p.next_cursor)
                 }
                 Resource::ReviewThreadComments => {
                     let p = m
                         .pulls_thread_comments(&repo, n, text(&c, "node"), page)
                         .await
-                        .map_err(error)?;
+                        .map_err(|e| error(e, "pulls_thread_comments"))?;
                     (
                         p.items
                             .into_iter()
@@ -160,7 +180,10 @@ impl CodeHostingService for BranvilService {
                     )
                 }
                 Resource::PullRequestFiles => {
-                    let p = m.pulls_files(&repo, n, page).await.map_err(error)?;
+                    let p = m
+                        .pulls_files(&repo, n, page)
+                        .await
+                        .map_err(|e| error(e, "pulls_files"))?;
                     (
                         p.items
                             .into_iter()
@@ -186,7 +209,9 @@ impl CodeHostingService for BranvilService {
         Box::pin(async move {
             if check {
                 let m = self.member().await?;
-                m.members_get(self.username.clone()).await.map_err(error)?;
+                m.members_get(self.username.clone())
+                    .await
+                    .map_err(|e| error(e, "members_get"))?;
             }
             Ok(BTreeMap::from([(
                 "branvil_username".into(),
@@ -204,7 +229,11 @@ impl CodeHostingService for BranvilService {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
-            let t = value(m.pulls_get(&r, number(&k)?).await.map_err(error)?)?;
+            let t = value(
+                m.pulls_get(&r, number(&k)?)
+                    .await
+                    .map_err(|e| error(e, "pulls_get"))?,
+            )?;
             let c = m
                 .pulls_add_comment(
                     &r,
@@ -215,7 +244,7 @@ impl CodeHostingService for BranvilService {
                     },
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "pulls_add_comment"))?;
             let v = value(c)?;
             Ok(CommentWritten {
                 id: text(&v, "id").into(),
@@ -228,11 +257,12 @@ impl CodeHostingService for BranvilService {
     }
     fn create_pull_request(&self, r: CreatePullRequest) -> ServiceFuture<'_, PullRequestCreated> {
         Box::pin(async move {
+            self.repository(&r.repository)?;
             let links = self
                 .validate_ticket_links(&r.repository, &r.tickets)
                 .await?;
             self.writable(&r.repository)?;
-            let p=self.member().await?.pulls_create(&r.repository,decode(json!({"head":r.head,"base":r.base,"title":r.title,"body":r.body,"draft":r.draft,"tickets":links}))?).await.map_err(error)?;
+            let p=self.member().await?.pulls_create(&r.repository,decode(json!({"head":r.head,"base":r.base,"title":r.title,"body":r.body,"draft":r.draft,"tickets":links}))?).await.map_err(|e| error(e, "pulls_create"))?;
             let created = p.created;
             let v = value(p.pull)?;
             Ok(PullRequestCreated {
@@ -265,7 +295,7 @@ impl CodeHostingService for BranvilService {
                         decode(json!({"title":r.title,"body":r.body,"tickets":links}))?,
                     )
                     .await
-                    .map_err(error)?,
+                    .map_err(|e| error(e, "pulls_update"))?,
             )?;
             Ok(PullRequestUpdated {
                 body: text(&v, "body").into(),
@@ -284,7 +314,11 @@ impl CodeHostingService for BranvilService {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
-            let t = value(m.pulls_get(&r, number(&k)?).await.map_err(error)?)?;
+            let t = value(
+                m.pulls_get(&r, number(&k)?)
+                    .await
+                    .map_err(|e| error(e, "pulls_get"))?,
+            )?;
             let v = m
                 .pulls_review(
                     &r,
@@ -292,7 +326,7 @@ impl CodeHostingService for BranvilService {
                     decode(json!({"body":body.trim_end(),"verdict":verdict,"commit":head}))?,
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "pulls_review"))?;
             Ok(gb_ports::ReviewSubmitted {
                 verdict,
                 commit: v.commit,
@@ -310,8 +344,12 @@ impl CodeHostingService for BranvilService {
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
             let m = self.member().await?;
-            let t = value(m.pulls_get(&repo, number(&key)?).await.map_err(error)?)?;
-            let c=value(m.pulls_inline_comment(&repo,number(&key)?,decode(json!({"body":r.body.trim_end(),"commit":r.head,"path":r.path,"line":r.line,"side":r.side,"start_line":r.start_line.filter(|_|r.start_side.is_some()),"start_side":r.start_side.as_ref().filter(|_|r.start_line.is_some())}))?).await.map_err(error)?)?;
+            let t = value(
+                m.pulls_get(&repo, number(&key)?)
+                    .await
+                    .map_err(|e| error(e, "pulls_get"))?,
+            )?;
+            let c=value(m.pulls_inline_comment(&repo,number(&key)?,decode(json!({"body":r.body.trim_end(),"commit":r.head,"path":r.path,"line":r.line,"side":r.side,"start_line":r.start_line.filter(|_|r.start_side.is_some()),"start_side":r.start_side.as_ref().filter(|_|r.start_line.is_some())}))?).await.map_err(|e| error(e, "pulls_inline_comment"))?)?;
             Ok(ReviewCommentWritten {
                 id: text(&c, "id").into(),
                 url: c["url"].as_str().map(Into::into),
@@ -333,7 +371,11 @@ impl CodeHostingService for BranvilService {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
-            let t = value(m.pulls_get(&r, number(&k)?).await.map_err(error)?)?;
+            let t = value(
+                m.pulls_get(&r, number(&k)?)
+                    .await
+                    .map_err(|e| error(e, "pulls_get"))?,
+            )?;
             let c = value(
                 m.pulls_reply(
                     &r,
@@ -344,7 +386,7 @@ impl CodeHostingService for BranvilService {
                     },
                 )
                 .await
-                .map_err(error)?,
+                .map_err(|e| error(e, "pulls_reply"))?,
             )?;
             Ok(ReplyWritten {
                 id: text(&c, "id").into(),
@@ -375,7 +417,7 @@ impl CodeHostingService for BranvilService {
                     true,
                 )
                 .await
-                .map_err(error)?;
+                .map_err(|e| error(e, "pulls_react"))?;
             Ok(ReactionAdded {
                 reaction: r,
                 id: id.into(),
@@ -396,6 +438,7 @@ impl CodeHostingService for BranvilService {
         branch: &'a str,
     ) -> ServiceFuture<'a, Vec<String>> {
         Box::pin(async move {
+            self.repository(repo)?;
             let m = self.member().await?;
             let mut out = vec![];
             let mut cursor = None;
@@ -409,10 +452,10 @@ impl CodeHostingService for BranvilService {
                             Some(100),
                             cursor.as_deref(),
                         )
-                        .map_err(error)?,
+                        .map_err(|e| error(e, "page"))?,
                     )
                     .await
-                    .map_err(error)?;
+                    .map_err(|e| error(e, "pulls_list"))?;
                 out.extend(p.items.into_iter().map(|p| p.url));
                 cursor = p.next_cursor;
                 if cursor.is_none() {
@@ -431,20 +474,19 @@ impl CodeHostingService for BranvilService {
     }
     fn clone_url<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
-            if !crate::valid_repository_path(repo) {
-                return Err(ServiceError::NotFound);
-            }
+            self.repository(repo)?;
             Ok(format!("{}/git/{repo}.git", self.api.base_url()))
         })
     }
     fn default_branch<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
+            self.repository(repo)?;
             Ok(self
                 .member()
                 .await?
                 .repos_get(repo)
                 .await
-                .map_err(error)?
+                .map_err(|e| error(e, "repos_get"))?
                 .default_branch)
         })
     }
@@ -504,11 +546,23 @@ impl BranvilService {
     ) -> Result<Download<ArtifactRef>, ServiceError> {
         let (r, k) = self.item(url, "pulls")?;
         let m = self.member().await?;
-        let p = m.pulls_get(&r, number(&k)?).await.map_err(error)?;
+        let p = m
+            .pulls_get(&r, number(&k)?)
+            .await
+            .map_err(|e| error(e, "pulls_get"))?;
         let content = m
             .artifact(&r, &p.head_sha, name, limit)
             .await
-            .map_err(error)?;
+            .map_err(|e| {
+                if e.code == "too_large" {
+                    diagnostic(
+                        "integrations.branvil.api.artifact_too_large",
+                        [("name", name.to_owned()), ("limit", limit.to_string())],
+                    )
+                } else {
+                    error(e, "artifact")
+                }
+            })?;
         Ok(Download {
             metadata: ArtifactRef {
                 name: name.into(),
@@ -528,7 +582,10 @@ impl BranvilService {
         }
         let (repo, key) = self.item(url, "pulls")?;
         let m = self.member().await?;
-        let report = m.pulls_checks(&repo, number(&key)?).await.map_err(error)?;
+        let report = m
+            .pulls_checks(&repo, number(&key)?)
+            .await
+            .map_err(|e| error(e, "pulls_checks"))?;
         let mut failed = Vec::new();
         if logs {
             let failed_checks = report
@@ -560,7 +617,10 @@ impl BranvilService {
                 let bytes = crate::effective_tail_bytes(tail, selected.len())?;
                 for c in selected {
                     let id = c.attempt_id.as_deref().ok_or(ServiceError::InvalidResult)?;
-                    let v = m.job_log(&repo, id, bytes as u64).await.map_err(error)?;
+                    let v = m
+                        .job_log(&repo, id, bytes as u64)
+                        .await
+                        .map_err(|e| error(e, "job_log"))?;
                     let log = text(&v, "log").to_string();
                     failed.push(FailedLog {
                         job_id: id.into(),
@@ -576,7 +636,10 @@ impl BranvilService {
                 }
             }
         }
-        let current = m.pulls_get(&repo, number(&key)?).await.map_err(error)?;
+        let current = m
+            .pulls_get(&repo, number(&key)?)
+            .await
+            .map_err(|e| error(e, "pulls_get"))?;
         self.readiness_result(report, value(&current)?, logs.then_some(failed))
     }
 
@@ -598,11 +661,17 @@ impl BranvilService {
             })
             .collect::<Vec<_>>();
         let freshness = if text(&current, "state") == "open" {
-            if report.head_sha.is_empty()
-                || report.base_sha.is_empty()
-                || text(&current, "base_sha").is_empty()
-            {
-                return Err(ServiceError::InvalidResult);
+            if report.head_sha.is_empty() {
+                return Err(diagnostic(
+                    "integrations.branvil.api.no_head",
+                    [("url", text(&current, "url").to_owned())],
+                ));
+            }
+            if report.base_sha.is_empty() || text(&current, "base_sha").is_empty() {
+                return Err(diagnostic(
+                    "integrations.branvil.api.no_base",
+                    [("url", text(&current, "url").to_owned())],
+                ));
             }
             Some(crate::Freshness {
                 base_sha: report.base_sha.clone(),

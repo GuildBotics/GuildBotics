@@ -52,6 +52,23 @@ async fn member_identity_scope_and_resource_boundaries() {
         service.repository_from_remote("https://foreign.invalid/git/test/repo.git"),
         None
     );
+    assert_eq!(
+        service.clone_url("invalid").await.unwrap_err(),
+        diagnostic(
+            "integrations.branvil.api.not_path",
+            [("path", "invalid".into())]
+        )
+    );
+    let foreign = "https://tracker.invalid/T-1";
+    assert_eq!(
+        CodeHostingService::read(&service, Resource::TicketPullRequests, foreign, None, "")
+            .await
+            .unwrap_err(),
+        diagnostic(
+            "integrations.branvil.api.foreign_ticket",
+            [("url", foreign.into())]
+        )
+    );
     let request = || CreateTicket {
         tracker: "test/repo".into(),
         title: "ticket".into(),
@@ -64,6 +81,20 @@ async fn member_identity_scope_and_resource_boundaries() {
         parent: None,
         blocked_by: vec![],
     };
+    let mut off_board = request();
+    off_board.add_to_board = false;
+    assert_eq!(
+        service.create_ticket(off_board).await.unwrap_err(),
+        diagnostic("integrations.branvil.api.every_on_board", [])
+    );
+    let mut undefined = request();
+    undefined.labels = vec!["undefined".into()];
+    let label_error = service.create_ticket(undefined).await.unwrap_err();
+    assert_eq!(
+        label_error.translation_key(),
+        "integrations.branvil.api.label_undefined"
+    );
+    assert!(label_error.translation_args()["message"].contains("undefined"));
     let t = service.create_ticket(request()).await.unwrap();
     assert_eq!(t.target.label, "#1");
     let read = TicketService::read(&service, Resource::Tickets, &t.target.url, None, "")
@@ -106,7 +137,13 @@ async fn member_identity_scope_and_resource_boundaries() {
         "other".into(),
         observer.clone(),
     );
-    assert!(wrong.create_ticket(request()).await.is_err());
+    assert_eq!(
+        wrong.create_ticket(request()).await.unwrap_err(),
+        diagnostic(
+            "integrations.branvil.api.identity_mismatch",
+            [("name", "owner1".into()), ("username", "other".into())]
+        )
+    );
     let outside = BranvilService::new(
         running.data.clone(),
         token,
@@ -163,7 +200,10 @@ async fn member_identity_scope_and_resource_boundaries() {
         "agent-one".into(),
         observer.clone(),
     );
-    assert!(invalid.member().await.is_err());
+    assert_eq!(
+        invalid.member().await.err().unwrap(),
+        diagnostic("integrations.branvil.api.authentication", [])
+    );
     let missing = BranvilService::new(
         running.data.clone(),
         String::new(),
@@ -175,6 +215,7 @@ async fn member_identity_scope_and_resource_boundaries() {
     assert_eq!(
         missing.member().await.err(),
         Some(ServiceError::Diagnostic {
+            class: ServiceErrorClass::Failure,
             key: "integrations.branvil.api.token_missing",
             args: [("name".into(), "AGENT_ONE_BRANVIL_TOKEN".into())].into(),
         })
@@ -333,7 +374,7 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
     let activity = json!({"comments":[{"author":"human","created_at":"2026-01-01T00:00:00Z"}]});
     assert!(matches!(
         service.pull_work(&pull, &activity).await,
-        Err(ServiceError::NotFound)
+        Err(ref error) if error.is_not_found()
     ));
     pull["author"] = json!("human");
     pull["reviewers"] = json!(["owner1"]);

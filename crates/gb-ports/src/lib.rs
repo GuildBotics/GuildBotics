@@ -31,6 +31,14 @@ pub enum SemanticReaction {
     Support,
 }
 
+/// Categories remain available independently of localized provider guidance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceErrorClass {
+    Failure,
+    NotFound,
+    Unsupported,
+}
+
 /// All ports fail through this hierarchy. Display returns a locale key;
 /// only explicitly safe parameters may accompany it at a presentation boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +47,7 @@ pub enum ServiceError {
     OutOfScope,
     /// The provider owns the localized diagnosis and supplies only safe arguments.
     Diagnostic {
+        class: ServiceErrorClass,
         key: &'static str,
         args: std::collections::BTreeMap<String, String>,
     },
@@ -57,9 +66,39 @@ pub enum ServiceError {
     InvalidParameters,
     InvalidContinuation,
     InvalidResult,
+    ResponseTooLarge,
+    AttachmentMissing {
+        url: String,
+        id: String,
+    },
+    AttachmentTooLarge {
+        name: String,
+        limit: usize,
+    },
 }
 
 impl ServiceError {
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::NotFound
+                | Self::AttachmentMissing { .. }
+                | Self::Diagnostic {
+                    class: ServiceErrorClass::NotFound,
+                    ..
+                }
+        )
+    }
+    pub fn is_unsupported(&self) -> bool {
+        matches!(
+            self,
+            Self::Unsupported
+                | Self::Diagnostic {
+                    class: ServiceErrorClass::Unsupported,
+                    ..
+                }
+        )
+    }
     pub fn translation_key(&self) -> &'static str {
         match self {
             Self::Failed => "integrations.resources.service_failed",
@@ -76,6 +115,9 @@ impl ServiceError {
             Self::InvalidParameters => "integrations.resources.parameters",
             Self::InvalidContinuation => "integrations.resources.continuation",
             Self::InvalidResult => "integrations.resources.invalid_result",
+            Self::ResponseTooLarge => "integrations.resources.too_large",
+            Self::AttachmentMissing { .. } => "integrations.resources.attachment_missing",
+            Self::AttachmentTooLarge { .. } => "integrations.resources.attachment_too_large",
         }
     }
     pub fn translation_args(&self) -> std::collections::BTreeMap<String, String> {
@@ -90,6 +132,14 @@ impl ServiceError {
             .into(),
             Self::Diagnostic { args, .. } => args.clone(),
             Self::MissingCredential { name } => [("name".into(), name.clone())].into(),
+            Self::AttachmentMissing { url, id } => {
+                [("url".into(), url.clone()), ("id".into(), id.clone())].into()
+            }
+            Self::AttachmentTooLarge { name, limit } => [
+                ("name".into(), name.clone()),
+                ("limit".into(), limit.to_string()),
+            ]
+            .into(),
             _ => Default::default(),
         }
     }

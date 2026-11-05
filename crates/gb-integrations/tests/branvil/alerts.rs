@@ -197,10 +197,13 @@ async fn single_id(c: &dyn CodeHostingService) {
     assert_eq!(page.items()[0]["id"], "4");
     assert_eq!(page.items()[0]["state"], "dismissed");
     assert_eq!(page.continuation(), None);
-    assert!(matches!(
-        read(c, json!({"id":"99"}), "").await,
-        Err(ServiceError::NotFound)
-    ));
+    let missing = read(c, json!({"id":"99"}), "").await.unwrap_err();
+    assert_eq!(
+        missing.translation_key(),
+        "integrations.branvil.api.not_found"
+    );
+    assert!(missing.is_not_found());
+    assert!(!missing.translation_args()["message"].is_empty());
 }
 async fn empty_and_unsupported(host: &Host, c: &dyn CodeHostingService, base: &str, token: &str) {
     host.answers.lock().unwrap().alerts.clear();
@@ -208,22 +211,52 @@ async fn empty_and_unsupported(host: &Host, c: &dyn CodeHostingService, base: &s
     assert!(page.items().is_empty());
     assert_eq!(page.continuation(), None);
     write(base, token, "/repos/acme%2Fdemo/upstream", None).await;
-    assert!(matches!(
-        read(c, json!({}), "").await,
-        Err(ServiceError::Unsupported)
-    ));
+    let unsupported = read(c, json!({}), "").await.unwrap_err();
+    assert_eq!(
+        unsupported.translation_key(),
+        "integrations.branvil.api.unsupported"
+    );
+    assert!(unsupported.is_unsupported());
+    assert!(!unsupported.translation_args()["message"].is_empty());
 }
 async fn failures(host: &Host, c: &dyn CodeHostingService) {
     for status in [401, 403, 404, 429, 500] {
         host.answers.lock().unwrap().failure = Some(status);
         for query in [json!({}), json!({"id":"1"})] {
             let result = read(c, query, "").await;
-            let expected = match status {
-                404 => ServiceError::NotFound,
-                429 | 500 => ServiceError::Unavailable,
-                _ => ServiceError::Failed,
-            };
-            assert_eq!(result.unwrap_err(), expected, "upstream status {status}");
+            let error = result.unwrap_err();
+            if status == 404 {
+                assert_eq!(
+                    error.translation_key(),
+                    "integrations.branvil.api.not_found"
+                );
+                assert!(error.is_not_found());
+                assert!(!error.translation_args()["message"].is_empty());
+            } else {
+                assert_eq!(error.translation_key(), "integrations.branvil.api.refused");
+                let args = error.translation_args();
+                assert_eq!(
+                    args["status"],
+                    if status == 401 || status == 403 {
+                        "409"
+                    } else {
+                        "503"
+                    }
+                );
+                assert_eq!(
+                    args["code"],
+                    if status == 401 || status == 403 {
+                        "upstream_refused"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                assert!(!args["message"].is_empty());
+                assert!(
+                    ["upstream_dependency_alert", "upstream_dependency_alerts"]
+                        .contains(&args["operation"].as_str())
+                );
+            }
         }
     }
     host.answers.lock().unwrap().failure = None;
