@@ -39,7 +39,8 @@ def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None
 #: each uses only crates below it, and siblings of one layer (workspace and
 #: observability) never each other. The wire, generated from the schemas,
 #: and the service ports both stand on no other workspace crate; integrations
-#: belong above the ports.
+#: belong above the ports. Member capabilities use ports and the workspace's
+#: identity and record stores, without depending on a provider or the server.
 _ALLOWED = {
     "loopback-auth": set(),
     "branvil": {"loopback-auth"},
@@ -49,6 +50,7 @@ _ALLOWED = {
     "gb-wire": set(),
     "gb-ports": set(),
     "gb-integrations": {"gb-ports", "gb-base", "gb-config", "branvil"},
+    "gb-member": {"gb-ports", "gb-base", "gb-workspace", "gb-observability"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},
