@@ -618,7 +618,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
   条件: 履歴取得をブロック、別threadから到着通知→同一listener1回drain、未処理2人に保存、処理済3人目は除外、stop1回。
 
-- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_reads_the_channel_and_known_threads_once_per_interval` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_never_claims_ready_until_recovery`
+- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_reads_the_channel_and_known_threads_once_per_interval` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_restores_ready`
 
   条件: 2メンバー別間隔、channel/既知threadの巡回、失敗でも次回時刻を進める。回復まではcatching upを維持し完了後だけready。
 
@@ -638,11 +638,11 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
   条件: 受信cutoffの下限・フィルタ、同時刻ID順、最新既知からoverlap、NotFound threadは次回対象外。
 
-- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_is_due_once_per_member_channel_and_interval` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_never_claims_ready_until_recovery`
+- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_is_due_once_per_member_channel_and_interval` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_restores_ready`
 
   条件: 2メンバー別間隔、channel/既知threadの巡回、失敗でも次回時刻を進める。回復まではcatching upを維持し完了後だけready。
 
-- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_failure_updates_attempt_cadence` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_never_claims_ready_until_recovery`
+- `tests/guildbotics/drivers/test_event_listener_runner.py::test_backfill_failure_updates_attempt_cadence` -> `crates/gb-server/src/chat_receiver.rs::failed_backfill_obeys_each_members_cadence_and_restores_ready`
 
   条件: 2メンバー別間隔、channel/既知threadの巡回、失敗でも次回時刻を進める。回復まではcatching upを維持し完了後だけready。
 
@@ -1582,17 +1582,29 @@ The Rust host has one service generation and one serial worker per active member
 
 独立監査: 全21件。共有Python維持・Rust分割検査・設計変更による非移植を区別。部分対応の範囲も明記。
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_passes_top_level_cwd_to_spec_factory` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_passes_top_level_cwd_to_spec_factory に維持。Rust hostへ移す処理ではない。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_passes_top_level_cwd_to_spec_factory` -> `移さない：共有Python commands.runner の契約を 下記の共有Pythonテスト に維持。Rust hostへ移す処理ではない。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger に維持。ledgerとattempt別parametersとcwdを検査。`
+  Shared Python references: `tests/guildbotics/commands/test_runner_contract.py::test_invoke_passes_top_level_cwd_to_spec_factory`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_refuses_completion_managed_turns_without_a_ledger` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_invoke_refuses_completion_managed_turns_without_a_ledger に維持。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger` -> `移さない：共有Python commands.runner の契約を 下記の共有Pythonテスト に維持。ledgerとattempt別parametersとcwdを検査。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_the_command_runs_in_the_environment_booted_for_it` -> `crates/gb-environment/tests/shape.rs::shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths + crates/gb-environment/tests/shape.rs::selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity + crates/gb-environment/src/runtime.rs::cancelled_boot_cleans_up_a_vm_that_finishes_starting_later。補足: guest入力・member・pipe・invocationは tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved。これらはshapeとcleanupの分割検査であり、単一command正常/失敗のboot-discard結合検査と同一ではない。`
+  Shared Python references: `tests/guildbotics/commands/test_runner_contract.py::test_invoke_drives_completion_managed_turns_with_the_host_ledger`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_run_uses_spec_cwd_not_runner_cwd` -> `移さない：共有Python commands.runner の契約を tests/guildbotics/commands/test_runner_contract.py::test_run_uses_spec_cwd_not_runner_cwd に維持。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_invoke_refuses_completion_managed_turns_without_a_ledger` -> `移さない：共有Python commands.runner の契約を 下記の共有Pythonテスト に維持。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_ask_passes_message_member_and_working_tree_to_brain` -> `移さない：共有Python ask templateとcommand machineryの契約を tests/guildbotics/commands/test_runner_contract.py::test_ask_passes_message_member_and_working_tree_to_brain に維持。en/jaでmessage/member/cwd/未commitファイル保持を検査。`
+  Shared Python references: `tests/guildbotics/commands/test_runner_contract.py::test_invoke_refuses_completion_managed_turns_without_a_ledger`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_command_runs_in_the_environment_booted_for_it` -> `crates/gb-environment/tests/shape.rs::shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths + crates/gb-environment/tests/shape.rs::selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity + crates/gb-environment/src/runtime.rs::cancelled_boot_cleans_up_a_vm_that_finishes_starting_later。補足: guest入力・member・pipe・invocationは 下記の共有Pythonテスト。これらはshapeとcleanupの分割検査であり、単一command正常/失敗のboot-discard結合検査と同一ではない。`
+
+  Shared Python references: `tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_run_uses_spec_cwd_not_runner_cwd` -> `移さない：共有Python commands.runner の契約を 下記の共有Pythonテスト に維持。`
+
+  Shared Python references: `tests/guildbotics/commands/test_runner_contract.py::test_run_uses_spec_cwd_not_runner_cwd`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_ask_passes_message_member_and_working_tree_to_brain` -> `移さない：共有Python ask templateとcommand machineryの契約を 下記の共有Pythonテスト に維持。en/jaでmessage/member/cwd/未commitファイル保持を検査。`
+
+  Shared Python references: `tests/guildbotics/commands/test_runner_contract.py::test_ask_passes_message_member_and_working_tree_to_brain`
 
 - `tests/guildbotics/drivers/test_command_runner.py::test_ticket_workflow_runs_only_through_its_selector` -> `crates/gb-server/src/member/native.rs::workflow_runtime_assembles_local_ports_and_idle_ticket_command_leaves_no_run + crates/gb-server/src/member/native.rs::native_ticket_patrol_moves_the_local_ticket_and_accepts_real_member_comment_and_completion。manualとroutineを分割検査。scheduledでselectorを通る境界の直接assertはない。`
 
@@ -1614,15 +1626,21 @@ The Rust host has one service generation and one serial worker per active member
 
 - `tests/guildbotics/drivers/test_command_runner.py::test_the_grant_ends_with_its_command_however_it_ended` -> `crates/gb-server/src/tool_login.rs::host_end_turn_returns_the_lent_login_refusal_and_revokes_the_grant + crates/gb-server/src/host_window.rs::host_calls_require_the_command_token_and_preserve_the_wire_envelope。注意: loan revokeと認証は分割検査で、全commandの正常/失敗後HTTP endpoint消滅を直接固定するものではない。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_the_machine_stays_awake_while_the_command_runs_however_it_ends` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。factoryで成功/失敗/cancel後hold数0を検査。production command入口はcommands.rs/dispatcher.rsのFollow::commandで保持するが、test自体は入口との結合をstubしていない。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_machine_stays_awake_while_the_command_runs_however_it_ends` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。factoryで成功/失敗/cancel後hold数0を検査。本番の手動・dispatcherの両入口はFollow::commandで保持するが、test自体は入口との結合をstubしていない。`
 
 - `tests/guildbotics/drivers/test_command_runner.py::test_commands_running_together_each_keep_the_machine_awake` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。独立2holdの一方cancel後1、最後drop後0。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_a_result_crosses_only_as_the_type_the_caller_reads_it_as` -> `移さない：任意Python result_type/Pydantic modelをhostで復元するAPIを廃止。wire CommandReply JSON schemaとcaller固有のparseを使用。unread resultの省略は tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved。functions/talk_asはstring contentのみを採用。旧TroubleshootingResult callerは別ticket #89の範囲。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_result_crosses_only_as_the_type_the_caller_reads_it_as` -> `移さない：任意Python 型指定/Pydantic modelをhostで復元するAPIを廃止。wire CommandReply JSON schemaとcaller固有のparseを使用。unread resultの省略は 下記の共有Pythonテスト。functions/talk_asはstring contentのみを採用。旧TroubleshootingResult callerは別ticket #89の範囲。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_a_failure_in_the_environment_is_rebuilt_as_the_host_knows_it` -> `crates/gb-server/src/commands.rs::a_failure_in_the_environment_is_named_and_answered_as_the_host_rebuilds_it + crates/gb-server/src/dispatcher.rs::wrapped_cli_authentication_and_explicit_cancellation_keep_their_alert_codes + crates/gb-server/src/ticket_selector/tests.rs::rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_other_categories。補足: guest failure packingは tests/guildbotics/guest/test_entry.py::test_a_failure_is_said_the_way_the_host_rebuilds_it。`
+  Shared Python references: `tests/guildbotics/guest/test_entry.py::test_the_entry_runs_the_file_the_host_resolved`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_a_subcommand_works_only_where_the_environment_lets_one_work` -> `crates/gb-server/src/host_window.rs::guest_work_admission_uses_posix_boundaries_on_every_host。補足: 共有guestのcommand拒否は tests/guildbotics/guest/test_entry.py::test_child_rejects_cwd_outside_main_mounts。凍結4パターンのcwd解決そのものは共有Python spec_factory契約であり、host grant側testと同じ検査ではない。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_failure_in_the_environment_is_rebuilt_as_the_host_knows_it` -> `crates/gb-server/src/commands.rs::a_failure_in_the_environment_is_named_and_answered_as_the_host_rebuilds_it + crates/gb-server/src/dispatcher.rs::wrapped_cli_authentication_and_explicit_cancellation_keep_their_alert_codes + crates/gb-server/src/ticket_selector/tests.rs::rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_other_categories。補足: guest failure packingは 下記の共有Pythonテスト。`
+
+  Shared Python references: `tests/guildbotics/guest/test_entry.py::test_a_failure_is_said_the_way_the_host_rebuilds_it`
+
+- `tests/guildbotics/drivers/test_command_runner.py::test_a_subcommand_works_only_where_the_environment_lets_one_work` -> `crates/gb-server/src/host_window.rs::guest_work_admission_uses_posix_boundaries_on_every_host。補足: 共有guestのcommand拒否は 下記の共有Pythonテスト。凍結4パターンのcwd解決そのものは共有Python spec_factory契約であり、host grant側testと同じ検査ではない。`
+
+  Shared Python references: `tests/guildbotics/guest/test_entry.py::test_child_rejects_cwd_outside_main_mounts`
 
 
 ## レビュー修正後の条件
