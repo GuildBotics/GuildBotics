@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "DecisionEvaluatedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "brain": {
+          "title": "Brain",
+          "type": "string"
+        },
+        "duration_ms": {
+          "title": "Duration Ms",
+          "type": "number"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "evaluation_id": {
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "response_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Effort"
+        },
+        "route": {
+          "title": "Route",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluation_id",
+        "brain",
+        "model",
+        "route",
+        "reason",
+        "response_effort",
+        "error",
+        "duration_ms"
+      ],
+      "title": "DecisionEvaluatedPayload",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "$ref": "#/$defs/DecisionEvaluatedPayload"
+    }
+  },
+  "required": [
+    "payload"
+  ],
+  "title": "DecisionEvaluatedArguments",
+  "type": "object"
+}

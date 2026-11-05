@@ -101,6 +101,7 @@ impl Controller {
         if self.execution.generation().draining.is_cancelled() {
             self.execution.wait(self.execution.begin_drain(false)).await;
         }
+        let previous = self.service.status().await;
         let attempt = self.service.starting().await;
         let mut starting = Starting {
             service: self.service.clone(),
@@ -108,8 +109,18 @@ impl Controller {
             settled: false,
         };
         let result = self.start_worker().await;
-        if result.is_err() {
-            self.service.startup_failed(attempt).await;
+        if let Err(error) = &result {
+            if error
+                .downcast_ref::<crate::service::AlreadyRunning>()
+                .is_some()
+                || error
+                    .downcast_ref::<crate::service_settings::InvalidSettings>()
+                    .is_some()
+            {
+                self.service.startup_rejected(attempt, previous).await;
+            } else {
+                self.service.startup_failed(attempt).await;
+            }
         }
         starting.settled = true;
         result
@@ -297,29 +308,43 @@ pub(crate) async fn start(
                 )
                 .into_response();
             }
-            let (status, code) = startup_error(&error, api.workspace.is_some());
-            crate::api::ApiError::new(status, code, &headers).into_response()
+            startup_error(&error, api.workspace.is_some(), &headers).into_response()
         }
     }
 }
 fn startup_error(
     error: &anyhow::Error,
     configured: bool,
-) -> (axum::http::StatusCode, &'static str) {
+    headers: &axum::http::HeaderMap,
+) -> crate::api::ApiError {
     use axum::http::StatusCode;
     if error.downcast_ref::<StartupSecrets>().is_some() {
-        (
+        crate::api::ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "service_secret_store_unavailable",
+            "secret_store_unavailable",
+            headers,
         )
-    } else if error.downcast_ref::<std::io::Error>().is_some() {
-        (StatusCode::SERVICE_UNAVAILABLE, "service_path_unavailable")
+        .key(
+            "secret_store_unavailable",
+            vec![("reason", error.root_cause().to_string())],
+        )
     } else if !configured {
-        (StatusCode::BAD_REQUEST, "config_not_found")
+        crate::api::ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", headers)
     } else if error.downcast_ref::<StartupConfig>().is_some() {
-        (StatusCode::BAD_REQUEST, "service_config_invalid")
+        let path = error
+            .downcast_ref::<gb_config::ConfigFile>()
+            .map(|file| file.0.display().to_string());
+        crate::api::ApiError::new(StatusCode::BAD_REQUEST, "member_config_invalid", headers)
+            .reason(format!("{error:#}"))
+            .context(serde_json::json!({"path":path}))
+    } else if error.downcast_ref::<std::io::Error>().is_some() {
+        crate::api::ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service_path_unavailable",
+            headers,
+        )
     } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+        crate::api::ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", headers)
     }
 }
 #[derive(Default, serde::Deserialize)]
@@ -337,7 +362,6 @@ pub(crate) async fn stop(
 
 pub struct NativeWorker {
     service_instance_id: String,
-    execution: crate::execution::Coordinator,
     scheduler: crate::scheduler::Scheduler,
     groups: Vec<Arc<crate::chat_receiver::Group>>,
     started: OnceCell<()>,
@@ -359,12 +383,13 @@ impl NativeWorker {
         execution: crate::execution::Coordinator,
     ) -> anyhow::Result<(Arc<Self>, Vec<String>)> {
         let generation = execution.generation();
+        let service_instance_id = uuid::Uuid::new_v4().simple().to_string();
         let team = gb_config::team::Team::load(
             &native.workspace.join(".guildbotics/config"),
             &native.identity_root,
         )?;
         let cleanup = TaskTracker::new();
-        let draining = generation.draining.clone();
+        let draining = generation.draining.child_token();
         let cancelled = generation.cancelled.clone();
         let mut scheduler = crate::scheduler::Scheduler::default();
         let mut listeners = BTreeMap::<String, crate::chat_receiver::Connection>::new();
@@ -387,6 +412,7 @@ impl NativeWorker {
                 settings.event_queue.then_some(&mut listeners),
             )?;
             runtime.generation = Some(generation.clone());
+            runtime.service_run_id = Some(service_instance_id.clone());
             chat_provider.clone_from(&runtime.chat_provider);
             if settings.event_queue
                 && !runtime.channels.is_empty()
@@ -437,7 +463,16 @@ impl NativeWorker {
             } else {
                 None
             };
-            let (scheduled, routines) = commands(&metadata, chrono::Local::now().naive_local())?;
+            let (scheduled, routines) = commands(&metadata, chrono::Local::now().naive_local())
+                .with_context(|| {
+                    gb_config::ConfigFile(
+                        native
+                            .workspace
+                            .join(".guildbotics/config/team/members")
+                            .join(&member.person_id)
+                            .join("member.yml"),
+                    )
+                })?;
             scheduler.add(
                 member.person_id.clone(),
                 Arc::new(crate::native_scheduler::Engine::new(runtime, chat)),
@@ -452,8 +487,7 @@ impl NativeWorker {
             .collect::<anyhow::Result<_>>()?;
         Ok((
             Arc::new(Self {
-                service_instance_id: generation.id.clone(),
-                execution,
+                service_instance_id,
                 scheduler,
                 groups,
                 started: OnceCell::new(),
@@ -547,7 +581,6 @@ impl Worker for NativeWorker {
             self.receivers.wait().await;
             self.cleanup.close();
             self.cleanup.wait().await;
-            self.execution.wait(self.execution.begin_drain(false)).await;
         })
     }
 }
@@ -569,38 +602,61 @@ mod tests {
         assert!(status.error.is_some());
     }
 
-    #[test]
-    fn startup_error_classes_preserve_config_paths_secrets_and_internal_errors() {
-        use axum::http::StatusCode;
-        for (error, expected, code) in [
-            (
-                anyhow::anyhow!("bad yaml").context(StartupConfig),
-                StatusCode::BAD_REQUEST,
-                "service_config_invalid",
-            ),
-            (
-                anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
-                    .context(StartupConfig),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "service_path_unavailable",
-            ),
-            (
-                anyhow::anyhow!("keychain denied")
-                    .context(StartupSecrets)
-                    .context(StartupConfig),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "service_secret_store_unavailable",
-            ),
-            (
-                anyhow::anyhow!("unexpected"),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-            ),
-        ] {
-            assert_eq!(startup_error(&error, true), (expected, code));
-            for language in ["en", "ja"] {
-                let key = format!("app_api.errors.{code}");
-                assert_ne!(crate::i18n::t(language, &key, &[]), key);
+    #[tokio::test]
+    async fn startup_error_classes_preserve_config_paths_secrets_and_internal_errors() {
+        use axum::response::IntoResponse;
+        for language in ["en", "ja"] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("x-guildbotics-language", language.parse().unwrap());
+            for (error, status, code, path, reason) in [
+                (
+                    anyhow::anyhow!("bad yaml")
+                        .context(gb_config::ConfigFile("/team/member.yml".into()))
+                        .context(StartupConfig),
+                    400,
+                    "member_config_invalid",
+                    Some("/team/member.yml"),
+                    "bad yaml",
+                ),
+                (
+                    anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::NotFound))
+                        .context(gb_config::ConfigFile("/team/project.yml".into()))
+                        .context(StartupConfig),
+                    400,
+                    "member_config_invalid",
+                    Some("/team/project.yml"),
+                    "",
+                ),
+                (
+                    anyhow::anyhow!("keychain denied")
+                        .context(StartupSecrets)
+                        .context(StartupConfig),
+                    503,
+                    "secret_store_unavailable",
+                    None,
+                    "keychain denied",
+                ),
+                (
+                    anyhow::anyhow!("unexpected"),
+                    500,
+                    "internal_error",
+                    None,
+                    "",
+                ),
+            ] {
+                let response = startup_error(&error, true, &headers).into_response();
+                assert_eq!(response.status().as_u16(), status);
+                let body: serde_json::Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(body["code"], code);
+                assert!(body["message"].as_str().unwrap().contains(reason));
+                if let Some(path) = path {
+                    assert_eq!(body["context"]["path"], path);
+                }
             }
         }
     }
@@ -681,19 +737,25 @@ mod tests {
         let generation = execution.generation();
         let worker = Arc::new(NativeWorker {
             service_instance_id: generation.id.clone(),
-            execution: execution.clone(),
             scheduler: Default::default(),
             groups: vec![],
             started: OnceCell::new(),
             receivers: TaskTracker::new(),
             cleanup: TaskTracker::new(),
-            draining: generation.draining.clone(),
+            draining: generation.draining.child_token(),
             cancelled: generation.cancelled.clone(),
             stop_reception: CancellationToken::new(),
             reception_failed: Default::default(),
             auth_skipped: vec![],
             chat_provider: String::new(),
         });
+        let release = CancellationToken::new();
+        let manual = execution
+            .spawn({
+                let release = release.clone();
+                move |_| async move { release.cancelled().await }
+            })
+            .unwrap();
         let service = crate::service::Service::default();
         service
             .start(
@@ -718,8 +780,137 @@ mod tests {
         })
         .await
         .unwrap();
+        while service.status().await.running {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(service.status().await.state, "stopped");
+        assert!(!manual.is_finished());
+        assert!(!generation.cancelled.is_cancelled());
         assert!(execution.spawn(|_| async {}).unwrap().await.is_ok());
-        assert_ne!(execution.generation().id, generation.id);
+        assert_eq!(execution.generation().id, generation.id);
+        release.cancel();
+        manual.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn service_starts_have_distinct_ids_without_replacing_manual_work() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let execution = crate::execution::Coordinator::default();
+        let generation = execution.generation();
+        let (first, _) = NativeWorker::assemble(
+            &native,
+            host.clone(),
+            &Settings::default(),
+            execution.clone(),
+        )
+        .await
+        .unwrap();
+        let (second, _) =
+            NativeWorker::assemble(&native, host, &Settings::default(), execution.clone())
+                .await
+                .unwrap();
+        assert_ne!(first.service_instance_id, second.service_instance_id);
+        assert_eq!(execution.generation().id, generation.id);
+    }
+
+    #[tokio::test]
+    async fn a_new_start_waits_for_an_explicit_manual_drain() {
+        let controller = Arc::new(Controller::default());
+        let generation = controller.execution.generation();
+        let release = CancellationToken::new();
+        let manual = controller
+            .execution
+            .spawn({
+                let release = release.clone();
+                move |_| async move { release.cancelled().await }
+            })
+            .unwrap();
+        controller.execution.begin_drain(false);
+        let start = tokio::spawn({
+            let controller = controller.clone();
+            async move { controller.start().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!start.is_finished());
+        assert_eq!(controller.service.status().await.state, "stopped");
+        release.cancel();
+        manual.await.unwrap();
+        assert!(start.await.unwrap().is_err());
+        assert_ne!(controller.execution.generation().id, generation.id);
+        assert!(!controller.execution.generation().draining.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn preflight_refusals_leave_stopped_without_an_error() {
+        for invalid_settings in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let native = crate::member::native::tests::fixture(root.path());
+            let host = Arc::new(gb_environment::Host {
+                data: native.data.clone(),
+                home: root.path().join("home"),
+                package: native.package.clone(),
+                identity_root: native.identity_root.clone(),
+            });
+            let lock = if invalid_settings {
+                let path = Settings::path(&native.workspace);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "[invalid").unwrap();
+                None
+            } else {
+                gb_base::files::FileLock::try_hold(&native.data.join("run/service.lock")).unwrap()
+            };
+            let controller = Controller::new(native, host);
+            let error = controller.start().await.unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::service_settings::InvalidSettings>()
+                    .is_some(),
+                invalid_settings
+            );
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::service::AlreadyRunning>()
+                    .is_some(),
+                !invalid_settings
+            );
+            let status = controller.service.status().await;
+            assert_eq!(status.state, "stopped");
+            assert!(!status.running);
+            assert!(status.error.is_none());
+            drop(lock);
+        }
+    }
+
+    #[tokio::test]
+    async fn config_read_failures_retain_the_actual_filename() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let project = native
+            .workspace
+            .join(".guildbotics/config/team/project.yml");
+        for contents in [None, Some("[invalid")] {
+            if let Some(text) = contents {
+                std::fs::write(&project, text).unwrap();
+            } else {
+                std::fs::remove_file(&project).unwrap();
+            }
+            let error = gb_config::team::Team::load(
+                &native.workspace.join(".guildbotics/config"),
+                &native.identity_root,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<gb_config::ConfigFile>().unwrap().0,
+                project
+            );
+        }
     }
 
     #[tokio::test]
@@ -740,7 +931,7 @@ mod tests {
         };
         tokio::task::yield_now().await;
         assert!(controller.gate.try_lock().is_err());
-        assert!(!controller.service.status().await.running);
+        assert!(controller.service.status().await.running);
         assert_eq!(controller.service.status().await.state, "starting");
         starting.abort();
         assert!(starting.await.unwrap_err().is_cancelled());

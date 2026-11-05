@@ -134,7 +134,7 @@ impl Dispatcher {
                     && record.finished_at.is_some()
                     && record.result.is_some()
                 {
-                    self.settle(&pending, &record, true).await?;
+                    self.settle(&pending, &record).await?;
                     count += 1;
                     continue;
                 }
@@ -148,13 +148,7 @@ impl Dispatcher {
                         continue;
                     }
                     Err(error) => {
-                        if self.runner.stopping() {
-                            return Ok(count);
-                        }
                         self.runner.selection_failed(&pending, &error).await;
-                        if self.runner.stopping() {
-                            return Ok(count);
-                        }
                         let unavailable = error.downcast_ref::<ContextUnavailable>().is_some()
                             || error
                                 .downcast_ref::<gb_ports::ServiceError>()
@@ -178,15 +172,13 @@ impl Dispatcher {
                 if self.runner.stopping() {
                     return Ok(count);
                 }
-                let requested_run_id = pending.run_id.clone();
                 match self
                     .runner
                     .dispatch(&mut pending, invocation, &self.store)
                     .await
                 {
                     Ok(record) if record.finished_at.is_some() && record.result.is_some() => {
-                        self.settle(&pending, &record, record.run_id != requested_run_id)
-                            .await?;
+                        self.settle(&pending, &record).await?;
                         count += 1;
                     }
                     Ok(_) => self.retry(&mut pending, Failure::Failed, now).await?,
@@ -446,12 +438,7 @@ impl Dispatcher {
             "thread_context":&context[from..],"thread_context_complete":true,"source_cursor":event.message.position(),"source_snapshot":snapshot.iter().map(ChatEvent::payload).collect::<Vec<_>>(),"event_ids":batch.iter().map(|e|&e.event_id).collect::<Vec<_>>()}),
         )
     }
-    async fn settle(
-        &self,
-        pending: &Pending,
-        record: &RunRecord,
-        recovered: bool,
-    ) -> anyhow::Result<()> {
+    async fn settle(&self, pending: &Pending, record: &RunRecord) -> anyhow::Result<()> {
         let status = record
             .result
             .as_ref()
@@ -462,9 +449,6 @@ impl Dispatcher {
                 _ => "blocked",
             })
             .unwrap_or("");
-        if recovered {
-            self.runner.event("workflow.completed",pending,json!({"run_id":record.run_id,"attempt":pending.attempt_count.max(1),"recovered":true,"status":status}));
-        }
         let mut ids =
             gb_member::chat_updates::completed_event_ids(&record.provider_evidence, status);
         ids.push(pending.event.event_id.clone());
@@ -576,9 +560,6 @@ impl Dispatcher {
         error: Failure,
         now: DateTime<Utc>,
     ) -> anyhow::Result<()> {
-        if self.runner.stopping() {
-            return Ok(());
-        }
         if let Failure::RateLimited { at, hint } = &error {
             self.runner.event("workflow.rate_limited",pending,json!({"category":"rate_limited","retry_after_at":at,"retry_after_text":hint,"subject_id":pending.event.event_id,"source_event_id":pending.event.event_id}));
         }
@@ -627,6 +608,9 @@ impl Dispatcher {
         Ok(())
     }
     async fn notice(&self, pending: &Pending, reason: &str, at: &str, hint: &str) {
+        if self.runner.stopping() {
+            return;
+        }
         let channel = &pending.event.message.channel_id;
         let thread = &pending.event.message.thread_id;
         let Ok(state) = self
@@ -715,6 +699,8 @@ mod tests {
         stop_on_dispatch: bool,
         stop_on_selection_failure: bool,
         calls: Mutex<Vec<String>>,
+        events: Mutex<Vec<String>>,
+        dispatch_failure: Option<&'static str>,
     }
     impl Runner for Runs {
         fn selection_failed<'a>(&'a self, _: &'a Pending, _: &'a anyhow::Error) -> Future<'a, ()> {
@@ -751,13 +737,25 @@ mod tests {
                 if self.stop_on_dispatch {
                     self.stopping.store(true, Ordering::SeqCst);
                 }
-                Err(Failure::Failed)
+                match self.dispatch_failure {
+                    Some("unavailable") => {
+                        pending.attempt_count = pending.attempt_count.saturating_sub(1);
+                        Err(Failure::Unavailable)
+                    }
+                    Some("rate_limited") => Err(Failure::RateLimited {
+                        at: "2026-11-07T00:00:00Z".into(),
+                        hint: "tomorrow".into(),
+                    }),
+                    _ => Err(Failure::Failed),
+                }
             })
         }
         fn record(&self, _: &str) -> anyhow::Result<Option<RunRecord>> {
             Ok(None)
         }
-        fn event(&self, _: &str, _: &Pending, _: Value) {}
+        fn event(&self, kind: &str, _: &Pending, _: Value) {
+            self.events.lock().unwrap().push(kind.into());
+        }
     }
     fn fixture(
         root: &std::path::Path,
@@ -844,8 +842,16 @@ mod tests {
                         p.attempt_count,
                         u32::from(stage == "dispatch" && p.event.event_id == "T1")
                     );
-                    assert!(p.next_attempt_at.is_none());
-                    assert!(p.last_error_category.is_empty());
+                    if stage == "dispatch" && p.event.event_id == "T1" {
+                        assert!(p.next_attempt_at.is_some());
+                        assert_eq!(p.last_error_category, "failed");
+                    } else if stage == "selection_failure" && p.event.event_id == "T1" {
+                        assert!(p.next_attempt_at.is_some());
+                        assert_eq!(p.last_error_category, "provider_unavailable");
+                    } else {
+                        assert!(p.next_attempt_at.is_none());
+                        assert!(p.last_error_category.is_empty());
+                    }
                 }
             }
             assert!(
@@ -860,9 +866,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_finalizes_every_charged_failure_without_notices_or_more_dispatch() {
+        for category in ["unavailable", "rate_limited", "failed"] {
+            for exhausted in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let runs = Arc::new(Runs {
+                    stop_on_dispatch: true,
+                    dispatch_failure: Some(category),
+                    ..Default::default()
+                });
+                let (dispatcher, chat) = fixture(root.path(), runs.clone());
+                let mut p = pending("C1", "T1");
+                p.max_attempts = 3;
+                p.attempt_count = if exhausted { 2 } else { 1 };
+                dispatcher
+                    .store
+                    .receive("local", "aiko", p.event.clone(), "social")
+                    .unwrap();
+                dispatcher.store.save("local", "aiko", &p).unwrap();
+                dispatcher
+                    .store
+                    .receive("local", "aiko", pending("C1", "T2").event, "social")
+                    .unwrap();
+                history(&dispatcher, "C1", &[p, pending("C1", "T2")]);
+                let now = DateTime::parse_from_rfc3339("2026-11-06T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc);
+                dispatcher.process(now).await.unwrap();
+                let saved = dispatcher.store.pending("local", "aiko", "C1").unwrap();
+                assert_eq!(runs.calls.lock().unwrap().len(), 1);
+                assert!(
+                    !chat
+                        .calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|c| c["operation"] == "post")
+                );
+                let abandoned = exhausted && category != "unavailable";
+                assert_eq!(
+                    dispatcher.processed("C1").unwrap().contains("T1"),
+                    abandoned
+                );
+                assert_eq!(
+                    runs.events
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|k| *k == "chat_dispatch.abandoned")
+                        .count(),
+                    usize::from(abandoned)
+                );
+                if !abandoned {
+                    let p = saved.iter().find(|p| p.event.event_id == "T1").unwrap();
+                    assert_eq!(
+                        p.attempt_count,
+                        if category == "unavailable" {
+                            if exhausted { 2 } else { 1 }
+                        } else {
+                            2
+                        }
+                    );
+                    assert_eq!(
+                        p.last_error_category,
+                        if category == "unavailable" {
+                            "provider_unavailable"
+                        } else {
+                            category
+                        }
+                    );
+                    assert_eq!(
+                        p.next_attempt_at.as_deref(),
+                        Some(if category == "rate_limited" {
+                            "2026-11-07T00:00:00Z"
+                        } else if category == "unavailable" && !exhausted {
+                            "2026-11-06T00:01:00+00:00"
+                        } else {
+                            "2026-11-06T00:02:00+00:00"
+                        })
+                    );
+                }
+                assert_eq!(
+                    saved
+                        .iter()
+                        .find(|p| p.event.event_id == "T2")
+                        .unwrap()
+                        .attempt_count,
+                    0
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeed() {
         let root = tempfile::tempdir().unwrap();
-        let (mut dispatcher, chat) = fixture(root.path(), Arc::new(Runs::default()));
+        let runs = Arc::new(Runs::default());
+        let (mut dispatcher, chat) = fixture(root.path(), runs.clone());
         let mut colleague = dispatcher.roster[0].clone();
         colleague.person_id = "yuki".into();
         colleague.accounts.insert("local".into(), "yuki".into());
@@ -878,7 +978,9 @@ mod tests {
             .lock()
             .unwrap()
             .insert("identity:".into(), gb_ports::ServiceError::Unavailable);
-        assert!(dispatcher.settle(&p, &record, true).await.is_err());
+        for _ in 0..3 {
+            assert!(dispatcher.settle(&p, &record).await.is_err());
+        }
         assert_eq!(
             dispatcher
                 .store
@@ -889,8 +991,8 @@ mod tests {
         );
         assert!(!dispatcher.processed("C1").unwrap().contains("T1"));
         chat.errors.lock().unwrap().clear();
-        dispatcher.settle(&p, &record, true).await.unwrap();
-        dispatcher.settle(&p, &record, true).await.unwrap();
+        dispatcher.settle(&p, &record).await.unwrap();
+        dispatcher.settle(&p, &record).await.unwrap();
         assert!(
             dispatcher
                 .store
@@ -914,5 +1016,13 @@ mod tests {
         assert_eq!(state["handoffs"].as_array().unwrap().len(), 1);
         assert_eq!(state["handoffs"][0]["person_id"], "yuki");
         assert_eq!(state["handoffs"][0]["message_id"], "reply");
+        assert!(
+            !runs
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == "workflow.completed")
+        );
     }
 }

@@ -877,6 +877,31 @@ mod tests {
         assert_eq!(event["payload"], metadata);
     }
 
+    #[test]
+    fn evaluated_decision_metadata_is_bounded_and_redacted() {
+        let event = record_entry(
+            json!({"type":"decision_evaluated","payload":{
+                "evaluation_id":"evaluation", "brain":"chat_decision",
+                "model":"api_key=synthetic-key", "route":"agent",
+                "reason":"token=synthetic-token", "response_effort":null,
+                "error": "x".repeat(9000), "duration_ms":1,
+                "input":"raw source", "person_id":"foreign"
+            }}),
+            "trace",
+            "run",
+            "aiko",
+            "chat",
+        )
+        .unwrap();
+        assert_eq!(event["payload"].as_object().unwrap().len(), 8);
+        assert_eq!(event["payload"]["model"], "api_key=***");
+        assert_eq!(event["payload"]["reason"], "token=***");
+        assert_eq!(
+            event["payload"]["error"].as_str().unwrap().chars().count(),
+            8192
+        );
+    }
+
     fn command_context(root: &std::path::Path) -> Context {
         let invocation = gb_environment::broker::Invocation {
             chat_subject: None,
@@ -2298,7 +2323,7 @@ fn record_entry_detail(
             (
                 "decision.evaluated".into(),
                 "decision",
-                Value::Object(payload),
+                event_redact(Value::Object(payload)),
             )
         }
         "record_completed" => (

@@ -6,6 +6,10 @@
 
 ## 境界と条件の差
 
+- Windows の cfg 分岐は Linux 環境と現在の CI では未コンパイル・未実行。先頭1byteのロック・owner読取の実機保証は未確認で、owner書換中の409では一時的にownerが空になる場合がある。
+- subscription_count は解決済みID数ではなく組立て時の購読定義数、events の cycle_failure_count は resolve/backfill を含むチャンネル単位の失敗数として公開する。凍結版とは監視値の粒度が異なる。
+
+
 - HostはRust、チャット判断と応答agentは同じコマンドVMのPythonで実行する（#81）。
   判定規則・確率の境界値・モデル設定・プロンプト境界の検査は共有Pythonに残す。
   replayも同じ設定・gatewayを使い、実スレッドのeffortやチャットを変更しない。
@@ -578,7 +582,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/drivers/test_pending_chat_dispatcher.py::test_event_completed_elsewhere_is_processed_without_running_again` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
 
 - `tests/guildbotics/drivers/test_pending_chat_dispatcher.py::test_repeated_failures_use_the_whole_attempt_budget_then_abandon` -> `crates/gb-server/src/member/native.rs::chat_retry_budget_is_durable_due_rejection_and_notices_do_not_spend_extra_attempts`
 
@@ -900,7 +904,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_recovered_completion_records_workflow_completed_event` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_judgment_without_effort_preserves_response_settings` -> `移さない：#81で判定とresponse agentは同じVMの共有Pythonに保持。`
 
@@ -928,7 +932,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_completed_batch_recovery_does_not_consume_new_messages` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_batch_keeps_unread_messages_beyond_historical_context_bound` -> `crates/gb-server/src/member/native.rs::local_chat_snapshot_paginates_bounds_history_and_keeps_every_unread_message_at_the_same_time`
 
@@ -948,7 +952,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 - `tests/guildbotics/capabilities/test_chat_selection.py::test_updates_read_during_turn_are_consumed_only_on_completion` -> `crates/gb-server/src/member/native.rs::completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action`
 
-  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。
+  条件: batchあり/なし × 更新後action7種またはなし。完了証跡後の更新だけを取り込み、新着M4を残す。blocked/noopは更新の処理根拠にしない。workflow.completedはhost終端の1件が正本であり、settleの再試行からは重複発行しない。chat_dispatch::settlement_keeps_input_recoverable_until_reply_cache_and_thread_updates_succeedで2回失敗後の成功でも追加完了eventが0件であることを検査する。
 
 ### tests/guildbotics/capabilities/test_chat_selection_fast_path.py
 
@@ -1504,7 +1508,7 @@ The Rust host has one service generation and one serial worker per active member
 
 - `tests/guildbotics/app_api/test_lifecycle.py::test_event_runner_natural_stop_releases_lock_without_status_poll` -> `crates/gb-server/src/service_runtime.rs::natural_worker_completion_reopens_manual_admission_without_status_polling`
 
-  Condition: Natural completion drains receiver and command cleanup, opens a fresh coordinator generation, and releases ownership without status polling.
+  Condition: Natural completion drains receiver and command cleanup and releases ownership without waiting for unrelated manual work. Manual admission and its generation stay intact; each service start has a separate service ID.
 
 - `tests/guildbotics/app_api/test_lifecycle.py::test_restart_scheduler_does_not_spawn_duplicate` -> `crates/gb-server/src/service_runtime.rs::cancelled_start_cannot_leave_a_running_service_without_its_worker; crates/gb-server/src/service.rs::force_escalates_a_graceful_stop_and_releases_machine_ownership`
 
@@ -1576,7 +1580,7 @@ The Rust host has one service generation and one serial worker per active member
 
 - `tests/guildbotics/app_api/test_lifecycle.py::test_status_refresh_after_thread_terminates_naturally` -> `crates/gb-server/src/service_runtime.rs::natural_worker_completion_reopens_manual_admission_without_status_polling`
 
-  Condition: Natural completion drains receiver and command cleanup, opens a fresh coordinator generation, and releases ownership without status polling.
+  Condition: Natural completion drains receiver and command cleanup and releases ownership without waiting for unrelated manual work. Manual admission and its generation stay intact; each service start has a separate service ID.
 
 ### tests/guildbotics/drivers/test_command_runner.py
 
@@ -1626,7 +1630,7 @@ The Rust host has one service generation and one serial worker per active member
 
 - `tests/guildbotics/drivers/test_command_runner.py::test_the_grant_ends_with_its_command_however_it_ended` -> `crates/gb-server/src/tool_login.rs::host_end_turn_returns_the_lent_login_refusal_and_revokes_the_grant + crates/gb-server/src/host_window.rs::host_calls_require_the_command_token_and_preserve_the_wire_envelope。注意: loan revokeと認証は分割検査で、全commandの正常/失敗後HTTP endpoint消滅を直接固定するものではない。`
 
-- `tests/guildbotics/drivers/test_command_runner.py::test_the_machine_stays_awake_while_the_command_runs_however_it_ends` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。factoryで成功/失敗/cancel後hold数0を検査。本番の手動・dispatcherの両入口はFollow::commandで保持するが、test自体は入口との結合をstubしていない。`
+- `tests/guildbotics/drivers/test_command_runner.py::test_the_machine_stays_awake_while_the_command_runs_however_it_ends` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。factoryで成功/失敗/cancel後hold数0を検査。入口の結合は crates/gb-server/src/commands.rs::command_entry_holds_during_success_failure_and_cancellation と crates/gb-server/src/dispatcher.rs::dispatcher_entry_holds_during_success_failure_and_cancellation で実行中1・終了後0を検査し、手動HTTP入口もpreflight拒否時の取得と解放を確認する。`
 
 - `tests/guildbotics/drivers/test_command_runner.py::test_commands_running_together_each_keep_the_machine_awake` -> `crates/gb-server/src/keep_awake.rs::commands_hold_independently_through_success_failure_and_cancellation。独立2holdの一方cancel後1、最後drop後0。`
 

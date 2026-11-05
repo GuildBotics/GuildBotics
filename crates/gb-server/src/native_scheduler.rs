@@ -198,7 +198,7 @@ impl crate::scheduler::Engine for Engine {
     }
     fn failed(&self, errors: u8, limit: u8, source: &str) {
         self.runtime.diagnostics().record(serde_json::from_value(serde_json::json!({"kind":"event","type":"scheduler.worker.failed","trace_id":null,"source":"scheduler","person_id":self.runtime.person.person_id,
-            "timestamp":chrono::Utc::now().to_rfc3339(),"attributes":{"service_run_id":self.runtime.generation.as_ref().map(|g|g.id.as_str()).unwrap_or("")},
+            "timestamp":chrono::Utc::now().to_rfc3339(),"attributes":{"service_run_id":self.runtime.service_run_id.as_deref().unwrap_or("")},
             "payload":{"source":source,"consecutive_errors":errors,"consecutive_error_limit":limit}})).expect("worker failure"));
         tracing::error!(
             person = self.runtime.person.person_id,

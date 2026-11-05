@@ -256,3 +256,33 @@ sys.argv = ["scripts/generate-wire-schema.py", "--check"]
 runpy.run_path(sys.argv[0], run_name="__main__")
 """
     subprocess.run([sys.executable, "-c", probe], cwd=ROOT, check=True)
+
+
+def test_decision_evaluated_has_only_metadata_and_null_result(generator):
+    model = generator.wire.HOST_ARGUMENTS["decision_evaluated"]
+    payload = {
+        "evaluation_id": "evaluation",
+        "brain": "chat_decision",
+        "model": "configured-model",
+        "route": "agent",
+        "reason": "invalid",
+        "response_effort": None,
+        "error": None,
+        "duration_ms": 12.5,
+    }
+    assert model.model_validate({"payload": payload}).model_dump() == {
+        "payload": payload
+    }
+    for damaged in [
+        payload | {"input": "raw"},
+        payload | {"duration_ms": "bad"},
+        {k: v for k, v in payload.items() if k != "brain"},
+    ]:
+        with pytest.raises(ValidationError):
+            model.model_validate({"payload": damaged})
+    schemas = generator.build_schemas()
+    schema = json.loads(schemas["DecisionEvaluatedArguments.json"])
+    metadata = schema["$defs"]["DecisionEvaluatedPayload"]
+    assert set(metadata["properties"]) == set(payload)
+    assert metadata["additionalProperties"] is False
+    assert json.loads(schemas["DecisionEvaluatedResult.json"])["type"] == "null"

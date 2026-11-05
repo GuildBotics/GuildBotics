@@ -114,10 +114,8 @@ impl Team {
         let text = |key: &str| match project.get(key) {
             None => Ok(String::new()),
             Some(Value::String(text)) => Ok(text.clone()),
-            Some(_) => anyhow::bail!(
-                "{}: {key} must be a string",
-                team.join("project.yml").display()
-            ),
+            Some(_) => Err(anyhow::anyhow!("{key} must be a string")
+                .context(crate::ConfigFile(team.join("project.yml")))),
         };
         let identities = identity_root.join(".guildbotics/config/team/members");
         let mut members = Vec::new();
@@ -142,23 +140,28 @@ impl Team {
             let string = |file: &Map<String, Value>, key: &str, path: &Path| match file.get(key) {
                 None => Ok(String::new()),
                 Some(Value::String(s)) => Ok(s.clone()),
-                Some(_) => anyhow::bail!("{}: {key} must be a string", path.display()),
+                Some(_) => Err(anyhow::anyhow!("{key} must be a string")
+                    .context(crate::ConfigFile(path.into()))),
             };
             let person_id = string(&identity, "person_id", &identity_file)?;
-            anyhow::ensure!(
-                person_id == name,
-                "{}: the member's ID is not its directory's name",
-                identity_file.display()
-            );
+            if person_id != name {
+                return Err(
+                    anyhow::anyhow!("the member's ID is not its directory's name")
+                        .context(crate::ConfigFile(identity_file.clone())),
+                );
+            }
             let name_value = identity
                 .get("name")
                 .and_then(Value::as_str)
-                .with_context(|| format!("{}: name is required", identity_file.display()))?;
+                .context("name is required")
+                .with_context(|| crate::ConfigFile(identity_file.clone()))?;
             let is_active = match participation.get("is_active") {
                 None => false,
-                Some(value) => lax_bool(value).with_context(|| {
-                    format!("{}: is_active must be true or false", directory.display())
-                })?,
+                Some(value) => lax_bool(value)
+                    .with_context(|| {
+                        format!("{}: is_active must be true or false", directory.display())
+                    })
+                    .with_context(|| crate::ConfigFile(directory.join("member.yml")))?,
             };
             members.push(Member {
                 person_id,
@@ -248,34 +251,40 @@ fn participants(members: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn yaml_mapping(path: &Path) -> anyhow::Result<Map<String, Value>> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    match crate::yaml::value(&text) {
-        Ok(Value::Object(mapping)) => Ok(mapping),
-        _ => anyhow::bail!("{} is not a YAML mapping", path.display()),
-    }
+    (|| {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        match crate::yaml::value(&text) {
+            Ok(Value::Object(mapping)) => Ok(mapping),
+            _ => anyhow::bail!("{} is not a YAML mapping", path.display()),
+        }
+    })()
+    .with_context(|| crate::ConfigFile(path.into()))
 }
 
 /// One of a member's two files, holding only the fields it is for.
 fn member_file(path: &Path, fields: &[&str]) -> anyhow::Result<Map<String, Value>> {
-    let file = yaml_mapping(path)?;
-    anyhow::ensure!(
-        file.get("profile").is_none_or(Value::is_object),
-        "{} is not a YAML mapping",
-        path.display()
-    );
-    let misplaced: Vec<&str> = file
-        .keys()
-        .map(String::as_str)
-        .filter(|key| !fields.contains(key))
-        .collect();
-    anyhow::ensure!(
-        misplaced.is_empty(),
-        "{}: fields that belong in the other file: {}",
-        path.display(),
-        misplaced.join(", ")
-    );
-    Ok(file)
+    (|| {
+        let file = yaml_mapping(path)?;
+        anyhow::ensure!(
+            file.get("profile").is_none_or(Value::is_object),
+            "{} is not a YAML mapping",
+            path.display()
+        );
+        let misplaced: Vec<&str> = file
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !fields.contains(key))
+            .collect();
+        anyhow::ensure!(
+            misplaced.is_empty(),
+            "{}: fields that belong in the other file: {}",
+            path.display(),
+            misplaced.join(", ")
+        );
+        Ok(file)
+    })()
+    .with_context(|| crate::ConfigFile(path.into()))
 }
 
 #[cfg(test)]

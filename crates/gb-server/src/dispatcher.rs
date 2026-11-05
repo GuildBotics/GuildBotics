@@ -164,7 +164,14 @@ impl Dispatcher {
     ) -> Result<CommandReply, DispatchFailure> {
         let name = command.name.clone();
         let person = command.person_id.clone();
-        let mut reply = self.driver.execute(self, command, cancelled).await?;
+        let awake = tokio::select! {
+            biased;
+            () = cancelled.cancelled() => return Err(DispatchFailure::Cancelled),
+            awake = crate::keep_awake::CommandHold::acquire(&self.workspace) => awake,
+        };
+        let result = self.driver.execute(self, command, cancelled).await;
+        awake.finish().await;
+        let mut reply = result?;
         trace.command_output(&name, &person, &reply.text_output);
         if let Some(failure) = reply.failure.take() {
             return Err(DispatchFailure::Guest(Box::new(failure)));
@@ -197,7 +204,6 @@ impl Dispatcher {
         )
         .await
         .map_err(|error| DispatchFailure::Environment(Failure::Command(Sentence::Text(error))))?;
-        let _awake = crate::keep_awake::Follow::command().ok();
         let run = gb_environment::run(
             &self.host,
             &self.workspace,
@@ -219,6 +225,83 @@ impl Dispatcher {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[tokio::test]
+    async fn dispatcher_entry_holds_during_success_failure_and_cancellation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Run {
+            count: Arc<AtomicUsize>,
+            mode: u8,
+            entered: CancellationToken,
+        }
+        impl Driver for Run {
+            fn execute<'a>(
+                &'a self,
+                _: &'a Dispatcher,
+                _: Command,
+                _: &'a CancellationToken,
+            ) -> crate::service::Pending<'a, Result<CommandReply, DispatchFailure>> {
+                Box::pin(async move {
+                    self.entered.cancel();
+                    assert_eq!(self.count.load(Ordering::SeqCst), 1);
+                    match self.mode {
+                        0 => Ok(serde_json::from_value(json!({"text_output":"done"})).unwrap()),
+                        1 => Err(DispatchFailure::Journal),
+                        _ => std::future::pending().await,
+                    }
+                })
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let count = Arc::new(AtomicUsize::new(0));
+        let _factory = crate::keep_awake::test_count(&native.workspace, count.clone());
+        for mode in 0..3 {
+            let entered = CancellationToken::new();
+            let dispatcher = Dispatcher {
+                driver: Arc::new(Run {
+                    count: count.clone(),
+                    mode,
+                    entered: entered.clone(),
+                }),
+                host: Arc::new(Host {
+                    data: native.data.clone(),
+                    home: root.path().join("home"),
+                    package: native.package.clone(),
+                    identity_root: native.identity_root.clone(),
+                }),
+                workspace: native.workspace.clone(),
+                member: None,
+            };
+            let trace = Trace::open(
+                &gb_observability::Diagnostics::open(&native.workspace),
+                "manual",
+            );
+            let invocation = serde_json::from_value(json!({"command":"workflows/chat_conversation_workflow","person_id":"aiko","source":"manual","trigger_type":"generic","payload":{},"work":{"kind":"generic","identity":"test"}})).unwrap();
+            let command = dispatcher
+                .prepare(
+                    "workflows/chat_conversation_workflow",
+                    invocation,
+                    trace.id(),
+                )
+                .unwrap();
+            let task = tokio::spawn(async move {
+                dispatcher
+                    .dispatch_prepared(command, &trace, &CancellationToken::new())
+                    .await
+            });
+            entered.cancelled().await;
+            if mode == 2 {
+                task.abort();
+            }
+            let result = task.await;
+            if mode == 2 {
+                assert!(result.unwrap_err().is_cancelled());
+            } else {
+                assert_eq!(result.unwrap().is_err(), mode == 1);
+            }
+            crate::keep_awake::wait_released(&count).await;
+        }
+    }
     #[test]
     fn wrapped_cli_authentication_and_explicit_cancellation_keep_their_alert_codes() {
         use gb_observability::Failure;

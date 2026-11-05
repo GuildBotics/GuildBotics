@@ -109,9 +109,6 @@ impl Follow {
     fn with_factory(workspace: PathBuf, enabled: bool, factory: Factory) -> anyhow::Result<Self> {
         Self::watch(Some(workspace), enabled, factory)
     }
-    pub fn command() -> anyhow::Result<Self> {
-        Self::watch(None, true, Arc::new(platform_hold))
-    }
     fn watch(workspace: Option<PathBuf>, enabled: bool, factory: Factory) -> anyhow::Result<Self> {
         let (stop, received) = std::sync::mpsc::channel();
         let (ready, entered) = std::sync::mpsc::sync_channel(0);
@@ -159,6 +156,98 @@ impl Drop for Follow {
             let _ = thread.join();
         }
     }
+}
+
+/// A blocking worker owns acquisition and release, including when the caller
+/// is cancelled during acquisition. The platform hold stays on the watcher.
+pub struct CommandHold {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    finished: tokio::task::JoinHandle<()>,
+}
+impl CommandHold {
+    pub async fn acquire(workspace: &std::path::Path) -> Self {
+        #[cfg(test)]
+        let factory = test_factories().lock().unwrap().get(workspace).cloned();
+        #[cfg(not(test))]
+        let factory: Option<Factory> = {
+            let _ = workspace;
+            None
+        };
+        Self::with_factory(factory.unwrap_or_else(|| Arc::new(platform_hold))).await
+    }
+    async fn with_factory(factory: Factory) -> Self {
+        let (stop, received) = std::sync::mpsc::channel();
+        let (ready, entered) = tokio::sync::oneshot::channel();
+        let finished = tokio::task::spawn_blocking(move || {
+            let _hold = Follow::watch(None, true, factory).ok();
+            let _ = ready.send(());
+            let _ = received.recv();
+        });
+        let guard = Self {
+            stop: Some(stop),
+            finished,
+        };
+        let _ = entered.await;
+        guard
+    }
+    pub async fn finish(mut self) {
+        self.stop.take();
+        let _ = (&mut self.finished).await;
+    }
+}
+impl Drop for CommandHold {
+    fn drop(&mut self) {
+        self.stop.take();
+    }
+}
+#[cfg(test)]
+fn test_factories() -> &'static std::sync::Mutex<std::collections::BTreeMap<PathBuf, Factory>> {
+    static FACTORIES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<PathBuf, Factory>>,
+    > = std::sync::OnceLock::new();
+    FACTORIES.get_or_init(Default::default)
+}
+#[cfg(test)]
+pub(crate) struct TestFactory(PathBuf, pub Arc<std::sync::atomic::AtomicUsize>);
+#[cfg(test)]
+impl Drop for TestFactory {
+    fn drop(&mut self) {
+        test_factories().lock().unwrap().remove(&self.0);
+    }
+}
+#[cfg(test)]
+pub(crate) async fn wait_released(count: &std::sync::atomic::AtomicUsize) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while count.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+#[cfg(test)]
+pub(crate) fn test_count(
+    workspace: &std::path::Path,
+    count: Arc<std::sync::atomic::AtomicUsize>,
+) -> TestFactory {
+    let acquisitions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let entered = acquisitions.clone();
+    test_factories().lock().unwrap().insert(
+        workspace.into(),
+        Arc::new(move || {
+            struct Count(Arc<std::sync::atomic::AtomicUsize>);
+            impl Held for Count {}
+            impl Drop for Count {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            entered.fetch_add(1, Ordering::SeqCst);
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(Count(count.clone())))
+        }),
+    );
+    TestFactory(workspace.into(), acquisitions)
 }
 
 #[cfg(unix)]
@@ -283,6 +372,47 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 1);
         drop(first);
         assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn cancellation_during_acquisition_releases_on_the_acquiring_thread() {
+        let (release, blocked) = std::sync::mpsc::channel();
+        let blocked = std::sync::Mutex::new(blocked);
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let entered = std::sync::Mutex::new(Some(entered));
+        let (released, finished) = tokio::sync::oneshot::channel();
+        let released = std::sync::Mutex::new(Some(released));
+        struct ThreadHold(
+            std::thread::ThreadId,
+            Option<tokio::sync::oneshot::Sender<bool>>,
+        );
+        impl Held for ThreadHold {}
+        impl Drop for ThreadHold {
+            fn drop(&mut self) {
+                let same_thread = self.0 == std::thread::current().id();
+                let _ = self.1.take().unwrap().send(same_thread);
+            }
+        }
+        let factory: Factory = Arc::new(move || {
+            entered.lock().unwrap().take().unwrap().send(()).unwrap();
+            blocked.lock().unwrap().recv().unwrap();
+            Ok(Box::new(ThreadHold(
+                std::thread::current().id(),
+                released.lock().unwrap().take(),
+            )))
+        });
+        let task = tokio::spawn(CommandHold::with_factory(factory));
+        started.await.unwrap();
+        task.abort();
+        assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+        // The single async worker remains available while acquisition is blocked.
+        tokio::task::yield_now().await;
+        release.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), finished)
+                .await
+                .unwrap()
+                .unwrap()
+        );
     }
     #[test]
     fn independent_holds_start_synchronously_and_release_from_another_thread() {

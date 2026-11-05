@@ -1714,6 +1714,7 @@ pub(crate) mod tests {
         .unwrap();
         let generation = Arc::new(crate::execution::Generation::default());
         runtime.generation = Some(generation.clone());
+        runtime.service_run_id = Some(generation.id.clone());
         let driver = Arc::new(MemberTurn {
             chat_action: Mutex::new("reply"),
             completion: Mutex::new("done"),
@@ -2584,6 +2585,15 @@ pub(crate) mod tests {
                             .map(|_| ())
                     })
                     .unwrap();
+                // The host already emitted the terminal event before recovery.
+                let mut prior = dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
+                prior.run_id = "prior-run".into();
+                crate::chat_dispatch::Runner::event(
+                    runtime.as_ref(),
+                    "workflow.completed",
+                    &prior,
+                    json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
+                );
                 assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
                 assert!(driver.calls.lock().unwrap().is_empty());
                 let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
@@ -2615,12 +2625,14 @@ pub(crate) mod tests {
                         .join(".guildbotics/local/run/sessions/prior-run.jsonl"),
                 )
                 .unwrap();
-                assert!(
+                assert_eq!(
                     transcript
                         .lines()
                         .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                        .any(|e| e["type"] == "workflow.completed"
+                        .filter(|e| e["type"] == "workflow.completed"
                             && e["payload"]["run_id"] == "prior-run")
+                        .count(),
+                    1
                 );
                 cleanup.close();
                 cleanup.wait().await;
@@ -3759,6 +3771,13 @@ pub(crate) mod tests {
             .remove(0);
         assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
         original.run_id = runner.invocations.lock().unwrap()[0].run_id.clone();
+        // This runner double leaves the host terminal event to the fixture.
+        crate::chat_dispatch::Runner::event(
+            runner.as_ref(),
+            "workflow.completed",
+            &original,
+            json!({"run_id":original.run_id,"status":"done"}),
+        );
         runner.records.lock().unwrap().get_mut(&original.run_id).unwrap().provider_evidence.push(json!({"type":"chat_reply","payload":{"channel_id":"C1","thread_id":"M1","message_id":"response","text":"@local-yuki design review @outsider","occurred_at":"2026-11-05T00:00:05Z"}}));
         dispatch
             .store
@@ -3803,8 +3822,14 @@ pub(crate) mod tests {
             "response"
         );
         assert_eq!(
-            runner.events.lock().unwrap().last().unwrap()["type"],
-            "workflow.completed"
+            runner
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event["type"] == "workflow.completed")
+                .count(),
+            1
         );
     }
     #[tokio::test]

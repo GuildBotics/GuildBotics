@@ -103,6 +103,7 @@ impl Service {
         state.startup_attempt += 1;
         if state.running.is_none() {
             state.status.state = "starting";
+            state.status.running = true;
             state.status.error = None;
         }
         state.startup_attempt
@@ -112,11 +113,19 @@ impl Service {
         let mut state = self.0.lock().await;
         if state.running.is_none() && state.startup_attempt == attempt {
             state.status.state = "failed";
+            state.status.running = false;
             state.status.error = Some(crate::i18n::t(
                 "en",
                 "app_api.errors.service_start_failed",
                 &[],
             ));
+        }
+    }
+
+    pub async fn startup_rejected(&self, attempt: u64, previous: Status) {
+        let mut state = self.0.lock().await;
+        if state.running.is_none() && state.startup_attempt == attempt {
+            state.status = previous;
         }
     }
 
@@ -256,6 +265,7 @@ impl Service {
             drop(lock);
             let mut state = service.0.lock().await;
             let failed = panicked;
+            state.status.error = None;
             if panicked {
                 state.status.error = Some(crate::i18n::t(
                     "en",
@@ -430,6 +440,7 @@ mod tests {
         while service.status().await.running {
             tokio::task::yield_now().await;
         }
+        assert!(service.status().await.error.is_none());
         assert!(
             gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
                 .unwrap()

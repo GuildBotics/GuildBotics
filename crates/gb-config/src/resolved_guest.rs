@@ -14,8 +14,11 @@ const MODELS: &[&str] = &[
 ];
 
 fn read(path: &Path) -> anyhow::Result<Value> {
-    crate::yaml::value(&std::fs::read_to_string(path)?)
-        .map_err(|_| anyhow::anyhow!("Invalid configuration: {}", path.display()))
+    (|| {
+        crate::yaml::value(&std::fs::read_to_string(path)?)
+            .map_err(|_| anyhow::anyhow!("Invalid configuration YAML"))
+    })()
+    .with_context(|| crate::ConfigFile(path.into()))
 }
 // Optional YAML dictionaries use the frozen host's _yaml_dict semantics.
 fn dictionary(path: &Path) -> anyhow::Result<serde_json::Map<String, Value>> {

@@ -23,6 +23,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 pub struct Runtime {
     pub generation: Option<Arc<crate::execution::Generation>>,
+    pub service_run_id: Option<String>,
     pub dispatcher: Dispatcher,
     pub writes: Arc<SharedWrites>,
     pub redactor: Redactor,
@@ -62,8 +63,8 @@ impl Runtime {
         &self,
         mut attributes: serde_json::Map<String, Value>,
     ) -> serde_json::Map<String, Value> {
-        if let Some(generation) = &self.generation {
-            attributes.insert("service_run_id".into(), json!(generation.id));
+        if let Some(service_run_id) = &self.service_run_id {
+            attributes.insert("service_run_id".into(), json!(service_run_id));
         }
         attributes
     }
@@ -118,9 +119,11 @@ impl Runtime {
                     .map(|v| crate::member::native::public(&v))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let project = gb_config::yaml_value(&std::fs::read_to_string(
-            roots.config.join("team/project.yml"),
-        )?)?;
+        let project_path = roots.config.join("team/project.yml");
+        let project = (|| -> anyhow::Result<Value> {
+            gb_config::yaml_value(&std::fs::read_to_string(&project_path)?)
+        })()
+        .with_context(|| gb_config::ConfigFile(project_path))?;
         let writes = Arc::new(SharedWrites::new(
             native.identity_root.clone(),
             Some(native.workspace.clone()),
@@ -253,6 +256,7 @@ impl Runtime {
         Ok((
             Self {
                 generation: None,
+                service_run_id: None,
                 dispatcher,
                 writes,
                 redactor,
@@ -652,8 +656,7 @@ impl Runner for Runtime {
             match self.record(run_id) {
                 Ok(Some(record)) => {
                     if work_stops::suppressed(&record, &self.roster) {
-                        let payload = json!({"run_id":run_id,"reason":record.result.as_ref().unwrap().status,"url":task.pull_request_url.as_ref().or(task.url.as_ref()),"waiting_for":record.result.as_ref().unwrap().waiting_for});
-                        self.activity(trace, "work_stop.suppressed", payload.clone());
+                        let payload = json!({"run_id":run_id,"reason":record.result.as_ref().unwrap().status,"url":task.pull_request_url.as_deref().or(task.url.as_deref()).unwrap_or(""),"waiting_for":record.result.as_ref().unwrap().waiting_for});
                         trace.event(
                             "work_stop.suppressed",
                             serde_json::from_value(payload).unwrap(),
@@ -925,6 +928,43 @@ fn slot_identity(mut slot: BTreeMap<String, String>) -> BTreeMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn agent_only_asking_records_one_diagnostic_without_domain_activity() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = crate::test_chat::runtime(root.path());
+        let workspace = &runtime.dispatcher.workspace;
+        let record: RunRecord = serde_json::from_value(json!({
+            "run_id":"asking", "work_kind":"ticket", "execution_mode":"autonomous",
+            "member_id":"aiko", "device_id":"device", "status":"succeeded",
+            "started_at":"2026-11-05T00:00:00Z", "finished_at":"2026-11-05T00:01:00Z",
+            "result":{"subject_type":"ticket", "subject_id":"1", "status":"asking", "waiting_for":["aiko"]}
+        })).unwrap();
+        runtime
+            .writes
+            .transaction(|writer| {
+                RunStore::open(workspace).start(writer, record, &runtime.redactor)?;
+                Ok(())
+            })
+            .unwrap();
+        let trace = Trace::open(&Diagnostics::open(workspace), "test");
+        let task: Task = serde_json::from_value(json!({"id":"1", "title":"Question"})).unwrap();
+        Runner::completed(&runtime, &task, "asking", &trace).await;
+        let transcript = std::fs::read_to_string(workspace.join(format!(
+            ".guildbotics/local/run/sessions/{}.jsonl",
+            trace.id()
+        )))
+        .unwrap();
+        let diagnostics = transcript
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["type"] == "work_stop.suppressed")
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0]["payload"]["url"], "");
+        assert_eq!(diagnostics[0]["payload"]["waiting_for"], json!(["aiko"]));
+        assert!(!workspace.join(".guildbotics/state/events").exists());
+    }
+
     #[test]
     fn talk_as_accepts_only_nonempty_trimmed_text() {
         for content in [json!(null), json!(3), json!([]), json!(""), json!(" \n\t")] {
