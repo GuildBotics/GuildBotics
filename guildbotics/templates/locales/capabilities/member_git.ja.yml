@@ -16,6 +16,6 @@ ja:
   lock_timeout: "同じ member の別の Git 操作が実行中です。終了を待って再実行してください。"
   redirect: "member の Git 操作では insteadOf または pushurl による転送は使用できません。"
   checkout_required: "この clone は member git prepare で checkout されていません。prepare が返す repo_path を使ってください。"
-  detached: "リポジトリがブランチ上にありません。push する前にブランチを選んでください。"
+  detached: "リポジトリがブランチ上にありません。ブランチを選んでから実行し直してください。"
   branch_empty: "ブランチ「%{branch}」には push するコミットがありません。"
   push_failed: "ブランチ「%{branch}」を origin に push できませんでした: %{reason}"

@@ -29,21 +29,38 @@ impl Output {
         String::from_utf8_lossy(&self.stdout).trim().to_owned()
     }
     fn checked(self) -> Result<Self> {
-        if self.code == 0 {
-            Ok(self)
-        } else {
-            let reason = format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&self.stdout),
-                String::from_utf8_lossy(&self.stderr)
-            )
-            .trim()
-            .to_owned();
-            Err(MemberError::CapabilityArgs {
-                key: "capabilities.member_git.git_failed_reason",
-                args: [("reason".into(), reason)].into(),
-            })
+        self.checked_text(false)
+    }
+    fn checked_bundle(mut self) -> Result<Self> {
+        if self.code != 0 {
+            self.stdout.clear();
         }
+        self.checked()
+    }
+    fn checked_text(self, combine: bool) -> Result<Self> {
+        if self.code == 0 {
+            return Ok(self);
+        }
+        // Drop oversized streams as a whole: never split a credential across
+        // a cutoff before the response's redactor can recognize it.
+        let text = |bytes: &[u8]| {
+            if bytes.len() > 4096 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(bytes).into_owned()
+            }
+        };
+        let reason = if combine {
+            format!("{}\n{}", text(&self.stdout), text(&self.stderr))
+        } else if self.stderr.is_empty() {
+            text(&self.stdout)
+        } else {
+            text(&self.stderr)
+        };
+        Err(MemberError::CapabilityArgs {
+            key: "capabilities.member_git.git_failed_reason",
+            args: [("reason".into(), reason.trim().to_owned())].into(),
+        })
     }
 }
 fn failure(key: &'static str) -> MemberError {
@@ -363,7 +380,7 @@ impl Origin {
             MAX_OUTPUT,
         )
         .await?
-        .checked()
+        .checked_text(args.first() == Some(&"push"))
     }
     pub async fn fetch(&self, credential: Option<GitCredential>) -> Result<()> {
         self.connected(
@@ -603,6 +620,8 @@ struct Checkout {
     branch: String,
     #[serde(default)]
     discarded: bool,
+    #[serde(default)]
+    removed: bool,
 }
 /// Host-owned invocation data. The requester cannot choose its work or guest.
 pub struct Workspace<'a> {
@@ -752,7 +771,7 @@ impl Workspace<'_> {
                     MAX_BUNDLE,
                 )
                 .await?
-                .checked()?;
+                .checked_bundle()?;
             return Ok((json!({"refs":refs}), bundle.stdout));
         }
         self.guard.ensure_current()?;
@@ -981,7 +1000,7 @@ impl Workspace<'_> {
                     MAX_BUNDLE,
                 )
                 .await?
-                .checked()?;
+                .checked_bundle()?;
             let script = "f=$(mktemp) || exit 1; cat >\"$f\" || exit 1; git bundle verify \"$f\" >/dev/null 2>&1 || { rm -f \"$f\"; exit 3; }; git bundle unbundle \"$f\" >/dev/null; s=$?; rm -f \"$f\"; exit $s";
             let result = self
                 .guest
@@ -1158,6 +1177,7 @@ impl Workspace<'_> {
             owner,
             branch: requested.into(),
             discarded: false,
+            removed: false,
         };
         if !initialized {
             self.save(&slot, &record)?;
@@ -1247,12 +1267,12 @@ impl Workspace<'_> {
             self.save(&other, record)?;
         }
         for (other, record) in &retired {
-            if !record.discarded || record.repository != repository {
+            if !record.discarded || record.removed || record.repository != repository {
                 continue;
             }
             // Discarded IDs remain reserved even after deletion. Never inspect
             // partially removed Git metadata when retrying cleanup.
-            let _ = self
+            let result = self
                 .guest
                 .run(
                     &self.clones,
@@ -1262,6 +1282,11 @@ impl Workspace<'_> {
                     MAX_OUTPUT,
                 )
                 .await;
+            if result.is_ok_and(|output| output.code == 0) {
+                let mut removed = record.clone();
+                removed.removed = true;
+                self.save(other, &removed)?;
+            }
         }
         let branch = self
             .run(
@@ -1357,7 +1382,7 @@ impl Workspace<'_> {
                     MAX_BUNDLE,
                 )
                 .await?
-                .checked()?;
+                .checked_bundle()?;
             if !origin.receive(&branch, &head, Some(&bundle.stdout)).await? {
                 return Err(failure("bundle"));
             }
@@ -1745,7 +1770,7 @@ mod tests {
             stdout: b"branch rejected non-fast-forward".to_vec(),
             stderr: b"remote unavailable".to_vec(),
         }
-        .checked()
+        .checked_text(true)
         .err()
         .unwrap();
         let MemberError::CapabilityArgs { args, .. } = error else {
@@ -1952,9 +1977,19 @@ mod tests {
             git(&upstream, &["show", "-s", "--format=%cn <%ce>", "HEAD"]),
             "Member <member@example.invalid>"
         );
+        let raw = std::process::Command::new("git")
+            .args(["cat-file", "commit", "HEAD"])
+            .current_dir(&upstream)
+            .output()
+            .unwrap();
+        assert!(raw.status.success());
         assert_eq!(
-            git(&upstream, &["show", "-s", "--format=%s", "HEAD"]),
-            "message"
+            String::from_utf8(raw.stdout)
+                .unwrap()
+                .split_once("\n\n")
+                .unwrap()
+                .1,
+            "message\n"
         );
         assert_eq!(git(&upstream, &["config", "author.name"]), "Override");
         assert_eq!(git(&upstream, &["config", "user.name"]), "Original");
@@ -2068,5 +2103,48 @@ mod tests {
                 && v.bytes()
                     .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         }));
+    }
+    #[test]
+    fn binary_bundle_failures_never_enter_diagnostics_and_text_is_bounded() {
+        for stderr in [vec![], b"bundle failed".to_vec()] {
+            let error = Output {
+                code: 1,
+                stdout: vec![255; 1024 * 1024],
+                stderr,
+            }
+            .checked_bundle()
+            .err()
+            .unwrap();
+            let MemberError::CapabilityArgs { args, .. } = error else {
+                panic!()
+            };
+            assert!(!args["reason"].contains('\u{fffd}'));
+            assert!(args["reason"].len() <= 4096);
+        }
+        let output = || Output {
+            code: 1,
+            stdout: b"[rejected] topic".to_vec(),
+            stderr: b"push failed".to_vec(),
+        };
+        let MemberError::CapabilityArgs { args, .. } = output().checked().err().unwrap() else {
+            panic!()
+        };
+        assert_eq!(args["reason"], "push failed");
+        let MemberError::CapabilityArgs { args, .. } = output().checked_text(true).err().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(args["reason"], "[rejected] topic\npush failed");
+        let MemberError::CapabilityArgs { args, .. } = (Output {
+            code: 1,
+            stdout: vec![b'x'; 5000],
+            stderr: vec![],
+        })
+        .checked_text(true)
+        .err()
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(args["reason"], "");
     }
 }

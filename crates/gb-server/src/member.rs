@@ -212,7 +212,16 @@ async fn start(
 ) -> Response {
     let Some(backend) = api.member.clone() else {
         return ApiError::new(StatusCode::CONFLICT, "member_workspace_mismatch", &headers)
-            .key("member_workspace_mismatch", vec![("workspace", "—".into())])
+            .key(
+                "member_workspace_mismatch",
+                vec![(
+                    "workspace",
+                    api.workspace
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "—".into()),
+                )],
+            )
             .into_response();
     };
     if api.cancelled.is_cancelled() || api.work.is_closed() {
@@ -584,33 +593,43 @@ mod tests {
     #[tokio::test]
     async fn missing_member_backend_guides_workspace_recovery_in_both_languages() {
         for language in ["en", "ja"] {
-            for path in ["/api/member/plan", "/api/member/run"] {
-                let temp = tempfile::tempdir().unwrap();
-                let (mut api, _) = api(temp.path(), false);
-                Arc::get_mut(&mut api).unwrap().member = None;
-                let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
-                let response = crate::api::router(api)
-                    .oneshot(
-                        axum::http::Request::builder()
-                            .method("POST")
-                            .uri(path)
-                            .header("host", "127.0.0.1:8765")
-                            .header("authorization", format!("Bearer {}", token.trim()))
-                            .header("content-type", "application/json")
-                            .header("x-guildbotics-language", language)
-                            .body(Body::from(body().to_string()))
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::CONFLICT);
-                let result: Value = serde_json::from_slice(&bytes(response).await).unwrap();
-                assert_eq!(result["code"], "member_workspace_mismatch");
-                let message = result["message"].as_str().unwrap();
-                assert!(message.contains("—"));
-                assert!(!message.contains("%{"));
-                assert!(!message.contains("guildbotics server stop"));
-                assert!(!message.contains("guildbotics workspace use"));
+            for selected in [false, true] {
+                for path in ["/api/member/plan", "/api/member/run"] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let (mut api, _) = api(temp.path(), false);
+                    Arc::get_mut(&mut api).unwrap().member = None;
+                    let expected = if selected {
+                        temp.path().display().to_string()
+                    } else {
+                        "—".into()
+                    };
+                    if selected {
+                        Arc::get_mut(&mut api).unwrap().workspace = Some(temp.path().into());
+                    }
+                    let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+                    let response = crate::api::router(api)
+                        .oneshot(
+                            axum::http::Request::builder()
+                                .method("POST")
+                                .uri(path)
+                                .header("host", "127.0.0.1:8765")
+                                .header("authorization", format!("Bearer {}", token.trim()))
+                                .header("content-type", "application/json")
+                                .header("x-guildbotics-language", language)
+                                .body(Body::from(body().to_string()))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::CONFLICT);
+                    let result: Value = serde_json::from_slice(&bytes(response).await).unwrap();
+                    assert_eq!(result["code"], "member_workspace_mismatch");
+                    let message = result["message"].as_str().unwrap();
+                    assert!(message.contains(&expected));
+                    assert!(!message.contains("%{"));
+                    assert!(!message.contains("guildbotics server stop"));
+                    assert!(!message.contains("guildbotics workspace use"));
+                }
             }
         }
     }

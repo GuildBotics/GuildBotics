@@ -40,6 +40,14 @@ impl Guest for LocalGuest {
                 .unwrap()
                 .push((cwd.to_owned(), argv.clone(), env.clone()));
             if argv.first().is_some_and(|v| v == "rm")
+                && self.fail.lock().unwrap().as_deref() == Some("rm-status")
+            {
+                return Ok(Output {
+                    code: 1,
+                    ..Default::default()
+                });
+            }
+            if argv.first().is_some_and(|v| v == "rm")
                 && self.fail.lock().unwrap().as_deref() == Some("partial-rm")
             {
                 let slot = cwd.join(argv.last().unwrap());
@@ -449,6 +457,17 @@ async fn idle_cleanup_retries_and_discarded_paths_cannot_publish() {
             f.remote.to_str().unwrap(),
             first.to_str().unwrap(),
         ],
+    );
+    f.guest.calls.lock().unwrap().clear();
+    f.prepare("two", "ticket/2").await;
+    assert!(first.join(".git").is_dir());
+    assert!(
+        !f.guest
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, argv, _)| argv.first().is_some_and(|a| a == "rm"))
     );
     assert!(f.workspace("one").commit(&first, "stale").await.is_err());
 }
@@ -1241,5 +1260,30 @@ async fn detached_and_unprepared_pushes_have_actionable_diagnostics() {
             .unwrap_err()
             .to_string(),
         "capabilities.member_git.detached"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_nonzero_status_retries_but_success_does_not() {
+    let f = Fixture::new();
+    let first = f.prepare("one", "ticket/1").await;
+    f.stage(&first, "dirty\n");
+    f.prepare("two", "ticket/2").await;
+    git(&first, &["reset", "--hard"]);
+    *f.guest.fail.lock().unwrap() = Some("rm-status".into());
+    f.prepare("two", "ticket/2").await;
+    assert!(first.exists());
+    *f.guest.fail.lock().unwrap() = None;
+    f.prepare("two", "ticket/2").await;
+    assert!(!first.exists());
+    f.guest.calls.lock().unwrap().clear();
+    f.prepare("two", "ticket/2").await;
+    assert!(
+        !f.guest
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, argv, _)| argv.first().is_some_and(|a| a == "rm"))
     );
 }

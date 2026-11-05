@@ -16,6 +16,6 @@ en:
   lock_timeout: "Another Git operation of this member is still running. Wait for it to finish and try again."
   redirect: "Git URL redirects (insteadOf or pushurl) are not allowed for member operations."
   checkout_required: "This clone was not checked out by member git prepare. Run prepare and use its repo_path."
-  detached: "The repository is not on a branch. Switch to a branch before pushing."
+  detached: "The repository is not on a branch. Select a branch and run the command again."
   branch_empty: "Branch '%{branch}' has no commit to push."
   push_failed: "Failed to push '%{branch}' to origin: %{reason}"
