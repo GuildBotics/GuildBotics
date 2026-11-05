@@ -21,7 +21,10 @@ provider に任せる。操作の返り値は送信・reaction の receipt で�
 から使う。書き換えは read・変更・文書二ファイルの保存・recency を一つの共有 transaction に
 収める。policy の既存文書の検索もその範囲内で行う。監査は文書の commit 後の best effort
 であり、I/O エラーや共有ロックの競合を理由に、完了済み文書を失敗扱いにしない。
-secret snapshot は呼び出し側が `Redactor` として渡す。文書本文は省略せずにマスクする。
+secret snapshot は呼び出し側が `Redactor::with_min_length(values, 4)` として渡す。
+文書本文・metadata・memory 監査は4文字以上をマスクし、本文は省略しない。
+共有 activity / task run / diagnostics 用の `Redactor::new` は衝突を避ける8文字の下限を保つ。
+member CLI の組立を担う #127 でも memory には4文字の設定を渡す。
 
 `events` は payload を組み立て、明示的に渡された correlation と合わせて既存の
 diagnostics / activity store に記録する。`target.recorded` や review limit の失敗診断は

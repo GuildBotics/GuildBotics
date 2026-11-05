@@ -23,6 +23,7 @@ pub struct Memory<'a> {
     pub autonomous: bool,
     pub correlation: Value,
     pub audit_sink: Option<&'a (dyn Fn(Value) -> Result<()> + Sync)>,
+    /// Construct with `Redactor::with_min_length(values, 4)` for the memory boundary.
     pub redactor: &'a Redactor,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]

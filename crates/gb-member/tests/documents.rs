@@ -26,7 +26,7 @@ fn memory<'a>(writes: &'a SharedWrites, root: &'a Path, redactor: &'a Redactor) 
 fn document_lifecycle_redaction_search_and_recency() {
     let d = tempfile::tempdir().unwrap();
     let writes = SharedWrites::new(d.path().into(), None);
-    let redactor = Redactor::new(["a-secret-value-123".into()]);
+    let redactor = Redactor::with_min_length(["a-secret-value-123".into()], 4);
     let m = memory(&writes, d.path(), &redactor);
     let first = m
         .record(
@@ -380,16 +380,16 @@ fn logical_paths_and_all_metadata_fields_are_redacted_on_each_device() {
     );
     let d = tempfile::tempdir().unwrap();
     let writes = SharedWrites::new(d.path().into(), None);
-    let redactor = Redactor::new(["postgres://user:pass@db/example".into()]);
+    let redactor = Redactor::with_min_length(["four".into()], 4);
     let m = memory(&writes, d.path(), &redactor);
     let doc = m
         .record(
             Scope::Personal,
             Edit {
-                title: Some("postgres://user:pass@db/example".into()),
-                summary: Some("postgres://user:pass@db/example".into()),
-                keywords: Some(vec!["postgres://user:pass@db/example".into()]),
-                source: Some(vec![json!({"url":"postgres://user:pass@db/example"})]),
+                title: Some("four".into()),
+                summary: Some("four".into()),
+                keywords: Some(vec!["four".into()]),
+                source: Some(vec![json!({"url":"four"})]),
                 ..Default::default()
             },
             false,
@@ -428,12 +428,15 @@ fn unreadable_device_identity_prevents_service_construction_and_document_writes(
 fn audits_keep_scoped_snapshots_and_corrupt_neighbors_do_not_break_discovery() {
     let d = tempfile::tempdir().unwrap();
     let writes = SharedWrites::new(d.path().into(), None);
-    let redactor = Redactor::new([
-        "four".into(),
-        "five5".into(),
-        "sixsix".into(),
-        "seven77".into(),
-    ]);
+    let redactor = Redactor::with_min_length(
+        [
+            "four".into(),
+            "five5".into(),
+            "sixsix".into(),
+            "seven77".into(),
+        ],
+        4,
+    );
     let rows = std::sync::Mutex::new(vec![]);
     let sink = |v| {
         rows.lock().unwrap().push(v);
@@ -441,8 +444,19 @@ fn audits_keep_scoped_snapshots_and_corrupt_neighbors_do_not_break_discovery() {
     };
     let m = Memory {
         audit_sink: Some(&sink),
+        correlation: json!({"correlated": "x four five5 sixsix seven77 y"}),
         ..memory(&writes, d.path(), &redactor)
     };
+    m.recall(&["four five5 sixsix seven77".into()], false, 20)
+        .unwrap();
+    {
+        let guard = rows.lock().unwrap();
+        let row = guard.last().unwrap();
+        assert_eq!(row["payload"]["query_keywords"], json!(["*** *** *** ***"]));
+        assert_eq!(row["correlated"], "x *** *** *** *** y");
+        assert_eq!(row["message"], "memory recall: *** *** *** ***");
+    }
+    rows.lock().unwrap().clear();
     let doc = m
         .record(
             Scope::Personal,
