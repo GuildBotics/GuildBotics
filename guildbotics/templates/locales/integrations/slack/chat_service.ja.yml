@@ -1,0 +1,5 @@
+ja:
+  authentication_failed: "Slack がメンバー %{member} の %{name} の認証情報を拒否しました（%{code}）。更新してサービスを再起動してください。"
+  request_failed: "Slack から有効な応答がありませんでした。"
+  missing_scope: "Slack に必要なスコープ: %{needed}。付与済みスコープ: %{provided}。OAuth & Permissions を更新してアプリを再インストールしてください。"
+  api_failed: "Slack API に失敗しました（%{code}）。"

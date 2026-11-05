@@ -1,4 +1,12 @@
 ja:
+  service_failed: "サービスの操作に失敗しました。"
+  out_of_scope: "書き込みはプロジェクトに設定された範囲に限られます。"
+  missing_credential: "設定 > メンバー > 環境変数で、メンバーの %{name} を設定してください。"
+  credential_prefix_conflict: "メンバー '%{member}' と '%{conflicting_member}' の認証情報の接頭辞が重複しています。認証情報を設定する前に、いずれかのメンバー名を変更してください。"
+  not_found: "このサービスに対象が見つかりません。"
+  unavailable: "サービスへ接続できませんでした。"
+  operation_unsupported: "このサービスは操作に対応していません。"
+  invalid_result: "サービスから不正な結果が返されました。"
   unsupported: "使うには project.services に対応する %{service} を設定してください。'%{name}' は対応していません。"
   too_large: "取得結果がページの上限サイズを超えています。一覧では page_size を下げてください。上限を超える個別の項目は返せません。"
   resource: "未対応の参照リソースです。対応する名前は member help で確認してください。"

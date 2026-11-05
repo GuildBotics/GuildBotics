@@ -23,3 +23,5 @@ en:
   no_base: "The base branch of %{url} is gone."
   artifact_too_large: "Artifact '%{name}' is above the %{limit} byte limit. Ask a human to retrieve it."
   every_on_board: "Branvil keeps every ticket on its workspace's board: a ticket is not created off it."
+  stopped: "The embedded Branvil service is stopped."
+  start_failed: "The embedded Branvil service could not start."

@@ -5,6 +5,7 @@
 //! commands under one of its own (`main` with its `Invocation`) and the
 //! service in its own process (`serve`).
 
+pub mod api;
 mod app;
 mod auth;
 mod autoland;
@@ -351,6 +352,18 @@ pub async fn serve(
 ) -> anyhow::Result<u8> {
     invocation.install();
     cli::serve(serve_config()?, interrupt, terminate, false).await
+}
+
+/// Runs the combined-process service and publishes its authenticated data API
+/// after recovery and background startup, before accepting HTTP requests.
+pub async fn serve_with_data_api(
+    invocation: Invocation,
+    interrupt: impl Future<Output = ()> + Send + 'static,
+    terminate: impl Future<Output = ()> + Send + 'static,
+    ready: tokio::sync::oneshot::Sender<api::DataApi>,
+) -> anyhow::Result<u8> {
+    invocation.install();
+    cli::serve_with_api(serve_config()?, interrupt, terminate, false, Some(ready)).await
 }
 
 /// Whether `branvil init` has made the data directory `serve` would use.

@@ -6,6 +6,40 @@
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "integrations.resources",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/integrations/resources.en.yml"),
+    ),
+    (
+        "integrations.resources",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/integrations/resources.ja.yml"),
+    ),
+    (
+        "integrations.slack.chat_service",
+        "en",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/slack/chat_service.en.yml"
+        ),
+    ),
+    (
+        "integrations.slack.chat_service",
+        "ja",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/slack/chat_service.ja.yml"
+        ),
+    ),
+    (
+        "integrations.branvil.api",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/api.en.yml"),
+    ),
+    (
+        "integrations.branvil.api",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/api.ja.yml"),
+    ),
+    (
         "app_api.errors",
         "en",
         include_str!("../../../guildbotics/templates/locales/app_api/errors.en.yml"),
@@ -101,6 +135,40 @@ fn lookup(language: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_errors_are_translated_with_safe_actionable_parameters() {
+        for lang in ["en", "ja"] {
+            for key in [
+                "out_of_scope",
+                "service_failed",
+                "not_found",
+                "unavailable",
+                "operation_unsupported",
+                "invalid_result",
+            ] {
+                let full = format!("integrations.resources.{key}");
+                assert_ne!(t(lang, &full, &[]), full);
+            }
+            let missing = t(
+                lang,
+                "integrations.resources.missing_credential",
+                &[("name", "AIKO_SLACK_BOT_TOKEN")],
+            );
+            assert!(missing.contains("AIKO_SLACK_BOT_TOKEN"));
+            let scope = t(
+                lang,
+                "integrations.slack.chat_service.missing_scope",
+                &[("needed", "channels:history"), ("provided", "identify")],
+            );
+            assert!(scope.contains("channels:history"));
+            assert!(scope.contains("identify"));
+        }
+        assert_ne!(
+            t("en", "integrations.resources.out_of_scope", &[]),
+            t("ja", "integrations.resources.out_of_scope", &[])
+        );
+    }
 
     #[test]
     fn sentences_come_from_the_locale_files_in_the_language_asked() {

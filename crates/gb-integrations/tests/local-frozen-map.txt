@@ -1,0 +1,88 @@
+Frozen local-provider test inventory and Rust mapping
+Frozen source: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
+Local tests: crates/gb-integrations/src/factory/local/tests.rs and chat.rs::tests
+Shared contracts: crates/gb-integrations/tests/support/contracts.rs
+Inventory was enumerated before implementation; this file records final test names.
+
+tests/guildbotics/integrations/test_local_chat.py
+  test_the_listener_passes_over_a_bad_line_alone_and_keeps_listening -> every_frozen_damaged_record_is_skipped_alone + chat_malformed_records_cursor_status_and_listener_partial_lines
+  test_reading_a_channel_passes_over_a_bad_line -> every_frozen_damaged_record_is_skipped_alone + chat_malformed_records_cursor_status_and_listener_partial_lines
+  test_a_status_that_is_none_leaves_its_message_carrying_none -> chat_malformed_records_cursor_status_and_listener_partial_lines
+  test_a_channel_nothing_was_written_to_is_empty_and_one_unreadable_fails -> chat_malformed_records_cursor_status_and_listener_partial_lines
+  test_a_cursor_no_page_gave_is_refused -> chat_malformed_records_cursor_status_and_listener_partial_lines
+  test_posts_of_one_clock_tick_still_follow_one_another -> posts_after_a_future_clock_tick_still_follow_in_order
+
+tests/guildbotics/integrations/test_local_code_hosting.py
+  test_files_preserve_japanese_paths_and_decode_patch_content -> pull_request_git_unicode_files_reviews_threads_checks_and_artifacts (strict path decoding and replacement patch decoding; provider failures use sanitized ServiceError locale keys)
+  test_git_requires_exact_paths_and_reports_undecodable_diagnostics -> git_strictly_decodes_machine_output_and_sanitizes_failures
+
+tests/guildbotics/integrations/test_local_tickets.py
+  test_a_ticket_already_being_worked_on_is_taken_up_while_blocked -> relations_validate_before_writes_and_working_ignores_open_blockers
+  test_a_relation_to_no_ticket_is_refused_and_nothing_is_written -> relations_validate_before_writes_and_working_ignores_open_blockers
+  test_leaving_a_parent_outside_the_scope_is_refused_and_nothing_is_written -> relations_validate_before_writes_and_working_ignores_open_blockers
+
+tests/guildbotics/integrations/test_local_awaited_checks.py
+  test_no_work_while_the_checks_are_pending -> tests/patrol_cases.rs::no_work_while_checks_pending
+  test_settled_checks_resume_the_member -> tests/patrol_cases.rs::success_and_failure_checks_both_resume_the_member
+  test_a_new_head_resumes_the_work_while_its_checks_are_pending -> tests/patrol_cases.rs::new_head_resumes_work_even_with_pending_checks
+  test_a_pr_no_longer_open_and_ready_is_not_resumed -> tests/patrol_cases.rs::closed_merged_or_draft_prs_never_resume
+  test_only_the_members_next_notice_ends_the_wait -> tests/patrol_cases.rs::only_next_notice_ends_wait_and_ordinary_comments_do_not
+  test_someone_elses_wait_and_an_unanswered_statement_are_not_this_role -> tests/patrol_cases.rs::someone_elses_wait_does_not_resume_my_work
+  test_a_wait_whose_checks_cannot_be_read_waits_on -> tests/patrol_cases.rs::failed_check_read_waits_without_hiding_another_pr_feedback
+  test_a_wait_on_a_head_that_is_gone_resumes_nothing -> tests/patrol_cases.rs::missing_head_resumes_nothing
+  test_a_resumed_run_stopped_by_a_rate_limit_is_resumed_after_the_reset -> tests/patrol_cases.rs::resumed_rate_limited_run_waits_for_reset
+  test_whatever_the_pr_asks_while_its_checks_are_awaited_resumes_that_work -> tests/patrol_cases.rs::feedback_and_later_checks_both_resume_original_work
+  test_a_wait_names_the_work_it_resumes -> tests/patrol_cases.rs::a_wait_names_the_work_it_resumes
+
+Additional local invariants pinned:
+  all eight damaged records through read/reaction/listener, other channels and three invalid statuses -> chat.rs::tests::frozen_bad_lines_preserve_channel_thread_reaction_and_other_channels
+  missing blocker NotFound and leaving an out-of-scope parent by replacement/removal -> relations_validate_before_writes_and_working_ignores_open_blockers
+  empty chat cursor, missing thread, resolve None/Some, non-ASCII cursor -> chat_malformed_records_cursor_status_and_listener_partial_lines
+  bounded draft file lock, independent writes during contention and missing parent directory -> draft_lock_times_out_without_blocking_other_local_writes
+  canonical trailing-slash ticket links and empty/non-file checks defaults -> pull_request_git_unicode_files_reviews_threads_checks_and_artifacts
+  bounded listener stop -> blocked_worker_shutdown_finishes_within_frozen_two_second_bound
+  lifecycle serialization -> concurrent_start_waits_for_stop_of_previous_generation
+  detached generation isolation -> detached_worker_cannot_be_revived_by_next_start
+  stop on worker callback -> a_worker_can_stop_itself_without_joining_its_own_thread
+  actual scope checks across all writes -> every_local_write_refuses_other_scope_without_changing_files
+  malformed local URL population -> local_urls_and_scope_reject_all_escape_shapes
+  tracker search, reciprocal relations, inherited interaction, attachment boundary -> ticket_search_relations_interactive_and_referenced_attachments
+  factory identity secrets, collision withholding, listener keys -> tests/factory.rs (three fixtures)
+
+Mutation evidence: Store.save authorization removed -> write population test fails; restored.
+Mutation evidence: stop_worker timeout detachment replaced by joining -> bounded shutdown test fails; restored.
+Mutation evidence for review repairs: canonical link storage, empty-check fallback, empty chat cursor, canonical numbers, unrelated writes during lock contention, and lock-parent creation were each removed; the corresponding tests failed and all edits were restored.
+
+Shared frozen ticket contract population (same helpers execute local and Branvil fixtures):
+tests/guildbotics/integrations/contracts/test_ticket_service_contract.py
+  test_every_ticket_service_answers_every_operation_of_the_port -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_tracker_search_filters_title_body_state_label_and_pages -> support/contracts.rs::ticket_contract -> ticket_shared_contract + ticket_search_decoy_contract -> full_shared_code_state_and_link_contracts
+  test_tracker_search_rejects_a_url_as_subject_and_invalid_continuation -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_tracker_search_rejects_invalid_conditions -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_creation_sets_assignment_relations_and_initial_lane -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_interactive_creation_is_excluded_from_patrol_or_refused_before_writes -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_creation_checks_all_related_write_scopes_before_creating -> support/contracts.rs::ticket_scope_contract -> full_shared_ticket_scope_resource_and_attachment_contract
+  test_interactive_updates_read_inheritance_and_control_patrol -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_creation_can_assign_human_members -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_github_exposes_status_only_after_relations_and_agent_assignment -> provider-specific GitHub-only observation; frozen test explicitly returns for local/Branvil. Restored creation contract tests complete readback and selection after create.
+  test_unassigned_mentions_are_answered_once_without_taking_the_ticket -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_comments_addressed_to_other_members_do_not_wake_the_assignee -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_a_new_ready_assignment_starts_despite_a_comment_addressed_elsewhere -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_unanswered_mentions_survive_later_comments_to_other_members -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_other_recipients_do_not_erase_the_members_held_status -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_a_held_ticket_does_not_finish_its_merged_pr_after_other_recipients -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_assignment_refreshes_mention_work_into_regular_work_without_duplicates -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_a_ticket_reads_back_as_it_was_written -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_a_ticket_closes_once -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_an_assigned_ready_ticket_is_taken_and_moved_to_the_working_lane -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_relations_read_back_from_both_sides_and_are_taken_back -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_a_ready_ticket_is_not_taken_while_a_ticket_it_is_blocked_by_is_open -> support/contracts.rs::ticket_patrol_contract -> full_shared_ticket_patrol_contract
+  test_a_created_ticket_is_on_the_board_without_being_assigned -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_a_ticket_is_created_off_the_board_or_refused_as_unsupported -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_the_boards_closed_work_is_listed -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_writes_outside_the_configured_scope_are_refused -> support/contracts.rs::ticket_scope_contract -> full_shared_ticket_scope_resource_and_attachment_contract
+  test_a_reaction_reaches_only_a_comment_of_the_ticket_it_names -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_a_reaction_of_no_meaning_is_refused_before_anything_is_written -> support/contracts.rs::ticket_contract -> ticket_shared_contract (invalid meaning rejected by SemanticReaction deserialization before provider invocation)
+  test_a_ticket_operation_reaches_no_pull_request -> support/contracts.rs::ticket_wrong_subject_contract -> full_shared_ticket_scope_resource_and_attachment_contract
+  test_a_label_the_tracker_does_not_define_is_refused -> support/contracts.rs::ticket_contract -> ticket_shared_contract
+  test_a_ticket_lists_the_files_it_refers_to_and_hands_out_each_by_id -> support/contracts.rs::ticket_attachment_contract -> full_shared_ticket_scope_resource_and_attachment_contract

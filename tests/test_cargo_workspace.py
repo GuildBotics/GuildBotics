@@ -38,7 +38,8 @@ def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None
 #: GuildBotics' crates follow the layers of the Python version's zones (#81):
 #: each uses only crates below it, and siblings of one layer (workspace and
 #: observability) never each other. The wire, generated from the schemas,
-#: stands on nothing.
+#: and the service ports both stand on no other workspace crate; integrations
+#: belong above the ports.
 _ALLOWED = {
     "loopback-auth": set(),
     "branvil": {"loopback-auth"},
@@ -46,6 +47,8 @@ _ALLOWED = {
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
+    "gb-ports": set(),
+    "gb-integrations": {"gb-ports", "gb-base", "gb-config", "branvil"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},

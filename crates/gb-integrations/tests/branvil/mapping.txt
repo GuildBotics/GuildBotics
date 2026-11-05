@@ -1,0 +1,32 @@
+Frozen specification: origin/python-host fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0
+Inventory was inspected before implementation; final executable names below replace the planned targets.
+Run: scripts/branvil-integration.sh (custom harness, deliberately separate from nextest).
+Runner claim regression: main.rs next_claim treats HTTP 204 as an idle queue with a 15-second deadline; scenario first verifies an empty queue stays pending, then finishes jobs registered by real pushes. Treating 204 as EOF makes that assertion fail; restored.
+
+Shared contract populations (identical helper functions run against local and Branvil):
+contracts/test_ticket_service_contract.py -> tests/support/contracts.rs ticket_contract, ticket_patrol_contract, ticket_scope_contract, ticket_attachment_contract, ticket_wrong_subject_contract, ticket_search_decoy_contract. Each old test is enumerated in ../local-frozen-map.txt.
+contracts/test_code_hosting_contract.py -> tests/support/contracts.rs code_contract plus kind/closed/stale-head/other-actor/artifact/old-artifact/Unicode/missing-base/open-order/link/cross-repository helpers. Each old test is enumerated in ../code-frozen-map.txt.
+contracts/test_member_directory_contract.py -> code_contract member names; factory/branvil/tests.rs member_identity_scope_and_resource_boundaries. ActorName field population is also tested in gb-ports/tests/contracts.rs.
+
+integration/branvil/test_smoke.py:
+  test_initial_ticket_state_and_interactive_patrol_exclusion -> main.rs ticket_relations + ticket_patrol_contract
+  test_tickets_and_their_relations -> main.rs ticket_relations + ticket_contract + ticket_patrol_contract
+  test_mention_shapes_and_workspace_discovery -> ticket_patrol_contract + factory/branvil/tests.rs mentions_match_the_frozen_ascii_name_boundaries
+  test_a_push_a_pull_request_and_its_merge -> main.rs scenario (real Git push, public factory, exact-head review, CI and merge)
+  test_open_pull_requests_follow_newest_first_pages -> code_open_order_contract (101 open pull requests)
+  test_checks_decide_readiness_of_the_current_head -> main.rs scenario (pending, failing logs, success, moved head, artifact freshness)
+  test_a_reused_result_is_ready_through_the_provider -> extra.rs reused_and_gates
+  test_a_behind_head_exposes_the_landing_gate_checks -> extra.rs reused_and_gates (success/failure/conflict, separate repositories)
+
+Detailed test_branvil_tickets.py inventory: ticket-frozen-map.txt (26 individual tests and branch conditions).
+Detailed test_branvil_code_hosting.py inventory: code-frozen-map.txt (59 individual tests and branch conditions).
+test_branvil_ticket_selector.py -> ticket_patrol_contract + ticket_contract + ticket_scope_contract + tests/selection.rs + tests/patrol_cases.rs. These pin assignment, mentions, held/rate-limit statuses, interactive inheritance, blocked/working lanes and refresh without duplicates through the real public factory.
+  HTTP-client retry/deadline/probe tests are intentionally not ported: #81/#88 replace that transport with the same-process DataApi and remove request replay. crates/branvil/src/api.rs tests pin permissions, revocation, stopped handles, domain cancellation shielding, shared HTTP/API state and actual-operation/caller/filter cursor binding instead.
+  CLI alert-command rendering is not covered here; member CLI migration is #89. Port alert dispatch is pinned through the real in-process provider.
+test_branvil_provider.py:
+  service member identity, missing token, identity mismatch and refused token -> factory/branvil/tests.rs + tests/factory.rs; service account and person id differ in main.rs fixture.
+  HTTP reachability/response-format/diagnose and image-load polling tests are intentionally not duplicated in the in-process service port. Connection/setup/image lifecycle belongs to the environment/configuration migration; the old transport no longer exists in this provider.
+test_branvil_owner_git.py -> owner credential-helper issuance/rotation, keychain/helper setup and connection ownership belong to the member/connection CLI (#89), not this service port. This PR tests the provider's returned member Git credentials/remotes, actual authenticated push, refused identities, and poisoned parent Git environment.
+test_branvil_setup.py -> connection/setup migration, outside #88's service ports and listener. No setup UI/connection workflow coverage is claimed.
+
+Preserved guarantees: one process-wide App/Store; operation-time authentication/revocation; owner/agent/runner authorization; per-repository exclusion; journal recovery; events and CI; cursor binding; isolated Git environment. HTTP handlers and DataApi call the same domain operations. Branvil does not depend on GuildBotics crates.

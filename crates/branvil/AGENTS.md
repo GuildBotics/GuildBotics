@@ -59,8 +59,9 @@ hold across modules:
 - **Branvil listens on loopback only.** Other machines reach it through OpenSSH
   port forwarding managed by the OS (`src/config.rs` refuses any other listen
   address). SSH connections and their supervision belong outside Branvil.
-- **The HTTP API is the only way into the data.** The GUI, GuildBotics'
-  provider, and the `branvil` CLI's client commands all use it. Only
+- **The authenticated data API is the boundary into the data.** The GUI and
+  CLI use its HTTP transport. An embedded provider uses `api::DataApi` from
+  the same service instance directly; it never opens a separate store. Only
   `branvil init`, `branvil admin check|reindex|upgrade`, and `branvil restore`, run
   with the service stopped, work on the data directory directly. `branvil admin
   notify` reads only `secrets/webhook.url` and works with the service running

@@ -19,9 +19,10 @@ use loopback_auth::Refusal;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
+use crate::api::{attachments, members, pulls, repos, tickets};
 use crate::app::Shared;
 use crate::auth::{self, Caller};
-use crate::domain::{self, PageReq, apps, attachments, members, pulls, repos, tickets};
+use crate::domain::{self, PageReq, apps};
 use crate::error::{AppError, AppResult};
 use crate::model::IdempotencyRecord;
 use crate::store::{self, Key, Rd};
