@@ -191,7 +191,14 @@ async fn serve() -> anyhow::Result<u8> {
             }
         }
     };
-    let running = tokio::spawn(branvil::serve(BRANVIL, interrupt, branvil_terminate));
+    let (ready, data_api) = tokio::sync::oneshot::channel();
+    let running = tokio::spawn(branvil::serve_with_data_api(
+        BRANVIL,
+        interrupt,
+        branvil_terminate,
+        ready,
+    ));
+    let server = server.with_branvil(data_api.await?)?;
     // Told however Branvil ends, a panic included.
     let branvil = tokio::spawn({
         let branvil_ended = branvil_ended.clone();

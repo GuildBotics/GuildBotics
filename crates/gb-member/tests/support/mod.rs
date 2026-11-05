@@ -11,6 +11,9 @@ pub struct Probe {
     pub notices: std::sync::Mutex<Vec<Value>>,
     pub open: Vec<String>,
     pub fail_on: Option<String>,
+    pub git_urls: BTreeMap<String, String>,
+    pub git_head: Option<PullRequestHead>,
+    pub git_default: std::sync::Mutex<String>,
 }
 impl Probe {
     pub fn new(error: Option<ServiceError>) -> Self {
@@ -23,6 +26,9 @@ impl Probe {
             notices: Default::default(),
             open: vec![],
             fail_on: None,
+            git_urls: BTreeMap::new(),
+            git_head: None,
+            git_default: std::sync::Mutex::new("main".into()),
         }
     }
 }
@@ -235,26 +241,44 @@ impl CodeHostingService for Probe {
     ) -> ServiceFuture<'a, Download<ArtifactRef>> {
         Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
     }
-    fn clone_url<'a>(&'a self, _repository: &'a str) -> ServiceFuture<'a, String> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    fn clone_url<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async move {
+            self.git_urls
+                .get(repository)
+                .cloned()
+                .ok_or(ServiceError::NotFound)
+        })
     }
-    fn default_branch<'a>(&'a self, _repository: &'a str) -> ServiceFuture<'a, String> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    fn default_branch<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async move {
+            if self.git_urls.contains_key(repository) {
+                Ok(self.git_default.lock().unwrap().clone())
+            } else {
+                Err(ServiceError::NotFound)
+            }
+        })
     }
     fn pull_request_head<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+        Box::pin(async { self.git_head.clone().ok_or(ServiceError::NotFound) })
     }
     fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+        Box::pin(async { Ok(None) })
     }
-    fn check_push(&self, _repository: &str) -> Result<(), ServiceError> {
-        panic!("unused synchronous operation")
+    fn check_push(&self, repository: &str) -> Result<(), ServiceError> {
+        if repository.starts_with("owner/") {
+            Ok(())
+        } else {
+            Err(ServiceError::OutOfScope)
+        }
     }
-    fn commit_url(&self, _repository: &str, _sha: &str) -> String {
-        panic!("unused synchronous operation")
+    fn commit_url(&self, repository: &str, sha: &str) -> String {
+        format!("https://fixture/{repository}/commit/{sha}")
     }
-    fn repository_from_remote(&self, _remote_url: &str) -> Option<String> {
-        panic!("unused synchronous operation")
+    fn repository_from_remote(&self, url: &str) -> Option<String> {
+        self.git_urls
+            .iter()
+            .find(|(_, v)| v.as_str() == url)
+            .map(|(k, _)| k.clone())
     }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })

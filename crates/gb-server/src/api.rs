@@ -33,6 +33,7 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
+    pub member: Option<Arc<crate::member::Backend>>,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
@@ -164,6 +165,14 @@ routes!(
     (post, "/session/links", entry_link),
     (get, "/session", session),
     (post, "/commands/run", crate::commands::run),
+    (post, "/member/run", crate::member::execute, 4 << 20),
+    (post, "/member/plan", crate::member::describe, 4 << 20),
+    (
+        post,
+        "/member/git",
+        crate::member::exchange,
+        (1 << 30) + (4 << 20) + 1
+    ),
     (
         post,
         "/commands/input-files",
@@ -275,8 +284,8 @@ async fn health(State(api): State<Shared>) -> Response {
     };
     Json(json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-        "workspace_id": workspace_id,
+        "version": api.member.as_ref().map(|v|v.version.as_str()).unwrap_or(env!("CARGO_PKG_VERSION")),
+        "workspace_id": api.member.as_ref().map(|v|v.workspace_id.as_str()).or(workspace_id.as_deref()),
         "service_instance_id": api.instance_id,
         "workspace": api.workspace,
         "machine_name": machine_name,
@@ -406,6 +415,15 @@ mod tests {
         // name it here and exercise its CAS boundary beside this test.
         let config: &[(&str, &str)] = &[];
         let elsewhere = [
+            (("post", "/member/run"), "member capability execution"),
+            (
+                ("post", "/member/plan"),
+                "member command plan without caller file access",
+            ),
+            (
+                ("post", "/member/git"),
+                "private host repository bundle exchange",
+            ),
             (("post", "/session/links"), "an entry code held in memory"),
             (("post", "/session"), "machine-local authentication records"),
             (

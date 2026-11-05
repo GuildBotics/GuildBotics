@@ -100,13 +100,24 @@ impl Server {
                 tracing::error!("cannot open the selected workspace: {e:#}");
                 None
             });
+        let work = tokio_util::task::TaskTracker::new();
+        let member = workspace
+            .as_ref()
+            .map(|workspace| {
+                let mut native =
+                    crate::member::native::Native::new(workspace.clone(), data.clone())?;
+                native.runtime_work = Some(work.clone());
+                native.backend()
+            })
+            .transpose()?;
         let api = Arc::new(Api {
+            member,
             inputs: crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
             instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
             workspace,
-            work: tokio_util::task::TaskTracker::new(),
+            work,
             cancelled: tokio_util::sync::CancellationToken::new(),
         });
         if let Some(workspace) = &api.workspace {
@@ -124,6 +135,18 @@ impl Server {
             listener,
             api,
         })
+    }
+    pub fn with_branvil(mut self, branvil: branvil::api::DataApi) -> anyhow::Result<Self> {
+        let api =
+            Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
+        if let Some(workspace) = &api.workspace {
+            let mut native =
+                crate::member::native::Native::new(workspace.clone(), api.data.clone())?;
+            native.branvil = Some(branvil);
+            native.runtime_work = Some(api.work.clone());
+            api.member = Some(native.backend()?);
+        }
+        Ok(self)
     }
 
     /// Serves until `stop`, then waits for the work it started, and hands

@@ -11,6 +11,7 @@ pub mod broker;
 pub mod contract;
 pub mod device;
 pub mod gateway;
+pub mod guest_process;
 pub mod image;
 pub mod image_archive;
 pub mod language;
@@ -102,6 +103,7 @@ pub struct Shape {
 
 /// Per-command host windows and non-secret data, owned until the VM stops.
 pub struct Session {
+    pub guest_process: guest_process::Channel,
     pub window_url: String,
     pub window_token: String,
     pub resolved: serde_json::Value,
@@ -199,7 +201,7 @@ pub async fn run(
     }
     let stdin = serde_json::to_vec(&shape.request).expect("JSON");
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();
-    runtime::run_once(
+    runtime::run_once_with_guest(
         &runtime::Boot {
             home: &host.data.join("msb"),
             snapshot: &snapshot,
@@ -215,6 +217,7 @@ pub async fn run(
             env: &shape.env,
             stdin: &stdin,
         },
+        &session.guest_process,
     )
     .await
 }

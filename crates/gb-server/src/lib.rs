@@ -10,6 +10,7 @@ pub mod environment;
 pub mod host_window;
 mod i18n;
 mod input_files;
+pub mod member;
 mod screens;
 mod server;
 pub mod tool_login;

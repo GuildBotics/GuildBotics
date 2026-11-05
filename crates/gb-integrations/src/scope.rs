@@ -45,15 +45,4 @@ impl ScopedPath<'_> {
     }
 }
 
-pub fn valid_repository_path(path: &str) -> bool {
-    path.contains('/') && path.split('/').all(valid_name)
-}
-
-fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
-}
+pub use gb_ports::valid_repository_path;

@@ -1378,13 +1378,28 @@ pub struct CommandServices {
     _host: HttpHost,
     _gateways: Vec<Gateway>,
 }
+impl CommandServices {
+    pub async fn settle(&self) {
+        self._host.broker.settle().await;
+    }
+}
 pub async fn prepare_command(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
     command: &gb_environment::Command,
     roots: &gb_config::commands::CommandRoots,
     preflight: &gb_environment::device::Device,
+    member: Option<&crate::member::Backend>,
 ) -> Result<CommandServices, String> {
+    if !command.access.read_only {
+        gb_base::host_path::open_directory(
+            &workspace
+                .join(".guildbotics/local/clones")
+                .join(&command.person_id),
+            true,
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let mut resolved =
         gb_config::resolved_guest::resolve(roots, &host.identity_root, &command.person_id)
             .map_err(|e| e.to_string())?;
@@ -1416,7 +1431,16 @@ pub async fn prepare_command(
     let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| host.home.join(".guildbotics/bin/guildbotics"));
-    let broker = Broker::new(program, invocation.clone());
+    let guest_process = gb_environment::guest_process::Channel::new();
+    let broker = match member.and_then(|backend| {
+        backend
+            .executor
+            .broker(invocation.clone(), guest_process.clone())
+    }) {
+        Some(handler) => Broker::native(invocation.clone(), handler)
+            .tracked(member.and_then(|backend| backend.executor.tracker())),
+        None => Broker::new(program, invocation.clone()),
+    };
     let tools: std::collections::BTreeSet<String> = resolved["brains"]
         .as_object()
         .into_iter()
@@ -1690,6 +1714,7 @@ pub async fn prepare_command(
     resolved["inference_urls"] = urls.into();
     resolved["inference_keys"] = keys.into();
     let session = gb_environment::Session {
+        guest_process,
         window_url: window.guest_url(),
         window_token: window.token.clone(),
         resolved,

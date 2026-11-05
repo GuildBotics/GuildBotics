@@ -626,6 +626,7 @@ mod tests {
 
     fn api(root: &Path) -> Shared {
         std::sync::Arc::new(crate::api::Api {
+            member: None,
             inputs: InputFileStore::deferred(&root.join("command_inputs")),
             auth: crate::auth::ServerAuth::open(root, 8765).unwrap(),
             instance_id: "fixture".into(),

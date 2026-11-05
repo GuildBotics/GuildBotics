@@ -26,4 +26,4 @@ test_an_artifact_is_only_the_current_heads -> code_artifact_contract + code_old_
 test_dependency_alerts_are_read_or_refused_as_unsupported -> branvil/alerts.rs (state pages, ID, empty/no-upstream, failures); factory.rs (local Unsupported)
 test_the_callers_git_environment_does_not_reach_the_service -> provider fixture process environment isolation; integration script is also run with poisoned parent GIT_DIR and GIT_CONFIG_COUNT
 test_the_git_remote_names_its_repository_and_its_open_pull_requests -> code_contract + code_open_order_contract
-test_member_show_reads_default_branch_for_every_provider -> CLI member show excluded #89; default_branch and repository reads remain code_contract
+test_member_show_reads_default_branch_for_every_provider -> crates/gb-integrations/tests/support/contracts.rs::member_show_contract

@@ -21,6 +21,9 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 unicode-casefold = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.11.1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "process", "io-util", "time", "rt", "sync"] }
 
 [dev-dependencies]
 tempfile = "3"
