@@ -115,7 +115,7 @@ fn redaction_walks_new_fields_arrays_unicode_and_masks_before_truncating() {
         json!({"future":[{"field":"1234567890 short"},"界".repeat(501)],
         "stdout":"gone","nested":{"messages":["gone"],"value":true}}),
     );
-    assert_eq!(masked["future"][0]["field"], "*** short");
+    assert_eq!(masked["future"][0]["field"], "*** ***");
     assert_eq!(masked["future"][1].as_str().unwrap().chars().count(), 500);
     assert_eq!(masked["nested"], json!({"value":true}));
     assert!(masked.get("stdout").is_none());

@@ -351,6 +351,7 @@ pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
 fn blocker_summary(results: &[(Value, Readiness)]) -> String {
     results
         .iter()
+        .filter(|(_, r)| r.readiness != ReadinessReadiness::Ready)
         .map(|(_, r)| {
             format!(
                 "{}: {}",
@@ -370,16 +371,20 @@ pub fn ensure_awaitable(results: &[(Value, Readiness)]) -> Result<Vec<&Readiness
         .iter()
         .filter(|(_, r)| r.readiness != ReadinessReadiness::Ready)
         .collect();
-    if awaited.is_empty()
-        || awaited.iter().any(|(pr, r)| {
-            pr["draft"] == true
-                || r.completion_blockers.is_empty()
-                || r.completion_blockers
-                    .iter()
-                    .any(|b| b.code != "checks_pending")
-        })
-    {
-        return Err(MemberError::Capability("cli.member.checks_not_awaitable"));
+    if awaited.is_empty() {
+        return Err(MemberError::Capability("cli.member.checks_none"));
+    }
+    if awaited.iter().any(|(pr, r)| {
+        pr["draft"] == true
+            || r.completion_blockers.is_empty()
+            || r.completion_blockers
+                .iter()
+                .any(|b| b.code != "checks_pending")
+    }) {
+        return Err(MemberError::CapabilityArgs {
+            key: "cli.member.checks_not_awaitable",
+            args: [("blockers".into(), blocker_summary(results))].into(),
+        });
     }
     Ok(awaited.into_iter().map(|(_, r)| r).collect())
 }
@@ -400,14 +405,14 @@ pub async fn open_pull_request_readiness(
 }
 /// A mention response with no PR evidence requires no code-host service.
 pub async fn completion_readiness(
-    code: Option<&dyn CodeHostingService>,
+    services: &dyn RepositoryServices,
     ticket: Option<&str>,
     evidence: &[Value],
 ) -> Result<Vec<Readiness>> {
     if ticket.is_none() && evidence_urls(evidence).is_empty() {
         return Ok(vec![]);
     }
-    let results = answered(code.ok_or(ServiceError::Unsupported)?, ticket, evidence).await?;
+    let results = answered(services.code()?, ticket, evidence).await?;
     ensure_ready(&results)?;
     Ok(results.into_iter().map(|(_, r)| r).collect())
 }
@@ -426,6 +431,7 @@ impl Repository<'_> {
         results: &[(Value, Readiness)],
         work: AwaitWork<'_>,
         render: impl Fn(&Readiness) -> String,
+        mut record: impl FnMut(&Value) -> Result<()>,
     ) -> Result<Vec<Value>> {
         let awaited = ensure_awaitable(results)?;
         self.guard.ensure_current()?;
@@ -439,7 +445,9 @@ impl Repository<'_> {
                 .code()?
                 .comment(&readiness.target.url, &render(readiness), Some(&status))
                 .await?;
-            notices.push(payload(notice)?);
+            let notice = payload(notice)?;
+            record(&notice)?;
+            notices.push(notice);
         }
         Ok(notices)
     }

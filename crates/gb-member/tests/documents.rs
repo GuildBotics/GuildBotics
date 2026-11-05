@@ -423,3 +423,203 @@ fn unreadable_device_identity_prevents_service_construction_and_document_writes(
     );
     assert!(!d.path().join(".guildbotics/state/documents").exists());
 }
+
+#[test]
+fn audits_keep_scoped_snapshots_and_corrupt_neighbors_do_not_break_discovery() {
+    let d = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(d.path().into(), None);
+    let redactor = Redactor::new([
+        "four".into(),
+        "five5".into(),
+        "sixsix".into(),
+        "seven77".into(),
+    ]);
+    let rows = std::sync::Mutex::new(vec![]);
+    let sink = |v| {
+        rows.lock().unwrap().push(v);
+        Ok(())
+    };
+    let m = Memory {
+        audit_sink: Some(&sink),
+        ..memory(&writes, d.path(), &redactor)
+    };
+    let doc = m
+        .record(
+            Scope::Personal,
+            edit("Title", "x four five5 sixsix seven77 y"),
+            false,
+        )
+        .unwrap();
+    let id = doc["doc_id"].as_str().unwrap();
+    assert_eq!(m.get(id, None).unwrap()["body"], "x *** *** *** *** y");
+    m.touch(id, None).unwrap();
+    m.update(id, None, edit("Title", "new"), false).unwrap();
+    m.promote(id).unwrap();
+    let archived = m.archive(id, None, false).unwrap();
+    let guard = rows.lock().unwrap();
+    for row in guard.iter() {
+        assert!(
+            row["attributes"]["memory.path"]
+                .as_str()
+                .unwrap()
+                .starts_with("documents/")
+        );
+    }
+    let last = guard.last().unwrap();
+    assert_eq!(last["attributes"]["memory.path"], archived["path"]);
+    assert_eq!(last["attributes"]["memory.scope"], "team");
+    assert_eq!(last["attributes"]["memory.kind"], "note");
+    assert_eq!(last["message"], "memory archive: Title");
+    drop(guard);
+    for scope in ["team", "personal/aiko"] {
+        let path = d
+            .path()
+            .join(format!(".guildbotics/state/documents/{scope}/broken"));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("meta.yml"), "- a").unwrap();
+    }
+    let policy = || Edit {
+        kind: Some("policy".into()),
+        ..edit("Policy", "rules")
+    };
+    m.record(Scope::Team, policy(), true).unwrap();
+    m.record(
+        Scope::Team,
+        Edit {
+            summary: Some("changed".into()),
+            ..policy()
+        },
+        true,
+    )
+    .unwrap();
+    assert!(
+        !m.context().unwrap()["pinned"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !m.recall(&["Policy".into()], false, 20).unwrap()["results"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(m.get("broken", Some(Scope::Team)).is_err());
+    let rows = rows.lock().unwrap();
+    assert_eq!(rows.last().unwrap()["type"], "memory.recall");
+    assert!(rows.iter().any(|r| {
+        r["type"] == "memory.update"
+            && r["payload"]["changed_fields"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("summary"))
+    }));
+}
+
+#[test]
+fn audit_snapshots_disambiguate_identical_document_ids() {
+    let d = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(d.path().into(), None);
+    let redactor = Redactor::default();
+    let rows = std::sync::Mutex::new(vec![]);
+    let sink = |v| {
+        rows.lock().unwrap().push(v);
+        Ok(())
+    };
+    let m = Memory {
+        audit_sink: Some(&sink),
+        ..memory(&writes, d.path(), &redactor)
+    };
+    let doc = m
+        .record(Scope::Personal, edit("Personal", "body"), false)
+        .unwrap();
+    let id = doc["doc_id"].as_str().unwrap();
+    let root = d.path().join(".guildbotics/state/documents");
+    let team = root.join("team").join(id);
+    fs::create_dir_all(&team).unwrap();
+    fs::copy(
+        root.join("personal/aiko").join(id).join("meta.yml"),
+        team.join("meta.yml"),
+    )
+    .unwrap();
+    m.update(id, Some(Scope::Team), edit("Team", "body"), false)
+        .unwrap();
+    m.get(id, Some(Scope::Team)).unwrap();
+    let guard = rows.lock().unwrap();
+    assert_eq!(guard.last().unwrap()["message"], "memory get: Team");
+    assert_eq!(
+        guard.last().unwrap()["attributes"]["memory.path"],
+        format!("documents/team/{id}")
+    );
+}
+
+#[test]
+fn memory_policy_errors_digest_limit_and_query_snippets_remain_observable() {
+    let d = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(d.path().into(), None);
+    let redactor = Redactor::default();
+    let m = memory(&writes, d.path(), &redactor);
+    let policy = || Edit {
+        kind: Some("policy".into()),
+        params: serde_json::from_value(json!({"digest_n":1})).unwrap(),
+        ..edit("Policy", "---\ndigest_n: 99\n---\nrules")
+    };
+    assert_eq!(
+        m.record(Scope::Team, policy(), false)
+            .unwrap_err()
+            .to_string(),
+        "cli.member.memory_policy_approval"
+    );
+    assert_eq!(
+        m.record(
+            Scope::Team,
+            Edit {
+                params: serde_json::from_value(json!({"digest_n":1})).unwrap(),
+                ..edit("N", "B")
+            },
+            false
+        )
+        .unwrap_err()
+        .to_string(),
+        "cli.member.memory_set_note"
+    );
+    let auto = Memory {
+        autonomous: true,
+        ..memory(&writes, d.path(), &redactor)
+    };
+    assert_eq!(
+        auto.record(Scope::Team, policy(), true)
+            .unwrap_err()
+            .to_string(),
+        "cli.member.memory_policy_autonomous"
+    );
+    m.record(Scope::Team, policy(), true).unwrap();
+    let first = m
+        .record(
+            Scope::Personal,
+            edit("First", &format!("{}needle", "x".repeat(400))),
+            false,
+        )
+        .unwrap();
+    m.record(Scope::Personal, edit("Second", "body"), false)
+        .unwrap();
+    assert_eq!(m.context().unwrap()["digest"].as_array().unwrap().len(), 1);
+    let hits = m
+        .recall(&[" needle ".into(), " ".into()], false, 20)
+        .unwrap();
+    assert_eq!(
+        hits["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["doc_id"].clone())
+            .collect::<Vec<_>>(),
+        vec![first["doc_id"].clone()]
+    );
+    assert!(
+        hits["results"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("needle")
+    );
+}

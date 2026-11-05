@@ -1,10 +1,9 @@
 use gb_member::context::{command_summary, help};
 #[test]
 fn command_summary_comes_from_the_catalog() {
-    assert!(
-        command_summary("git push")
-            .unwrap()
-            .starts_with("Push the current branch with the member credential")
+    assert_eq!(
+        command_summary("git push").unwrap(),
+        "Push the current branch with the member credential and report readiness for matching open PRs."
     );
 }
 #[test]
@@ -196,7 +195,7 @@ fn reference_documents_complete_content_command_usage() {
 }
 #[test]
 fn reference_excludes_task_contract() {
-    let text = help();
+    let text = help().to_lowercase();
     assert!(!text.contains("primary objective"));
     assert!(!text.contains("you must finish"));
 }
@@ -210,4 +209,24 @@ fn reference_excludes_ticket_specific_issue_comment_rule() {
     assert!(!text.contains("member ticket comment"));
     assert!(!text.contains("result comment"));
     assert!(!text.contains("not a substitute"));
+}
+
+#[test]
+fn draft_instructions_keep_duplicate_search_and_unavailable_outcomes() {
+    let text = help().split_whitespace().collect::<Vec<_>>().join(" ");
+    for required in [
+        "tracker_tickets --subject <tracker> --params",
+        "\"text\":",
+        "\"state\":\"all\"",
+        "continuation",
+        "short term sets",
+        "synonyms and English/Japanese variants",
+        "identical conditions for each term set",
+        "no open match was found",
+        "still present the complete draft",
+        "conditions tried",
+        "duplicates could not be ruled out",
+    ] {
+        assert!(text.contains(required), "{required}");
+    }
 }

@@ -20,7 +20,7 @@ impl Redactor {
     pub fn new(values: impl IntoIterator<Item = String>) -> Self {
         let mut values: Vec<_> = values
             .into_iter()
-            .filter(|v| v.chars().count() >= 8)
+            .filter(|v| v.chars().count() >= 4)
             .collect();
         values.sort_by_key(|v| std::cmp::Reverse(v.chars().count()));
         values.dedup();

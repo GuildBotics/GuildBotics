@@ -25,14 +25,7 @@ fn bundle(names: &[&str]) -> Vec<u8> {
 fn archive_refuses_unsafe_paths_duplicates_collisions_and_preserves_files() {
     let d = tempfile::tempdir().unwrap();
     let out = d.path().join("out");
-    for name in [
-        "../escape",
-        "/root",
-        "a/../../escape",
-        ".",
-        "a\\..\\escape",
-        "C:/escape",
-    ] {
+    for name in ["../escape", "/root", "a/../../escape", ".", "a\\..\\escape"] {
         assert!(archive::extract(&bundle(&[name]), &out).is_err(), "{name}");
         assert!(!out.exists());
     }
@@ -60,7 +53,10 @@ fn archive_checks_the_expanded_size_and_duplicate_names_before_writing() {
     let header = large.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
     large[header + 24..header + 28]
         .copy_from_slice(&((archive::MAX_ARTIFACT_BYTES + 1) as u32).to_le_bytes());
-    assert!(archive::extract(&large, &out).is_err());
+    let error = archive::extract(&large, &out).unwrap_err();
+    let args = typed(&error, "cli.member.artifact_too_large");
+    assert_eq!(args["size"], (archive::MAX_ARTIFACT_BYTES + 1).to_string());
+    assert_eq!(args["limit"], archive::MAX_ARTIFACT_BYTES.to_string());
     assert!(!out.exists());
     let mut duplicate = bundle(&["one", "two"]);
     let positions = duplicate
@@ -71,7 +67,11 @@ fn archive_checks_the_expanded_size_and_duplicate_names_before_writing() {
     for i in positions {
         duplicate[i..i + 3].copy_from_slice(b"one");
     }
-    assert!(archive::extract(&duplicate, &out).is_err());
+    let error = archive::extract(&duplicate, &out).unwrap_err();
+    assert_eq!(
+        typed(&error, "cli.member.artifact_duplicate")["path"],
+        "one"
+    );
     assert!(!out.exists());
 }
 #[test]
@@ -234,6 +234,22 @@ fn domain_recording_uses_existing_storage_redaction_and_correlation() {
         })
         .unwrap();
     assert!(inspected.is_none());
+    for index in 0..21 {
+        writes.transaction(|w|events::record(d.path(),w,json!({"type":"ticket.item","attributes":{"target.activity_id":format!("inside-{index}")}}),&json!({}),&redactor)).unwrap();
+    }
+    writes.transaction(|w|events::record(d.path(),w,json!({"type":"ticket.item","timestamp":(chrono::Utc::now()+chrono::Duration::days(3)).to_rfc3339(),"attributes":{"target.activity_id":"outside"}}),&json!({}),&redactor)).unwrap();
+    let window = ActivityEvents::open(d.path())
+        .list_between(
+            chrono::Utc::now() - chrono::Duration::days(1),
+            chrono::Utc::now() + chrono::Duration::days(1),
+        )
+        .unwrap();
+    let ids = window
+        .iter()
+        .filter_map(|r| r["attributes"]["target.activity_id"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 21);
+    assert!(!ids.contains(&"outside"));
     assert_eq!(
         ActivityEvents::open(d.path())
             .list_between(
@@ -242,7 +258,7 @@ fn domain_recording_uses_existing_storage_redaction_and_correlation() {
             )
             .unwrap()
             .len(),
-        1
+        22
     );
 }
 #[test]
@@ -311,7 +327,12 @@ async fn context_roster_exposes_all_members_and_only_public_configured_accounts(
                 }
                 let result = context::member_context(
                     &m,
-                    &[m.clone()],
+                    &[m.clone(), {
+                        let mut owner = member("human");
+                        owner.person_id = "owner".into();
+                        owner.name = "Owner".into();
+                        owner
+                    }],
                     &[provider.into()],
                     json!({"digest":[],"pinned":[]}),
                     None,
@@ -319,6 +340,8 @@ async fn context_roster_exposes_all_members_and_only_public_configured_accounts(
                 )
                 .await
                 .unwrap();
+                assert_eq!(result["roster"].as_array().unwrap().len(), 2);
+                assert_eq!(result["roster"][1]["person_id"], "owner");
                 assert_eq!(result["credential_status"], "unchecked");
                 assert_eq!(result["capabilities"], context::help());
                 assert_eq!(result["roster"][0]["person_type"], kind);
@@ -340,4 +363,190 @@ async fn context_roster_exposes_all_members_and_only_public_configured_accounts(
             }
         }
     }
+}
+
+fn typed(error: &anyhow::Error, key: &str) -> std::collections::BTreeMap<String, String> {
+    match error
+        .downcast_ref::<gb_member::MemberError>()
+        .expect("typed diagnostic")
+    {
+        gb_member::MemberError::CapabilityArgs { key: actual, args } => {
+            assert_eq!(*actual, key);
+            args.clone()
+        }
+        other => panic!("{other}"),
+    }
+}
+#[test]
+fn downloads_preserve_diagnostic_arguments_and_unix_colons() {
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("out");
+    let error = archive::extract(&bundle(&["../outside.txt"]), &out).unwrap_err();
+    assert_eq!(
+        typed(&error, "cli.member.artifact_path")["path"],
+        "../outside.txt"
+    );
+    typed(
+        &archive::extract(b"not zip", &out).unwrap_err(),
+        "cli.member.artifact_invalid",
+    );
+    let mut data = bundle(&["file"]);
+    let offset = zip::ZipArchive::new(Cursor::new(data.clone()))
+        .unwrap()
+        .by_index(0)
+        .unwrap()
+        .data_start() as usize;
+    data[offset] ^= 0xff;
+    typed(
+        &archive::extract(&data, &out).unwrap_err(),
+        "cli.member.artifact_invalid",
+    );
+    let target = archive::attachment(b"mine", d.path(), "screen.png", "id").unwrap();
+    let args = typed(
+        &archive::attachment(b"new", d.path(), "screen.png", "id").unwrap_err(),
+        "cli.member.attachment_exists",
+    );
+    assert_eq!(args["path"], target.display().to_string());
+    assert_eq!(fs::read(target).unwrap(), b"mine");
+    #[cfg(not(windows))]
+    assert!(archive::extract(&bundle(&["logs/12:00:00.txt"]), &d.path().join("colon")).is_ok());
+}
+#[test]
+fn empty_attributes_cannot_erase_correlated_targets() {
+    let d = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(d.path().into(), None);
+    let redactor = Redactor::default();
+    let path=writes.transaction(|w|events::record(d.path(),w,json!({"type":"pull_request.review_limit","attributes":{"target.title":"","target.url":null,"target.action":false}}),&json!({"attributes":{"target.title":"Fix login","target.url":"U"}}),&redactor)).unwrap().unwrap();
+    let result: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        result["attributes"],
+        json!({"target.title":"Fix login","target.url":"U"})
+    );
+}
+
+#[test]
+fn mapped_domain_and_roster_conditions_are_complete() {
+    for kind in ["ticket", "pull_request"] {
+        let target =
+            json!({"kind":kind,"provider":"local","url":"U","label":"L","title":" Title "});
+        for read_only in [false, true] {
+            let event = events::inspected(&target, read_only);
+            assert_eq!(
+                event["payload"][kind],
+                json!({"url":"U","label":"L","title":"Title"})
+            );
+            assert_eq!(event["attributes"]["target.kind"], kind);
+            assert_eq!(
+                event["attributes"]["target.action"],
+                if read_only { "inspected" } else { "" }
+            );
+        }
+        for action in ["opened", "closed"] {
+            let event = events::target(&target, action, None);
+            assert_eq!(event["type"], format!("{kind}.item"));
+            assert_eq!(
+                event["payload"],
+                json!({"action":action,kind:{"url":"U","label":"L","title":"Title"}})
+            );
+        }
+    }
+    let target = json!({"kind":"ticket","provider":"local","url":"U","label":"L","title":"Title"});
+    let opened = events::target(&target, "opened", None);
+    assert_eq!(opened["type"], "ticket.item");
+    assert_eq!(
+        opened["payload"],
+        json!({"action":"opened","ticket":{"url":"U","label":"L","title":"Title"}})
+    );
+    let closed =
+        events::ticket_closed(&json!({"target":target,"state":"closed","state_changed":true}))
+            .unwrap();
+    assert_eq!(closed["payload"]["action"], "closed");
+    assert_eq!(closed["payload"]["ticket"]["title"], "Title");
+    let created=events::pr_created(&json!({"created":true,"target":{"kind":"pull_request","url":"PR","title":"Title","label":"!1"}})).unwrap();
+    assert_eq!(created["type"], "pull_request.item");
+    assert_eq!(
+        created["payload"],
+        json!({"action":"opened","pull_request":{"url":"PR","title":"Title","label":"!1","merged":false}})
+    );
+    let mut a = member("agent");
+    a.accounts.insert("branvil".into(), "  AIKO  ".into());
+    let mut b = member("human");
+    b.person_id = "owner".into();
+    b.accounts.insert("branvil".into(), "   ".into());
+    for (entry, local, branvil) in [
+        (
+            a.roster_entry(&["local".into(), "branvil".into()]),
+            "local-reviewer",
+            Some("aiko"),
+        ),
+        (
+            b.roster_entry(&["local".into(), "branvil".into()]),
+            "local-owner",
+            None,
+        ),
+    ] {
+        assert_eq!(
+            entry["services"]["local"],
+            json!({"names":[local],"mention":format!("@{local}")})
+        );
+        if let Some(name) = branvil {
+            assert_eq!(
+                entry["services"]["branvil"],
+                json!({"names":[name],"mention":format!("@{name}")})
+            );
+        } else {
+            assert!(entry["services"].get("branvil").is_none());
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    for (i, name) in ["..", " ", "a\nb", "a\u{8}b.png"].iter().enumerate() {
+        assert_eq!(
+            archive::attachment(b"x", &d.path().join(i.to_string()), name, "id")
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "id"
+        );
+    }
+}
+#[test]
+fn audit_filters_and_trimming_preserve_other_journals_and_unwritable_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(d.path().into(), None);
+    let dir = d.path().join(".guildbotics/state/documents/memory_events");
+    let audit = Audit {
+        writes: &writes,
+        directory: &dir,
+        device_id: "one",
+        max_bytes: 1000,
+    };
+    let other = Audit {
+        device_id: "two",
+        ..audit
+    };
+    other.record(json!({"message":"keep"})).unwrap();
+    let original = fs::read(other.path().unwrap()).unwrap();
+    for _ in 0..30 {
+        audit.record(json!({"type":"memory.record","message":"Find This","payload":{"source":[{"url":"https://GITHUB.example/1"}]}})).unwrap();
+    }
+    assert_eq!(fs::read(other.path().unwrap()).unwrap(), original);
+    assert!(
+        !audit
+            .list(&json!({"source":"github"}), None, None, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !audit
+            .list(&json!({"query":"find this"}), None, None, None)
+            .unwrap()
+            .is_empty()
+    );
+    let before = fs::read(audit.path().unwrap()).unwrap();
+    let tiny = Audit {
+        max_bytes: 1,
+        ..audit
+    };
+    tiny.record(json!({"message":"x".repeat(100)})).unwrap();
+    assert_eq!(fs::read(audit.path().unwrap()).unwrap(), before);
 }

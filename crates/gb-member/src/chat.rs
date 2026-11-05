@@ -45,6 +45,7 @@ impl Chat<'_> {
             json!({"service":self.service_name,"status":status,"credentials":checks.into_iter().map(|c| {
             let mut result = json!({"name":c.name,"status":c.status});
             if !c.error.is_empty() { result["error"] = c.error.into(); }
+            if !c.error_args.is_empty() {result["error_args"]=serde_json::to_value(c.error_args).expect("string map");}
             result
         }).collect::<Vec<_>>()}),
         )
@@ -72,7 +73,10 @@ impl Chat<'_> {
             .resolve_channel_id(name)
             .await?
             .filter(|id| !id.is_empty())
-            .ok_or(MemberError::Capability("cli.member.chat_channel_missing"))
+            .ok_or_else(|| MemberError::CapabilityArgs {
+                key: "cli.member.chat_channel_missing",
+                args: [("name".into(), name.into())].into(),
+            })
     }
     async fn reference(&self, reference: &Reference<'_>) -> Result<ChatMessageRef> {
         if let Some(url) = reference.message_url.filter(|url| !url.is_empty()) {

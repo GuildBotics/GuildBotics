@@ -4,6 +4,7 @@ use gb_ports::CodeHostingService;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use unicode_casefold::UnicodeCaseFold;
 
 pub fn help() -> &'static str {
     include_str!("../../../guildbotics/templates/member/reference.md")
@@ -51,6 +52,11 @@ impl PublicMember {
                 format!("local-{}", self.person_id)
             } else {
                 self.accounts.get(provider).cloned().unwrap_or_default()
+            };
+            let account = if provider == "branvil" {
+                account.trim().case_fold().collect::<String>()
+            } else {
+                account.trim().to_owned()
             };
             if account.is_empty() {
                 continue;

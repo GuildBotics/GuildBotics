@@ -136,12 +136,19 @@ impl<'a> Memory<'a> {
         anyhow::bail!("cli.member.memory_missing")
     }
     fn documents(&self) -> Result<Vec<Document>> {
+        self.documents_in(&[Scope::Personal, Scope::Team])
+    }
+    fn documents_in(&self, scopes: &[Scope]) -> Result<Vec<Document>> {
         let mut docs = Vec::new();
-        for s in [Scope::Personal, Scope::Team] {
+        for &s in scopes {
             for path in entries(&self.scope(s))? {
                 let id = path.file_name().unwrap().to_string_lossy().into_owned();
-                if id != "archived" && path.is_dir() && path.join("meta.yml").is_file() {
-                    docs.push(self.read(&id, Some(s))?);
+                if id != "archived"
+                    && path.is_dir()
+                    && path.join("meta.yml").is_file()
+                    && let Ok(doc) = self.read(&id, Some(s))
+                {
+                    docs.push(doc);
                 }
             }
         }
@@ -216,28 +223,29 @@ impl<'a> Memory<'a> {
         })?;
         Ok(())
     }
+    fn audit_payload(&self, doc: &Document, fields: Vec<String>) -> Value {
+        json!({"doc_id":doc.id,"path":self.logical(&doc.path),"changed_fields":fields,"_snapshot":{"scope":if doc.scope==Scope::Team{"team"}else{"personal"},"kind":doc.meta["kind"],"title":doc.meta["title"],"summary":doc.meta["summary"],"source":doc.meta["source"]}})
+    }
     pub fn record(&self, scope: Scope, mut edit: Edit, approved: bool) -> Result<Value> {
         self.check_ids()?;
-        let (id,action)=self.writes.transaction(|writer| {
+        let (doc,action,fields)=self.writes.transaction(|w| {
             let kind=edit.kind.as_deref().unwrap_or("note").trim();
-            let kind=if kind.is_empty(){"note"}else{kind};
-            edit.kind=Some(kind.to_owned());
-            let kind=edit.kind.as_deref().unwrap();
-            ensure!(["note","policy"].contains(&kind),"cli.member.memory_kind");
-            ensure!(edit.params.is_empty() || kind=="policy","cli.member.memory_set_note");
-            let scope=if kind=="policy" { self.policy_allowed(approved)?;edit.pinned=Some(true);Scope::Team } else {scope};
-            if kind=="policy" && let Some(doc)=self.documents()?.into_iter().find(|d|d.scope==Scope::Team && d.meta["kind"]=="policy") {
-                let id=doc.id.clone(); self.update_in(writer,doc,edit,approved)?; return Ok((id,"update"));
+            edit.kind=Some(if kind.is_empty(){"note"}else{kind}.into());
+            let policy=edit.kind.as_deref()==Some("policy");
+            if policy {
+                self.policy_allowed(approved)?;edit.pinned=Some(true);
+                if let Some(doc)=self.documents_in(&[Scope::Team])?.into_iter().find(|d|d.meta["kind"]=="policy") {
+                    let (doc,fields)=self.update_in(w,doc,edit,approved)?;return Ok((doc,"update",fields));
+                }
             }
-            let id=loop { let id=uuid::Uuid::new_v4().simple().to_string()[..12].to_owned(); if !self.scope(scope).join(&id).exists() { break id; } };
+            let scope=if policy {Scope::Team}else{scope};
+            let id=loop {let id=uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();if !self.scope(scope).join(&id).exists(){break id;}};
             let now=chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true);
-            let meta=json!({"title":"","summary":"","keywords":[],"source":[],"created_at":now,"created_by":self.person_id,
-                "updated_at":now,"updated_by":self.person_id,"kind":kind,"pinned":kind=="policy"});
-            let doc=Document{id:id.clone(),scope,path:self.scope(scope).join(&id),meta,body:String::new()};
-            self.update_in(writer,doc,edit,approved)?; Ok((id,"record"))
+            let doc=Document{id:id.clone(),scope,path:self.scope(scope).join(id),body:String::new(),meta:json!({"title":"","summary":"","keywords":[],"source":[],"created_at":now,"created_by":self.person_id,"kind":"note","pinned":policy})};
+            let (doc,_)=self.update_in(w,doc,edit,approved)?;Ok((doc,"record",vec![]))
         })?;
-        self.audit(action, json!({"doc_id":id}));
-        Ok(self.summary(&self.read(&id, None)?))
+        self.audit(action, self.audit_payload(&doc, fields));
+        Ok(self.summary(&doc))
     }
     fn update_in(
         &self,
@@ -245,7 +253,9 @@ impl<'a> Memory<'a> {
         mut doc: Document,
         mut edit: Edit,
         approved: bool,
-    ) -> Result<()> {
+    ) -> Result<(Document, Vec<String>)> {
+        let before = doc.meta.clone();
+        let body_changed = edit.body.is_some();
         if let Some(kind) = &edit.kind {
             let kind = if kind.is_empty() {
                 doc.meta["kind"].as_str().unwrap_or("note")
@@ -308,11 +318,30 @@ impl<'a> Memory<'a> {
         }
         doc.meta["keywords"] = keywords.into();
         doc.meta.as_object_mut().unwrap().extend(edit.params);
+        let mut fields = if body_changed {
+            vec!["body".into()]
+        } else {
+            vec![]
+        };
+        for key in before
+            .as_object()
+            .unwrap()
+            .keys()
+            .chain(doc.meta.as_object().unwrap().keys())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            if !["created_at", "updated_at", "updated_by", "schema_version"].contains(&key.as_str())
+                && before[key] != doc.meta[key]
+            {
+                fields.push(key.clone());
+            }
+        }
         doc.meta["updated_at"] = chrono::Utc::now()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             .into();
         doc.meta["updated_by"] = self.person_id.into();
-        self.write(writer, &doc)
+        self.write(writer, &doc)?;
+        Ok((self.read(&doc.id, Some(doc.scope))?, fields))
     }
     pub fn update(
         &self,
@@ -321,56 +350,32 @@ impl<'a> Memory<'a> {
         edit: Edit,
         approved: bool,
     ) -> Result<Value> {
-        let changed = self.writes.transaction(|w| {
-            let before = self.read(id, scope)?;
-            let meta = before.meta.clone();
-            let body_changed = edit.body.is_some();
-            self.update_in(w, before, edit, approved)?;
-            let after = self.read(id, scope)?;
-            let mut fields = if body_changed {
-                vec!["body".to_owned()]
-            } else {
-                vec![]
-            };
-            let keys: std::collections::BTreeSet<_> = meta
-                .as_object()
-                .unwrap()
-                .keys()
-                .chain(after.meta.as_object().unwrap().keys())
-                .collect();
-            for key in keys {
-                if !["created_at", "updated_at", "updated_by", "schema_version"]
-                    .contains(&key.as_str())
-                    && meta[key] != after.meta[key]
-                {
-                    fields.push(key.clone());
-                }
-            }
-            Ok(fields)
-        })?;
-        self.audit("update", json!({"doc_id":id,"changed_fields":changed}));
-        Ok(self.summary(&self.read(id, scope)?))
+        let (doc, fields) = self
+            .writes
+            .transaction(|w| self.update_in(w, self.read(id, scope)?, edit, approved))?;
+        self.audit("update", self.audit_payload(&doc, fields));
+        Ok(self.summary(&doc))
     }
     pub fn get(&self, id: &str, scope: Option<Scope>) -> Result<Value> {
         let doc = self.read(id, scope)?;
         let mut result = self.summary(&doc);
+        self.audit("get", self.audit_payload(&doc, vec![]));
         result["meta"] = doc.meta;
         result["body"] = doc.body.into();
-        self.audit("get", json!({"doc_id":id}));
         Ok(result)
     }
     pub fn touch(&self, id: &str, scope: Option<Scope>) -> Result<Value> {
-        let result = self.writes.transaction(|w| {
+        let doc = self.writes.transaction(|w| {
             let doc = self.read(id, scope)?;
             self.touch_in(w, &doc.id)?;
-            Ok(json!({"doc_id":doc.id,"path":self.logical(&doc.path)}))
+            Ok(doc)
         })?;
-        self.audit("touch", result.clone());
-        Ok(result)
+        self.audit("touch", self.audit_payload(&doc, vec![]));
+        Ok(json!({"doc_id":doc.id,"path":self.logical(&doc.path)}))
     }
     pub fn archive(&self, id: &str, scope: Option<Scope>, approved: bool) -> Result<Value> {
-        let result = self.writes.transaction(|w| {
-            let doc = self.read(id, scope)?;
+        let doc = self.writes.transaction(|w| {
+            let mut doc = self.read(id, scope)?;
             if doc.meta["kind"] == "policy" {
                 self.policy_allowed(approved)?;
             }
@@ -379,15 +384,16 @@ impl<'a> Memory<'a> {
             w.check(&doc.path)?;
             ensure!(!target.exists(), "cli.member.memory_archive_exists");
             fs::create_dir_all(target.parent().unwrap())?;
-            fs::rename(doc.path, &target)?;
-            Ok(json!({"doc_id":doc.id,"path":self.logical(&target)}))
+            fs::rename(&doc.path, &target)?;
+            doc.path = target;
+            Ok(doc)
         })?;
-        self.audit("archive", result.clone());
-        Ok(result)
+        self.audit("archive", self.audit_payload(&doc, vec![]));
+        Ok(json!({"doc_id":doc.id,"path":self.logical(&doc.path)}))
     }
     pub fn promote(&self, id: &str) -> Result<Value> {
-        self.writes.transaction(|w| {
-            let doc = self.read(id, Some(Scope::Personal))?;
+        let doc = self.writes.transaction(|w| {
+            let mut doc = self.read(id, Some(Scope::Personal))?;
             ensure!(
                 doc.meta["kind"] != "policy",
                 "cli.member.memory_promote_policy"
@@ -397,11 +403,14 @@ impl<'a> Memory<'a> {
             w.check(&doc.path)?;
             ensure!(!target.exists(), "cli.member.memory_team_exists");
             fs::create_dir_all(target.parent().unwrap())?;
-            fs::rename(doc.path, target)?;
-            self.touch_in(w, &doc.id)
+            fs::rename(&doc.path, &target)?;
+            doc.path = target;
+            doc.scope = Scope::Team;
+            self.touch_in(w, &doc.id)?;
+            Ok(doc)
         })?;
-        self.audit("promote", json!({"doc_id":id}));
-        Ok(self.summary(&self.read(id, Some(Scope::Team))?))
+        self.audit("promote", self.audit_payload(&doc, vec!["scope".into()]));
+        Ok(self.summary(&doc))
     }
     pub fn recall(&self, queries: &[String], meta_only: bool, limit: usize) -> Result<Value> {
         let started = std::time::Instant::now();
@@ -430,7 +439,15 @@ impl<'a> Memory<'a> {
                             .any(|q| line.case_fold().collect::<String>().contains(q))
                     })
                 {
-                    result["snippet"] = line.trim().chars().take(160).collect::<String>().into();
+                    let folded = line.case_fold().collect::<String>();
+                    let index = queries.iter().find_map(|q| folded.find(q)).unwrap_or(0);
+                    let chars = folded[..index].chars().count();
+                    result["snippet"] = line
+                        .chars()
+                        .skip(chars.saturating_sub(80))
+                        .take(200)
+                        .collect::<String>()
+                        .into();
                 }
                 results.push(result);
                 if results.len() >= limit {
@@ -498,26 +515,23 @@ impl<'a> Memory<'a> {
         attributes.insert("memory.action".into(), action.into());
         if let Some(id) = payload["doc_id"].as_str() {
             attributes.insert("memory.doc_id".into(), id.into());
-            if let Ok(doc) = self.read(id, None) {
-                attributes.insert(
-                    "memory.scope".into(),
-                    match doc.scope {
-                        Scope::Team => "team",
-                        Scope::Personal => "personal",
-                    }
-                    .into(),
-                );
-                attributes.insert("memory.path".into(), self.logical(&doc.path).into());
-                attributes.insert("memory.kind".into(), doc.meta["kind"].clone());
-                payload["title"] = doc.meta["title"].clone();
-                payload["summary"] = doc.meta["summary"].clone();
-                payload["source"] = doc.meta["source"].clone();
-            }
         }
         for field in ["result_count", "duration_ms"] {
             if let Some(value) = payload.get(field) {
                 attributes.insert(format!("memory.{field}"), value.clone());
             }
+        }
+        if let Some(snapshot) = payload.as_object_mut().unwrap().remove("_snapshot") {
+            for key in ["scope", "kind"] {
+                attributes.insert(format!("memory.{key}"), snapshot[key].clone());
+            }
+            attributes.insert("memory.path".into(), payload["path"].clone());
+            for key in ["title", "summary", "source"] {
+                payload[key] = snapshot[key].clone();
+            }
+        }
+        if payload.get("changed_fields").is_none() {
+            payload["changed_fields"] = json!([]);
         }
         let message = if action == "recall" {
             format!(
@@ -540,9 +554,6 @@ impl<'a> Memory<'a> {
                     .unwrap_or("")
             )
         };
-        if payload.get("changed_fields").is_none() {
-            payload["changed_fields"] = json!([]);
-        }
         let mut row = self.correlation.as_object().cloned().unwrap_or_default();
         row.extend(json!({"schema_version":SHARED_RECORD_SCHEMA_VERSION,"kind":"memory","type":format!("memory.{action}"),
             "timestamp":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"person_id":self.person_id,"message":message,"attributes":attributes,"payload":payload}).as_object().unwrap().clone());

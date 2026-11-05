@@ -52,6 +52,8 @@ impl ChatService for Double {
         Box::pin(async move {
             assert_eq!(channel, "C1");
             assert_eq!(query.limit, 3);
+            assert!(query.since.is_some());
+            assert!(query.until.is_some());
             Ok(page())
         })
     }
@@ -120,6 +122,14 @@ async fn chat_service_errors_are_preserved() {
         ServiceError::NotFound,
         ServiceError::Unavailable,
         ServiceError::Unsupported,
+        ServiceError::MissingCredential {
+            name: "AIKO_SLACK_BOT_TOKEN".into(),
+        },
+        ServiceError::Diagnostic {
+            class: ServiceErrorClass::Failure,
+            key: "key",
+            args: [("code".into(), "invalid_auth".into())].into(),
+        },
     ] {
         let provider = Double {
             error: Some(error.clone()),
@@ -164,6 +174,9 @@ async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {
     };
     let post = c.post(&reference, "Hello Reviewer", false).await.unwrap();
     assert!(post.posted);
+    assert_eq!(post.channel_id, "C1");
+    assert_eq!(post.message_id, "posted");
+    assert_eq!(post.occurred_at, "2026-01-01T00:00:00+00:00");
     assert_eq!(post.text, "Hello @reviewer");
     assert_eq!(post.thread_id, "posted");
     let reply = Reference {
@@ -198,6 +211,8 @@ async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {
             &reference,
             ChannelEventsQuery {
                 limit: 3,
+                since: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                until: Some("2026-01-02T00:00:00Z".parse().unwrap()),
                 ..Default::default()
             },
         )
@@ -221,7 +236,14 @@ async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {
         .await
         .is_err()
     );
-    assert_eq!(provider.posts.lock().unwrap().len(), 3);
+    assert_eq!(
+        *provider.posts.lock().unwrap(),
+        vec![
+            ("C1".into(), "Hello @reviewer".into(), None),
+            ("C1".into(), "Reply @reviewer".into(), Some("root".into())),
+            ("C1".into(), "By name @reviewer".into(), Some("root".into()))
+        ]
+    );
 }
 #[tokio::test]
 async fn credential_status_handles_empty_unconfigured_mixed_and_failed_checks() {
@@ -248,7 +270,11 @@ async fn credential_status_handles_empty_unconfigured_mixed_and_failed_checks() 
                     } else {
                         String::new()
                     },
-                    error_args: Default::default(),
+                    error_args: [
+                        ("member".into(), "aiko".into()),
+                        ("code".into(), "invalid_auth".into()),
+                    ]
+                    .into(),
                 })
                 .collect(),
             ..Default::default()
@@ -261,6 +287,18 @@ async fn credential_status_handles_empty_unconfigured_mixed_and_failed_checks() 
             participant_labels: BTreeMap::new(),
         };
         let result = c.check_credentials().await.unwrap();
+        let expected_credentials: Vec<_> = provider
+            .checks
+            .iter()
+            .map(|v| {
+                let mut row = json!({"name":v.name,"status":v.status,"error_args":v.error_args});
+                if !v.error.is_empty() {
+                    row["error"] = v.error.clone().into();
+                }
+                row
+            })
+            .collect();
+        assert_eq!(result["credentials"], json!(expected_credentials));
         assert_eq!(result["status"], expected);
         if expected == "failed" {
             assert_eq!(result["credentials"][1]["error"], "safe guidance");

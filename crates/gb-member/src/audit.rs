@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use unicode_casefold::UnicodeCaseFold;
 pub struct Audit<'a> {
     pub writes: &'a SharedWrites,
     pub directory: &'a Path,
@@ -145,6 +146,23 @@ impl Audit<'_> {
                 }
                 let mut selected = true;
                 for (key, value) in filters.as_object().into_iter().flat_map(|m| m.iter()) {
+                    if ["query", "source"].contains(&key.as_str()) {
+                        let haystack = if key == "source" {
+                            item["payload"].get("source").cloned().unwrap_or(json!([]))
+                        } else {
+                            json!({"type":item["type"],"message":item["message"],"person_id":item["person_id"],"attributes":item["attributes"],"payload":item["payload"]})
+                        };
+                        if !haystack
+                            .to_string()
+                            .case_fold()
+                            .collect::<String>()
+                            .contains(&value.as_str().unwrap_or("").case_fold().collect::<String>())
+                        {
+                            selected = false;
+                            break;
+                        }
+                        continue;
+                    }
                     let field = match key.as_str() {
                         "action" => &item["attributes"]["memory.action"],
                         "doc_id" => &item["attributes"]["memory.doc_id"],

@@ -169,6 +169,10 @@ mod tests {
                             ("state", "closed"),
                             ("person", "PERSON"),
                             ("blockers", "BLOCKERS"),
+                            ("path", "PATH"),
+                            ("name", "CHANNEL"),
+                            ("size", "100"),
+                            ("limit", "99"),
                         ],
                     );
                     assert_ne!(sentence, key, "{lang}: {key}");

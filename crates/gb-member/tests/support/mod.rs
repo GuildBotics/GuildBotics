@@ -10,6 +10,7 @@ pub struct Probe {
     pub checks: BTreeMap<String, Readiness>,
     pub notices: std::sync::Mutex<Vec<Value>>,
     pub open: Vec<String>,
+    pub fail_on: Option<String>,
 }
 impl Probe {
     pub fn new(error: Option<ServiceError>) -> Self {
@@ -21,6 +22,7 @@ impl Probe {
             checks: BTreeMap::new(),
             notices: Default::default(),
             open: vec![],
+            fail_on: None,
         }
     }
 }
@@ -141,6 +143,9 @@ impl CodeHostingService for Probe {
         _status: Option<&'a WorkflowStatus>,
     ) -> ServiceFuture<'a, CommentWritten> {
         Box::pin(async move {
+            if self.fail_on.as_deref() == Some(_url) {
+                return Err(ServiceError::Failed);
+            }
             if let Some(e) = &self.error {
                 return Err(e.clone());
             }

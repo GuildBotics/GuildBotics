@@ -116,7 +116,19 @@ pub fn record(
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
     if let Some(extra) = event["attributes"].as_object() {
-        attributes.extend(extra.clone());
+        attributes.extend(
+            extra
+                .iter()
+                .filter(|(_, v)| {
+                    !v.is_null()
+                        && *v != false
+                        && v.as_f64() != Some(0.0)
+                        && *v != ""
+                        && v.as_array().is_none_or(|a| !a.is_empty())
+                        && v.as_object().is_none_or(|o| !o.is_empty())
+                })
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
     }
     if let Some(event) = event.as_object() {
         result.extend(event.clone());

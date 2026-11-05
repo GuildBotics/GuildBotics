@@ -317,7 +317,7 @@ fn pr_page(author_type: &str, state: &str) -> ReadPage {
 #[tokio::test]
 async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures() {
     assert!(
-        completion_readiness(None, None, &[])
+        completion_readiness(&Forbidden, None, &[])
             .await
             .unwrap()
             .is_empty()
@@ -329,7 +329,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
     );
     provider.checks.insert("url".into(), readiness(&[]));
     assert_eq!(
-        completion_readiness(Some(&provider), Some("url"), &[])
+        completion_readiness(&provider, Some("url"), &[])
             .await
             .unwrap()
             .len(),
@@ -339,7 +339,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
         .checks
         .insert("url".into(), readiness(&["checks_pending"]));
     assert!(
-        completion_readiness(Some(&provider), Some("url"), &[])
+        completion_readiness(&provider, Some("url"), &[])
             .await
             .is_err()
     );
@@ -348,7 +348,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
             .pages
             .insert("pull_requests|url|".into(), Ok(pr_page(author, state)));
         assert!(
-            completion_readiness(Some(&provider), Some("url"), &[])
+            completion_readiness(&provider, Some("url"), &[])
                 .await
                 .unwrap()
                 .is_empty()
@@ -362,7 +362,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
         Err(ServiceError::Unsupported),
     );
     assert!(
-        completion_readiness(Some(&provider), Some("ticket"), &[])
+        completion_readiness(&provider, Some("ticket"), &[])
             .await
             .unwrap()
             .is_empty()
@@ -372,7 +372,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
         Err(ServiceError::Unavailable),
     );
     assert!(matches!(
-        completion_readiness(Some(&provider), Some("ticket"), &[]).await,
+        completion_readiness(&provider, Some("ticket"), &[]).await,
         Err(MemberError::Service(ServiceError::Unavailable))
     ));
 }
@@ -396,7 +396,12 @@ async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
         subject: "ticket",
     };
     let notices = r
-        .await_checks(&results, work(), |_| "localized wait notice".into())
+        .await_checks(
+            &results,
+            work(),
+            |_| "localized wait notice".into(),
+            |_| Ok(()),
+        )
         .await
         .unwrap();
     assert_eq!(notices.len(), 1);
@@ -409,7 +414,8 @@ async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
         r.await_checks(
             &[(json!({"draft":true}), readiness(&["checks_pending"]))],
             work(),
-            |_| String::new()
+            |_| String::new(),
+            |_| Ok(())
         )
         .await
         .is_err()
@@ -472,7 +478,37 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
             .iter()
             .any(|r| r["attributes"]["target.activity_id"] == "pull_request:pr:merged")
     );
+    assert!(
+        events
+            .iter()
+            .any(|r| r["attributes"]["target.activity_id"] == "ticket:ticket:closed")
+    );
+    for event in &events {
+        assert_eq!(event["member_id"], "");
+        let pr = event["kind"] == "pull_request.item";
+        assert_eq!(
+            event["kind"],
+            if pr {
+                "pull_request.item"
+            } else {
+                "ticket.item"
+            }
+        );
+        assert_eq!(
+            event["occurred_at"],
+            if pr {
+                "2026-01-01T02:00:00Z"
+            } else {
+                "2026-01-01T01:00:00Z"
+            }
+        );
+        assert_eq!(
+            event["payload"][if pr { "pull_request" } else { "ticket" }]["url"],
+            if pr { "pr" } else { "ticket" }
+        );
+    }
 }
+
 #[tokio::test]
 async fn open_readiness_skips_closed_results() {
     let mut provider = support::Probe::new(None);
@@ -590,4 +626,166 @@ async fn roster_assignment_and_initial_ticket_state_reach_the_provider() {
         assert!(!sent.add_to_board);
         assert_eq!(sent.parent.as_deref(), Some("parent"));
     }
+}
+
+#[test]
+fn blockers_keep_diagnostics_and_omit_ready_targets() {
+    let ready = (json!({}), readiness(&[]));
+    for code in ["checks_failed", "base_out_of_date"] {
+        let blocked = (json!({}), readiness(&[code]));
+        for error in [
+            ensure_ready(&[ready.clone(), blocked.clone()]).unwrap_err(),
+            ensure_awaitable(&[ready.clone(), blocked]).unwrap_err(),
+        ] {
+            match error {
+                MemberError::CapabilityArgs { args, .. } => {
+                    assert_eq!(args["blockers"], format!("url: {code}"))
+                }
+                other => panic!("{other}"),
+            }
+        }
+    }
+    assert_eq!(
+        ensure_awaitable(&[]).unwrap_err().to_string(),
+        "cli.member.checks_none"
+    );
+}
+#[tokio::test]
+async fn completion_preserves_factory_failure_and_orders_owned_references() {
+    struct Missing;
+    impl RepositoryServices for Missing {
+        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+            unreachable!()
+        }
+        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+            Err(ServiceError::Diagnostic {
+                class: ServiceErrorClass::Failure,
+                key: "integrations.resources.unsupported",
+                args: [("service".into(), "code_hosting_service".into())].into(),
+            }
+            .into())
+        }
+    }
+    assert!(matches!(
+        completion_readiness(&Missing, Some("ticket"), &[]).await,
+        Err(MemberError::Service(ServiceError::Diagnostic {
+            key: "integrations.resources.unsupported",
+            ..
+        }))
+    ));
+    let mut p = support::Probe::new(None);
+    p.pages
+        .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
+    p.pages.insert(
+        "ticket_pull_requests|ticket|".into(),
+        Ok(ReadPage::of(
+            Resource::TicketPullRequests,
+            ["mine", "foreign", "closed"].map(
+                |url| json!({"url":url,"label":"!1","title":"T","state":"open","merged":false}),
+            ),
+            None,
+            None,
+        )
+        .unwrap()),
+    );
+    for (url, author, state) in [
+        ("mine", "Assistant", "open"),
+        ("touched", "Assistant", "open"),
+        ("foreign", "User", "open"),
+        ("closed", "Assistant", "closed"),
+    ] {
+        let mut items = pr_page(author, state).items().to_vec();
+        items[0]["url"] = url.into();
+        p.pages.insert(
+            format!("pull_requests|{url}|"),
+            Ok(ReadPage::of(Resource::PullRequests, items, None, None).unwrap()),
+        );
+        let mut check = readiness(&[]);
+        check.target.url = url.into();
+        p.checks.insert(url.into(), check);
+    }
+    let evidence = [json!({"payload":{"pull_requests":[{"url":"mine"},{"url":"touched"}]}})];
+    let result = completion_readiness(&p, Some("ticket"), &evidence)
+        .await
+        .unwrap();
+    assert_eq!(
+        result
+            .iter()
+            .map(|r| r.target.url.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mine", "touched"]
+    );
+}
+#[tokio::test]
+async fn waits_record_each_success_and_retain_all_work_status_fields() {
+    let mut p = support::Probe::new(None);
+    let roster = BTreeMap::new();
+    for url in ["A", "B"] {
+        let mut check = readiness(&["checks_pending"]);
+        check.target.url = url.into();
+        p.checks.insert(url.into(), check);
+    }
+    for kind in ["ticket", "chat", "manual", "checks_resumed"] {
+        let r = Repository {
+            services: &p,
+            guard: &Current,
+            roster: &roster,
+        };
+        let mut recorded = vec![];
+        r.await_checks(
+            &[
+                (json!({"draft":false}), readiness(&[])),
+                (json!({"draft":false}), p.checks["A"].clone()),
+            ],
+            AwaitWork {
+                person_id: "aiko",
+                run_id: "run",
+                work_kind: kind,
+                work_identity: "original",
+                subject: "subject",
+            },
+            |_| "wait".into(),
+            |v| {
+                recorded.push(v.clone());
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0]["target"]["url"], "A");
+        assert_eq!(
+            p.notices.lock().unwrap().last().unwrap(),
+            &json!({"reason":"awaiting_checks","person_id":"aiko","run_id":"run","subject":"subject","head":"head","work_kind":kind,"work_identity":"original","kind":"workflow_error","routing":"suppress"})
+        );
+    }
+    p.fail_on = Some("B".into());
+    let r = Repository {
+        services: &p,
+        guard: &Current,
+        roster: &roster,
+    };
+    let mut recorded = vec![];
+    let results = ["A", "B"].map(|url| (json!({"draft":false}), p.checks[url].clone()));
+    assert!(
+        r.await_checks(
+            &results,
+            AwaitWork {
+                person_id: "aiko",
+                run_id: "run",
+                work_kind: "chat",
+                work_identity: "original",
+                subject: "subject"
+            },
+            |_| "wait".into(),
+            |v| {
+                recorded.push(v.clone());
+                Ok(())
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["target"]["url"], "A");
 }
