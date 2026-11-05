@@ -3,6 +3,9 @@ name = "gb-member"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
+description = "Member capabilities and domain event assembly above provider ports"
+license = "MIT"
+repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
