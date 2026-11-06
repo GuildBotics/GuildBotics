@@ -258,12 +258,13 @@ async fn removing_snapshots_uses_metadata_callback_and_keeps_login_files() {
     std::fs::create_dir_all(&login).unwrap();
     std::fs::write(login.join("fixture"), b"fake-login-state").unwrap();
     let mut removed = Vec::new();
-    gb_environment::snapshot::remove(root.path(), |path| {
+    let names = gb_environment::snapshot::remove(root.path(), |path| {
         removed.push(path.clone());
         async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
     })
     .await
     .unwrap();
+    assert_eq!(names, [NAME]);
     assert_eq!(removed, vec![directory.join(NAME)]);
     assert_eq!(
         std::fs::read(login.join("fixture")).unwrap(),

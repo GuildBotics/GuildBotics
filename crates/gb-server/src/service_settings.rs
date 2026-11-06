@@ -232,6 +232,7 @@ mod tests {
             workspace: Some(workspace.clone()),
             work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
+            shutdown: crate::server::Shutdown::default(),
         });
         let app = crate::api::router(api);
         for (method, body, authorized, expected) in [

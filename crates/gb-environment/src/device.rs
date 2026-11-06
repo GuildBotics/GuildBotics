@@ -13,12 +13,6 @@ pub struct Device {
     dns_problem: Option<Sentence>,
 }
 
-fn sentence(failure: Failure) -> Sentence {
-    match failure {
-        Failure::Command(s) | Failure::Runtime(s) => s,
-    }
-}
-
 impl Device {
     pub fn rendered(mut self, say: impl Fn(Sentence) -> String) -> Value {
         let refusal = self.refusal.map(&say).unwrap_or_default();
@@ -41,13 +35,13 @@ impl Device {
 
 pub async fn read(host: &Host, workspace: &Path) -> Device {
     let home = host.data.join("msb");
-    let health = runtime::ensure(&home).err().map(sentence);
+    let health = runtime::ensure(&home).err().map(Failure::sentence);
     let templates = host.package.join("templates");
     let config = workspace.join(".guildbotics/config");
     let mut device = Device {
         view: json!({"platform":std::env::consts::OS,
             "runtime":{"available":health.is_none(),"reason":"","version":runtime::RUNTIME_VERSION,"home":home},
-            "resources":null,"snapshot":{"state":"missing","name":"","detail":"","output":[]},
+            "resources":null,"snapshot":{"state":"missing","name":"","path":"","detail":"","output":[]},
             "image":{"default":"","architecture":image::device_architecture(),"reference":"","digest":"","digests":{},"present":true,"held":"","problem":"","warning":"","load_command":""},
             "network":null,"dns":{"declared":"","nameservers":[],"problem":""},
             "tools":[],"problem":"","problem_setting":"","warning":"",
@@ -88,6 +82,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
             device.view["dns"] = view["dns"].clone();
         }
         Err(error) => {
+            device.view["resources"] = Value::Null;
             device.dns_problem = Some(error.clone());
             if device.refusal.is_none() {
                 device.refusal = Some(error);
@@ -113,7 +108,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
             match runtime::held_image(&home, &declared.reference, &recipe.image).await {
                 Ok(value) => held = value,
                 Err(error) => {
-                    device.refusal = Some(sentence(error));
+                    device.refusal = Some(error.sentence());
                     device.view["problem_setting"] = json!("image");
                 }
             }
@@ -148,7 +143,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
                 snapshot::State::Failed(detail) => ("failed", detail.as_str()),
             };
             device.view["snapshot"] =
-                json!({"state":state,"name":name,"detail":detail,"output":[]});
+                json!({"state":state,"name":name,"path":snapshot.path,"detail":detail,"output":[]});
             match snapshot.require_ready() {
                 Ok(path) => device.snapshot = Some(path),
                 Err(refusal) if device.refusal.is_none() => {

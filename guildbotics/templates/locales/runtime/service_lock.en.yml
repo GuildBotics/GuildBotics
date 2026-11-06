@@ -15,3 +15,4 @@ en:
   waiting_for_work: "Waiting for in-flight work to finish (`guildbotics server stop --force` cancels it)..."
   services_started: "The services started."
   services_stopped: "The services stopped."
+  teardown_timeout: "The server did not terminate after cancelling its work."

@@ -187,6 +187,11 @@ pub fn workspace_identity_path(workspace: &Path) -> PathBuf {
     workspace.join(".guildbotics/state/workspace.json")
 }
 
+/// Read an existing identity without modifying the workspace.
+pub fn read_workspace_identity(workspace: &Path) -> anyhow::Result<Option<WorkspaceIdentity>> {
+    read(&workspace_identity_path(workspace))
+}
+
 /// The workspace's identity, created on first use.
 pub fn ensure_workspace_identity(workspace: &Path) -> anyhow::Result<WorkspaceIdentity> {
     let path = workspace_identity_path(workspace);

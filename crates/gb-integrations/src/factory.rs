@@ -8,6 +8,16 @@ use sha2::{Digest, Sha256};
 pub use slack::{IntegrationEvent, IntegrationObserver};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+/// The providers that issue the human's Git credentials are selected here.
+/// Read the credential for a human's remote. The host supplies its device
+/// ID and display name on demand when the provider needs to issue a token.
+pub async fn human_git_credential(
+    origin: &str,
+    device: impl FnOnce(&std::path::Path) -> anyhow::Result<(String, String)>,
+) -> anyhow::Result<Option<GitCredential>> {
+    branvil::owner_git::credential(origin, device).await
+}
+
 #[derive(Clone, Debug)]
 pub struct IntegrationConfig {
     pub local_root: PathBuf,

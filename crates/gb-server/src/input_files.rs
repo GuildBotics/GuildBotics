@@ -635,6 +635,7 @@ mod tests {
             workspace: None,
             work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
+            shutdown: crate::server::Shutdown::default(),
         })
     }
 

@@ -229,35 +229,37 @@ pub async fn load_image(
     home: &Path,
     archive: &Path,
     tag: Option<String>,
-) -> Result<Vec<(String, String)>, String> {
-    crate::image_archive::validate(archive, crate::image::device_architecture())
-        .map_err(|e| format!("{}: {e}", archive.display()))?;
-    ready(home).map_err(|_| {
-        format!(
-            "The microVM runtime under {} is unavailable or is not version {RUNTIME_VERSION}.",
-            home.display()
-        )
+) -> Result<Vec<(String, String)>, Sentence> {
+    crate::image_archive::validate(archive, crate::image::device_architecture())?;
+    ensure(home).map_err(|error| match error {
+        Failure::Command(sentence) | Failure::Runtime(sentence) => sentence,
     })?;
-    backend(home).await.map_err(|e| format!("{e:?}"))?;
-    let unpacked = crate::image_archive::uncompressed(archive).map_err(|e| e.to_string())?;
+    backend(home)
+        .await
+        .map_err(|e| Sentence::Text(format!("{e:?}")))?;
+    let unpacked =
+        crate::image_archive::uncompressed(archive).map_err(|e| Sentence::Text(e.to_string()))?;
     let input = unpacked.as_ref().map(|file| file.path()).unwrap_or(archive);
     let handles = microsandbox::Image::load(input, tag.into_iter().collect())
         .await
-        .map_err(|e| format!("{}: {e}", archive.display()))?;
+        .map_err(|e| Sentence::Text(format!("{}: {e}", archive.display())))?;
     if handles.is_empty() {
-        return Err(format!("No image was loaded from {}.", archive.display()));
+        return Err(Sentence::Text(format!(
+            "No image was loaded from {}.",
+            archive.display()
+        )));
     }
     let mut loaded = Vec::new();
     for handle in handles {
         let reference = handle.reference().to_owned();
         let detail = microsandbox::Image::inspect(&reference)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Sentence::Text(e.to_string()))?;
         let digest = detail
             .config
             .map(|c| c.digest)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("No configuration digest for {reference}"))?;
+            .ok_or_else(|| Sentence::Text(format!("No configuration digest for {reference}")))?;
         loaded.push((reference, digest));
     }
     Ok(loaded)
@@ -1892,10 +1894,12 @@ pub async fn remove_snapshot(path: PathBuf) -> Result<(), String> {
 }
 
 /// Remove SDK metadata together with artifacts while retaining provider logins.
-pub async fn remove_snapshots(home: &Path, workspace: &Path) -> Result<(), String> {
-    ensure(home).map_err(|e| format!("{e:?}"))?;
-    backend(home).await.map_err(|e| format!("{e:?}"))?;
-    crate::snapshot::remove(workspace, remove_snapshot).await
+pub async fn remove_snapshots(home: &Path, workspace: &Path) -> Result<Vec<String>, Failure> {
+    ensure(home)?;
+    backend(home).await?;
+    crate::snapshot::remove(workspace, remove_snapshot)
+        .await
+        .map_err(|error| Failure::Command(Sentence::Text(error)))
 }
 
 fn worktree_argv(operation: &str, copy: &crate::worktree::Copy) -> Vec<String> {

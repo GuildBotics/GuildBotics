@@ -76,16 +76,37 @@ fn sanitized_keychain_error(error: anyhow::Error) -> anyhow::Error {
         .into()
 }
 pub struct SystemKeychain;
+#[cfg(test)]
 fn keychain_target(windows: bool) -> Option<String> {
     // Python's WindowsCredentialManager._target (windows_credentials.py).
     windows.then(|| format!("{SERVICE}/utf8/{ACCOUNT}"))
 }
+#[cfg(not(target_os = "macos"))]
 fn keychain_entry() -> keyring::Result<keyring::Entry> {
-    match keychain_target(cfg!(target_os = "windows")) {
-        Some(target) => keyring::Entry::new_with_target(&target, SERVICE, ACCOUNT),
-        None => keyring::Entry::new(SERVICE, ACCOUNT),
+    system_entry(SERVICE, ACCOUNT)
+}
+fn system_entry(service: &str, account: &str) -> keyring::Result<keyring::Entry> {
+    if cfg!(target_os = "windows") {
+        keyring::Entry::new_with_target(&format!("{service}/utf8/{account}"), service, account)
+    } else {
+        keyring::Entry::new(service, account)
     }
 }
+
+pub fn get_os_credential(service: &str, account: &str) -> anyhow::Result<Option<String>> {
+    let entry = system_entry(service, account).map_err(system_keychain_error)?;
+    match read_entry(&entry, cfg!(target_os = "windows")) {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(system_keychain_error(error)),
+    }
+}
+
+pub fn keep_os_credential(service: &str, account: &str, credential: &str) -> anyhow::Result<()> {
+    let entry = system_entry(service, account).map_err(system_keychain_error)?;
+    write_entry(&entry, credential, cfg!(target_os = "windows")).map_err(system_keychain_error)
+}
+
 fn read_entry(entry: &keyring::Entry, windows: bool) -> keyring::Result<String> {
     if windows {
         // get_password decodes UTF-16 on Windows; Python stores raw UTF-8.
@@ -95,7 +116,6 @@ fn read_entry(entry: &keyring::Entry, windows: bool) -> keyring::Result<String> 
         entry.get_password()
     }
 }
-#[cfg(any(not(target_os = "macos"), test))]
 fn write_entry(entry: &keyring::Entry, value: &str, windows: bool) -> keyring::Result<()> {
     if windows {
         entry.set_secret(value.as_bytes())
@@ -105,12 +125,7 @@ fn write_entry(entry: &keyring::Entry, value: &str, windows: bool) -> keyring::R
 }
 impl Keychain for SystemKeychain {
     fn read(&self) -> anyhow::Result<Option<String>> {
-        let entry = keychain_entry().map_err(system_keychain_error)?;
-        match read_entry(&entry, cfg!(target_os = "windows")) {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(system_keychain_error(error)),
-        }
+        get_os_credential(SERVICE, ACCOUNT)
     }
     fn create(&self, encoded_key: &str) -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]

@@ -77,36 +77,19 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 ### インストール
 
-GuildBotics にインストーラーはありません。サーバーは Hub にあるこのリポジトリのチェックアウトから動かします。リポジトリを取得し、依存を入れて、画面をビルドします。
+Hub にあるチェックアウトから、Rust の CLI と画面をビルドします。
 
 ```bash
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-uv sync --locked --extra test --extra dev
 npm ci && npm run build --workspace desktop
+cargo build --locked -p guildbotics
+target/debug/guildbotics install
 ```
 
-macOS では、続けてサーバーをユーザーのサービス（LaunchAgent）として登録します。
+`install` はビルドした実行ファイルを `~/.guildbotics/bin/guildbotics` に配置し、見つかった対応ツールのユーザースキル用ディレクトリに GuildBotics スキルをコピーします。Unix では、空いていれば `~/.local/bin/guildbotics` にもリンクを作ります。ユーザー自身が置いたコマンドと、編集済みのスキルは保持します。実行ファイルを更新するときは、再ビルドしてから `install` を実行してください。
 
-```bash
-scripts/hub-server.sh install
-```
-
-実行する前に、次のことを済ませてください。
-
-- 以前の GuildBotics デスクトップアプリが入っていれば、終了してアンインストールします。デスクトップアプリが残した `~/.guildbotics/programs/` は手で削除してかまいません
-- ほかの GuildBotics サーバーを止めます（`guildbotics server stop`）。サーバーが動いている間、`install` は登録を断ります
-- 既にワークスペースがあれば、`.venv/bin/guildbotics workspace use <パス>` で選びます。サーバーは起動時に、選ばれたワークスペースを開きます。なければ、`guildbotics open` で開いた画面で作るか選びます
-- このマシンのキーチェーンに GuildBotics のシークレットが既にあれば（デスクトップアプリで登録したものなど）、ターミナルで一度 `.venv/bin/guildbotics server start` を実行し、キーチェーンの確認に「常に許可」で答えてから Ctrl-C で止めます。サービスにはこの確認に答えるウィンドウがありません
-
-`install` は以下を配置して、サーバーを起動します。
-
-- `~/.guildbotics/bin/guildbotics`: 管理用 GuildBotics CLI。チェックアウトの `.venv/bin/guildbotics` を呼ぶ小さなスクリプトです。AI CLI ツール・スキル・人のメンバーの git の credential helper がこのパスを使います
-- `~/.local/bin/guildbotics`: 上記 CLI へ転送します。`~/.local/bin` が PATH にあれば `guildbotics` で呼べます（GuildBotics が書いたものでない `guildbotics` がそこにあれば、そのままにします）
-- このマシンにある Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが編集したスキルは上書きしません
-- LaunchAgent `local.guildbotics`。チェックアウトの `guildbotics server start` を、すぐに、ログインのたびに、予期せず止まったときにも起動します（→ [サーバーを OS のサービスで動かす](#サーバーを-os-のサービスで動かす)）
-
-Linux では、ターミナルで `.venv/bin/guildbotics server start` を実行してサーバーを動かし、`.venv/bin/python scripts/install_cli_assets.py` で CLI とスキルを配置します。
+既にワークスペースがあれば、`~/.guildbotics/bin/guildbotics workspace use <パス>` で選びます。ターミナルで `~/.guildbotics/bin/guildbotics server start` を実行し、別のターミナルで `guildbotics open` を実行すると GuildBotics の画面が開きます。Branvil の画面を開く場合は `guildbotics open --branvil` を使います。
 
 エージェント隔離環境の runtime は、最初に必要になったときに `~/.guildbotics/data/msb` へ、GuildBotics に同梱された複製から配置します（ダウンロードはしません）。Windows ではこの固定パスに対する firewall 規則を、昇格の確認 1 回で作成します。
 
@@ -164,7 +147,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 ## メンバーと一緒に作業する
 
-`scripts/hub-server.sh install`（と `update`）が、このマシンにある Claude Code / Codex などのユーザースキル用ディレクトリへ **guildbotics スキル**を配置します（→ [インストール](#インストール)）。このスキルを使って、いま開いているリポジトリでメンバーと一緒に作業します。
+`guildbotics install` が、このマシンにある Claude Code / Codex などのユーザースキル用ディレクトリへ **guildbotics スキル**を配置します（→ [インストール](#インストール)）。このスキルを使って、いま開いているリポジトリでメンバーと一緒に作業します。
 
 スキルは各ツールが読み込むユーザースキル用ディレクトリ（Claude Code なら `~/.claude/skills`、Codex なら `~/.agents/skills` など）に置かれるため、CLI から起動しても、そのツールのアプリから起動しても同じスキルが使われます。どのツールのどこへ配置したか、編集されていたので残した写しはどれかは、導入時に表示されます。
 
@@ -181,7 +164,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 guildbotics スキルを使い、メンバーの alice としてこの変更をコミットして push してください
 ```
 
-member コマンドは、サーバーで選択中のワークスペースを使います。`member --workspace <パス>` は手元のワークスペースの ID を選ぶ指定で、サーバーは切り替えません。作業を終えてから **設定 → プロジェクト** で切り替えるか、`guildbotics server stop` でサーバーを止め、`guildbotics workspace use <パス>` を実行してから、サーバーを起動し直してください（サービスなら `scripts/hub-server.sh restart`）。本文のファイル読み取り、ダウンロードの保存、手元のリポジトリでの commit は CLI が扱い、サービスの資格情報はサーバーに残ります。
+member コマンドは、サーバーで選択中のワークスペースを使います。`member --workspace <パス>` は手元のワークスペースの ID を選ぶ指定で、サーバーは切り替えません。作業を終えてから **設定 → プロジェクト** で切り替えるか、`guildbotics server stop` でサーバーを止め、`guildbotics workspace use <パス>` を実行してから、サーバーを起動し直してください。本文のファイル読み取り、ダウンロードの保存、手元のリポジトリでの commit は CLI が扱い、サービスの資格情報はサーバーに残ります。
 
 AI CLI ツールはメンバーのプロフィール（役割、判断基準、話し方）と記憶を読み込み、以降はそのメンバーとして応答します。コミット、push、PR 作成、Slack 投稿などの外部操作はメンバー本人の名義で実行されます。
 
@@ -606,31 +589,11 @@ echo "Hello" | guildbotics run translate
    この解除が済むまで、Secret を使うワークフローは実行時エラーになります。GuildBotics が
    平文のファイルへ書き出すことはありません。
 
-### サーバーを OS のサービスで動かす
+### ターミナルでサーバーを動かす
 
-macOS の Hub では、`scripts/hub-server.sh install`（→ [インストール](#インストール)）が、チェックアウトの `guildbotics server start` を LaunchAgent `local.guildbotics` として、ログインしたユーザーのセッションで動かします。サーバーのシークレットがそのユーザーのキーチェーンにあるためです。サーバーはサービスを開始せずに起動するので、ログインのたびに巡回とチャットイベントの受信も再開させるには、**サービス実行** 画面の **サーバーの起動時にサービスも開始する** をオンにします。スクリプトはチェックアウトから実行します。
+Hub で `guildbotics server start` を実行します。起動時の案内やサービスのログは、このターミナルに出ます。スケジュール、チケット巡回、チャット受信も一緒に始める場合は `guildbotics server start --services` を使います。
 
-```bash
-scripts/hub-server.sh status      # サービスと、直前の終了の状態
-scripts/hub-server.sh restart     # `guildbotics server stop` と同じく実行中の作業の完了を待ってサーバーを止めてから、起動し直す
-scripts/hub-server.sh update      # チェックアウトを更新したあと（下記）
-scripts/hub-server.sh uninstall   # サーバーを止め、LaunchAgent を外す
-```
-
-- **ログ**: サーバーの出力は `~/Library/Logs/guildbotics.log` に追記されます。ローテーションはしません。サーバーが起動しない・止まったときは、まずここを見ます
-- **動くとき**: ログインすると起動し、Hub を再起動したあとはログインするまで動きません。予期せず終わったとき（クラッシュや強制終了）は起動し直します。`guildbotics server stop` で止めると、次のログインか `scripts/hub-server.sh restart` まで止まったままです。`--force` を付けたときも同じで、サーバーを強制終了するまでに至ったときだけ起動し直します。サーバーが起動できないとき（別のサーバーがすでに動いている、など）は、サービスが 15 秒ごとに起動し直し、理由をログに書きます。ワークスペースが選ばれていなくてもサーバーは起動し、画面でワークスペースを選ぶよう案内します
-- **macOS が止めるとき**（ログアウト、再起動）: サーバーは SIGTERM を受けて実行中の作業をすぐにキャンセルし、その実行は `guildbotics server stop --force` がキャンセルしたときと同じ終わり方をします。`restart`・`update`・`uninstall` は、`guildbotics server stop` と同じく実行中の作業の完了を、どれだけかかっても待って止めます。別のターミナルで `guildbotics server stop --force` を実行すると、作業をキャンセルします
-- **環境**: サービスは `install` を実行したシェルの `PATH` を引き継ぐので、サーバーは `git` や `uv` などのコマンドに届きます。`GUILDBOTICS_SERVER_PORT` が設定されていれば、それも引き継ぎます。変えたときは `install` をもう一度実行します
-
-**更新**: チェックアウトを更新（`git pull` など）してから、次を実行します。
-
-```bash
-scripts/hub-server.sh update
-```
-
-依存を入れ直し（`uv sync`、ルートで `npm ci`）、画面をビルドし（`npm run build --workspace desktop`）、CLI とスキルを配置し直してから、実行中の作業の完了を待ってサーバーを起動し直します。自分で始めた `guildbotics run` は先に止めてください。
-
-更新で Python の実行ファイルが変わると、新しい実行ファイルが読む前に、キーチェーンが GuildBotics の項目ごとに許可を聞き直します。ウィンドウのないサービスからは答えられないので、`update` はサーバーを止め、ターミナルで一度 `guildbotics server start` を実行し、確認に「常に許可」で答えて Ctrl-C で止めてから `scripts/hub-server.sh restart` を実行するよう案内します。
+チェックアウトを更新したら `guildbotics server stop` でサーバーを止めます。[インストール](#インストール)の手順で画面と Rust の実行ファイルをビルドし直し、新しい実行ファイルから `install` を実行してからサーバーを起動します。
 
 ### ブラウザから使う
 
@@ -670,7 +633,7 @@ guildbotics open
    sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
    ```
 
-   `~/.guildbotics/bin/guildbotics` は導入時に置かれる managed shim なので、常にチェックアウトの CLI を指します。
+   `~/.guildbotics/bin/guildbotics` は導入時に置かれる実行ファイルです。更新するときは、新しくビルドした実行ファイルから `install` を実行します。
 
 4. ポートを転送します。[Branvil 連携ガイド](docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する) の転送サービスを使うと、ログインしている間ずっと転送されます。`--port 8765` を指定してインストールします（Branvil を使うときは `--port 7878` も指定します）。その場限りなら `ssh -L 8765:127.0.0.1:8765 <Hub>` でも転送できます。
 5. Hub で入口リンクを表示し、手元のブラウザに貼ります:
@@ -796,7 +759,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | 症状                                         | 最初に確認すること                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `guildbotics` コマンドが見つからない | `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。どちらも無ければ、配置し直します（→ [インストール](#インストール)） |
-| サーバーが起動しない・止まった | `~/Library/Logs/guildbotics.log` を読み、`scripts/hub-server.sh status` を実行します（→ [サーバーを OS のサービスで動かす](#サーバーを-os-のサービスで動かす)） |
+| サーバーが起動しない・止まった | `guildbotics server start` の出力を確認します（[ターミナルでサーバーを動かす](#ターミナルでサーバーを動かす)を参照） |
 | どのワークスペースが使われているか分からない | **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
 | メンバーが動作しない・設定に不安がある       | **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
 | GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます。`GitHub writes are limited to repositories of '<owner>'` というエラーは、書き込み先リポジトリの owner がプロジェクトに設定した owner と異なるため、GuildBotics が送信せずに拒否したことを表します |

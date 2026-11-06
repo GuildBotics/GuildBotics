@@ -128,7 +128,7 @@ pub fn needs_build(state: &State) -> bool {
 
 /// Remove only environment snapshots and their failure markers under the build
 /// lock. The caller removes each snapshot through its runtime's metadata API.
-pub async fn remove<F, Fut>(workspace: &Path, mut perform: F) -> Result<(), String>
+pub async fn remove<F, Fut>(workspace: &Path, mut perform: F) -> Result<Vec<String>, String>
 where
     F: FnMut(PathBuf) -> Fut,
     Fut: Future<Output = Result<(), String>>,
@@ -137,6 +137,7 @@ where
     let _held = FileLock::try_hold(&directory.join(LOCK_FILE))
         .map_err(|e| e.to_string())?
         .ok_or("An environment build is already running")?;
+    let mut removed = Vec::new();
     for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -146,11 +147,13 @@ where
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         if kind.is_dir() {
             perform(entry.path()).await?;
+            removed.push(name);
         } else if kind.is_file() && name.ends_with(FAILED_SUFFIX) {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
         }
     }
-    Ok(())
+    removed.sort();
+    Ok(removed)
 }
 
 /// Serialize builds across processes, remember failure only for this recipe,

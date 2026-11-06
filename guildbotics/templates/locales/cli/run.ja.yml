@@ -1,0 +1,3 @@
+ja:
+  empty_command: "コマンド名を指定してください。"
+  invalid_output: "GuildBotics サーバーから返されたコマンドの結果が無効です。"

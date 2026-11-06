@@ -388,6 +388,35 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
         "{in_japanese}"
     );
 
+    let owner_id = &token[4..20];
+    for nonce in [
+        json!(""),
+        json!("0".repeat(63)),
+        json!("g".repeat(64)),
+        json!(42),
+    ] {
+        let refused = server
+            .http
+            .post(server.url("/api/local-api/proof"))
+            .json(&json!({"token_id":owner_id,"nonce":nonce}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{nonce}"
+        );
+    }
+    let unknown = server
+        .http
+        .post(server.url("/api/local-api/proof"))
+        .json(&json!({"token_id":"0123456789abcdef","nonce":"0".repeat(64)}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
+
     for (header, value, status, code) in [
         (
             "host",
@@ -668,6 +697,7 @@ fn open(dir: &Path, port: u16) -> Output {
     }
     command
         .args(["open", "--print"])
+        .env("LANGUAGE", "en")
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
         .env("GUILDBOTICS_HOME", dir.join("home"))
@@ -801,6 +831,19 @@ fn nothing_can_write_to_stdout_after_the_notice() {
         Err(mpsc::RecvTimeoutError::Disconnected)
     );
     server.stop();
+}
+
+#[test]
+fn failed_bind_releases_the_server_lock_for_the_next_start() {
+    let root = tempfile::tempdir().unwrap();
+    let reserved = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    let failed = server_command(root.path(), port).output().unwrap();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty(), "{failed:?}");
+    drop(reserved);
+    let server = Server::spawn(server_command(root.path(), port), root.path(), port);
+    assert!(server.owner_token().starts_with("gbt_"));
 }
 
 #[test]
@@ -979,11 +1022,25 @@ fn set_up_branvil(dir: &Path, listen: &str) -> PathBuf {
     data
 }
 
+#[test]
+fn open_can_print_a_branvil_entry_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let listen = format!("127.0.0.1:{}", free_port());
+    let data = set_up_branvil(dir.path(), &listen);
+    let server = Server::start(dir.path());
+    let url = server.branvil_url();
+    let opened = guildbotics(&data, &["open", "--branvil", "--print"]);
+    server.stop();
+    assert_ok(&opened);
+    let link = String::from_utf8(opened.stdout).unwrap();
+    assert!(link.starts_with(&format!("{url}/-/enter#")), "{link}");
+}
+
 /// A Ctrl-C while the server still starts -- here held, after its notice,
 /// by the lock of the workspaces' registry -- stops Branvil too, which has
-/// not started yet: one is enough to end the process.
+/// not started yet. The second signal escalates while startup is still held.
 #[test]
-fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
+fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
     let dir = tempfile::tempdir().unwrap();
     set_up_branvil(dir.path(), "127.0.0.1:0");
     let workspace = dir.path().join("workspace");
@@ -994,13 +1051,27 @@ fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
     held.lock().unwrap();
     let port = free_port();
     let mut command = server_command(dir.path(), port);
-    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    command
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
+        .env("LANGUAGE", "en");
     let mut server = Server::spawn(command, dir.path(), port);
-    let interrupted = Command::new("kill")
-        .args(["-INT", &server.child.id().to_string()])
-        .output()
-        .unwrap();
-    assert!(interrupted.status.success());
+    for key in [
+        "runtime.service_lock.stopping_after_work",
+        "runtime.service_lock.cancelling",
+    ] {
+        let interrupted = Command::new("kill")
+            .args(["-INT", &server.child.id().to_string()])
+            .output()
+            .unwrap();
+        assert!(interrupted.status.success());
+        let expected = gb_server::i18n::t("en", key, &[]);
+        loop {
+            let line = server.stderr.recv_timeout(Duration::from_secs(5)).unwrap();
+            if line == expected {
+                break;
+            }
+        }
+    }
     drop(held);
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let status = loop {
@@ -1009,7 +1080,7 @@ fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
         }
         if std::time::Instant::now() >= deadline {
             server.child.kill().unwrap();
-            panic!("one Ctrl-C did not end the server");
+            panic!("Ctrl-C did not end the server");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -1437,4 +1508,689 @@ fn sigterm_with_nothing_running_ends_the_server_as_asked() {
     assert!(terminated.status.success());
     let output = server.child.wait_with_output().unwrap();
     assert!(output.status.success(), "{:?}", output.status);
+}
+
+fn service_command(dir: &Path, args: &[&str]) -> Output {
+    // Service commands use the port held by the server, not the one in the
+    // calling shell's environment.
+    Command::new(BIN)
+        .arg("service")
+        .args(args)
+        .env("GUILDBOTICS_HOME", dir.join("home"))
+        .env("GUILDBOTICS_SERVER_PORT", "1")
+        .env("LANGUAGE", "en")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn service_commands_need_a_running_server() {
+    let dir = tempfile::tempdir().unwrap();
+    for action in ["start", "stop"] {
+        let output = service_command(dir.path(), &[action]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("No GuildBotics server is running.")
+        );
+    }
+}
+
+#[test]
+fn service_commands_reach_the_port_held_by_the_server_and_show_its_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    // A server with no workspace refuses to start its services.
+    let started = service_command(dir.path(), &["start"]);
+    // Stopping idle services succeeds for both modes.
+    for args in [&["stop"][..], &["stop", "--force"][..]] {
+        let stopped = service_command(dir.path(), args);
+        assert_ok(&stopped);
+        assert!(String::from_utf8_lossy(&stopped.stdout).contains("The services stopped."));
+    }
+    server.stop();
+    assert!(!started.status.success());
+    assert!(started.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&started.stderr)
+            .contains("GuildBotics configuration is not available.")
+    );
+}
+
+#[test]
+fn run_accepts_options_after_the_command_and_executes_with_or_without_a_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    let port = free_port();
+    let mut command = server_command(&root, port);
+    command
+        .env("HOME", &root)
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, &root, port);
+    let run = || {
+        Command::new(BIN)
+            .env("HOME", &root)
+            .env("GUILDBOTICS_HOME", root.join("home"))
+            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("LANGUAGE", "en")
+            .args(["run", "look@yuki", "--person", "unknown"])
+            .arg("--cwd")
+            .arg(&workspace)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let via_server = run();
+    server.stop();
+    let local = run();
+    for output in [&via_server, &local] {
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("unknown") && error.contains("yuki"),
+            "{error}"
+        );
+    }
+    assert_eq!(local.stderr, via_server.stderr);
+}
+
+#[test]
+fn server_stop_uses_the_running_port_and_waits_for_both_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    set_up_branvil(dir.path(), "127.0.0.1:0");
+    let stop = |force: bool| {
+        let mut command = Command::new(BIN);
+        command
+            .args(["server", "stop"])
+            .env("GUILDBOTICS_HOME", dir.path().join("home"))
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("LANGUAGE", "en");
+        if force {
+            command.arg("--force");
+        }
+        command.output().unwrap()
+    };
+    for force in [false, true] {
+        let server = Server::start(dir.path());
+        let branvil = server.branvil_url();
+        let output = stop(force);
+        assert_ok(&output);
+        assert!(String::from_utf8_lossy(&output.stdout).contains(if force {
+            "The server stopped after cancelling in-flight work."
+        } else {
+            "The server stopped."
+        }));
+        assert!(server.child.wait_with_output().unwrap().status.success());
+        let address = branvil.strip_prefix("http://").unwrap();
+        assert!(std::net::TcpStream::connect(address).is_err());
+    }
+    let output = stop(false);
+    assert_ok(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No GuildBotics server is running."));
+}
+
+#[tokio::test]
+async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    let verifier = loopback_auth::random_secret::<48>();
+    let redirect = "http://127.0.0.1:12345/callback";
+    let authorize = || {
+        json!({
+            "client":"GuildBotics CLI Blackbox", "redirect_uri":redirect, "state":"expected",
+            "code_challenge":loopback_auth::b64(&loopback_auth::sha256(verifier.as_bytes())),
+        })
+    };
+    let authenticated = server
+        .http
+        .post(server.url("/api/apps/authorizations"))
+        .bearer_auth(server.owner_token())
+        .json(&authorize())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authenticated.status(), StatusCode::CREATED);
+    let authorized: Value = authenticated.json().await.unwrap();
+    let returned = reqwest::Url::parse(authorized["redirect"].as_str().unwrap()).unwrap();
+    assert_eq!(returned.path(), "/callback");
+    let pairs = returned
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(pairs["state"], "expected");
+    let exchange = json!({"code":pairs["code"],"redirect_uri":redirect,"code_verifier":verifier});
+    let issued = server
+        .http
+        .post(server.url("/api/apps/token"))
+        .json(&exchange)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(issued.status(), StatusCode::CREATED);
+    let issued: Value = issued.json().await.unwrap();
+    let token = issued["token"].as_str().unwrap();
+    let spent = server
+        .http
+        .post(server.url("/api/apps/token"))
+        .json(&exchange)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(spent.status(), StatusCode::BAD_REQUEST);
+    for (path, expected) in [
+        ("/session/links", StatusCode::CREATED),
+        ("/shutdown", StatusCode::UNAUTHORIZED),
+        ("/commands/run", StatusCode::UNAUTHORIZED),
+        ("/member/run", StatusCode::UNAUTHORIZED),
+        ("/apps/authorizations", StatusCode::UNAUTHORIZED),
+    ] {
+        let response = server
+            .http
+            .post(server.url(&format!("/api{path}")))
+            .bearer_auth(token)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{path}");
+    }
+    server.stop();
+}
+
+#[test]
+fn member_uses_the_active_workspace_and_reads_only_planned_caller_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    let other = root.join("other");
+    std::fs::create_dir_all(other.join(".guildbotics/state")).unwrap();
+    let fake_identity = json!({
+        "schema_version": 4,
+        "workspace_id": "019691c2-8dc0-7654-8000-000000000042",
+        "created_at":"2026-11-06T00:00:00Z",
+    });
+    std::fs::write(
+        other.join(".guildbotics/state/workspace.json"),
+        fake_identity.to_string(),
+    )
+    .unwrap();
+    let data = root.join("home/data");
+    std::fs::create_dir_all(&data).unwrap();
+    let active = data.join("active-workspace.json");
+    std::fs::write(&active, json!({"workspace":workspace}).to_string()).unwrap();
+    let port = free_port();
+    let mut launch = server_command(&root, port);
+    launch.env("HOME", &root);
+    let server = Server::spawn(launch, &root, port);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let ready = server
+                .http
+                .get(server.url("/api/health"))
+                .bearer_auth(server.owner_token())
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(ready.status(), StatusCode::OK);
+            let ready: Value = ready.json().await.unwrap();
+            assert_eq!(ready["workspace"], json!(workspace));
+        });
+    let cli = |args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .current_dir(&root)
+            .env("HOME", &root)
+            .env("GUILDBOTICS_HOME", root.join("home"))
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("LANGUAGE", "en")
+            .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
+            .env_remove("GUILDBOTICS_CONFIG_DIR")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let from_active = cli(&["member", "context", "--person", "yuki", "--format", "json"]);
+    assert_ok(&from_active);
+    let context: Value = serde_json::from_slice(&from_active.stdout).unwrap();
+    assert_eq!(context["person_id"], "yuki");
+    let named = format!("--workspace={}", other.display());
+    let mismatched = cli(&["member", &named, "context", "--person", "yuki"]);
+    assert!(!mismatched.status.success());
+    assert!(mismatched.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&mismatched.stderr).contains("workspace"));
+    let note = root.join("note.txt");
+    std::fs::write(&note, "one line\n日本語の本文\n").unwrap();
+    let content = format!("--content-file={}", note.display());
+    let written = cli(&[
+        "member",
+        "memory",
+        "record",
+        "--person",
+        "yuki",
+        "--scope",
+        "team",
+        "--title",
+        "File content",
+        "--format",
+        "json",
+        &content,
+    ]);
+    assert_ok(&written);
+    let receipt: Value = serde_json::from_slice(&written.stdout).unwrap();
+    let record = cli(&[
+        "member",
+        "memory",
+        "get",
+        "--person",
+        "yuki",
+        "--team",
+        "--id",
+        receipt["doc_id"].as_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_ok(&record);
+    let memory: Value = serde_json::from_slice(&record.stdout).unwrap();
+    assert_eq!(memory["body"], "one line\n日本語の本文\n");
+    let invalid = cli(&[
+        "member",
+        "memory",
+        "record",
+        "--person",
+        "yuki",
+        "--scope",
+        "team",
+        "--title",
+        "Bad",
+        "--content-file",
+        "does-not-exist",
+        "--content-stdin",
+    ]);
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("exactly one"));
+    server.stop();
+    let no_server = cli(&["member", "--help"]);
+    assert!(!no_server.status.success());
+    assert!(String::from_utf8_lossy(&no_server.stderr).contains("Start the GuildBotics server"));
+}
+
+#[test]
+fn open_passes_one_entry_link_to_the_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    let browser = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let handler = dir.path().join(browser);
+    std::fs::write(
+        &handler,
+        "#!/bin/sh\n[ \"$#\" = 1 ] && printf '%s' \"$1\" > \"$CAPTURE\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&handler, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let capture = dir.path().join("opened");
+    let output = Command::new(BIN)
+        .arg("open")
+        .env("PATH", dir.path())
+        .env("CAPTURE", &capture)
+        .env("GUILDBOTICS_HOME", &server.home)
+        .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
+        .env("LANGUAGE", "en")
+        .output()
+        .unwrap();
+    let expected = server.url("/-/enter#");
+    server.stop();
+    assert_ok(&output);
+    assert!(output.stdout.is_empty());
+    assert!(
+        std::fs::read_to_string(capture)
+            .unwrap()
+            .starts_with(&expected)
+    );
+}
+
+#[test]
+fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    let config = workspace.join(".guildbotics/config/team");
+    std::fs::write(
+        config.join("project.yml"),
+        "name: Git CLI\nlanguage: en\nservices:\n  code_hosting_service:\n    name: local\n    owner: acme/team\n",
+    ).unwrap();
+    let identity = root.join("home/identity/.guildbotics/config/team/members/yuki/identity.yml");
+    std::fs::write(
+        identity,
+        "person_id: yuki\nname: Yuki\nperson_type: agent\naccount_info:\n  git_email: yuki@example.test\n",
+    ).unwrap();
+    let local = workspace.join(".guildbotics/local/services/code");
+    let owner = local.join("acme%2Fteam%2Fowner/repository.git");
+    let other = local.join("acme%2Fteam%2Fother/repository.git");
+    let seed = root.join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    let git_checked = |cwd: &Path, args: &[&str]| {
+        let output = git(cwd, &root, "", args);
+        assert_ok(&output);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git_checked(&seed, &["init", "-q", "-b", "main"]);
+    git_checked(&seed, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let original = git_checked(&seed, &["rev-parse", "HEAD"]);
+    for remote in [&owner, &other] {
+        std::fs::create_dir_all(remote.parent().unwrap()).unwrap();
+        git_checked(
+            &seed,
+            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+        );
+    }
+    let checkout = root.join("checkout");
+    git_checked(
+        &seed,
+        &[
+            "clone",
+            "-q",
+            other.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ],
+    );
+    let push_url = reqwest::Url::from_file_path(&owner).unwrap();
+    git_checked(
+        &checkout,
+        &["remote", "set-url", "--push", "origin", push_url.as_str()],
+    );
+    let fetch_url = reqwest::Url::from_file_path(&other).unwrap();
+    git_checked(
+        &checkout,
+        &["remote", "set-url", "origin", fetch_url.as_str()],
+    );
+    for (name, script) in [
+        (
+            "pre-commit",
+            "#!/bin/sh\nprintf '%s' \"host${GUILDBOTICS_TEST_GUEST-}\" > hook-ran\n",
+        ),
+        ("pre-push", "#!/bin/sh\ntouch push-ran\nexit 1\n"),
+    ] {
+        let path = checkout.join(".git/hooks").join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(checkout.join("change"), "new content").unwrap();
+    git_checked(&checkout, &["add", "change"]);
+    let port = free_port();
+    let mut command = server_command(&root, port);
+    command
+        .env("HOME", &root)
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, &root, port);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let status = runtime.block_on(async {
+        server
+            .http
+            .get(server.url("/api/health"))
+            .bearer_auth(server.owner_token())
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    });
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{:?}",
+        server.stderr.try_iter().collect::<Vec<_>>()
+    );
+    let message = root.join("commit-message");
+    std::fs::write(&message, "publish current workspace").unwrap();
+    let sub = checkout.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(
+        root.join("gitconfig"),
+        "[author]\n\tname = Configured Human\n\temail = configured@example.test\n",
+    )
+    .unwrap();
+    let member = |action: &str, repository: &Path| {
+        let mut cli = Command::new(BIN);
+        for (key, _) in std::env::vars() {
+            if key.starts_with("GIT_") {
+                cli.env_remove(key);
+            }
+        }
+        cli.current_dir(&sub)
+            .env("GIT_AUTHOR_NAME", "Environment Human")
+            .env("GIT_COMMITTER_EMAIL", "environment@example.test")
+            .env("HOME", &root)
+            .env("GUILDBOTICS_HOME", root.join("home"))
+            .env("LANGUAGE", "en")
+            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
+            .args([
+                "member",
+                "git",
+                action,
+                "--workspace-mode",
+                "current",
+                "--person",
+                "yuki",
+                "--format",
+                "json",
+                "--repo-path",
+            ])
+            .arg(repository)
+            .stdin(Stdio::null());
+        if action == "publish" {
+            cli.arg("--content-file").arg(&message);
+        }
+        cli.output().unwrap()
+    };
+    let wrong = member("publish", &seed);
+    assert_eq!(wrong.status.code(), Some(1), "{wrong:?}");
+    assert!(
+        String::from_utf8_lossy(&wrong.stderr).contains("current workspace repository"),
+        "{wrong:?}"
+    );
+    assert!(!checkout.join("hook-ran").exists());
+    let missing = member("publish", Path::new("../missing"));
+    assert_eq!(missing.stderr, wrong.stderr);
+    let published = member("publish", Path::new(".."));
+    assert_ok(&published);
+    let published: Value = serde_json::from_slice(&published.stdout).unwrap();
+    let head = git_checked(&checkout, &["rev-parse", "HEAD"]);
+    assert_eq!(published["commit_sha"], head);
+    assert_eq!(published["pushed"], true);
+    assert_eq!(
+        published["commits"][0]["message"],
+        "publish current workspace"
+    );
+    assert_eq!(
+        git_checked(&checkout, &["log", "-1", "--format=%an <%ae> / %cn <%ce>"]),
+        "Yuki <yuki@example.test> / Yuki <yuki@example.test>"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("hook-ran")).unwrap(),
+        "host"
+    );
+    assert!(!checkout.join("push-ran").exists());
+    assert_eq!(git_checked(&owner, &["rev-parse", "refs/heads/main"]), head);
+    assert_eq!(
+        git_checked(&other, &["rev-parse", "refs/heads/main"]),
+        original
+    );
+    assert_eq!(
+        git_checked(&checkout, &["rev-parse", "refs/remotes/origin/main"]),
+        head
+    );
+
+    git_checked(
+        &seed,
+        &["commit", "-q", "--allow-empty", "-m", "other change"],
+    );
+    let ahead = git_checked(&seed, &["rev-parse", "HEAD"]);
+    git_checked(
+        &seed,
+        &["push", "-q", "--force", owner.to_str().unwrap(), "main"],
+    );
+    let tracking_lock = checkout.join(".git/refs/remotes/origin/main.lock");
+    std::fs::write(&tracking_lock, "fixture conflict").unwrap();
+    let twice_refused = member("push", &checkout);
+    assert_eq!(twice_refused.status.code(), Some(1));
+    let reason = String::from_utf8_lossy(&twice_refused.stderr);
+    assert!(
+        reason.contains("Failed to push 'main'") && reason.contains("main.lock"),
+        "{reason}"
+    );
+    assert_eq!(
+        git_checked(&owner, &["rev-parse", "refs/heads/main"]),
+        ahead
+    );
+    std::fs::remove_file(&tracking_lock).unwrap();
+    let rejected = member("push", &checkout);
+    assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("Failed to push 'main'"),
+        "{rejected:?}"
+    );
+    assert_eq!(
+        git_checked(&owner, &["rev-parse", "refs/heads/main"]),
+        ahead
+    );
+    assert_eq!(
+        git_checked(&checkout, &["rev-parse", "refs/remotes/origin/main"]),
+        ahead
+    );
+    assert_eq!(git_checked(&checkout, &["rev-parse", "HEAD"]), head);
+
+    git_checked(&checkout, &["switch", "-c", "next"]);
+    let tracking_lock = tracking_lock.with_file_name("next.lock");
+    std::fs::write(&tracking_lock, "fixture conflict").unwrap();
+    let tracking_refused = member("push", &checkout);
+    assert_eq!(tracking_refused.status.code(), Some(1));
+    let reason = String::from_utf8_lossy(&tracking_refused.stderr);
+    assert!(
+        reason.contains("next.lock") && !reason.contains("Failed to push"),
+        "{reason}"
+    );
+    assert_eq!(git_checked(&owner, &["rev-parse", "refs/heads/next"]), head);
+    std::fs::remove_file(tracking_lock).unwrap();
+    git_checked(&checkout, &["switch", "--orphan", "empty"]);
+    let empty = member("push", &checkout);
+    assert_eq!(empty.status.code(), Some(1), "{empty:?}");
+    assert!(
+        String::from_utf8_lossy(&empty.stderr).contains("Branch 'empty' has no commit to push."),
+        "{empty:?}"
+    );
+    server.stop();
+}
+
+impl Server {
+    async fn scheduler_running(&self) -> bool {
+        let response = self
+            .http
+            .get(self.url("/api/scheduler/status"))
+            .bearer_auth(self.owner_token())
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .unwrap();
+        let (status, _, result) = body(response).await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        result["scheduler"]["running"].as_bool().unwrap()
+    }
+}
+
+#[tokio::test]
+async fn server_starts_without_a_workspace_with_or_without_services_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    for requested in [false, true] {
+        let port = free_port();
+        let mut command = server_command(dir.path(), port);
+        if requested {
+            command.arg("--services");
+        }
+        let server = Server::spawn(command, dir.path(), port);
+        assert!(server.health().await["workspace"].is_null());
+        assert!(!server.scheduler_running().await);
+        server.stop();
+        assert!(
+            gb_server::running(&dir.path().join("home/data"), "en")
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_starts_services_from_settings_or_flag_and_serves_after_a_startup_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    gb_base::files::atomic_write(&root.join("home/data/msb"), b"disable runtime upkeep").unwrap();
+    let settings = workspace.join(".guildbotics/local/service.yml");
+    for (autostart, flag, invalid) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, false, true),
+    ] {
+        let mut settings_text = format!(
+            "start_with_server: {autostart}\nscheduled: true\nroutine: false\nevent_queue: false\n"
+        );
+        if invalid {
+            settings_text.push_str("invalid: [\n");
+        }
+        gb_base::files::atomic_write(&settings, settings_text.as_bytes()).unwrap();
+        let port = free_port();
+        let mut command = server_command(&root, port);
+        command
+            .env("HOME", &root)
+            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+        if flag {
+            command.arg("--services");
+        }
+        let server = Server::spawn(command, &root, port);
+        assert_eq!(server.health().await["workspace"], json!(workspace));
+        if invalid {
+            assert!(!server.scheduler_running().await);
+            let start = service_command(&root, &["start"]);
+            assert_eq!(start.status.code(), Some(1), "{start:?}");
+            assert!(
+                String::from_utf8_lossy(&start.stderr).contains("service.yml"),
+                "{start:?}"
+            );
+        } else {
+            if !(autostart || flag) {
+                assert!(!server.scheduler_running().await);
+                assert_ok(&service_command(&root, &["start"]));
+            }
+            tokio::time::timeout(Duration::from_secs(15), async {
+                while !server.scheduler_running().await {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_ok(&service_command(&root, &["stop"]));
+            assert!(!server.scheduler_running().await);
+        }
+        assert_eq!(server.health().await["workspace"], json!(workspace));
+        server.stop();
+    }
 }

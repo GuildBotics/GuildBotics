@@ -13,7 +13,7 @@ pub mod dispatcher;
 pub mod environment;
 pub mod execution;
 pub mod host_window;
-mod i18n;
+pub mod i18n;
 mod input_files;
 mod keep_awake;
 pub mod member;
@@ -37,5 +37,6 @@ pub mod tool_login;
 mod ui;
 pub mod work_stops;
 pub mod workflow_runtime;
+pub mod workspace;
 
-pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, Server};
+pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, RunningServer, Server, Shutdown, running};
