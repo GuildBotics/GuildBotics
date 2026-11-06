@@ -769,9 +769,13 @@ impl Drop for Running {
     }
 }
 
-/// Initialize an empty data directory. This is an administrative operation.
-pub fn initialize(data_dir: &std::path::Path, owner: &str) -> anyhow::Result<()> {
-    crate::cli::init(None, Some(data_dir), owner, None, "127.0.0.1:0", None)
+/// Initialize an empty data directory and return the owner's token. This is an
+/// administrative operation.
+pub fn initialize(data_dir: &std::path::Path, owner: &str) -> anyhow::Result<String> {
+    crate::cli::init(None, Some(data_dir), owner, None, "127.0.0.1:0", None)?;
+    Ok(std::fs::read_to_string(
+        crate::config::Layout::new(data_dir).owner_token(),
+    )?)
 }
 
 #[cfg(test)]
@@ -784,8 +788,7 @@ mod tests {
     #[tokio::test]
     async fn authenticated_data_operations_share_permissions_and_revocation() {
         let temp = tempfile::tempdir().unwrap();
-        initialize(temp.path(), "owner1").unwrap();
-        let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+        let token = initialize(temp.path(), "owner1").unwrap();
         let running = Running::start(temp.path()).await.unwrap();
         let api = &running.data;
         assert!(api.authenticate("invalid".into()).await.is_err());

@@ -1,10 +1,9 @@
 //! Setup HTTP contracts against temporary identity and Branvil services.
 use super::*;
 const SLACK_PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
-async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi) {
+async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi, String) {
     let path = f.root.join("branvil");
-    branvil::api::initialize(&path, "owner1").unwrap();
-    let token = std::fs::read_to_string(path.join("secrets/owner.token")).unwrap();
+    let token = branvil::api::initialize(&path, "owner1").unwrap();
     let running = branvil::api::Running::start(&path).await.unwrap();
     f.api.branvil.set(running.data.clone()).ok().unwrap();
     f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &token);
@@ -13,8 +12,8 @@ async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi
             .join("identity/.guildbotics/config/connections/branvil.yml"),
         &json!({"base_url":running.data.base_url()}).to_string(),
     );
-    let owner = running.data.authenticate(token).await.unwrap();
-    (running, owner)
+    let owner = running.data.authenticate(token.clone()).await.unwrap();
+    (running, owner, token)
 }
 #[tokio::test]
 async fn provider_listing_validation_localization_and_public_page() {
@@ -73,7 +72,7 @@ async fn provider_listing_validation_localization_and_public_page() {
 #[tokio::test]
 async fn member_save_issues_keeps_replaces_and_removes_only_its_tokens() {
     let f = fixture();
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, _) = branvil(&f).await;
     f.init_with(json!({"language":"en","services":{"ticket_service":{"name":"branvil","workspace":"acme"}}})).await;
     let mut form = agent("agent1");
     form["accounts"] =
@@ -174,7 +173,7 @@ async fn disconnected_accounts_keep_input_humans_use_owner_and_wrong_kind_is_ref
         f.get("/config/members/agent1").await["accounts"]["branvil"],
         json!({"username":"chosen","has_token":false})
     );
-    let (running, _) = branvil(&f).await;
+    let (running, _, _) = branvil(&f).await;
     let mut human = agent("human1");
     human["person_type"] = "human".into();
     human["accounts"] = json!({"branvil":{}});
@@ -576,8 +575,7 @@ async fn callback(f: &Fixture, url: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
     let f = fixture();
-    let (running, _) = branvil(&f).await;
-    let owner_token = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
+    let (running, _, owner_token) = branvil(&f).await;
     let (started, redirect) = consent(&f, &running, &owner_token).await;
     let (_, pending) = f
         .call(
@@ -699,8 +697,7 @@ async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
 #[tokio::test]
 async fn denied_forged_spent_and_unkept_consents_do_not_connect() {
     let f = fixture();
-    let (running, _) = branvil(&f).await;
-    let owner_token = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
+    let (running, _, owner_token) = branvil(&f).await;
     for mode in ["denied", "forged", "spent", "locked"] {
         let (started, redirect) = consent(&f, &running, &owner_token).await;
         let old = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
@@ -909,7 +906,7 @@ async fn avatar_import_answers_both_config_locks_with_503() {
 #[tokio::test]
 async fn provider_verify_and_diagnose_keep_credential_and_workspace_boundaries() {
     let f = fixture();
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, _) = branvil(&f).await;
     owner
         .repos_create_workspace(branvil::api::repos::NewWorkspace {
             name: "acme".into(),
@@ -1063,7 +1060,7 @@ async fn provider_verify_and_diagnose_keep_credential_and_workspace_boundaries()
 async fn account_settlement_preserves_later_saves_and_unrelated_tokens_and_shares_pictures() {
     use gb_setup::ProviderModels;
     let f = fixture();
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, _) = branvil(&f).await;
     f.init().await;
     let mut form = agent("agent1");
     form["accounts"] = json!({"branvil":{}});
@@ -1220,7 +1217,7 @@ async fn account_settlement_preserves_later_saves_and_unrelated_tokens_and_share
 #[tokio::test]
 async fn failed_writes_keep_any_token_already_stored_and_failed_preparation_rolls_back() {
     let f = fixture();
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, _) = branvil(&f).await;
     f.init().await;
     let mut form = agent("agent1");
     form["accounts"] = json!({"branvil":{}});
@@ -1355,7 +1352,7 @@ async fn absent_or_refused_connection_cannot_administer_save_or_delete_members()
             .0,
         StatusCode::BAD_REQUEST
     );
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, _) = branvil(&f).await;
     f.init().await;
     let mut form = agent("agent1");
     form["accounts"] = json!({"branvil":{}});
@@ -1540,8 +1537,7 @@ async fn slack_accounts_are_identity_scoped_blank_fields_keep_secrets_and_anothe
 async fn consent_exchange_and_storage_finish_after_the_browser_request_is_dropped() {
     let mut f = fixture();
     Arc::get_mut(&mut f.api).unwrap().write_timeout = Duration::from_secs(2);
-    let (running, _) = branvil(&f).await;
-    let owner_token = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
+    let (running, _, owner_token) = branvil(&f).await;
     let (_, redirect) = consent(&f, &running, &owner_token).await;
     let held = IdentityLock::acquire(&f.root.join("identity"), Duration::from_secs(1)).unwrap();
     assert!(
@@ -1564,7 +1560,7 @@ async fn consent_exchange_and_storage_finish_after_the_browser_request_is_droppe
 async fn account_hooks_preserve_each_reissue_settlement_picture_and_removal_branch() {
     use gb_setup::ProviderModels;
     let f = fixture();
-    let (running, owner) = branvil(&f).await;
+    let (running, owner, admin_token) = branvil(&f).await;
     f.init().await;
     let mut form = agent("agent1");
     form["accounts"] = json!({"branvil":{}});
@@ -1652,7 +1648,6 @@ async fn account_hooks_preserve_each_reissue_settlement_picture_and_removal_bran
         .unwrap();
     disconnected.removed("branvil", &member).await.unwrap();
     // Missing members are already removed; this does not turn deletion into an error.
-    let admin_token = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
     f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &admin_token);
     unnamed
         .account_info
@@ -1696,7 +1691,7 @@ async fn avatar_import_finishes_in_the_workspace_it_started_reading() {
 #[tokio::test]
 async fn provider_and_uploaded_avatars_are_given_to_the_named_branvil_member() {
     let (f, _double) = slack_fixture().await;
-    let (running, _) = branvil(&f).await;
+    let (running, _, _) = branvil(&f).await;
     let mut form = agent("agent1");
     form["accounts"] = json!({"branvil":{},"slack":{}});
     assert_eq!(
@@ -1751,7 +1746,7 @@ async fn provider_and_uploaded_avatars_are_given_to_the_named_branvil_member() {
 #[tokio::test]
 async fn callback_keeps_the_initiating_language_and_retry_in_browser_and_poll() {
     let f = fixture();
-    let (running, _) = branvil(&f).await;
+    let (running, _, _) = branvil(&f).await;
     for lang in ["en", "ja"] {
         let (status, started) = f
             .call_in(lang, "POST", "/config/providers/branvil/connect", json!({}))
@@ -1788,7 +1783,7 @@ async fn callback_keeps_the_initiating_language_and_retry_in_browser_and_poll() 
 #[tokio::test]
 async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
     let f = fixture();
-    let (running, _) = branvil(&f).await;
+    let (running, _, _) = branvil(&f).await;
     let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
     for poll_first in [false, true] {
         let (_, started) = f
@@ -1823,8 +1818,7 @@ async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
 #[tokio::test]
 async fn completed_consents_keep_their_outcomes_after_the_pending_deadline() {
     let f = fixture();
-    let (running, _) = branvil(&f).await;
-    let owner = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
+    let (running, _, owner) = branvil(&f).await;
     for mode in ["connected", "denied", "not_kept"] {
         let (started, redirect) = consent(&f, &running, &owner).await;
         let state = started["state"].as_str().unwrap();

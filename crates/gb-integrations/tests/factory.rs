@@ -266,8 +266,7 @@ fn member_scoped_secrets_and_collision_withholding() {
 async fn branvil_factory_supplies_roster_names_to_task_comments() {
     let d = tempfile::tempdir().unwrap();
     let data_root = d.path().join("branvil");
-    branvil::api::initialize(&data_root, "owner1").unwrap();
-    let token = fs::read_to_string(data_root.join("secrets/owner.token")).unwrap();
+    let token = branvil::api::initialize(&data_root, "owner1").unwrap();
     let running = branvil::api::Running::start(&data_root).await.unwrap();
     let owner = running.data.authenticate(token.clone()).await.unwrap();
     owner

@@ -140,8 +140,7 @@ async fn frozen_remote_and_pull_address_population() {
 #[tokio::test]
 async fn frozen_git_credentials_identity_and_missing_token_operations() {
     let temp = tempfile::tempdir().unwrap();
-    initialize(temp.path(), "owner1").unwrap();
-    let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+    let token = initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(temp.path()).await.unwrap();
     let mut service = BranvilService::new(
         running.data.clone(),

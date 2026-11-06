@@ -5,8 +5,7 @@ use gb_setup::SavedMember;
 
 async fn connected(f: &Fixture) -> (branvil::api::Running, String) {
     let path = f.root.join("branvil");
-    branvil::api::initialize(&path, "owner1").unwrap();
-    let token = std::fs::read_to_string(path.join("secrets/owner.token")).unwrap();
+    let token = branvil::api::initialize(&path, "owner1").unwrap();
     let running = branvil::api::Running::start(&path).await.unwrap();
     f.api.branvil.set(running.data.clone()).ok().unwrap();
     f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &token);

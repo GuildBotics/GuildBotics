@@ -3,8 +3,7 @@ use branvil::api::{Running, initialize};
 #[tokio::test]
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();
-    initialize(temp.path(), "owner1").unwrap();
-    let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+    let token = initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(temp.path()).await.unwrap();
     let m = running.data.authenticate(token.clone()).await.unwrap();
     m.repos_create_workspace(decode(json!({"name":"test"})).unwrap())
@@ -339,8 +338,7 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
 #[tokio::test]
 async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
     let temp = tempfile::tempdir().unwrap();
-    initialize(temp.path(), "owner1").unwrap();
-    let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+    let token = initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(temp.path()).await.unwrap();
     let service = BranvilService::new(
         running.data.clone(),
