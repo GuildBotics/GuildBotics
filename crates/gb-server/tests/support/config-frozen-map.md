@@ -15,6 +15,18 @@ Rust のテストに確かめる条件を添える。同じ Rust テストへ集
   キーを省く。ファイルの bytes（と revision）は Python 版と一致しない。
 - Branvil と Slack の service と member の model・hook・avatar の取込は #91。それまでの registry は
   provider の項目をそのまま保存し（名前は小文字）、member のアカウントの form は受けない。
+- メンバーの保存は、form が送ったアカウントの provider の `account_info` のキーだけを置き換え、ほかの
+  provider の保存済みのキーは残す（凍結版は全 provider のアカウントの form から作り直す。#91 までの
+  registry はアカウントの model を持たず、画面が送り返せないため）。
+- 読み取りに合わせて組み立てた保存（`expected_revisions` を送る PUT /config/project・POST
+  /config/members・PUT /config/members/{id}）は、読んだ `config_dir` を必ず送り、選択中の
+  ワークスペースの config を名指さないものは 409 `config_changed`（`path` は `config`）で断る。
+  revision は 2 つのワークスペースのファイルを中身でしか区別しないため（凍結版の project は送られた
+  `config_dir` へ書き、member は送られたものを無視して選択中へ書く）。GET /config/members/{id} は
+  project と同じく読んだ `config_dir` を返す（凍結版のメンバーの読み取りは返さない）。
+- ワークスペースの切り替えとサービスの開始は、HTTP の要求ではなくサーバーのタスクとして最後まで
+  走る（凍結版の要求も、クライアントが切断しても取り消されない）。登録の取り消しは、進行中の
+  切り替えが終わるのを待ってから選択中かを確かめる。
 - GitHub provider は #88 で削除済み。GitHub を素材にした行は provider に依らない性質だけを、
   テスト用の provider（gb-setup）か本物の registry（gb-server）で確かめる。
 - `/config/init` の `config_dir` は `<workspace>/.guildbotics/config` の形だけを受ける（凍結版の
@@ -81,7 +93,7 @@ Rust のテストに確かめる条件を添える。同じ Rust テストへ集
 - tests/guildbotics/app_api/test_api.py::test_roles_endpoint_returns_template_roles -> crates/gb-server/src/config_api/tests.rs::roles_are_the_template_roles_of_the_asked_language — conditions: GET /api/config/roles?language=ja が 200 で {roles: [{role_id, summary, description}]}（同梱 roles/default.ja.yml の順）。architect / product / customer_success / growth / operations を含み、programmer / professional / personal を含まない。language 省略時は ja
 - tests/guildbotics/app_api/test_api.py::test_intelligence_config_endpoints_read_update_and_member_inherit -> #131 に回す：/config/intelligences の読み書きとメンバーの継承
 - tests/guildbotics/app_api/test_api.py::test_member_config_endpoints_read_update_delete -> crates/gb-server/src/config_api/tests.rs::a_member_is_read_saved_taken_out_of_the_workspace_and_deleted — conditions: GET /api/config/members/alice が 200 で person_id、roles ["architect"]、character.archetype、accounts.github == {account_type "", username alice, installation_id null, app_id null, has_private_key false, has_access_token true}、accounts.slack == {user_id "", has_bot_token true, has_app_token true}、chat_channels ["C01234567"]、chat_channel_participation {C01234567: social}、revisions、本文にトークンの値が無い。PUT（expected_revisions = 読んだ revisions）が 200 → identity root の identity.yml に person_id、name、profile == {character: 送った全体}、account_info == {git_user: 新しい名前, git_email, github_account_type machine_user, github_username alice-b}。member.yml の profile == {roles: {reviewer: {}}}、message_channels[0].name C09999999、chat == {enabled true, participation muted, notify_work_stops true, channel_id C09999999}。再 GET の work_stop_notification_channels ["C09999999"]。identity の store の ALICE_GITHUB_ACCESS_TOKEN / ALICE_SLACK_BOT_TOKEN / ALICE_SLACK_APP_TOKEN が新しい値、workspace の store にキーが無い。DELETE /api/config/members/alice が 200 で team/members/alice が消え、identity の Secret は残る。DELETE /api/identities/alice が 200 で identity のディレクトリと Secret が消える。Slack の account model は #91 に依存 ／#133 で確かめるのは: identity の store の ALICE_BRANVIL_TOKEN が member の DELETE で残り identity の DELETE で消える、workspace の store に member の鍵が無い、本文に値が出ない、name・is_active・roles・character・channel・participation・work_stop。アカウントの view と has_* は #91（provider の member model）
-- tests/guildbotics/app_api/test_api.py::test_member_create_uses_existing_runtime_config_dir -> crates/gb-server/src/config_api/tests.rs::a_new_member_is_written_to_the_selected_workspace_not_the_named_one — conditions: 本文の config_dir が別の場所でも POST /api/config/members が 200 で、選択中の workspace の team/members/new_member/member.yml ができ、本文の config_dir 側には何も作らない
+- tests/guildbotics/app_api/test_api.py::test_member_create_uses_existing_runtime_config_dir -> crates/gb-server/src/config_api/tests.rs::a_new_member_composed_in_another_workspace_is_refused_and_written_nowhere — conditions: 本文の config_dir が別の場所なら POST /api/config/members は 409 config_changed（path は config）で、選択中の workspace も本文の config_dir 側も変わらない。選択中の config を名指す同じ form は 200 で team/members/new_member/member.yml ができる（凍結版は 200 で選択中へ書く。冒頭の「読み取りに合わせて組み立てた保存」）
 - tests/guildbotics/app_api/test_api.py::test_default_person_endpoint_writes_runtime_config_dir -> crates/gb-server/src/config_api/tests.rs::the_default_person_is_stored_in_the_selected_project_and_must_exist — conditions: PUT /api/config/project/default-person {person_id alice} が 200、project.yml == {language en, default_person_id alice}（ほかは不変）。ghost は 400 person_not_found（message は setup の文 "Member config was not found."）で project.yml 不変
 - tests/guildbotics/app_api/test_api.py::test_member_config_accepts_member_without_github_link -> crates/gb-server/src/config_api/tests.rs::a_member_without_accounts_is_saved_with_only_its_git_user — conditions: person_type ""・accounts なしの POST /api/config/members が 200、identity.yml の person_id local-agent、person_type キーが無い、account_info == {git_user: "Local Agent"}、.env を作らない
 - tests/guildbotics/app_api/test_api.py::test_app_runtime_reports_missing_config -> #132 に回す：/team（main 済み）で project.yml はあるが設定を読めないときの 400 config_not_found {path}。Rust の /team は本文なしの 500

@@ -65,6 +65,10 @@ impl ProviderModels for Registry {
         Vec::new()
     }
 
+    fn account_info_keys(&self, _: &str) -> Vec<String> {
+        Vec::new()
+    }
+
     fn account(&self, provider: &str, _: &Value) -> anyhow::Result<Box<dyn MemberAccount>> {
         Err(InvalidInput(format!("'{provider}' has no member account")).into())
     }

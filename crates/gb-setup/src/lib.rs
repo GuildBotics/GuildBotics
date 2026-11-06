@@ -137,6 +137,9 @@ pub trait ProviderModels: Send + Sync {
     fn service(&self, kind: ServiceKind, form: &Value) -> anyhow::Result<Value>;
     /// The providers with a member account, in their order.
     fn member_providers(&self) -> Vec<String>;
+    /// The `account_info` keys the member's account with `provider` stores,
+    /// which a save of that account replaces.
+    fn account_info_keys(&self, provider: &str) -> Vec<String>;
     /// The member's account with `provider` as the form names it, or an
     /// [`InvalidInput`].
     fn account(&self, provider: &str, form: &Value) -> anyhow::Result<Box<dyn MemberAccount>>;

@@ -3124,6 +3124,8 @@ function MembersSection({
     setScheduledCommands([]);
     setPersonType("agent");
     setIsActive(true);
+    // A cleared form is composed anew, in the workspace open now.
+    setMemberRead({ revisions: {}, configDir });
     showTab(initialTab ?? "basic");
   };
 
@@ -3183,9 +3185,11 @@ function MembersSection({
     setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
-  // What the member form was composed against, sent back with the save so an
-  // edit that arrived from elsewhere meanwhile is not replaced unseen.
-  const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions | null>(null);
+  // What the member form was composed against -- the revisions it read and the
+  // workspace config it read them in -- sent back with the save so an edit that
+  // arrived from elsewhere meanwhile, or another workspace selected since, is
+  // not written over unseen.
+  const [memberRead, setMemberRead] = useState<MemberRead | null>(null);
   const currentMember = useQuery({
     queryKey: ["member-config", editingPersonId],
     queryFn: () => getMemberConfig(editingPersonId!),
@@ -3196,18 +3200,19 @@ function MembersSection({
   // compare revisions below and leave all unsaved fields in place.
   if (
     mode === "edit" &&
-    memberRevisions === null &&
+    memberRead === null &&
     currentMember.isSuccess &&
     !currentMember.isFetching
   ) {
-    setMemberRevisions(currentMember.data.revisions);
+    setMemberRead(readOf(currentMember.data));
     fillFormFromMember(currentMember.data);
   }
   const memberChanged = Boolean(
-    memberRevisions &&
+    memberRead &&
     currentMember.data &&
-    (Object.keys(memberRevisions).length !== Object.keys(currentMember.data.revisions).length ||
-      Object.entries(memberRevisions).some(
+    (Object.keys(memberRead.revisions).length !==
+      Object.keys(currentMember.data.revisions).length ||
+      Object.entries(memberRead.revisions).some(
         ([path, revision]) => currentMember.data.revisions[path] !== revision,
       )),
   );
@@ -3219,13 +3224,12 @@ function MembersSection({
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(["member-config", snapshot.person_id], snapshot);
-      setMemberRevisions(snapshot.revisions);
+      setMemberRead(readOf(snapshot));
       fillFormFromMember(snapshot);
       setMode("edit");
     },
   });
-  const memberLoading =
-    memberConfigMutation.isPending || (mode === "edit" && memberRevisions === null);
+  const memberLoading = memberConfigMutation.isPending || (mode === "edit" && memberRead === null);
   const defaultPersonMutation = useMutation({
     mutationFn: (personId: string) => updateDefaultPerson(personId),
     onSuccess: () => {
@@ -3261,7 +3265,7 @@ function MembersSection({
       // The screen stays open on the member that was just saved, so without
       // this its next save would be composed against the revision it replaced.
       await queryClient.cancelQueries({ queryKey: ["member-config", editingPersonId] });
-      setMemberRevisions(written.revisions);
+      setMemberRead((read) => read && { ...read, revisions: written.revisions });
       queryClient.setQueryData<MemberConfig>(["member-config", editingPersonId], (current) =>
         current ? { ...current, revisions: written.revisions } : current,
       );
@@ -3282,7 +3286,7 @@ function MembersSection({
     onSuccess: (snapshot) => {
       memberDiagnosticsMutation.reset();
       clearForm();
-      setMemberRevisions(snapshot.revisions);
+      setMemberRead(readOf(snapshot));
       fillFormFromMember(snapshot);
       setJoiningPersonId(snapshot.person_id);
       setEditingPersonId(null);
@@ -3656,10 +3660,10 @@ function MembersSection({
     let memberWritten = false;
     try {
       if (formMode === "edit" && editingPersonId) {
-        if (!memberRevisions) return;
+        if (!memberRead) return;
         await updateMemberMutation.mutateAsync({
           originalPersonId: editingPersonId,
-          body: { ...request, expected_revisions: memberRevisions },
+          body: composedRequest(request, memberRead),
         });
         memberWritten = true;
         setAccounts(settledAccounts());
@@ -3669,11 +3673,10 @@ function MembersSection({
         return;
       }
       // An existing member is added as its identity was read, so an edit
-      // made to it meanwhile, here or elsewhere, is not replaced.
+      // made to it meanwhile, here or elsewhere, is not replaced; a new one
+      // where its form was opened.
       await addMemberMutation.mutateAsync(
-        joiningPersonId && memberRevisions
-          ? { ...request, expected_revisions: memberRevisions }
-          : request,
+        memberRead ? composedRequest(request, memberRead) : request,
       );
       memberWritten = true;
       // The added member's form is cleared by now; what its accounts do after
@@ -3716,7 +3719,6 @@ function MembersSection({
     setMode("add");
     setEditingPersonId(null);
     setJoiningPersonId(null);
-    setMemberRevisions(null);
     clearForm({ withDefaults: true });
   };
 
@@ -3724,7 +3726,7 @@ function MembersSection({
     memberDiagnosticsMutation.reset();
     setJoiningPersonId(null);
     setAccounts({});
-    setMemberRevisions(null);
+    setMemberRead(null);
     setEditingPersonId(memberId);
     setMode("edit");
     showTab(initialTab ?? "basic");
@@ -6113,6 +6115,19 @@ function newDraftId(): string {
 
 function resolveConfigDir(workspaceDir: string): string {
   return joinPath(workspaceDir, ".guildbotics/config");
+}
+
+/** What a member form was composed against: the revisions it read, in the
+ * workspace config it read them in. */
+type MemberRead = { revisions: ConfigRevisions; configDir: string };
+
+function readOf(member: MemberConfig): MemberRead {
+  return { revisions: member.revisions, configDir: member.config_dir };
+}
+
+/** The member form's save, naming what it was composed against. */
+function composedRequest(request: MemberSetupRequest, read: MemberRead): MemberSetupRequest {
+  return { ...request, config_dir: read.configDir, expected_revisions: read.revisions };
 }
 
 function ScenarioDiagnosticsSummary({

@@ -122,6 +122,9 @@ impl ProviderModels for Models {
     fn member_providers(&self) -> Vec<String> {
         vec!["alpha".into(), "beta".into()]
     }
+    fn account_info_keys(&self, provider: &str) -> Vec<String> {
+        vec![format!("{provider}_user")]
+    }
     fn account(&self, provider: &str, form: &Value) -> anyhow::Result<Box<dyn MemberAccount>> {
         anyhow::ensure!(
             ["alpha", "beta"].contains(&provider),
@@ -706,6 +709,35 @@ fn accounts_of_every_provider_merge_and_secrets_never_reach_files() {
         );
     }
     assert!(world.workspace_secrets().is_empty());
+}
+
+#[test]
+fn a_save_keeps_the_account_entries_its_form_cannot_edit() {
+    let world = World::new();
+    world.identity_file(
+        "a",
+        "person_id: a\nname: Ann\nperson_type: agent\naccount_info:\n  git_user: Old\n  git_email: old@x\n  alpha_user: ann\n  beta_user: b\n  slack_user_id: U1\n  branvil_user_id: 7\n",
+    );
+    world.write("team/members/a/member.yml", "is_active: false\n");
+    // Without the beta account, and an alpha account that clears its user.
+    world
+        .save(json!({"person_id": "a", "person_name": "Ann", "git_email": "a@x", "roles": ["reviewer"],
+            "accounts": {"alpha": {}}}))
+        .unwrap();
+    assert_eq!(
+        world.identity("a")["account_info"],
+        json!({"git_user": "Ann", "git_email": "a@x", "beta_user": "b", "slack_user_id": "U1",
+            "branvil_user_id": 7})
+    );
+    // Without any account, every stored entry stays.
+    world
+        .save(json!({"person_id": "a", "person_name": "Ann", "git_email": "a@x", "roles": []}))
+        .unwrap();
+    assert_eq!(
+        world.identity("a")["account_info"],
+        json!({"git_user": "Ann", "git_email": "a@x", "beta_user": "b", "slack_user_id": "U1",
+            "branvil_user_id": 7})
+    );
 }
 
 #[test]

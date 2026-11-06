@@ -7,6 +7,7 @@ use gb_config::team::{
     PrefixConflict, person_secret_prefix, valid_member_directory_name, valid_person_id,
 };
 use std::cell::Cell;
+use std::collections::BTreeSet;
 
 /// What a member joining a workspace with a ticket service runs on patrol
 /// unless its form says otherwise.
@@ -522,12 +523,13 @@ impl Setup<'_> {
         began: &Cell<bool>,
     ) -> anyhow::Result<ConfigWriteReceipt<()>> {
         let id = input.person_id.as_str();
-        let (account_info, form_secrets) = stored(accounts, id, input.human())?;
+        let (account_info, form_secrets) =
+            self.account_info(&self.repository.identity_view(), input, accounts)?;
         let mut member = SavedMember {
             person_id: id.into(),
             name: input.person_name.clone(),
             human: input.human(),
-            account_info,
+            account_info: strings(Some(&Value::Object(account_info))),
             secrets: if accounts.is_empty() {
                 BTreeMap::new()
             } else {
@@ -582,13 +584,13 @@ impl Setup<'_> {
     ) -> anyhow::Result<()> {
         let id = input.person_id.as_str();
         let prefix = self.target_prefix(id)?;
-        let (account_info, secrets_of) = stored(accounts, id, input.human())?;
+        let identities = self.repository.identity_view();
+        let (account_info, secrets_of) = self.account_info(&identities, input, accounts)?;
         let names = self.providers.member_secret_names();
         anyhow::ensure!(
             secrets_of.keys().all(|key| names.contains(key)),
             "a provider returned an undeclared secret name"
         );
-        let identities = self.repository.identity_view();
         let identity_file = identities.path(&member_path(id, "identity"))?;
         let member_file = view.path(&member_path(id, "member"))?;
         if !secrets_of.is_empty() {
@@ -603,6 +605,37 @@ impl Setup<'_> {
         let participation = self.participation(view, input, joining)?;
         writer.write_json(&identity_file, &clean(identity(input, account_info)))?;
         writer.write_json(&member_file, &clean(participation))
+    }
+
+    /// The `account_info` a save stores, with the secrets its accounts store:
+    /// what the accounts the form sends store, over the stored entries none
+    /// of them replaces. The form cannot edit those, so they are kept; its
+    /// git name and e-mail are the form's own.
+    fn account_info(
+        &self,
+        identities: &ConfigView,
+        input: &PersonSetupInput,
+        accounts: &[Box<dyn MemberAccount>],
+    ) -> anyhow::Result<(Map<String, Value>, BTreeMap<String, String>)> {
+        let id = input.person_id.as_str();
+        let (info, secrets) = stored(accounts, id, input.human())?;
+        let replaced: BTreeSet<String> = input
+            .accounts
+            .keys()
+            .flat_map(|provider| self.providers.account_info_keys(provider))
+            .chain(["git_user".into(), "git_email".into()])
+            .collect();
+        let identity = lenient(
+            identities
+                .read_config(&member_path(id, "identity"))?
+                .as_ref(),
+        );
+        let mut kept: Map<String, Value> = object(identity.get("account_info"))
+            .into_iter()
+            .filter(|(key, _)| !replaced.contains(key))
+            .collect();
+        kept.extend(info.into_iter().map(|(k, v)| (k, Value::String(v))));
+        Ok((kept, secrets))
     }
 
     fn participation(
@@ -852,12 +885,12 @@ fn stored(
 
 /// The member's identity, with the `account_info` its accounts store over
 /// its git name and e-mail.
-fn identity(input: &PersonSetupInput, account_info: BTreeMap<String, String>) -> Value {
+fn identity(input: &PersonSetupInput, account_info: Map<String, Value>) -> Value {
     let human = input.human();
     let mut info = Map::new();
     info.insert("git_user".into(), input.person_name.clone().into());
     info.insert("git_email".into(), input.git_email.clone().into());
-    info.extend(account_info.into_iter().map(|(k, v)| (k, Value::String(v))));
+    info.extend(account_info);
     let mut identity = json!({
         "person_id": input.person_id,
         "name": input.person_name,

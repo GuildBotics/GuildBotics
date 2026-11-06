@@ -153,6 +153,29 @@ fn project(api: &Shared, headers: &HeaderMap) -> Result<PathBuf, Box<Response>> 
     ))
 }
 
+/// `workspace`, the selected one, when `config_dir` names its config. A save
+/// composed against a read names the config it read, since revisions tell
+/// the files of two workspaces apart only by their bytes: a form read in
+/// another workspace is stale here, however alike their files are.
+fn composed_in(
+    workspace: PathBuf,
+    config_dir: &Path,
+    headers: &HeaderMap,
+) -> Result<PathBuf, Box<Response>> {
+    let normalized =
+        |path: &Path| gb_base::host_path::normalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let config = normalized(&workspace.join(".guildbotics/config"));
+    let named = normalized(config_dir);
+    if named == config || same_directory(&named, &config) {
+        return Ok(workspace);
+    }
+    let stale = StaleConfigWriteError {
+        relative_path: "config".into(),
+        revisions: Revisions::new(),
+    };
+    Err(Box::new(failure(stale.into(), headers)))
+}
+
 fn invalid(headers: &HeaderMap, reason: &str) -> Response {
     ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -242,33 +265,54 @@ async fn active(selected: &Selected, admitted: bool) -> Option<Value> {
     })
 }
 
-/// Selects another workspace, once nothing runs for the selected one: its
-/// idle service is stopped, its system transcript finished, and the new one
-/// is opened and announced.
+fn blocked(headers: &HeaderMap, context: Value) -> Response {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "workspace_switch_blocked_by_active_work",
+        headers,
+    )
+    .context(context)
+    .into_response()
+}
+
+/// Selects another workspace, once nothing runs for the selected one. The
+/// switch is the server's, not the request's: it runs to its end holding
+/// the switch even when the client goes away, so the selection it persisted
+/// is the one that is open.
 pub(crate) async fn select_workspace(
     State(api): State<Shared>,
     headers: HeaderMap,
     Body(request): Body<WorkspaceRequest>,
 ) -> Response {
-    let blocked = |context: Value| {
-        ApiError::new(
-            StatusCode::CONFLICT,
-            "workspace_switch_blocked_by_active_work",
-            &headers,
-        )
-        .context(context)
-        .into_response()
-    };
-    let Ok(_switching) = api.switching.try_write() else {
+    let Ok(switching) = api.switching.clone().try_write_owned() else {
         let selected = api.selected();
-        return blocked(active(&selected, true).await.unwrap_or_default());
+        return blocked(&headers, active(&selected, true).await.unwrap_or_default());
     };
+    let switch = tokio::spawn(switch(
+        api,
+        headers.clone(),
+        request.workspace_dir,
+        switching,
+    ));
+    switch
+        .await
+        .unwrap_or_else(|error| failure(error.into(), &headers))
+}
+
+/// The switch to `requested`, holding `_switching` throughout: the selected
+/// workspace's idle service is stopped, its system transcript finished, and
+/// the new one is persisted, opened and announced.
+async fn switch(
+    api: Shared,
+    headers: HeaderMap,
+    requested: PathBuf,
+    _switching: tokio::sync::OwnedRwLockWriteGuard<()>,
+) -> Response {
     let selected = api.selected();
     if let Some(context) = active(&selected, false).await {
-        return blocked(context);
+        return blocked(&headers, context);
     }
-    let requested = &request.workspace_dir;
-    let resolved = resolve(requested);
+    let resolved = resolve(&requested);
     let not = |code: &str| {
         ApiError::new(StatusCode::BAD_REQUEST, code, &headers)
             .context(json!({"workspace_dir": resolved}))
@@ -286,7 +330,7 @@ pub(crate) async fn select_workspace(
     };
     selected.service.stop(true).await;
     if let Some(context) = active(&selected, false).await {
-        return blocked(context);
+        return blocked(&headers, context);
     }
     let instance = api.instance_id.clone();
     let (data, previous, next) = (
@@ -378,7 +422,8 @@ fn same_directory(a: &Path, b: &Path) -> bool {
 }
 
 /// Forgets a registered workspace other than the selected one, without
-/// touching its directory.
+/// touching its directory. A switch in progress is waited for, so the
+/// workspace it selects is never the one forgotten.
 pub(crate) async fn forget_workspace(
     State(api): State<Shared>,
     headers: HeaderMap,
@@ -386,6 +431,7 @@ pub(crate) async fn forget_workspace(
 ) -> Response {
     let named = gb_base::host_path::normalize(&request.workspace_dir)
         .unwrap_or_else(|_| request.workspace_dir.clone());
+    let _switching = api.switching.read().await;
     if let Some(selected) = api.selected().workspace.as_deref()
         && (named == selected || same_directory(&named, selected))
     {
@@ -418,6 +464,7 @@ pub(crate) async fn read_project(State(api): State<Shared>, headers: HeaderMap) 
 
 #[derive(Deserialize)]
 pub(crate) struct ProjectRequest {
+    config_dir: PathBuf,
     #[serde(flatten)]
     form: ProjectSetupInput,
     #[serde(default)]
@@ -429,7 +476,9 @@ pub(crate) async fn save_project(
     headers: HeaderMap,
     Body(request): Body<ProjectRequest>,
 ) -> Response {
-    let workspace = match project(&api, &headers) {
+    let workspace = match project(&api, &headers)
+        .and_then(|workspace| composed_in(workspace, &request.config_dir, &headers))
+    {
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };
@@ -515,6 +564,7 @@ pub(crate) async fn roles(
 
 #[derive(Deserialize)]
 pub(crate) struct MemberRequest {
+    config_dir: PathBuf,
     #[serde(flatten)]
     form: PersonSetupInput,
     #[serde(default)]
@@ -528,7 +578,9 @@ pub(crate) async fn create_member(
     headers: HeaderMap,
     Body(request): Body<MemberRequest>,
 ) -> Response {
-    let workspace = match workspace(&api, &headers) {
+    let workspace = match workspace(&api, &headers)
+        .and_then(|workspace| composed_in(workspace, &request.config_dir, &headers))
+    {
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };
@@ -559,8 +611,14 @@ pub(crate) async fn read_member(
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };
+    let config = workspace.join(".guildbotics/config");
     match with_setup(&api, workspace, move |setup| setup.read_member(&name)).await {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(snapshot) => {
+            // Where the form is composed, which its save names.
+            let mut answer = serde_json::to_value(snapshot).expect("a member snapshot");
+            answer["config_dir"] = json!(config);
+            Json(answer).into_response()
+        }
         Err(error) => failure(error, &headers),
     }
 }
@@ -574,7 +632,9 @@ pub(crate) async fn save_member(
     if !valid_person_id(&id) {
         return invalid(&headers, "person_id is not a member ID");
     }
-    let workspace = match workspace(&api, &headers) {
+    let workspace = match workspace(&api, &headers)
+        .and_then(|workspace| composed_in(workspace, &request.config_dir, &headers))
+    {
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };

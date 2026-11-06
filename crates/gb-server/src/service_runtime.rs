@@ -269,7 +269,7 @@ pub(crate) async fn start(
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let Some(_admitted) = api.admit() else {
+    let Some(admitted) = api.admit() else {
         return crate::api::ApiError::new(
             axum::http::StatusCode::CONFLICT,
             "command_workspace_changing",
@@ -277,9 +277,19 @@ pub(crate) async fn start(
         )
         .into_response();
     };
+    // The start is the server's, not the request's: a client that goes away
+    // does not cancel it into a failure.
     let selected = api.selected();
-    match selected.service.start().await {
-        Ok(_) => axum::Json(selected.service.view().await).into_response(),
+    let started = tokio::spawn(async move {
+        let _admitted = admitted;
+        selected.service.start().await?;
+        Ok::<_, anyhow::Error>(selected.service.view().await)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|started| started);
+    match started {
+        Ok(view) => axum::Json(view).into_response(),
         Err(error) => {
             tracing::error!("cannot start service: {error:#}");
             if let Some(held) = error.downcast_ref::<crate::service::AlreadyRunning>() {

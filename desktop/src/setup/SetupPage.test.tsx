@@ -1669,6 +1669,7 @@ const GITHUB_AND_SLACK: ProjectServices = {
 
 function memberConfig(): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -2335,6 +2336,7 @@ describe("patrol / schedule helpers", () => {
 
 function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -2518,6 +2520,70 @@ describe("MembersSection", () => {
       });
     },
   );
+
+  it("saves a member form to the workspace config it was read in", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ revisions: { "team/members/alice/member.yml": "same-bytes" } }),
+    );
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    fireEvent.change(name, { target: { value: "Edited in this workspace" } });
+
+    // Another workspace, whose files are this one's byte for byte, is
+    // selected while the form is open.
+    const other = "/other/.guildbotics/config";
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({ project_file_exists: true, workspace: "/other", config_dir: other }),
+    );
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ config_dir: other }));
+    const reads = vi.mocked(getConfigStatus).mock.calls.length;
+    await queryClient.invalidateQueries();
+    await waitFor(() =>
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(reads),
+    );
+    expect(name).toHaveValue("Edited in this workspace");
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateMemberConfig).mock.calls[0][1]).toMatchObject({
+      config_dir: "/workspace/.guildbotics/config",
+      expected_revisions: { "team/members/alice/member.yml": "same-bytes" },
+    });
+  });
+
+  it("composes a new member anew after the member it edited is deleted", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ revisions: { "team/members/alice/member.yml": "rev-alice" } }),
+    );
+    renderSetupPage("/setup?section=members&person_id=alice");
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    await user.click(screen.getByRole("button", { name: t("setup.members.removeButton") }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: t("setup.members.removeButton"),
+      }),
+    );
+    await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
+
+    await fillRequiredMemberBasics(user, { personId: "bob", personName: "Bob" });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    const request = lastMemberAddRequest();
+    expect(request).toMatchObject({
+      person_id: "bob",
+      config_dir: "/workspace/.guildbotics/config",
+    });
+    expect(request.expected_revisions).toEqual({});
+  });
 
   it("shows the add form when there are no members", async () => {
     vi.mocked(getTeam).mockResolvedValue({

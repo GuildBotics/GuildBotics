@@ -183,6 +183,23 @@ impl Fixture {
             .unwrap();
         answer(self.respond(request).await).await
     }
+    /// Sends a form composed against a read, which names the config it was
+    /// read in: the selected workspace's unless the form names another.
+    async fn save(&self, method: &str, uri: &str, form: Value) -> (StatusCode, Value) {
+        self.save_in("en", method, uri, form).await
+    }
+    async fn save_in(
+        &self,
+        language: &str,
+        method: &str,
+        uri: &str,
+        mut form: Value,
+    ) -> (StatusCode, Value) {
+        if form.get("config_dir").is_none() {
+            form["config_dir"] = json!(self.config());
+        }
+        self.call_in(language, method, uri, form).await
+    }
     async fn get(&self, uri: &str) -> Value {
         let (status, body) = self.call("GET", uri, Value::Null).await;
         assert_eq!(status, StatusCode::OK, "{uri}: {body}");
@@ -198,7 +215,7 @@ impl Fixture {
         body
     }
     async fn add(&self, form: Value) -> Value {
-        let (status, body) = self.call("POST", "/config/members", form).await;
+        let (status, body) = self.save("POST", "/config/members", form).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         body
     }
@@ -498,7 +515,7 @@ async fn the_project_is_read_and_saved_without_touching_what_the_form_does_not_n
     );
     assert_eq!(read["config_dir"], json!(f.config()));
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/project",
             json!({"language": "ja", "description": "New", "llm_api_type": "gemini", "cli_agent": "codex",
@@ -528,7 +545,7 @@ async fn a_project_saved_without_services_has_none() {
     f.init_with(json!({"language": "en", "services": {"chat_service": {"name": "local"}}}))
         .await;
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/project",
             json!({"language": "en", "services": {}}),
@@ -555,7 +572,7 @@ async fn invalid_project_services_are_refused_before_anything_is_written() {
         json!({"code_hosting_service": {}}),
     ] {
         let (status, body) = f
-            .call(
+            .save(
                 "PUT",
                 "/config/project",
                 json!({"language": "en", "services": services}),
@@ -575,7 +592,7 @@ async fn a_project_save_stores_only_the_api_keys_it_is_given() {
     let store = || f.root.join("workspace/.guildbotics/local/secrets.enc.json");
     let before = std::fs::read(store()).ok();
     let (status, _) = f
-        .call("PUT", "/config/project", json!({"language": "en"}))
+        .save("PUT", "/config/project", json!({"language": "en"}))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(std::fs::read(store()).ok(), before);
@@ -585,7 +602,7 @@ async fn a_project_save_stores_only_the_api_keys_it_is_given() {
             .is_none()
     );
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/project",
             json!({"language": "en", "provider_api_keys": {"openai": "token", "gemini": ""}}),
@@ -615,7 +632,7 @@ async fn update_keeps_cli_agents_and_keys_and_seeds_empty_commands() {
     );
     std::fs::remove_dir_all(f.config().join("commands")).unwrap();
     let (status, _) = f
-        .call("PUT", "/config/project", json!({"language": "ja"}))
+        .save("PUT", "/config/project", json!({"language": "ja"}))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -689,7 +706,7 @@ async fn save_description(
     description: &str,
     revisions: &Value,
 ) -> (StatusCode, Value) {
-    f.call(
+    f.save(
         "PUT",
         "/config/project",
         json!({"language": "en", "description": description, "expected_revisions": revisions}),
@@ -932,7 +949,7 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
     );
     assert_eq!(read["accounts"], json!({}));
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice", "person_name": "Alice B",
@@ -983,19 +1000,28 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
 }
 
 #[tokio::test]
-async fn a_new_member_is_written_to_the_selected_workspace_not_the_named_one() {
+async fn a_new_member_composed_in_another_workspace_is_refused_and_written_nowhere() {
     let f = fixture();
     f.init().await;
     let elsewhere = f.root.join("elsewhere/.guildbotics/config");
     let mut form = agent("new_member");
     form["config_dir"] = json!(elsewhere);
-    f.add(form).await;
+    let before = bytes_under(&f.config());
+    let (status, body) = f.save("POST", "/config/members", form).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::CONFLICT, &json!("config_changed"))
+    );
+    assert_eq!(body["context"]["path"], "config");
+    assert_eq!(bytes_under(&f.config()), before);
+    assert!(!f.root.join("elsewhere").exists());
+    // The same form, composed in the selected workspace, is added there.
+    f.add(agent("new_member")).await;
     assert!(
         f.config()
             .join("team/members/new_member/member.yml")
             .is_file()
     );
-    assert!(!f.root.join("elsewhere").exists());
 }
 
 #[tokio::test]
@@ -1012,6 +1038,28 @@ async fn a_member_without_accounts_is_saved_with_only_its_git_user() {
 }
 
 #[tokio::test]
+async fn a_roles_only_save_keeps_the_accounts_no_model_shows() {
+    let f = fixture();
+    f.init().await;
+    f.add(agent("alice")).await;
+    let path = f.identities().join("alice/identity.yml");
+    f.write(
+        &path,
+        "person_id: alice\nname: Test\nperson_type: agent\naccount_info:\n  git_user: Test\n  branvil_username: alice-bot\n  slack_user_id: U0ALICE\n",
+    );
+    let read = f.get("/config/members/alice").await;
+    assert_eq!(read["accounts"], json!({}));
+    let mut form = agent("alice");
+    form["roles"] = json!(["reviewer"]);
+    form["expected_revisions"] = read["revisions"].clone();
+    let (status, body) = f.save("PUT", "/config/members/alice", form).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let account_info = &f.read(&path)["account_info"];
+    assert_eq!(account_info["branvil_username"], "alice-bot");
+    assert_eq!(account_info["slack_user_id"], "U0ALICE");
+}
+
+#[tokio::test]
 async fn reading_an_unknown_member_answers_person_not_found() {
     let f = fixture();
     let (status, body) = f.call("GET", "/config/members/alice", Value::Null).await;
@@ -1024,7 +1072,7 @@ async fn reading_an_unknown_member_answers_person_not_found() {
 async fn saving_a_member_under_another_id_is_refused() {
     let f = fixture();
     let (status, body) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "bob", "person_type": "agent", "is_active": false, "person_name": "B"}),
@@ -1045,7 +1093,7 @@ async fn a_member_save_under_another_id_is_refused() {
     f.init().await;
     f.add(agent("alice")).await;
     let (status, body) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice2", "person_type": "agent", "is_active": false, "person_name": "A"}),
@@ -1064,6 +1112,7 @@ async fn a_member_read_reports_both_revisions_and_a_stale_save_is_refused() {
     f.init().await;
     f.add(agent("alice")).await;
     let read = f.get("/config/members/alice").await;
+    assert_eq!(read["config_dir"], json!(f.config()));
     assert_eq!(
         read["revisions"]
             .as_object()
@@ -1077,14 +1126,14 @@ async fn a_member_read_reports_both_revisions_and_a_stale_save_is_refused() {
     );
     let save = |name: &str| json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": name, "expected_revisions": read["revisions"]});
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             save("From the other machine"),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, body) = f.call("PUT", "/config/members/alice", save("Stale")).await;
+    let (status, body) = f.save("PUT", "/config/members/alice", save("Stale")).await;
     assert_eq!(
         (status, &body["code"]),
         (StatusCode::CONFLICT, &json!("config_changed"))
@@ -1106,7 +1155,7 @@ async fn a_member_save_answers_with_both_files_revisions() {
     f.add(agent("alice")).await;
     let read = f.get("/config/members/alice").await;
     let (_, saved) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": "A", "expected_revisions": read["revisions"]}),
@@ -1117,7 +1166,7 @@ async fn a_member_save_answers_with_both_files_revisions() {
         f.get("/config/members/alice").await["revisions"]
     );
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": "B", "expected_revisions": saved["revisions"]}),
@@ -1140,7 +1189,7 @@ async fn a_member_change_after_the_read_refuses_the_forms_save() {
         };
         f.write(&path, "is_active: true\n");
         let (status, _) = f
-            .call(
+            .save(
                 "PUT",
                 "/config/members/alice",
                 json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": "Form",
@@ -1165,7 +1214,7 @@ async fn a_change_right_after_a_member_save_refuses_the_next_save() {
         };
         f.write(&path, "is_active: true\n");
         let (status, _) = f
-            .call(
+            .save(
                 "PUT",
                 "/config/members/alice",
                 json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": "Form",
@@ -1220,7 +1269,7 @@ async fn a_member_save_refuses_a_schedule_without_five_fields_or_a_command() {
     ] {
         let mut form = agent("alice");
         form["task_schedules"] = json!([schedule]);
-        let (status, body) = f.call("POST", "/config/members", form).await;
+        let (status, body) = f.save("POST", "/config/members", form).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{schedule}");
         assert_eq!(body["code"], "validation_error");
         let reason = body["context"]["errors"][0]["msg"].as_str().unwrap();
@@ -1255,7 +1304,7 @@ async fn member_form_normalizes_channels_policies_and_work_stop_destinations() {
     cleared["chat_channels"] = json!(["general", "random"]);
     cleared["work_stop_notification_channels"] = json!([]);
     cleared["expected_revisions"] = read["revisions"].clone();
-    let (status, _) = f.call("PUT", "/config/members/alice", cleared).await;
+    let (status, _) = f.save("PUT", "/config/members/alice", cleared).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         f.get("/config/members/alice").await["work_stop_notification_channels"],
@@ -1297,7 +1346,7 @@ async fn a_new_member_whose_secret_prefix_collides_is_refused_with_the_colliding
     let before = (bytes_under(&f.identities()), bytes_under(&f.config()));
     for language in ["en", "ja"] {
         let (status, body) = f
-            .call_in(language, "POST", "/config/members", agent("alice_bak"))
+            .save_in(language, "POST", "/config/members", agent("alice_bak"))
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["code"], "person_env_prefix_conflict");
@@ -1379,7 +1428,7 @@ async fn an_identity_naming_another_member_is_repaired_by_saving_it() {
     assert_ne!(f.get("/team").await["problem"], "");
     let read = f.get("/config/members/alice").await;
     let (status, _) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice", "person_type": "agent", "is_active": false, "person_name": "Alice", "expected_revisions": read["revisions"]}),
@@ -1437,7 +1486,7 @@ async fn invalid_member_files_stay_listed_and_can_be_saved_or_removed() {
             );
             let read = f.get("/config/members/broken").await;
             let (status, body) = if repair == "save" {
-                f.call(
+                f.save(
                     "PUT",
                     "/config/members/broken",
                     json!({"person_id": "broken", "person_type": "agent", "is_active": false, "person_name": "B",
@@ -1524,7 +1573,7 @@ async fn a_secret_store_that_cannot_be_used_answers_503_with_its_reason() {
         );
         assert!(message.starts_with(empty.trim_end()), "{message}");
         let (status, body) = f
-            .call_in(
+            .save_in(
                 language,
                 "PUT",
                 "/config/project",
@@ -1923,6 +1972,45 @@ async fn a_workspace_switch_selects_it_and_announces_workspace_changed() {
     );
 }
 
+#[tokio::test]
+async fn a_switch_whose_request_goes_away_still_ends_opened_and_announced() {
+    let f = fixture();
+    let other = f.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    // The registry's lock keeps the switch persisting while its client
+    // goes away.
+    let registry =
+        gb_base::files::FileLock::hold(&f.data().join("workspaces.lock"), Duration::from_secs(1))
+            .unwrap();
+    let request = f.call("POST", "/workspace", json!({"workspace_dir": other}));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), request)
+            .await
+            .is_err()
+    );
+    assert!(f.api.admit().is_none(), "the switch outlives its request");
+    assert_eq!(f.api.selected().workspace, Some(f.workspace()));
+    drop(registry);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while f.api.admit().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the switch never ended"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(f.api.selected().workspace, Some(other.clone()));
+    assert_eq!(f.get("/config/status").await["workspace"], json!(other));
+    assert_eq!(
+        f.read(&f.data().join("active-workspace.json"))["workspace"],
+        json!(other)
+    );
+    assert_eq!(
+        f.events("workspace.changed")[0]["payload"],
+        json!({"workspace": other})
+    );
+}
+
 /// An `Api` to build a selection with before the fixture's own exists.
 fn placeholder(root: &Path) -> crate::api::Api {
     crate::api::Api::new(
@@ -2252,6 +2340,34 @@ async fn a_workspace_switch_whose_forced_stop_leaves_work_is_refused() {
 }
 
 #[tokio::test]
+async fn a_service_start_whose_request_goes_away_still_starts_the_service() {
+    let (f, selected) = running();
+    let held = selected.service.hold_start_for_test().await;
+    let request = f.call("POST", "/scheduler/start", Value::Null);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), request)
+            .await
+            .is_err()
+    );
+    assert!(
+        f.api.switching.try_write().is_err(),
+        "the start stays admitted"
+    );
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while f.api.switching.try_write().is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the start never ended"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let status = selected.service.service.status().await;
+    assert_eq!((status.state, status.running), ("running", true));
+    selected.service.stop(true).await;
+}
+
+#[tokio::test]
 async fn the_workspace_switch_is_refused_exactly_while_the_status_has_active_work() {
     let (f, selected) = running();
     let other = f.root.join("other");
@@ -2276,6 +2392,32 @@ async fn the_workspace_switch_is_refused_exactly_while_the_status_has_active_wor
     work.await.unwrap();
     assert_eq!(f.get("/scheduler/status").await["has_active_work"], false);
     assert_eq!(switch().await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn forgetting_the_workspace_a_switch_selects_waits_for_the_switch_and_is_refused() {
+    let f = fixture();
+    let other = f.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let registry =
+        gb_base::files::FileLock::hold(&f.data().join("workspaces.lock"), Duration::from_secs(1))
+            .unwrap();
+    let switch = f.call("POST", "/workspace", json!({"workspace_dir": other}));
+    let forget = f.call(
+        "DELETE",
+        "/device/workspaces",
+        json!({"workspace_dir": other}),
+    );
+    tokio::pin!(switch, forget);
+    let pending = Duration::from_millis(300);
+    assert!(tokio::time::timeout(pending, &mut switch).await.is_err());
+    assert!(tokio::time::timeout(pending, &mut forget).await.is_err());
+    drop(registry);
+    let ((switched, _), (forgot, answer)) = tokio::join!(switch, forget);
+    assert_eq!(switched, StatusCode::OK);
+    assert_eq!(forgot, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["code"], "unsafe_host_path");
+    assert_eq!(f.get("/device/workspaces").await, json!([other]));
 }
 
 #[tokio::test]
@@ -2457,7 +2599,7 @@ async fn writers(f: &Fixture) -> Vec<(&'static str, String, Value)> {
         (
             "PUT",
             "/config/project".into(),
-            json!({"language": "ja", "expected_revisions": project}),
+            json!({"config_dir": f.config(), "language": "ja", "expected_revisions": project}),
         ),
         (
             "PUT",
@@ -2467,12 +2609,12 @@ async fn writers(f: &Fixture) -> Vec<(&'static str, String, Value)> {
         (
             "POST",
             "/config/members".into(),
-            json!({"person_id": "aiko", "person_type": "agent", "is_active": false, "person_name": "N", "expected_revisions": member}),
+            json!({"config_dir": f.config(), "person_id": "aiko", "person_type": "agent", "is_active": false, "person_name": "N", "expected_revisions": member}),
         ),
         (
             "PUT",
             "/config/members/aiko".into(),
-            json!({"person_id": "aiko", "person_type": "agent", "is_active": false, "person_name": "N", "expected_revisions": member}),
+            json!({"config_dir": f.config(), "person_id": "aiko", "person_type": "agent", "is_active": false, "person_name": "N", "expected_revisions": member}),
         ),
         ("DELETE", "/config/members/aiko".into(), Value::Null),
         ("POST", "/config/members/aiko/avatar".into(), Value::Null),
@@ -2556,6 +2698,55 @@ async fn every_config_writer_refuses_a_stale_revision_before_writing() {
     assert_eq!(compared, 3);
     assert_eq!(
         (bytes_under(&f.config()), bytes_under(&f.identities())),
+        before
+    );
+}
+
+/// Every save composed against a read names the config it read: one read
+/// in a workspace whose files are the selected one's, byte for byte, is
+/// still refused, and one that names no config is not a save.
+#[tokio::test]
+async fn every_composed_save_is_refused_unless_it_names_the_selected_config() {
+    let f = fixture();
+    let routes = writers(&f).await;
+    let other = f.root.join("other/.guildbotics/config");
+    for (path, bytes) in bytes_under(&f.config()) {
+        let copy = other.join(path.strip_prefix(f.config()).unwrap());
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::write(copy, bytes).unwrap();
+    }
+    let before = (
+        bytes_under(&f.config()),
+        bytes_under(&other),
+        bytes_under(&f.identities()),
+    );
+    let mut composed = 0;
+    for (method, path, body) in routes {
+        if body.get("expected_revisions").is_none() {
+            continue;
+        }
+        composed += 1;
+        let mut elsewhere = body.clone();
+        elsewhere["config_dir"] = json!(other);
+        let (status, answer) = f.call(method, &path, elsewhere).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {path}: {answer}");
+        assert_eq!(answer["code"], "config_changed");
+        let mut unnamed = body;
+        unnamed.as_object_mut().unwrap().remove("config_dir");
+        let (status, answer) = f.call(method, &path, unnamed).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{method} {path}: {answer}"
+        );
+    }
+    assert_eq!(composed, 3);
+    assert_eq!(
+        (
+            bytes_under(&f.config()),
+            bytes_under(&other),
+            bytes_under(&f.identities())
+        ),
         before
     );
 }
@@ -2671,7 +2862,11 @@ async fn a_project_file_that_does_not_parse_is_refused_rather_than_written_over(
     let before = bytes_under(&f.config());
     for (method, uri, body) in [
         ("GET", "/config/project", Value::Null),
-        ("PUT", "/config/project", json!({"language": "en"})),
+        (
+            "PUT",
+            "/config/project",
+            json!({"config_dir": f.config(), "language": "en"}),
+        ),
         (
             "PUT",
             "/config/project/default-person",
@@ -2691,7 +2886,7 @@ async fn a_member_form_needs_its_type_and_activity_and_reads_policies_in_any_cas
     for missing in ["person_type", "is_active"] {
         let mut form = agent("aiko");
         form.as_object_mut().unwrap().remove(missing);
-        let (status, body) = f.call("POST", "/config/members", form).await;
+        let (status, body) = f.save("POST", "/config/members", form).await;
         assert_eq!(
             (status, &body["code"]),
             (StatusCode::UNPROCESSABLE_ENTITY, &json!("validation_error")),
@@ -2728,7 +2923,7 @@ async fn a_stale_identity_refuses_with_the_identitys_revisions_only() {
         "person_id: alice\nname: Newer\n",
     );
     let (status, body) = f
-        .call(
+        .save(
             "PUT",
             "/config/members/alice",
             json!({"person_id": "alice", "person_name": "A",
