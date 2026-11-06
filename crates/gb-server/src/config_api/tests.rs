@@ -1974,10 +1974,6 @@ async fn a_workspace_switch_selects_it_and_announces_workspace_changed() {
 
 #[tokio::test]
 async fn a_switch_whose_request_goes_away_still_ends_opened_and_announced() {
-    let profiling = std::env::var_os("GUILDBOTICS_SWITCH_TIMINGS").is_some();
-    if profiling {
-        switch_timing::START.set(std::time::Instant::now()).unwrap();
-    }
     let f = fixture();
     let other = f.root.join("other");
     std::fs::create_dir(&other).unwrap();
@@ -1994,10 +1990,8 @@ async fn a_switch_whose_request_goes_away_still_ends_opened_and_announced() {
     );
     assert!(f.api.admit().is_none(), "the switch outlives its request");
     assert_eq!(f.api.selected().workspace, Some(f.workspace()));
-    switch_timing::mark(format_args!("request dropped, registry lock release"));
     drop(registry);
-    let unlocked = std::time::Instant::now();
-    let deadline = unlocked + Duration::from_secs(if profiling { 90 } else { 10 });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while f.api.admit().is_none() {
         assert!(
             std::time::Instant::now() < deadline,
@@ -2005,14 +1999,6 @@ async fn a_switch_whose_request_goes_away_still_ends_opened_and_announced() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let elapsed = unlocked.elapsed();
-    switch_timing::mark(format_args!(
-        "switch completed {elapsed:?} after registry lock release"
-    ));
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "the switch took {elapsed:?} after registry lock release"
-    );
     assert_eq!(f.api.selected().workspace, Some(other.clone()));
     assert_eq!(f.get("/config/status").await["workspace"], json!(other));
     assert_eq!(
