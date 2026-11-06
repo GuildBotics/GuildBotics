@@ -9,7 +9,10 @@ use serde_json::{Value, json};
 
 const KEYCHAIN: &str = "GuildBotics/branvil-git";
 
-pub(in crate::factory) async fn credential(origin: &str) -> anyhow::Result<Option<GitCredential>> {
+pub(in crate::factory) async fn credential(
+    origin: &str,
+    device: impl FnOnce(&Path) -> anyhow::Result<(String, String)>,
+) -> anyhow::Result<Option<GitCredential>> {
     if origin.is_empty() {
         return Ok(None);
     }
@@ -47,7 +50,7 @@ pub(in crate::factory) async fn credential(origin: &str) -> anyhow::Result<Optio
     let read = || secrets::get_os_credential(KEYCHAIN, url);
     let keep = |token: &str| secrets::keep_os_credential(KEYCHAIN, url, token);
     let admin = || secrets.get("BRANVIL_ADMIN_TOKEN");
-    acquire(&http, url, &data, read, keep, admin)
+    acquire(&http, url, &data, read, keep, admin, device)
         .await
         .map(Some)
 }
@@ -59,6 +62,7 @@ async fn acquire(
     read: impl Fn() -> anyhow::Result<Option<String>>,
     keep: impl Fn(&str) -> anyhow::Result<()>,
     admin: impl FnOnce() -> anyhow::Result<Option<String>>,
+    device: impl FnOnce(&Path) -> anyhow::Result<(String, String)>,
 ) -> anyhow::Result<GitCredential> {
     let cached = || async {
         let Some(token) = read()?.filter(|token| !token.is_empty()) else {
@@ -100,8 +104,8 @@ async fn acquire(
         .owner()
         .await?
         .ok_or_else(|| diagnostic("integrations.branvil.api.admin_refused"))?;
-    let device = gb_workspace::identity::ensure_device_identity(data)?;
-    let id = &device.device_id[device.device_id.len() - 8..];
+    let (device_id, display_name) = device(data)?;
+    let id = &device_id[device_id.len() - 8..];
     let suffix = format!("({id})");
     let collection = format!("/members/{}/tokens", segment(&owner));
     let mut cursor = String::new();
@@ -140,7 +144,7 @@ async fn acquire(
     let issued = api
         .json(
             api.request(Method::POST, &collection)
-                .json(&json!({"label":format!("git:{} {suffix}", device.display_name)})),
+                .json(&json!({"label":format!("git:{display_name} {suffix}")})),
         )
         .await?;
     let password = issued["token"]
@@ -278,8 +282,9 @@ mod tests {
     #[tokio::test]
     async fn owner_git_reuses_only_owner_tokens_and_rotates_this_devices_labels() {
         let dir = tempfile::tempdir().unwrap();
-        let device = gb_workspace::identity::ensure_device_identity(dir.path()).unwrap();
-        let suffix = &device.device_id[device.device_id.len() - 8..];
+        let device_id = "019691c2-8dc0-7654-8000-0000abc01234";
+        let suffix = &device_id[device_id.len() - 8..];
+        let device = |_: &Path| Ok((device_id.into(), "Fixture machine".into()));
         let requests = Arc::new(Mutex::new(Requests::default()));
         let router = Router::new().fallback(double).with_state(requests.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -295,7 +300,7 @@ mod tests {
             Ok(())
         };
         let admin = || Ok(Some("admin-fixture".to_owned()));
-        let acquire = || acquire(&http, &url, dir.path(), read, keep, admin);
+        let acquire = || acquire(&http, &url, dir.path(), read, keep, admin, device);
         let (first, raced) = tokio::join!(acquire(), acquire());
         let first = first.unwrap();
         assert_eq!(first.username, "owner");
@@ -343,6 +348,7 @@ mod tests {
             || Ok(None),
             |_| unreachable!(),
             || Ok(None),
+            |_| unreachable!(),
         )
         .await;
         assert!(matches!(
@@ -362,6 +368,7 @@ mod tests {
             || Err(gb_config::secrets::KeychainFailure::Locked.into()),
             |_| unreachable!(),
             || unreachable!(),
+            |_| unreachable!(),
         )
         .await;
         assert!(

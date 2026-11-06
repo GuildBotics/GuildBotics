@@ -757,12 +757,7 @@ fn run_cli_refuses_humans_before_loading_or_running_a_command() {
             "{error}"
         );
         assert!(!error.contains("Traceback"));
-        assert!(
-            gb_observability::runs::RunStore::open(&workspace)
-                .records()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(run_records(&workspace).is_empty());
         assert!(
             !workspace
                 .join(".guildbotics/local/run/diagnostics.jsonl")
@@ -821,8 +816,6 @@ async fn workspace_and_member_refuse_a_directory_the_user_cannot_list() {
 
 #[test]
 fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() {
-    use gb_observability::runs::RunStore;
-
     let dir = tempfile::tempdir().unwrap();
     let root = gb_base::host_path::normalize(dir.path()).unwrap();
     let workspace = peer_workspace(&root);
@@ -868,8 +861,7 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
     assert!(
         String::from_utf8_lossy(&missing.stderr).contains("Unable to locate command 'missing'")
     );
-    let store = RunStore::open(&workspace);
-    assert!(store.records().unwrap().is_empty());
+    assert!(run_records(&workspace).is_empty());
     for args in [
         &["run", "solo@alice", "--cwd", "workspace", "topic=review"][..],
         &[
@@ -890,10 +882,9 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
             "{output:?}"
         );
     }
-    let records = store.records().unwrap();
+    let records = run_records(&workspace);
     assert_eq!(records.len(), 2);
     for record in records {
-        let record = serde_json::to_value(record).unwrap();
         assert_eq!(record["status"], "failed");
         assert_eq!(record["source"], "manual");
         assert_eq!(record["execution_mode"], "user_initiated");
@@ -920,4 +911,16 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
             assert_eq!(event["attributes"]["run.entry"], "command");
         }
     }
+}
+
+fn run_records(workspace: &Path) -> Vec<Value> {
+    let dirs = match std::fs::read_dir(workspace.join(".guildbotics/state/task-runs")) {
+        Ok(dirs) => dirs,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!("{error}"),
+    };
+    dirs.map(|entry| entry.unwrap().path().join("result.json"))
+        .filter(|path| path.is_file())
+        .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+        .collect()
 }

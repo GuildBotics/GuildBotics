@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
-use gb_observability::{Diagnostics, TraceSearch};
-use serde_json::{Value, json};
+use gb_server::client::diagnostics::{self, TraceSearch};
+use serde_json::Value;
 
 use crate::environment_cli::OutputFormat;
 
@@ -80,7 +80,6 @@ pub async fn run(command: DiagnosticsCommand) -> anyhow::Result<()> {
     let language = gb_server::client::language().await;
     let workspace =
         gb_server::workspace::read_selection(&gb_base::home::data()?, command.workspace, language)?;
-    let store = Diagnostics::open(&workspace);
     let result = match command.command {
         Command::Traces {
             source,
@@ -91,44 +90,40 @@ pub async fn run(command: DiagnosticsCommand) -> anyhow::Result<()> {
             include_assistant,
             limit,
             ..
-        } => store.search_traces(TraceSearch {
-            source: source.as_deref(),
-            person: person.as_deref(),
-            query: query.as_deref(),
-            attr_key: attr_key.as_deref(),
-            attr_value: attr_value.as_deref(),
-            include_assistant,
-            limit: limit as usize,
-            include_system: false,
-            search_transcripts: true,
-        })?,
+        } => diagnostics::traces(
+            &workspace,
+            TraceSearch {
+                source: source.as_deref(),
+                person: person.as_deref(),
+                query: query.as_deref(),
+                attr_key: attr_key.as_deref(),
+                attr_value: attr_value.as_deref(),
+                include_assistant,
+                limit: limit as usize,
+                include_system: false,
+                search_transcripts: true,
+            },
+        )?,
         Command::Trace {
             trace_id,
             kind,
             level,
             limit,
         } => {
-            let detail = store.trace_detail(&trace_id)?;
-            let records = detail["records"].as_array().expect("diagnostics records");
-            let filtered = records
+            let kinds = kind
                 .iter()
-                .filter(|record| {
-                    (kind.is_empty()
-                        || kind.iter().any(|kind| {
-                            kind.to_possible_value()
-                                .is_some_and(|kind| record["kind"] == kind.get_name())
-                        }))
-                        && level.as_deref().is_none_or(|level| {
-                            record["level"]
-                                .as_str()
-                                .is_some_and(|found| level.eq_ignore_ascii_case(found))
-                        })
-                })
+                .filter_map(ValueEnum::to_possible_value)
                 .collect::<Vec<_>>();
-            let start = filtered.len().saturating_sub(limit as usize);
-            json!({"trace_id": trace_id, "summary": detail["summary"], "record_count": filtered.len(), "records": &filtered[start..]})
+            let names = kinds.iter().map(|kind| kind.get_name()).collect::<Vec<_>>();
+            diagnostics::trace(
+                &workspace,
+                &trace_id,
+                &names,
+                level.as_deref(),
+                limit as usize,
+            )?
         }
-        Command::System { limit } => store.latest_system_records(limit as usize)?,
+        Command::System { limit } => diagnostics::system(&workspace, limit as usize)?,
     };
     match command.format {
         OutputFormat::Json => println!("{}", serde_json::to_string(&result)?),

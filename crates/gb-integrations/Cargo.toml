@@ -16,7 +16,6 @@ serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 gb-config = { path = "../gb-config" }
 gb-base = { path = "../gb-base" }
-gb-workspace = { path = "../gb-workspace" }
 branvil = { path = "../branvil" }
 regex = "1"
 url = "2"

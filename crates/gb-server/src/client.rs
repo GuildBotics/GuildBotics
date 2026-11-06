@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use crate::{auth, i18n};
 
 pub mod connect;
+pub mod diagnostics;
 pub mod member;
+pub mod secrets;
 
 const PROOF_TIMEOUT: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -212,7 +214,13 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
         std::io::stdout().lock(),
         std::io::stderr().lock(),
         language,
-        async |origin: String| gb_integrations::factory::human_git_credential(&origin).await,
+        async |origin: String| {
+            gb_integrations::factory::human_git_credential(&origin, |data| {
+                let device = gb_workspace::identity::ensure_device_identity(data)?;
+                Ok((device.device_id, device.display_name))
+            })
+            .await
+        },
     )
     .await
 }

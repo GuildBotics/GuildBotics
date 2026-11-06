@@ -9,8 +9,13 @@ pub use slack::{IntegrationEvent, IntegrationObserver};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 /// The providers that issue the human's Git credentials are selected here.
-pub async fn human_git_credential(origin: &str) -> anyhow::Result<Option<GitCredential>> {
-    branvil::owner_git::credential(origin).await
+/// Read the credential for a human's remote. The host supplies its device
+/// ID and display name on demand when the provider needs to issue a token.
+pub async fn human_git_credential(
+    origin: &str,
+    device: impl FnOnce(&std::path::Path) -> anyhow::Result<(String, String)>,
+) -> anyhow::Result<Option<GitCredential>> {
+    branvil::owner_git::credential(origin, device).await
 }
 
 #[derive(Clone, Debug)]
