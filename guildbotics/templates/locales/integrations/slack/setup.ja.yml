@@ -15,6 +15,6 @@ ja:
   channel_missing: "Slack チャンネルが見つかりません。"
   channel_not_joined: "Slack bot がチャンネルに参加していません。"
   not_configured: "Slack チャンネルが未設定のため診断を省略しました。"
-  bot_missing: "Slack の読み取り専用チェックに失敗しました: Slack Bot トークンが未設定です。%{key} を設定してください。"
+  bot_missing: "Slack の読み取り確認に失敗しました: Slack Bot トークンが未設定です。%{key} を設定してください。"
   api_failed: "Slack API '%{method}' に失敗しました: %{error}"
   api_unreachable: "Slack API '%{method}' から応答がありません: %{error}"

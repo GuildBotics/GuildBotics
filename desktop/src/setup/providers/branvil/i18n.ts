@@ -69,8 +69,7 @@ export const branvil = {
       diagnosticChecks: {
         branvil_reachable: {
           title: "Branvil is not reachable",
-          description:
-            "Branvil did not answer at {{target}}. Check that Branvil is running and that the Connection in Settings → Integrations → Branvil is where it listens.",
+          description: "Branvil did not answer at {{target}}. Check that Branvil is running.",
         },
         branvil_access: {
           title: "Branvil refused the member's token",
@@ -161,7 +160,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil に届きません",
           description:
-            "{{target}} の Branvil が応答しませんでした。Branvil が動いていることと、設定 → 連携 → Branvil の接続先 がその待ち受け先であることを確認してください。",
+            "{{target}} の Branvil が応答しませんでした。Branvil が動いていることを確認してください。",
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",

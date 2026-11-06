@@ -24,8 +24,8 @@ pub(crate) struct Consent {
     outcome: Option<Result<(), String>>,
 }
 impl Consent {
-    fn expired(&self) -> bool {
-        self.created.elapsed() > Duration::from_secs(600)
+    fn expired_pending(&self) -> bool {
+        self.outcome.is_none() && self.created.elapsed() > Duration::from_secs(600)
     }
 }
 fn language(headers: &HeaderMap) -> &str {
@@ -87,7 +87,7 @@ pub(crate) async fn connect(
         )
         .append_pair("code_challenge_method", "S256");
     let mut consents = api.consents.lock().await;
-    consents.retain(|_, c| !c.expired());
+    consents.retain(|_, c| c.created.elapsed() <= Duration::from_secs(600));
     consents.insert(
         state.clone(),
         Consent {
@@ -114,7 +114,7 @@ pub(crate) async fn connection(
     {
         let mut consents = api.consents.lock().await;
         if let Some(c) = consents.get(&query.state) {
-            if c.expired() {
+            if c.expired_pending() {
                 let reason = crate::i18n::t(&c.language, "integrations.branvil.setup.expired", &[]);
                 consents.remove(&query.state);
                 return Json(empty("disconnected", reason)).into_response();
@@ -187,7 +187,7 @@ async fn connected_task(
     if let Ok(value) = c.language.parse() {
         headers.insert("x-guildbotics-language", value);
     }
-    if c.expired() {
+    if c.expired_pending() {
         return page(
             &headers,
             Err(text(&headers, "integrations.branvil.setup.expired")),

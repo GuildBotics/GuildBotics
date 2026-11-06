@@ -1819,3 +1819,99 @@ async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
     }
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn completed_consents_keep_their_outcomes_after_the_pending_deadline() {
+    let f = fixture();
+    let (running, _) = branvil(&f).await;
+    let owner = std::fs::read_to_string(f.root.join("branvil/secrets/owner.token")).unwrap();
+    for mode in ["connected", "denied", "not_kept"] {
+        let (started, redirect) = consent(&f, &running, &owner).await;
+        let state = started["state"].as_str().unwrap();
+        let redirect = if mode == "denied" {
+            format!(
+                "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+            )
+        } else {
+            redirect
+        };
+        if mode == "not_kept" {
+            f.keys(Keys::Locked);
+        }
+        let initial = callback(&f, &redirect).await;
+        f.keys(Keys::Fixed);
+        assert_eq!(
+            initial.0,
+            if mode == "connected" {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        assert!(initial.1.as_str().unwrap().contains(&crate::i18n::t(
+            "en",
+            &format!("integrations.branvil.setup.{mode}"),
+            &[]
+        )));
+        let stored = f.identity_secrets();
+        f.api.consents.lock().await.get_mut(state).unwrap().created -= Duration::from_secs(601);
+        assert_eq!(
+            callback(&f, &redirect).await,
+            initial,
+            "{mode}: completed page"
+        );
+        assert_eq!(
+            f.identity_secrets(),
+            stored,
+            "replay must not exchange or store again"
+        );
+        let (_, polled) = f
+            .call(
+                "POST",
+                "/config/providers/branvil/connection",
+                json!({"state":state}),
+            )
+            .await;
+        assert_eq!(
+            polled["status"],
+            if mode == "connected" {
+                "connected"
+            } else {
+                "disconnected"
+            }
+        );
+        assert_eq!(
+            polled["message"],
+            if mode == "connected" {
+                String::new()
+            } else {
+                crate::i18n::t("en", &format!("integrations.branvil.setup.{mode}"), &[])
+            }
+        );
+        assert!(
+            !f.api.consents.lock().await.contains_key(state),
+            "poll consumes the result"
+        );
+    }
+    // Starting another consent still discards old completed entries, as the frozen start does.
+    let (_, old) = consent(&f, &running, &owner).await;
+    let old_url = url::Url::parse(&old).unwrap();
+    let state = old_url
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    callback(
+        &f,
+        &format!(
+            "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+        ),
+    )
+    .await;
+    f.api.consents.lock().await.get_mut(&state).unwrap().created -= Duration::from_secs(601);
+    f.call("POST", "/config/providers/branvil/connect", json!({}))
+        .await;
+    assert!(!f.api.consents.lock().await.contains_key(&state));
+    running.stop().await.unwrap();
+}
