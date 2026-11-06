@@ -97,9 +97,6 @@ pub enum WorkspaceCommand {
 
 #[derive(Subcommand)]
 pub enum AdminCommand {
-    /// Send text to the configured webhook without opening the database;
-    /// works while the service is running or stopped; no-op if unset
-    Notify { text: String },
     /// Check the database structure and that every index matches the records;
     /// a passing check also clears the mark an upgrade leaves, which
     /// `branvil serve` refuses
@@ -179,7 +176,7 @@ pub fn init(
 /// Runs the service until `interrupt` or `terminate` (`stop_signals`) stops
 /// it; the exit status is 3 when the stop interrupted running CI jobs
 /// (`Ci::stop`). With `announce`, it says on stdout when it listens and when
-/// it waits for repository operations (`scripts/serve.sh` reads them);
+/// it waits for repository operations;
 /// otherwise only its log does.
 pub async fn serve(
     config: Config,
@@ -332,7 +329,6 @@ pub(crate) async fn serve_with_api(
     tokio::pin!(close);
     if futures_util::poll!(close.as_mut()).is_pending() {
         if announce {
-            // scripts/serve.sh waits for a serve that says this (as for CI jobs).
             let mut out = std::io::stdout().lock();
             let _ = writeln!(
                 out,
@@ -386,16 +382,6 @@ pub async fn admin(
     config_path: Option<&Path>,
     data_dir: Option<&Path>,
 ) -> anyhow::Result<u8> {
-    if let AdminCommand::Notify { text } = command {
-        let dir = data_dir
-            .map(Path::to_path_buf)
-            .map(Ok)
-            .unwrap_or_else(config::default_data_dir)?;
-        crate::webhook::send(&crate::webhook::client(), &Layout::new(&dir), &text)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        return Ok(0);
-    }
     let config = Config::load(config_path, data_dir, None, None)?;
     let layout = config.layout();
     if !layout.db().exists() {
@@ -406,7 +392,6 @@ pub async fn admin(
     }
     let open = || Store::open(&layout.db(), config.storage.cache_size_mib << 20, 1);
     match command {
-        AdminCommand::Notify { .. } => unreachable!(),
         AdminCommand::Upgrade => {
             let done = crate::upgrade::upgrade(&layout)?;
             println!("{}", store::upgrade_report(&layout.db(), &done));

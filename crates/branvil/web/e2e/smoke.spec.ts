@@ -68,7 +68,12 @@ test("creates a ticket, moves it with its menu, and persists the move across rel
   const ref = (await card.getAttribute("aria-label"))?.split(" ")[0] as string;
 
   // One representative write journey; drag and assignment branches live in component tests.
+  const saved = page.waitForResponse(
+    (response) => response.request().method() === "PUT" &&
+      /^\/api\/v1\/repos\/[^/]+\/tickets\/[^/]+\/board$/.test(new URL(response.url()).pathname),
+  );
   await fromCardMenu(page, new RegExp(`^(Actions of ${ref}|${ref} の操作)$`), /^(Ready|着手可)$/);
+  expect((await saved).ok()).toBe(true);
   await expect(lane(page, /^(Ready|着手可)/).getByText(title)).toBeVisible();
 
   // A fresh load shows the server's state, not the optimistic one.

@@ -1160,7 +1160,7 @@ access and member key spelling in the package.
 `desktop/` is a React (Mantine, TanStack Query) frontend that the server serves to a
 browser; the repository is a monorepo on purpose. The server runs from a checkout on the
 Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
-`scripts/hub-server.sh` installs. There is no packaged program.
+[`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs the locally built Rust executable with Branvil in the same process.
 
 - **Local API boundary**: the GUI never reimplements the Python engine. The backend
   (`python -m guildbotics.app_api`, FastAPI) serves both the API under `/api` (REST,
@@ -1238,33 +1238,19 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     taken before the client's next connection (later requests usually reuse the proved
     connection). A browser redirected back by GitHub App registration or Branvil's
     consent reaches the port even after the server exited, carrying a one-time code.
-- **Runtime lifecycle**: the server is the sole composition root for member workers
-  and event listeners. `guildbotics server start` runs it as a child in its own process
-  group with its own PID for the watchdog (`GUILDBOTICS_APP_API_PARENT_PID`), and with
-  `GUILDBOTICS_START_SERVICES=1` under `--services`. Once it listens, the server starts
-  its services only then or when the service settings say `start_with_server` (the
-  Service screen's "Start the services when the server starts", off by default), and
-  stays up when they fail to start, so the screens and its output show why. The
-  server owns `app-api.lock` for its lifetime and `service.lock` only while services
-  run. `/scheduler/start` takes no body: every start, from any screen,
-  `guildbotics service start`, or the server's own, runs with the service settings
-  saved in `local/service.yml` (`drivers/service_settings.py`), which screens change
-  one setting at a time with `PATCH /service/settings`. `/scheduler/stop`
-  (`guildbotics service stop`) stops the services only; `/shutdown`
-  (`guildbotics server stop`) ends the server, after in-flight work or, with
-  `force`, cancelling it. On SIGTERM the server cancels at once, and its lifespan
-  teardown has `TEARDOWN_BUDGET_SECONDS`; the LaunchAgent's `ExitTimeOut` is
-  `KILL_AFTER_SECONDS`, the same wait a forced `server stop` gives it.
-- **Installing the CLI and the skill**: `scripts/install_cli_assets.py` (run by
-  `scripts/hub-server.sh install` and `update`) writes `~/.guildbotics/bin/guildbotics`,
-  a shim that runs the checkout's `.venv/bin/guildbotics` (the path instructions, the
-  skill, and the git credential helper of human members name;
-  `utils/managed_cli.py`), and a `~/.local/bin/guildbotics` shim. It copies
-  `skills/guildbotics/SKILL.md` to where each AI CLI of the catalog found on the
-  machine reads user skills (`CliAgentProvision.user_skills`), and records the hash of
-  what it wrote in `.guildbotics-managed.json` beside it, so a copy the user edited is
-  left alone. External AI CLI tools are _not_ installed on the host for turns — they run
-  inside the isolated environment.
+- **Runtime lifecycle**: `guildbotics server start` runs one foreground process.
+  It owns `app-api.lock` until both services exit. `guildbotics server stop`
+  keeps Branvil available while GuildBotics drains its work, then lets
+  Branvil wait for its CI jobs. `--force` and SIGTERM skip the wait. The
+  LaunchAgent runs the server directly and uses the CLI's forced-stop
+  timeout for SIGTERM. The workspace's service settings control whether patrol and chat
+  reception start with the server.
+- **Installing the CLI and the skill**: `guildbotics install` copies the
+  running executable to `~/.guildbotics/bin/guildbotics` and adds a link under
+  `~/.local/bin` when the path is available. It copies
+  `skills/guildbotics/SKILL.md` to detected tools' user skill directories.
+  The recorded content hash lets an update preserve a skill the user edited.
+  The Hub script runs this command after the selected build starts.
 - **This machine**: the settings section for what belongs to the machine rather than to a
   workspace — the registered workspaces (`/device/workspaces`) — listed in the settings nav
   under its own "This machine" group and reachable before any workspace is selected.

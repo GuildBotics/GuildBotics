@@ -63,9 +63,7 @@ hold across modules:
   CLI use its HTTP transport. An embedded provider uses `api::DataApi` from
   the same service instance directly; it never opens a separate store. Only
   `branvil init`, `branvil admin check|reindex|upgrade`, and `branvil restore`, run
-  with the service stopped, work on the data directory directly. `branvil admin
-  notify` reads only `secrets/webhook.url` and works with the service running
-  or stopped; it never opens the database.
+  with the service stopped, work on the data directory directly.
 - **The GUI looks like GuildBotics Desktop.** Keep the Mantine version, the
   theme (`web/src/theme.ts`), and the design tokens and component overrides in
   `web/src/styles.css` the same as GuildBotics Desktop's ("GUI files" in

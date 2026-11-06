@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gb_base::files::atomic_write;
+use gb_base::files::{FileLock, SHARED_WRITE_TIMEOUT, atomic_write};
 use gb_server::{client, i18n};
 use serde_json::{Value, json};
 
@@ -23,6 +23,7 @@ pub async fn run() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.install.home_required", &[])))?;
     let root = gb_base::home::machine_root()?;
+    let _install = FileLock::hold(&root.join("install.lock"), SHARED_WRITE_TIMEOUT)?;
     let bin = root.join("bin");
     if bin.is_symlink() {
         #[cfg(unix)]
@@ -141,30 +142,44 @@ fn install_on_path(path: &Path, managed: &Path) -> anyhow::Result<()> {
 fn install_skill(directory: &Path, content: &[u8]) -> anyhow::Result<bool> {
     let skill = directory.join("SKILL.md");
     let sidecar = directory.join(METADATA);
-    match fs::symlink_metadata(&skill) {
+    let previous = match fs::symlink_metadata(&skill) {
         Ok(metadata) if metadata.is_file() => {
             let earlier = fs::read(&sidecar)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
                 .unwrap_or_default();
-            if earlier["content_hash"] != content_hash(&fs::read(&skill)?) {
+            let current = content_hash(&fs::read(&skill)?);
+            if earlier["content_hash"] != current && earlier["pending_content_hash"] != current {
                 return Ok(false);
             }
+            Some(current)
         }
         Ok(_) => return Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
-    }
-    let metadata = json!({
+    };
+    let mut metadata = json!({
         "manager": "GuildBotics",
         "skill": "guildbotics",
-        "content_hash": content_hash(content),
+        "content_hash": previous,
+        "pending_content_hash": content_hash(content),
     });
+    let write_metadata = |metadata: &Value| {
+        atomic_write(
+            &sidecar,
+            gb_base::files::dump_shared_json(metadata).as_bytes(),
+        )
+    };
+    // A retry recognizes the managed bytes on either side of the skill write.
+    write_metadata(&metadata)?;
     atomic_write(&skill, content)?;
-    atomic_write(
-        &sidecar,
-        gb_base::files::dump_shared_json(&metadata).as_bytes(),
-    )?;
+    let pending = metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("pending_content_hash")
+        .unwrap();
+    metadata["content_hash"] = pending;
+    write_metadata(&metadata)?;
     Ok(true)
 }
 
@@ -177,8 +192,34 @@ fn content_hash(content: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROVISION, content_hash};
+    use super::{METADATA, PROVISION, content_hash, install_skill};
     use serde_json::Value;
+    use std::fs;
+
+    #[test]
+    fn retry_finishes_an_interrupted_managed_skill_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let skill = directory.path().join("SKILL.md");
+        let sidecar = directory.path().join(METADATA);
+        fs::create_dir(&sidecar).unwrap();
+        assert!(install_skill(directory.path(), b"new").is_err());
+        assert!(!skill.exists());
+        fs::remove_dir(&sidecar).unwrap();
+
+        for existing in [b"old", b"new"] {
+            fs::write(&skill, existing).unwrap();
+            let pending = serde_json::json!({
+                "content_hash": content_hash(b"old"),
+                "pending_content_hash": content_hash(b"new"),
+            });
+            fs::write(&sidecar, pending.to_string()).unwrap();
+            assert!(install_skill(directory.path(), b"new").unwrap());
+            let finished: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+            assert_eq!(finished["content_hash"], content_hash(b"new"));
+            assert!(finished.get("pending_content_hash").is_none());
+        }
+        assert_eq!(fs::read(skill).unwrap(), b"new");
+    }
 
     #[test]
     fn every_tool_in_the_provision_catalog_names_its_user_skills_directory() {

@@ -595,6 +595,8 @@ Run `guildbotics server start` on the Hub. Leave that terminal open to see start
 
 To update from a newly built checkout, stop the server with `guildbotics server stop`. Build the screens and the Rust executable as in [Installation](#installation), run the new executable's `install` command, and start the server again.
 
+For a macOS Hub that runs GuildBotics and Branvil at login, follow the [Hub installation and update guide](docs/hub-server.md).
+
 ### Use It from a Browser
 
 The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765`, and you use them in a browser.

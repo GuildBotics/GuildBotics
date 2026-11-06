@@ -17,11 +17,9 @@ real service (see "Checking with GuildBotics"). See
 [`docs/architecture.md`](docs/architecture.md) for what exists.
 
 This crate of the GuildBotics repository is a snapshot of the Branvil
-repository's `main` at commit `5f2728a840be25f3c54c82b92ee1c064be754949`. The
-production Branvil still runs from a checkout of the Branvil repository with
-that repository's `scripts/serve.sh` and `scripts/update.sh`, which this copy
-does not carry; where the documents describe them, they describe that
-repository's.
+repository's `main` at commit `5f2728a840be25f3c54c82b92ee1c064be754949`. On the
+macOS Hub, [the integrated LaunchAgent](../../docs/hub-server.md) runs Branvil
+in the same process as GuildBotics.
 
 ## Important Notice (Disclaimer)
 

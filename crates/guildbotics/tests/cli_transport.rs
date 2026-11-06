@@ -584,6 +584,48 @@ fn startup_rejects_the_old_commands_and_service_configuration_flags() {
 }
 
 #[tokio::test]
+async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for ready in [false, true] {
+        let mut args = vec!["server", "hub-probe"];
+        if ready {
+            args.push("--ready");
+        }
+        let output = peer_cli(root, &args).output().await.unwrap();
+        assert_eq!(output.status.code(), Some(i32::from(ready)));
+        assert!(output.stdout.is_empty());
+    }
+
+    let peer = CliPeer::bind(root).await;
+    let pid = format!("{}\n", std::process::id());
+    let holder = peer_cli(root, &["server", "hub-probe"])
+        .output()
+        .await
+        .unwrap();
+    assert!(holder.status.success());
+    assert_eq!(holder.stdout, pid.as_bytes());
+    peer.expect_no_retry().await;
+
+    let mut probe = peer_cli(root, &["server", "hub-probe", "--ready"]);
+    let task = tokio::spawn(async move { probe.output().await.unwrap() });
+    let (socket, path, headers, _) = peer.next().await;
+    assert!(path.starts_with("POST /api/local-api/proof "));
+    assert!(!headers.contains("authorization:"));
+    CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
+    let refused = task.await.unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+
+    let mut probe = peer_cli(root, &["server", "hub-probe", "--ready"]);
+    let task = tokio::spawn(async move { probe.output().await.unwrap() });
+    peer.prove().await;
+    let ready = task.await.unwrap();
+    assert!(ready.status.success());
+    assert_eq!(ready.stdout, pid.as_bytes());
+}
+
+#[tokio::test]
 async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_force() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

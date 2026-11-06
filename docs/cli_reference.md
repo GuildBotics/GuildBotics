@@ -129,7 +129,6 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics branvil runner doctor`](#guildbotics-branvil-runner-doctor)
 - [`guildbotics branvil runner install-msb`](#guildbotics-branvil-runner-install-msb)
 - [`guildbotics branvil admin`](#guildbotics-branvil-admin)
-- [`guildbotics branvil admin notify`](#guildbotics-branvil-admin-notify)
 - [`guildbotics branvil admin check`](#guildbotics-branvil-admin-check)
 - [`guildbotics branvil admin reindex`](#guildbotics-branvil-admin-reindex)
 - [`guildbotics branvil admin upgrade`](#guildbotics-branvil-admin-upgrade)
@@ -2208,7 +2207,6 @@ Offline maintenance of the data directory (the service must be stopped)
 Usage: guildbotics branvil admin [OPTIONS] <COMMAND>
 
 Commands:
-  notify   Send text to the configured webhook without opening the database; works while the service is running or stopped; no-op if unset
   check    Check the database structure and that every index matches the records; a passing check also clears the mark an upgrade leaves, which `branvil serve` refuses
   reindex  Rebuild every derived index from the records
   upgrade  Upgrade the database from the previous schema version, keeping a copy of it as it was (stop the service and take a backup first). Exits 3 when the database was upgraded, now or before, and has not passed `branvil admin check` since; 0 when it already has this version and is checked; 1 when it failed, which leaves it unchanged
@@ -2223,22 +2221,6 @@ Options:
 
           [env: BRANVIL_DATA_DIR]
 
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil admin notify
-
-```text
-Send text to the configured webhook without opening the database; works while the service is running or stopped; no-op if unset
-
-Usage: guildbotics branvil admin notify <TEXT>
-
-Arguments:
-  <TEXT>
-
-
-Options:
   -h, --help
           Print help
 ```

@@ -17,6 +17,11 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# The member handshake hashes the whole executable on first use. Keep that
+# calculation fast in dev and test builds too, where the binaries are large.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

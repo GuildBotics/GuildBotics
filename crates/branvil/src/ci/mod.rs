@@ -803,8 +803,7 @@ impl Ci {
                 return Ok(changed.len());
             }
             if running != told {
-                // scripts/serve.sh reads the first one, as it reads the line
-                // that says the service is ready; nobody may read it now.
+                // The standalone service announces the wait once on stdout.
                 if told == 0 && announce {
                     use std::io::Write;
                     let mut out = std::io::stdout().lock();

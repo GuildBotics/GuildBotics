@@ -1387,13 +1387,6 @@ is at least once: a crash between the answer and storing `notified_at` can
 repeat it. Without a webhook nothing is sent; setting one later sends pending
 notices. Local merges and gates passed with automatic landing off send nothing.
 
-`branvil admin notify 'The service stopped' --data-dir /srv/branvil` posts
-`{"text": "The service stopped"}` directly, without opening the database or
-contacting the service. It works with the service running or stopped, including
-after a failed schema upgrade. With no webhook it exits successfully without
-sending anything. It exits nonzero on delivery failure; errors omit the URL
-and response body. Requests time out after 10 seconds and do not follow redirects.
-
 Required protected checks automatically retry command failures, timeouts,
 runner absence, and second interruptions up to three times, keeping the same
 commit and definition. Other startup failures, requested cancellation,
@@ -1410,12 +1403,7 @@ until automatic retries are exhausted. A crash between delivery and recording
 may repeat a notice (at least once).
 Ordinary supersession does not send a failure notice. Missing required jobs,
 absent pipelines, and invalid pipelines do: they include a commit-page link
-when no attempt/log exists. Script notices have their own persistent delivery
-queue under `builds/`, so they can be sent even while the service is stopped.
-Queued script webhook notices, including their first attempt, wait for the
-next delivery round, normally within `scripts/serve.sh --interval` seconds.
-Slow deliveries or service transitions can delay them. Unsuccessful deliveries
-are retried each interval; desktop notifications do not wait for this round.
+when no attempt/log exists.
 
 ### CI settings
 

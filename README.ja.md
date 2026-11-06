@@ -595,6 +595,8 @@ Hub で `guildbotics server start` を実行します。起動時の案内やサ
 
 チェックアウトを更新したら `guildbotics server stop` でサーバーを止めます。[インストール](#インストール)の手順で画面と Rust の実行ファイルをビルドし直し、新しい実行ファイルから `install` を実行してからサーバーを起動します。
 
+macOSのログイン時にGuildBoticsとBranvilを起動するには、[Hubの起動と更新](docs/hub-server.md)を参照してください。
+
 ### ブラウザから使う
 
 GuildBotics の画面（サービス、コマンド、設定、診断）は、サーバーが `http://127.0.0.1:8765` で配っています。画面はブラウザで使います。

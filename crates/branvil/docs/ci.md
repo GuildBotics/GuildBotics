@@ -286,15 +286,21 @@ Leases and interruptions:
 
 Stopping the service:
 
-- SIGTERM (what `scripts/serve.sh` sends to switch builds, an update for
-  instance) stops CI first: the service gives out no job to any runner and
+The integrated Hub's [manual update](../../../docs/hub-server.md#手動更新)
+uses `guildbotics server stop`. Branvil keeps serving while GuildBotics
+finishes its work, then waits for its own CI jobs as described below. A
+forced stop or SIGTERM to the combined server skips the CI wait. On an
+orderly stop the combined server logs interrupted jobs and exits
+successfully so launchd leaves it stopped.
+
+- For standalone Branvil, SIGTERM stops CI first: the service gives out no job to any runner and
   waits until no check runs, at most `ci.stop_wait_secs` (default 3600 s, the
   default job time limit), while it serves everything else, the runners'
   heartbeats, logs, and results among it. Jobs queued meanwhile wait and run
   after the next start. The diagnostics' and the CI settings' runner state is
   `stopping` meanwhile, and the GUI shows the owner a warning on every page; the
   service's log says how many jobs it waits for, and its standard output says
-  `branvil stopping: waiting for …` (which `scripts/serve.sh` reads).
+  `branvil stopping: waiting for …` when running Branvil on its own.
 - Cache-refresh attempts are interrupted immediately when stopping starts;
   they do not use the wait period. The first interruption requeues them with
   their purpose and cache key. A second interruption ends them and releases
@@ -303,7 +309,7 @@ Stopping the service:
   Branvil stopped …; queued again in its place") and queued again in its place,
   so the next start runs it before the jobs queued after it (one already
   interrupted once ends for good, as above); the service then exits with
-  status 3, which `scripts/serve.sh` notifies.
+  status 3.
 - SIGINT (Ctrl-C), also during that wait, skips it; the running jobs are
   interrupted as in a restart above.
 - Then, after either signal, the GUI's event streams end, the service stops

@@ -15,68 +15,6 @@ fn text(out: &std::process::Output) -> String {
     )
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn admin_notify_needs_neither_a_running_service_nor_a_readable_database() {
-    use axum::{Router, routing::post};
-    use std::sync::{Arc, Mutex};
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let copy = received.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/secret-hook", listener.local_addr().unwrap());
-    let app = Router::new().route(
-        "/secret-hook",
-        post(move |axum::Json(v): axum::Json<serde_json::Value>| {
-            let copy = copy.clone();
-            async move {
-                copy.lock().unwrap().push(v);
-                "ok"
-            }
-        }),
-    );
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let dir = tempfile::tempdir().unwrap();
-    let data = dir.path();
-    std::fs::create_dir(data.join("secrets")).unwrap();
-    let notify = || {
-        std::process::Command::new(BIN)
-            .args(["admin", "notify", "test notice", "--data-dir"])
-            .arg(data)
-            .output()
-            .unwrap()
-    };
-    assert!(
-        notify().status.success(),
-        "unset is a no-op, even without a database"
-    );
-    assert!(received.lock().unwrap().is_empty());
-    std::fs::write(data.join("secrets/webhook.url"), &url).unwrap();
-    std::fs::write(data.join("branvil.redb"), "not a database").unwrap();
-    std::fs::write(
-        data.join("branvil.toml"),
-        "not valid TOML or service configuration",
-    )
-    .unwrap();
-    let out = notify();
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(
-        *received.lock().unwrap(),
-        vec![serde_json::json!({"text": "test notice"})]
-    );
-    assert!(!text(&out).contains("secret-hook"));
-    server.abort();
-    let out = notify();
-    assert!(!out.status.success());
-    assert!(text(&out).contains("could not connect to the webhook"));
-    assert!(!text(&out).contains(&url));
-    assert!(!text(&out).contains("secret-hook"));
-    std::fs::write(
-        data.join("secrets/webhook.url"),
-        "http://secret-hook:bad/path",
-    )
-    .unwrap();
-    assert!(!text(&notify()).contains("secret-hook"));
-}
-
 #[tokio::test]
 async fn bootstrap_and_admin_commands() {
     let dir = tempfile::tempdir().unwrap();

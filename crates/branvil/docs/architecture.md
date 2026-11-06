@@ -29,7 +29,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 
 | Module | Responsibility |
 | --- | --- |
-| `lib.rs`, `main.rs`, `cli.rs` | clap commands (`main.rs` is the `branvil` executable; another one runs the same commands under its own, and the service in its process, through `lib.rs`): `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), `admin notify` (reads only the webhook credential, online or offline), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
+| `lib.rs`, `main.rs`, `cli.rs` | clap commands (`main.rs` is the `branvil` executable; another one runs the same commands under its own, and the service in its process, through `lib.rs`): `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
 | `config.rs` | `branvil.toml`, data directory layout, loopback-only listen, fixed base URL |
 | `store.rs` | redb tables, order-preserving keys, JSON records, bounded blocking executor (`Store::read` / `Store::write`), the schema version and the upgrade frame (exclusive open, reads, then a copy and one write transaction) |
 | `upgrade.rs` | what the upgrade from the previous schema version changes in the records (replaced at each version) |
@@ -751,7 +751,7 @@ until the stream is back), CI cannot run, or an upstream cannot be followed.
 
 `web/dist` is embedded with rust-embed (`allow_missing`, so the service builds
 without it). Debug builds read the folder from disk, so a GUI built again
-shows on reload; release builds, which `scripts/serve.sh` runs, carry the GUI
+shows on reload; release builds, which the [Hub LaunchAgent](../../../docs/hub-server.md) runs, carry the GUI
 of their build. Every GET path that is not
 `/api/…`, `/git/…`, or `/-/hooks/…` and not a file is answered with `index.html`, so
 the web URLs of `api.md` open the single-page GUI. Every response carries
