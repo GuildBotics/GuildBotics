@@ -8,10 +8,7 @@ export const branvil = {
           label: "Branvil",
           openInBrowser: "Open Branvil in the system browser",
         },
-        baseUrl: "Base URL",
-        baseUrlHint:
-          "Where Branvil is reached from this machine, such as http://127.0.0.1:7878 for a Branvil running on it. The connection is the same in every workspace.",
-        baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
+        baseUrl: "Connection",
         workspace: "Workspace",
         workspaceHint:
           "The Branvil workspace members work in: they write only to its repositories and take tickets from its board.",
@@ -73,7 +70,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil is not reachable",
           description:
-            "Branvil did not answer at {{target}}. Check that Branvil is running and that the Base URL in Settings → Integrations → Branvil is where it listens.",
+            "Branvil did not answer at {{target}}. Check that Branvil is running and that the Connection in Settings → Integrations → Branvil is where it listens.",
         },
         branvil_access: {
           title: "Branvil refused the member's token",
@@ -102,10 +99,7 @@ export const branvil = {
           label: "Branvil",
           openInBrowser: "Branvil をシステムのブラウザで開く",
         },
-        baseUrl: "ベース URL",
-        baseUrlHint:
-          "このマシンから Branvil に届く URL です。このマシンで動く Branvil なら http://127.0.0.1:7878 のようになります。接続はすべてのワークスペースで共通です。",
-        baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
+        baseUrl: "接続先",
         workspace: "ワークスペース",
         workspaceHint:
           "メンバーが作業する Branvil のワークスペースです。そのリポジトリにだけ書き込み、そのボードからチケットを取ります。",
@@ -167,7 +161,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil に届きません",
           description:
-            "{{target}} の Branvil が応答しませんでした。Branvil が動いていることと、設定 → 連携 → Branvil のベース URL がその待ち受け先であることを確認してください。",
+            "{{target}} の Branvil が応答しませんでした。Branvil が動いていることと、設定 → 連携 → Branvil の接続先 がその待ち受け先であることを確認してください。",
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",

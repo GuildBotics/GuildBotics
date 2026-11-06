@@ -1,5 +1,6 @@
 //! The only provider selection boundary; provider modules stay private.
 mod branvil;
+pub use branvil::error as branvil_error;
 mod local;
 mod slack;
 use gb_config::secrets::SecretStore;

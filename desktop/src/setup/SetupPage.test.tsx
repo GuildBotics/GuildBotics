@@ -2227,6 +2227,86 @@ function lastMemberAddRequest() {
 }
 
 describe("MembersSection", () => {
+  describe("member form busy state", () => {
+    async function editAlice(user: ReturnType<typeof userEvent.setup>) {
+      vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
+      renderSetupPage("/setup?section=members");
+      await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+      await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
+    }
+
+    function pending<T>() {
+      let settle: (value: T) => void = () => {};
+      const promise = new Promise<T>((done) => {
+        settle = done;
+      });
+      return { promise, settle };
+    }
+
+    function expectFormHeld(held: boolean) {
+      for (const name of ["editButton", "newButton", "deleteButton"]) {
+        const button = screen.getByRole("button", { name: t(`setup.members.${name}`) });
+        if (held) {
+          expect(button).toBeDisabled();
+        } else {
+          expect(button).not.toBeDisabled();
+        }
+      }
+    }
+
+    it("keeps the form on its member until the save answers", async () => {
+      const user = userEvent.setup();
+      const save = pending<Awaited<ReturnType<typeof updateMemberConfig>>>();
+      vi.mocked(updateMemberConfig).mockReturnValueOnce(save.promise);
+      await editAlice(user);
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+
+      expectFormHeld(true);
+      save.settle(configWriteResponse());
+      await waitFor(() => expectFormHeld(false));
+    });
+
+    it("keeps the form on its member until a reload answers", async () => {
+      const user = userEvent.setup();
+      await editAlice(user);
+      const reload = pending<MemberConfig>();
+      vi.mocked(getMemberConfig).mockReturnValueOnce(reload.promise);
+      vi.mocked(updateMemberConfig).mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "config_changed",
+          message: "changed since it was read",
+          context: { path: "config/team/members/alice/person.yml", revisions: {} },
+        }),
+      );
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await screen.findByText(t("setup.staleSave.title"));
+
+      expectFormHeld(true);
+      reload.settle(memberConfigDetail());
+      await waitFor(() => expectFormHeld(false));
+    });
+
+    it("keeps the form on its member until a deletion answers", async () => {
+      const user = userEvent.setup();
+      const deletion = pending<Awaited<ReturnType<typeof deleteMemberConfig>>>();
+      vi.mocked(deleteMemberConfig).mockReturnValueOnce(deletion.promise);
+      await editAlice(user);
+      await user.click(screen.getByRole("button", { name: t("setup.members.removeButton") }));
+      await user.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: t("setup.members.removeButton"),
+        }),
+      );
+      await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
+
+      for (const name of ["editButton", "newButton"]) {
+        expect(screen.getByRole("button", { name: t(`setup.members.${name}`) })).toBeDisabled();
+      }
+      deletion.settle(configWriteResponse());
+    });
+  });
+
   beforeEach(() => {
     // The member's account tabs are those of the providers the project uses.
     vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: BRANVIL_AND_SLACK }));

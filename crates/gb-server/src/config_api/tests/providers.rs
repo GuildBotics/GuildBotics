@@ -21,20 +21,11 @@ async fn provider_listing_validation_localization_and_public_page() {
     let f = fixture();
     let providers = f.get("/config/providers").await;
     assert_eq!(
-        providers
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v["name"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["branvil", "local", "slack"]
-    );
-    assert!(
-        providers
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|v| v.get("credentials_from").is_none())
+        providers,
+        json!([
+            {"name":"branvil","title":"Branvil","kinds":["ticket_service","code_hosting_service"],"avatar":false},
+            {"name":"slack","title":"Slack","kinds":["chat_service"],"avatar":true}
+        ])
     );
     for lang in ["en", "ja"] {
         let (status, v) = f
@@ -204,10 +195,10 @@ async fn disconnected_accounts_keep_input_humans_use_owner_and_wrong_kind_is_ref
 }
 
 type Calls = Arc<Mutex<Vec<(String, String, BTreeMap<String, String>)>>>;
-struct SlackDouble {
-    base: String,
-    calls: Calls,
-    mode: Arc<Mutex<String>>,
+pub(super) struct SlackDouble {
+    pub(super) base: String,
+    pub(super) calls: Calls,
+    pub(super) mode: Arc<Mutex<String>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for SlackDouble {
@@ -312,7 +303,7 @@ async fn slack() -> SlackDouble {
         task,
     }
 }
-async fn slack_fixture() -> (Fixture, SlackDouble) {
+pub(super) async fn slack_fixture() -> (Fixture, SlackDouble) {
     let f = fixture();
     let double = slack().await;
     f.init_with(json!({"language":"en","services":{"chat_service":{"name":"slack","base_url":double.base}}})).await;
@@ -528,16 +519,28 @@ async fn slack_manifest_name_limits_scopes_events_and_url_roundtrip() {
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_.".contains(&c))
         );
     }
-    assert_eq!(
-        f.call(
-            "POST",
-            "/config/providers/slack/app-registrations",
-            json!({"app_name":"a".repeat(36)})
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
+    for (name, status, code) in [
+        (
+            "a".repeat(36),
+            StatusCode::BAD_REQUEST,
+            "invalid_slack_app_name",
+        ),
+        (
+            String::new(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+        ),
+    ] {
+        let (actual, body) = f
+            .call(
+                "POST",
+                "/config/providers/slack/app-registrations",
+                json!({"app_name":name}),
+            )
+            .await;
+        assert_eq!(actual, status);
+        assert_eq!(body["code"], code);
+    }
 }
 
 async fn consent(
@@ -605,7 +608,15 @@ async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
     assert_eq!(connected["status"], "connected");
     assert_eq!(connected["owner"], "owner1");
     assert_eq!(connected["base_url"], running.data.base_url());
-    assert!(!connected["git_config"].as_str().unwrap().is_empty());
+    let helper = f.api.home.join(".guildbotics/bin/guildbotics");
+    let quoted = helper.to_string_lossy().replace('\'', "'\\''");
+    assert_eq!(
+        connected["git_config"],
+        format!(
+            "[credential \"{}\"]\n\thelper =\n\thelper = \"!'{quoted}' git-credential\"\n",
+            running.data.base_url()
+        )
+    );
     assert_eq!(
         f.read(
             &f.root
@@ -734,7 +745,22 @@ async fn denied_forged_spent_and_unkept_consents_do_not_connect() {
                 )
                 .await;
             assert_eq!(connection["status"], "disconnected");
-            assert!(!connection["message"].as_str().unwrap().is_empty());
+            let key = match mode {
+                "denied" => "denied",
+                "locked" => "not_kept",
+                _ => "expired",
+            };
+            if mode != "spent" {
+                let expected =
+                    crate::i18n::t("en", &format!("integrations.branvil.setup.{key}"), &[]);
+                assert_eq!(connection["message"], expected);
+                assert!(page.as_str().unwrap().contains(&expected));
+            }
+            assert!(page.as_str().unwrap().contains(&crate::i18n::t(
+                "en",
+                "integrations.branvil.setup.retry",
+                &[]
+            )));
         }
     }
     running.stop().await.unwrap();
@@ -1091,6 +1117,7 @@ async fn account_settlement_preserves_later_saves_and_unrelated_tokens_and_share
             .name,
         "agent1"
     );
+    let token_a = stored_a.secrets["BRANVIL_TOKEN"].clone();
     member.secrets.extend(stored_a.secrets);
     let mut b = registry
         .account("branvil", &json!({"username":"agent1","reissue":true}))
@@ -1100,6 +1127,7 @@ async fn account_settlement_preserves_later_saves_and_unrelated_tokens_and_share
     let kept = stored_b.secrets["BRANVIL_TOKEN"].clone();
     b.settled(true).await;
     a.settled(true).await;
+    assert!(running.data.authenticate(token_a).await.is_err());
     assert!(running.data.authenticate(initial).await.is_err());
     assert!(running.data.authenticate(kept.clone()).await.is_ok());
     assert!(
@@ -1340,7 +1368,33 @@ async fn absent_or_refused_connection_cannot_administer_save_or_delete_members()
             .call("POST", "/config/providers/branvil/connection", json!({}))
             .await;
         assert_eq!(v["status"], "disconnected");
-        assert!(!v["message"].as_str().unwrap().is_empty());
+        let key = if token.is_empty() {
+            "not_connected"
+        } else {
+            "admin_refused"
+        };
+        assert_eq!(
+            v["message"],
+            crate::i18n::t("en", &format!("integrations.branvil.api.{key}"), &[])
+        );
+        for lang in ["en", "ja"] {
+            let (status, body) = f
+                .call_in(lang, "POST", "/config/providers/branvil/agents", json!({}))
+                .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                body["message"],
+                crate::i18n::t(lang, &format!("integrations.branvil.api.{key}"), &[])
+            );
+            let mut input = agent("rejected");
+            input["accounts"] = json!({"branvil":{}});
+            input["config_dir"] = json!(f.config());
+            let (_, body) = f.call_in(lang, "POST", "/config/members", input).await;
+            assert_eq!(
+                body["message"],
+                crate::i18n::t(lang, &format!("integrations.branvil.api.{key}"), &[])
+            );
+        }
         assert_eq!(
             f.call("POST", "/config/providers/branvil/agents", json!({}))
                 .await
@@ -1359,6 +1413,9 @@ async fn absent_or_refused_connection_cannot_administer_save_or_delete_members()
             StatusCode::BAD_REQUEST
         );
         assert!(f.identities().join("agent1").exists());
+        assert!(f.config().join("team/members/agent1/member.yml").is_file());
+        assert_eq!(f.identity_secrets()["AGENT1_BRANVIL_TOKEN"], agent_token);
+        assert!(running.data.authenticate(agent_token.clone()).await.is_ok());
     }
     f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &held);
     let mut chosen = agent("other_id");
@@ -1688,5 +1745,77 @@ async fn provider_and_uploaded_avatars_are_given_to_the_named_branvil_member() {
             .as_ref(),
         changed
     );
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn callback_keeps_the_initiating_language_and_retry_in_browser_and_poll() {
+    let f = fixture();
+    let (running, _) = branvil(&f).await;
+    for lang in ["en", "ja"] {
+        let (status, started) = f
+            .call_in(lang, "POST", "/config/providers/branvil/connect", json!({}))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let redirect = format!(
+            "http://127.0.0.1:8765/providers/branvil/pages/connected?state={}&error=denied",
+            started["state"].as_str().unwrap()
+        );
+        let (status, page) = callback(&f, &redirect).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        for key in ["failed", "denied", "retry"] {
+            assert!(page.as_str().unwrap().contains(&crate::i18n::t(
+                lang,
+                &format!("integrations.branvil.setup.{key}"),
+                &[]
+            )));
+        }
+        let (_, polled) = f
+            .call(
+                "POST",
+                "/config/providers/branvil/connection",
+                json!({"state":started["state"]}),
+            )
+            .await;
+        assert_eq!(
+            polled["message"],
+            crate::i18n::t(lang, "integrations.branvil.setup.denied", &[])
+        );
+    }
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
+    let f = fixture();
+    let (running, _) = branvil(&f).await;
+    let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
+    for poll_first in [false, true] {
+        let (_, started) = f
+            .call_in("ja", "POST", "/config/providers/branvil/connect", json!({}))
+            .await;
+        let state = started["state"].as_str().unwrap();
+        f.api.consents.lock().await.get_mut(state).unwrap().created -= Duration::from_secs(601);
+        let expired = crate::i18n::t("ja", "integrations.branvil.setup.expired", &[]);
+        if poll_first {
+            let (_, polled) = f
+                .call(
+                    "POST",
+                    "/config/providers/branvil/connection",
+                    json!({"state":state}),
+                )
+                .await;
+            assert_eq!(polled["status"], "disconnected");
+            assert_eq!(polled["message"], expired);
+        } else {
+            let url = format!(
+                "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+            );
+            let (status, page) = callback(&f, &url).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(page.as_str().unwrap().contains(&expired));
+        }
+        assert_eq!(f.identity_secrets()["BRANVIL_ADMIN_TOKEN"], held);
+    }
     running.stop().await.unwrap();
 }

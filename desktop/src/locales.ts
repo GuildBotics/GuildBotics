@@ -870,8 +870,6 @@ export const resources = {
             diagnostics: "Diagnostics",
           },
           personId: "Member ID",
-          personIdFixedByAccount:
-            "The member ID stays fixed while the {{provider}} account set up for it is pending.",
           personIdFixed:
             "A member keeps its ID: other workspaces on {{machine}} know the member by it.",
           scopeHint:
@@ -1963,8 +1961,6 @@ export const resources = {
             diagnostics: "検証",
           },
           personId: "メンバーID",
-          personIdFixedByAccount:
-            "このメンバー用の {{provider}} のアカウントを設定している間は、メンバー ID を変更できません。",
           personIdFixed:
             "メンバー ID は変更できません。{{machine}} のほかのワークスペースが、この ID でメンバーを指しているためです。",
           scopeHint:

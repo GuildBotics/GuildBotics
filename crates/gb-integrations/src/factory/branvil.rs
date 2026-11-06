@@ -300,7 +300,8 @@ fn classified_diagnostic<const N: usize>(
         args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
     }
 }
-fn error(e: AppError, operation: &str) -> ServiceError {
+/// Translate Branvil failures into the diagnostics shared by service and setup callers.
+pub fn error(e: AppError, operation: &str) -> ServiceError {
     // AppError's contract guarantees secret-free messages; never substitute a raw transport body.
     if e.code == "unavailable" && e.message == "integrations.branvil.api.stopped" {
         return diagnostic("integrations.branvil.api.stopped", []);

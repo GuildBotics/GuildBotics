@@ -130,7 +130,7 @@ impl Registry {
                     "branvil",
                     "branvil_reachable",
                     "error",
-                    accounts::message(e, lang),
+                    accounts::message_for(e, "health", lang),
                 )
                 .target(base),
             ];
@@ -154,12 +154,9 @@ impl Registry {
                     .identity()
                     .await
                     .map(|m| m.name)
-                    .map_err(|e| accounts::message(e, lang)),
+                    .map_err(|e| accounts::message_for(e, "identity", lang)),
                 Ok(None) => Err(say(lang, "integrations.branvil.api.not_connected", &[])),
-                Err(e) => Err(match e.sentence {
-                    gb_setup::Sentence::Key(k, _) => say(lang, &k, &[]),
-                    gb_setup::Sentence::Text(s) => s,
-                }),
+                Err(e) => Err(accounts::render(e, lang)),
             }
         } else {
             Ok(String::new())
@@ -203,14 +200,27 @@ impl Registry {
                 continue;
             }
             let access = async {
+                if name.is_empty() {
+                    return Err(say(lang, "integrations.branvil.api.username_missing", &[]));
+                }
+                if m.secret("BRANVIL_TOKEN").is_empty() {
+                    return Err(say(
+                        lang,
+                        "integrations.branvil.api.token_missing",
+                        &[(
+                            "name",
+                            &gb_config::team::person_secret_name(&m.person_id, "BRANVIL_TOKEN"),
+                        )],
+                    ));
+                }
                 let api = data
                     .authenticate(m.secret("BRANVIL_TOKEN").into())
                     .await
-                    .map_err(|e| accounts::message(e, lang))?;
+                    .map_err(|e| accounts::message_for(e, "authenticate", lang))?;
                 let identity = api
                     .identity()
                     .await
-                    .map_err(|e| accounts::message(e, lang))?;
+                    .map_err(|e| accounts::message_for(e, "identity", lang))?;
                 if !name.eq_ignore_ascii_case(&identity.name) {
                     return Err(say(
                         lang,
@@ -249,7 +259,9 @@ impl Registry {
                                         &[("workspace", &scope)],
                                     )
                                 })
-                                .unwrap_or_else(|e| accounts::message(e, lang)),
+                                .unwrap_or_else(|e| {
+                                    accounts::message_for(e, "repos_get_workspace", lang)
+                                }),
                         )
                         .target(&scope),
                     );

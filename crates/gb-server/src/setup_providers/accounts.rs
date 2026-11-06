@@ -4,18 +4,46 @@ use branvil::api::{DataApi, MemberApi, MemberKind, members};
 use gb_base::shared_writes::SharedWrites;
 use gb_config::secrets::{DeviceKey, Scope, SecretStore};
 
-pub(crate) fn message(e: branvil::api::AppError, lang: &str) -> String {
-    if e.message.starts_with("integrations.branvil.") {
-        crate::i18n::t(lang, &e.message, &[])
-    } else {
-        e.to_string()
+pub(crate) fn message_for(e: branvil::api::AppError, operation: &str, lang: &str) -> String {
+    render(refused_for(e, operation), lang)
+}
+pub(crate) fn render(error: SetupError, lang: &str) -> String {
+    match error.sentence {
+        gb_setup::Sentence::Key(key, params) => {
+            let args: Vec<_> = params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::i18n::t(lang, &key, &args)
+        }
+        gb_setup::Sentence::Text(text) => text,
     }
 }
-pub(crate) fn refused(e: branvil::api::AppError) -> SetupError {
-    if e.message.starts_with("integrations.branvil.") {
-        SetupError::new("branvil", &e.message)
+pub(crate) fn refused_for(e: branvil::api::AppError, operation: &str) -> SetupError {
+    let error = gb_integrations::factory::branvil_error(e, operation);
+    let mut result = SetupError::new("branvil", error.translation_key());
+    if error.is_unavailable() {
+        result.status = 503;
+    }
+    for (key, value) in error.translation_args() {
+        result = result.with(&key, value);
+    }
+    result
+}
+fn store_unavailable(error: impl std::fmt::Display) -> SetupError {
+    let mut result = SetupError::new(
+        "secret_store_unavailable",
+        "app_api.errors.secret_store_unavailable",
+    )
+    .with("reason", error.to_string());
+    result.status = 503;
+    result
+}
+fn admin_error(error: branvil::api::AppError, operation: &str) -> SetupError {
+    if error.status.as_u16() == 401 {
+        SetupError::new("branvil", "integrations.branvil.api.admin_refused")
     } else {
-        SetupError::text("branvil", e.to_string())
+        refused_for(error, operation)
     }
 }
 fn unavailable() -> SetupError {
@@ -30,7 +58,7 @@ impl Registry {
         let stored = match std::fs::read_to_string(path) {
             Ok(text) => gb_config::yaml_value(&text).map_err(|_| unavailable())?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(unavailable()),
+            Err(e) => return Err(store_unavailable(e)),
         };
         if stored["base_url"].as_str().unwrap_or("").is_empty() {
             return Ok(None);
@@ -49,20 +77,23 @@ impl Registry {
                 keychain: &*api.keychain,
             },
         )
-        .map_err(|_| unavailable())?;
+        .map_err(store_unavailable)?;
         let token = store
             .get("BRANVIL_ADMIN_TOKEN")
-            .map_err(|_| unavailable())?
+            .map_err(store_unavailable)?
             .filter(|s| !s.is_empty())
             .ok_or_else(unavailable)?;
-        let admin = data.authenticate(token).await.map_err(|e| {
-            if e.status.as_u16() == 401 {
-                SetupError::new("branvil", "integrations.branvil.api.admin_refused")
-            } else {
-                refused(e)
-            }
-        })?;
-        if admin.identity().await.map_err(refused)?.kind != MemberKind::Owner {
+        let admin = data
+            .authenticate(token)
+            .await
+            .map_err(|e| admin_error(e, "authenticate"))?;
+        if admin
+            .identity()
+            .await
+            .map_err(|e| admin_error(e, "identity"))?
+            .kind
+            != MemberKind::Owner
+        {
             return Err(SetupError::new(
                 "branvil",
                 "integrations.branvil.api.admin_refused",
@@ -87,11 +118,11 @@ impl Registry {
         loop {
             let page = admin
                 .page(format!("setup-tokens:{name}"), Some(100), cursor.as_deref())
-                .map_err(refused)?;
+                .map_err(|e| refused_for(e, "page"))?;
             let page = match admin.members_list_tokens(name.into(), page).await {
                 Ok(page) => page,
                 Err(e) if e.status.as_u16() == 404 => return Ok(()),
-                Err(e) => return Err(refused(e)),
+                Err(e) => return Err(refused_for(e, "members_list_tokens")),
             };
             ids.extend(
                 page.items
@@ -125,7 +156,7 @@ pub(super) async fn picture(
         admin
             .members_set_avatar(name.into(), Some(bytes))
             .await
-            .map_err(refused)?;
+            .map_err(|e| refused_for(e, "members_set_avatar"))?;
     }
     Ok(())
 }
@@ -133,7 +164,7 @@ async fn delete_token(admin: &MemberApi, name: &str, id: &str) -> Result<(), Set
     match admin.members_revoke_token(name.into(), id.into()).await {
         Ok(()) => Ok(()),
         Err(e) if e.status.as_u16() == 404 => Ok(()),
-        Err(e) => Err(refused(e)),
+        Err(e) => Err(refused_for(e, "members_revoke_token")),
     }
 }
 struct Issued {
@@ -162,7 +193,11 @@ impl MemberAccount for BranvilAccount {
             };
             if member.human {
                 if self.username.is_empty() {
-                    self.username = admin.identity().await.map_err(refused)?.name;
+                    self.username = admin
+                        .identity()
+                        .await
+                        .map_err(|e| refused_for(e, "identity"))?
+                        .name;
                 }
                 picture(&admin, &self.username, member).await?;
                 return Ok(());
@@ -179,8 +214,8 @@ impl MemberAccount for BranvilAccount {
                         kind: MemberKind::Agent,
                     })
                     .await
-                    .map_err(refused)?,
-                Err(e) => return Err(refused(e)),
+                    .map_err(|e| refused_for(e, "members_create"))?,
+                Err(e) => return Err(refused_for(e, "members_get")),
             };
             if found.kind != MemberKind::Agent {
                 return Err(
@@ -198,11 +233,11 @@ impl MemberAccount for BranvilAccount {
                     Ok(m) => m
                         .identity()
                         .await
-                        .map_err(refused)?
+                        .map_err(|e| refused_for(e, "identity"))?
                         .name
                         .eq_ignore_ascii_case(&self.username),
                     Err(e) if e.status.as_u16() == 401 => false,
-                    Err(e) => return Err(refused(e)),
+                    Err(e) => return Err(refused_for(e, "authenticate")),
                 }
             };
             if self.reissue || !accepted {
@@ -215,7 +250,7 @@ impl MemberAccount for BranvilAccount {
                         },
                     )
                     .await
-                    .map_err(refused)?;
+                    .map_err(|e| refused_for(e, "members_issue_token"))?;
                 self.issued = Some(Issued {
                     name: self.username.clone(),
                     token: issued.token,
@@ -260,5 +295,92 @@ impl MemberAccount for BranvilAccount {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn branvil_errors_keep_shared_locale_keys_and_operation_parameters() {
+        for (status, code, message, key) in [
+            (
+                401,
+                "unauthorized",
+                "No valid token or session.",
+                "authentication",
+            ),
+            (404, "not_found", "missing workspace", "not_found"),
+            (422, "invalid", "unsupported operation", "unsupported"),
+            (409, "head_moved", "stale head", "head_moved"),
+            (400, "label_undefined", "label absent", "label_undefined"),
+            (
+                503,
+                "unavailable",
+                "integrations.branvil.api.stopped",
+                "stopped",
+            ),
+            (403, "forbidden", "owner required", "refused"),
+            (500, "internal", "storage failed", "refused"),
+            (503, "unavailable", "storage unavailable", "refused"),
+        ] {
+            let make = || {
+                branvil::api::AppError::new(StatusCode::from_u16(status).unwrap(), code, message)
+            };
+            let error = refused_for(make(), "members_create");
+            let gb_setup::Sentence::Key(actual_key, params) = &error.sentence else {
+                panic!("Branvil errors must retain a translation key");
+            };
+            assert_eq!(actual_key, &format!("integrations.branvil.api.{key}"));
+            assert_eq!(error.status, if status == 503 { 503 } else { 400 });
+            if key == "refused" {
+                assert!(params.contains(&("operation".into(), "members_create".into())));
+                assert!(params.contains(&("status".into(), status.to_string())));
+                assert!(params.contains(&("code".into(), code.into())));
+                assert!(params.contains(&("message".into(), message.into())));
+            }
+            for lang in ["en", "ja"] {
+                let args: Vec<_> = params
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let rendered = message_for(make(), "members_create", lang);
+                assert_eq!(rendered, crate::i18n::t(lang, actual_key, &args));
+                assert!(!rendered.contains("%{"));
+                assert!(!rendered.contains("integrations.branvil.api."));
+            }
+        }
+        let error = refused_for(branvil::api::AppError::invalid_cursor(), "page");
+        assert_eq!(
+            error.sentence,
+            gb_setup::Sentence::Key("integrations.resources.continuation".into(), vec![])
+        );
+        for lang in ["en", "ja"] {
+            assert_eq!(
+                message_for(branvil::api::AppError::unauthorized(), "authenticate", lang),
+                crate::i18n::t(lang, "integrations.branvil.api.authentication", &[])
+            );
+        }
+    }
+
+    #[test]
+    fn shared_errors_bound_provider_message_and_admin_authentication_is_distinct() {
+        let error = refused_for(
+            branvil::api::AppError::forbidden("x".repeat(501)),
+            "members_create",
+        );
+        let gb_setup::Sentence::Key(_, params) = error.sentence else {
+            panic!("key required")
+        };
+        assert_eq!(
+            params.iter().find(|(k, _)| k == "message").unwrap().1.len(),
+            500
+        );
+        assert_eq!(
+            admin_error(branvil::api::AppError::unauthorized(), "identity").sentence,
+            gb_setup::Sentence::Key("integrations.branvil.api.admin_refused".into(), vec![])
+        );
     }
 }

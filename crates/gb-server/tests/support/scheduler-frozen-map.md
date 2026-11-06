@@ -1394,21 +1394,21 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
   条件: status無し/レート制限status有りの両方、全retry項目のJSON完全往復。2member/2channel/別serviceを隔離して列挙。
 
-- `tests/guildbotics/integrations/test_chat_state_store.py::test_list_known_channels_unions_cursor_pending_and_threads` -> `#91：chat設定APIの受信backlogリセットと既知channel列挙。`
+- `tests/guildbotics/integrations/test_chat_state_store.py::test_list_known_channels_unions_cursor_pending_and_threads` -> `#132：chat設定APIの受信backlogリセットと既知channel列挙。`
 
-  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#91のAPI範囲。
+  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#132のAPI範囲。
 
 - `tests/guildbotics/integrations/test_chat_state_store.py::test_receive_cutoff_roundtrip` -> `crates/gb-server/src/chat_state.rs::thread_state_cache_and_channel_cursors_roundtrip_without_crossing_scopes`
 
   条件: 全thread項目・handoff・noticeを往復、cursor watermarkと処理済IDを共存、service/person/channelの3軸で隔離。cacheの編集置換と2件trim、botフラグ、本文canaryが共有stateに無いこと、既知thread列挙、cutoffのmember隔離。
 
-- `tests/guildbotics/integrations/test_chat_state_store.py::test_clear_channel_receive_backlog_drops_pending_and_threads` -> `#91：chat設定APIの受信backlogリセットと既知channel列挙。`
+- `tests/guildbotics/integrations/test_chat_state_store.py::test_clear_channel_receive_backlog_drops_pending_and_threads` -> `#132：chat設定APIの受信backlogリセットと既知channel列挙。`
 
-  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#91のAPI範囲。
+  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#132のAPI範囲。
 
-- `tests/guildbotics/integrations/test_chat_state_store.py::test_clear_channel_receive_backlog_empties_pending_when_unlink_fails` -> `#91：chat設定APIの受信backlogリセットと既知channel列挙。`
+- `tests/guildbotics/integrations/test_chat_state_store.py::test_clear_channel_receive_backlog_empties_pending_when_unlink_fails` -> `#132：chat設定APIの受信backlogリセットと既知channel列挙。`
 
-  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#91のAPI範囲。
+  条件: このrunのreceiverは既存cutoffを読む。画面からの設定変更/リセットの書込は#132のAPI範囲。
 
 ### tests/guildbotics/cli/test_service_api.py
 

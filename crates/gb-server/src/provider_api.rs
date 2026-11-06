@@ -18,9 +18,15 @@ use std::{
 
 pub(crate) struct Consent {
     verifier: String,
+    language: String,
     redirect: String,
-    created: Instant,
+    pub(crate) created: Instant,
     outcome: Option<Result<(), String>>,
+}
+impl Consent {
+    fn expired(&self) -> bool {
+        self.created.elapsed() > Duration::from_secs(600)
+    }
 }
 fn language(headers: &HeaderMap) -> &str {
     headers
@@ -46,8 +52,7 @@ async fn admin(api: &Shared) -> Result<branvil::api::MemberApi, gb_setup::SetupE
 }
 pub(crate) async fn providers() -> Json<Value> {
     Json(json!([
-    {"name":"branvil","title":"Branvil","kinds":["code_hosting_service","ticket_service"],"avatar":false},
-    {"name":"local","title":"Local","kinds":["code_hosting_service","ticket_service","chat_service"],"avatar":false},
+    {"name":"branvil","title":"Branvil","kinds":["ticket_service","code_hosting_service"],"avatar":false},
     {"name":"slack","title":"Slack","kinds":["chat_service"],"avatar":true}
     ]))
 }
@@ -62,7 +67,10 @@ pub(crate) async fn connect(
         return error(unavailable(), &headers);
     };
     if let Err(e) = data.health() {
-        return error(super::setup_providers::accounts::refused(e), &headers);
+        return error(
+            super::setup_providers::accounts::refused_for(e, "health"),
+            &headers,
+        );
     }
     let state = loopback_auth::random_secret::<32>();
     let verifier = loopback_auth::random_secret::<48>();
@@ -79,11 +87,12 @@ pub(crate) async fn connect(
         )
         .append_pair("code_challenge_method", "S256");
     let mut consents = api.consents.lock().await;
-    consents.retain(|_, c| c.created.elapsed() <= Duration::from_secs(600));
+    consents.retain(|_, c| !c.expired());
     consents.insert(
         state.clone(),
         Consent {
             verifier,
+            language: language(&headers).to_owned(),
             redirect,
             created: Instant::now(),
             outcome: None,
@@ -105,6 +114,11 @@ pub(crate) async fn connection(
     {
         let mut consents = api.consents.lock().await;
         if let Some(c) = consents.get(&query.state) {
+            if c.expired() {
+                let reason = crate::i18n::t(&c.language, "integrations.branvil.setup.expired", &[]);
+                consents.remove(&query.state);
+                return Json(empty("disconnected", reason)).into_response();
+            }
             match &c.outcome {
                 None => return Json(empty("pending", String::new())).into_response(),
                 Some(Err(reason)) => {
@@ -118,17 +132,20 @@ pub(crate) async fn connection(
             }
         }
     }
-    let binary = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(e) => return error(e, &headers),
-    };
+    let binary = api.home.join(".guildbotics/bin/guildbotics");
     match Registry(Some(api.clone())).admin().await {
         Ok(Some((data,member)))=>match member.identity().await {
             Ok(owner)=>Json(json!({"status":"connected","base_url":data.base_url(),"owner":owner.name,"message":"","git_config":git_config(data.base_url(),&binary)})).into_response(),
-            Err(e)=>Json(empty("disconnected",crate::setup_providers::accounts::message(e, language(&headers)))).into_response(),
+            Err(e) => {
+                let failure = crate::setup_providers::accounts::refused_for(e, "identity");
+                if failure.status >= 500 { error(failure, &headers) } else {
+                    Json(empty("disconnected", crate::setup_providers::accounts::render(failure, language(&headers)))).into_response()
+                }
+            },
         },
         Ok(None)=>Json(empty("disconnected",String::new())).into_response(),
-        Err(e)=>{let message=match e.sentence {gb_setup::Sentence::Key(k,_)=>text(&headers,&k),gb_setup::Sentence::Text(t)=>t};Json(empty("disconnected",message)).into_response()}
+        Err(e) if e.status >= 500 => error(e, &headers),
+        Err(e)=>{let message=crate::setup_providers::accounts::render(e, language(&headers));Json(empty("disconnected",message)).into_response()}
     }
 }
 fn escaped(s: &str) -> String {
@@ -166,6 +183,16 @@ async fn connected_task(
             Err(text(&headers, "integrations.branvil.setup.expired")),
         );
     };
+    let mut headers = headers;
+    if let Ok(value) = c.language.parse() {
+        headers.insert("x-guildbotics-language", value);
+    }
+    if c.expired() {
+        return page(
+            &headers,
+            Err(text(&headers, "integrations.branvil.setup.expired")),
+        );
+    }
     if c.outcome.is_none() {
         let outcome =
             if query.contains_key("error") || query.get("code").is_none_or(|c| c.is_empty()) {
@@ -179,8 +206,9 @@ async fn connected_task(
                     })
                     .await
                 {
-                    Err(e) => Err(crate::setup_providers::accounts::message(
+                    Err(e) => Err(crate::setup_providers::accounts::message_for(
                         e,
+                        "exchange",
                         language(&headers),
                     )),
                     Ok(token) => {
@@ -203,6 +231,7 @@ async fn connected_task(
     page(&headers, c.outcome.clone().expect("completed exchange"))
 }
 fn page(headers: &HeaderMap, outcome: Result<(), String>) -> Response {
+    let failed = outcome.is_err();
     let (status, title, detail) = match outcome {
         Ok(()) => (
             StatusCode::OK,
@@ -215,7 +244,15 @@ fn page(headers: &HeaderMap, outcome: Result<(), String>) -> Response {
             reason,
         ),
     };
-    (status,Html(format!("<!doctype html><html><meta charset=\"utf-8\"><title>{}</title><h1>{}</h1><p>{}</p></html>",escaped(&title),escaped(&title),escaped(&detail)))).into_response()
+    let retry = if failed {
+        format!(
+            "<p>{}</p>",
+            escaped(&text(headers, "integrations.branvil.setup.retry"))
+        )
+    } else {
+        String::new()
+    };
+    (status,Html(format!("<!doctype html><html><meta charset=\"utf-8\"><title>{}</title><h1>{}</h1><p>{}</p>{}</html>",escaped(&title),escaped(&title),escaped(&detail),retry))).into_response()
 }
 fn keep(api: &Shared, base: &str, token: &str) -> anyhow::Result<()> {
     use gb_config::{
@@ -263,11 +300,10 @@ async fn list_workspaces(api: &Shared) -> Result<Vec<String>, gb_setup::SetupErr
     loop {
         let page = member
             .page("setup-workspaces".into(), Some(100), cursor.as_deref())
-            .map_err(super::setup_providers::accounts::refused)?;
-        let page = member
-            .repos_list_workspaces(page)
-            .await
-            .map_err(super::setup_providers::accounts::refused)?;
+            .map_err(|e| super::setup_providers::accounts::refused_for(e, "page"))?;
+        let page = member.repos_list_workspaces(page).await.map_err(|e| {
+            super::setup_providers::accounts::refused_for(e, "repos_list_workspaces")
+        })?;
         items.extend(page.items.into_iter().map(|v| v.name));
         cursor = page.next_cursor;
         if cursor.is_none() {
@@ -296,7 +332,9 @@ pub(crate) async fn create_workspace(
         let m = admin(&api).await?;
         m.repos_create_workspace(branvil::api::repos::NewWorkspace { name: input.name })
             .await
-            .map_err(super::setup_providers::accounts::refused)?;
+            .map_err(|e| {
+                super::setup_providers::accounts::refused_for(e, "repos_create_workspace")
+            })?;
         list_workspaces(&api).await
     };
     match action.await {
@@ -316,11 +354,11 @@ pub(crate) async fn agents(
         loop {
             let p = m
                 .page("setup-agents".into(), Some(100), cursor.as_deref())
-                .map_err(super::setup_providers::accounts::refused)?;
+                .map_err(|e| super::setup_providers::accounts::refused_for(e, "page"))?;
             let p = m
                 .members_list(p)
                 .await
-                .map_err(super::setup_providers::accounts::refused)?;
+                .map_err(|e| super::setup_providers::accounts::refused_for(e, "members_list"))?;
             items.extend(
                 p.items
                     .into_iter()
@@ -348,7 +386,7 @@ pub(crate) async fn entry(
             .await?
             .entry_link()
             .await
-            .map_err(super::setup_providers::accounts::refused)
+            .map_err(|e| super::setup_providers::accounts::refused_for(e, "entry_link"))
     }
     .await
     {

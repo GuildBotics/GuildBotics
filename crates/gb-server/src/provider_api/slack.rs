@@ -1,5 +1,36 @@
 //! Slack registration and probes: no credential values reach responses or logs.
 use super::*;
+fn error(e: impl Into<anyhow::Error>, headers: &HeaderMap) -> Response {
+    let e = e.into();
+    if let Some(file) = e.downcast_ref::<gb_config::ConfigFile>() {
+        return crate::api::ApiError::new(
+            StatusCode::BAD_REQUEST,
+            if file.path().ends_with("team/project.yml") {
+                "project_config_invalid"
+            } else {
+                "member_config_invalid"
+            },
+            headers,
+        )
+        .reason(file.to_string())
+        .context(json!({"path":file.path()}))
+        .into_response();
+    }
+    super::error(e, headers)
+}
+fn check_prefix(identity: &std::path::Path, id: &str) -> anyhow::Result<()> {
+    gb_config::team::person_secret_prefix(identity, id)
+        .map(|_| ())
+        .map_err(|e| {
+            gb_config::ConfigFile::wrap(
+                identity
+                    .join(".guildbotics/config/team/members")
+                    .join(id)
+                    .join("identity.yml"),
+                e,
+            )
+        })
+}
 const APPS: &str = "https://api.slack.com/apps";
 #[derive(Deserialize)]
 pub(crate) struct Registration {
@@ -23,8 +54,9 @@ pub(crate) async fn registration(headers: HeaderMap, Body(input): Body<Registrat
         );
     }
     let manifest = manifest(name);
-    let encoded =
-        url::form_urlencoded::byte_serialize(manifest.to_string().as_bytes()).collect::<String>();
+    let encoded = url::form_urlencoded::byte_serialize(manifest.to_string().as_bytes())
+        .collect::<String>()
+        .replace('+', "%20");
     Json(json!({"app_name":name,"registration_url":format!("{APPS}?new_app=1&manifest_json={encoded}"),"app_directory_url":APPS})).into_response()
 }
 fn manifest(name: &str) -> Value {
@@ -62,6 +94,32 @@ fn effective(entered: String, stored: &str) -> (String, &'static str) {
         (String::new(), "none")
     }
 }
+fn validate_member(setup: &gb_setup::Setup<'_>, id: &str) -> anyhow::Result<()> {
+    let identities = setup.repository.identity_view();
+    for (view, file) in [
+        (&identities, "identity"),
+        (setup.repository.view(), "member"),
+    ] {
+        let name = format!("team/members/{id}/{file}.yml");
+        let path = view.path(&name)?;
+        let snapshot = view
+            .read_config(&name)
+            .map_err(|e| gb_config::ConfigFile::wrap(&path, e))?;
+        if let Some(snapshot) = snapshot {
+            let value = snapshot
+                .value()
+                .map_err(|e| gb_config::ConfigFile::wrap(&path, e))?;
+            if !value.is_object() && !value.is_null() {
+                return Err(gb_config::ConfigFile::wrap(
+                    &path,
+                    anyhow::anyhow!("not a YAML mapping"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn saved(
     api: &Shared,
     workspace: Option<std::path::PathBuf>,
@@ -73,15 +131,13 @@ async fn saved(
     let id = id.to_owned();
     let identity = api.identity_root.clone();
     crate::config_api::with_setup(api, workspace, move |setup| {
+        if gb_config::team::valid_person_id(&id) {
+            validate_member(setup, &id)?;
+        }
         let members = setup.list_members()?;
         for member in &members {
-            if gb_config::team::person_secret_prefix(&identity, &member.person_id).is_err() {
-                return Err(gb_setup::SetupError::new(
-                    "member_config_invalid",
-                    "app_api.errors.member_config_invalid",
-                )
-                .into());
-            }
+            validate_member(setup, &member.person_id)?;
+            check_prefix(&identity, &member.person_id)?;
         }
         if !members.iter().any(|m| m.person_id == id) {
             return Ok(None);
@@ -90,18 +146,25 @@ async fn saved(
     })
     .await
 }
-fn base_url(workspace: Option<&std::path::Path>) -> String {
-    workspace
-        .and_then(|w| std::fs::read_to_string(w.join(".guildbotics/config/team/project.yml")).ok())
-        .and_then(|s| gb_config::yaml_value(&s).ok())
-        .and_then(|v| {
-            v["services"]["chat_service"]["base_url"]
-                .as_str()
-                .map(str::to_owned)
-        })
+fn base_url(workspace: Option<&std::path::Path>) -> anyhow::Result<String> {
+    let default = || "https://slack.com/api".to_owned();
+    let Some(workspace) = workspace else {
+        return Ok(default());
+    };
+    let path = workspace.join(".guildbotics/config/team/project.yml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(default()),
+        Err(e) => return Err(gb_config::ConfigFile::wrap(&path, e.into())),
+    };
+    let value = gb_config::yaml_value(&text).map_err(|e| gb_config::ConfigFile::wrap(&path, e))?;
+    Ok(value["services"]["chat_service"]["base_url"]
+        .as_str()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://slack.com/api".into())
+        .map(str::to_owned)
+        .unwrap_or_else(default))
 }
+
 struct Probe {
     http: reqwest::Client,
     base: String,
@@ -114,12 +177,7 @@ impl Probe {
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(10))
                 .build()
-                .map_err(|_| {
-                    gb_setup::SetupError::new(
-                        "avatar_import_failed",
-                        "app_api.errors.avatar_import_failed",
-                    )
-                })?,
+                .map_err(|_| avatar_error())?,
         })
     }
     async fn call(
@@ -170,10 +228,10 @@ pub(crate) async fn verify(
     Body(input): Body<TokenCheck>,
 ) -> Response {
     let workspace = api.selected().workspace.clone();
-    let stored = saved(&api, workspace.clone(), &input.person_id)
-        .await
-        .ok()
-        .flatten();
+    let stored = match saved(&api, workspace.clone(), &input.person_id).await {
+        Ok(member) => member,
+        Err(e) => return error(e, &headers),
+    };
     let bot = stored
         .as_ref()
         .map(|m| m.secret("SLACK_BOT_TOKEN"))
@@ -182,7 +240,11 @@ pub(crate) async fn verify(
         .as_ref()
         .map(|m| m.secret("SLACK_APP_TOKEN"))
         .unwrap_or("");
-    match Probe::new(base_url(workspace.as_deref())) {
+    let base = match base_url(workspace.as_deref()) {
+        Ok(base) => base,
+        Err(e) => return error(e, &headers),
+    };
+    match Probe::new(base) {
         Ok(probe) => Json(verify_tokens(&probe, input, bot, app).await).into_response(),
         Err(e) => error(e, &headers),
     }
@@ -343,9 +405,8 @@ pub(crate) async fn avatar(
         return ApiError::new(StatusCode::NOT_FOUND, "avatar_provider_unknown", &headers)
             .into_response();
     }
-    if gb_config::team::person_secret_prefix(&api.identity_root, &id).is_err() {
-        return ApiError::new(StatusCode::BAD_REQUEST, "member_config_invalid", &headers)
-            .into_response();
+    if let Err(e) = check_prefix(&api.identity_root, &id) {
+        return error(e, &headers);
     }
     let workspace = api.selected().workspace.clone();
     let member = match saved(&api, workspace.clone(), &id).await {
@@ -353,6 +414,7 @@ pub(crate) async fn avatar(
         Err(e) => return error(e, &headers),
         Ok(None) => {
             return ApiError::new(StatusCode::BAD_REQUEST, "person_not_found", &headers)
+                .key("person_not_found.plain", vec![("person", id.clone())])
                 .into_response();
         }
     };
@@ -375,7 +437,7 @@ pub(crate) async fn avatar(
             })
             .await?;
             for m in ids {
-                if let Ok(Some(m)) = saved(&api, Some(workspace.clone()), &m.person_id).await
+                if let Some(m) = saved(&api, Some(workspace.clone()), &m.person_id).await?
                     && !m.secret("SLACK_BOT_TOKEN").is_empty()
                 {
                     token = m.secret("SLACK_BOT_TOKEN").into();
@@ -386,7 +448,7 @@ pub(crate) async fn avatar(
         if token.is_empty() {
             return Err(avatar_setup("avatar_token_missing", "token_missing").into());
         }
-        let probe = Probe::new(base_url(workspace.as_deref()))?;
+        let probe = Probe::new(base_url(workspace.as_deref())?)?;
         let user = if user.is_empty() {
             probe
                 .call("auth.test", &token, &[])
@@ -471,6 +533,23 @@ pub(crate) async fn avatar(
     }
 }
 
+fn diagnostic_error(lang: &str, key: &str, method: &str, code: &str) -> String {
+    let detail = crate::i18n::t(
+        lang,
+        if code == "unreachable" {
+            "integrations.slack.setup.api_unreachable"
+        } else {
+            "integrations.slack.setup.api_failed"
+        },
+        &[("method", method), ("error", code)],
+    );
+    crate::i18n::t(
+        lang,
+        &format!("integrations.slack.setup.{key}"),
+        &[("detail", &detail)],
+    )
+}
+
 pub(crate) async fn diagnose(
     api: Option<&Shared>,
     members: &[(&gb_setup::SavedMember, Vec<Value>)],
@@ -483,6 +562,17 @@ pub(crate) async fn diagnose(
             .as_ref()
             .and_then(|selected| selected.workspace.as_deref()),
     );
+    let base = match base {
+        Ok(base) => base,
+        Err(e) => {
+            let mut check = Check::new("slack", "project_config_invalid", "error", e.to_string());
+            if let Some(file) = e.downcast_ref::<gb_config::ConfigFile>() {
+                check.target = file.path().display().to_string();
+                check.context = json!({"path":file.path()});
+            }
+            return vec![check];
+        }
+    };
     let probe = Probe::new(base);
     let mut checks = vec![];
     let mut subscribed = false;
@@ -549,12 +639,29 @@ pub(crate) async fn diagnose(
             )
             .member(member, true);
             if let Err((code, _)) = outcome {
-                c.message = format!("{}: {code}", c.message);
+                c.message = diagnostic_error(lang, "app_failed", "apps.connections.open", &code);
                 c.target =
                     gb_config::team::person_secret_name(&member.person_id, "SLACK_APP_TOKEN");
                 c.context = json!({"error_type":if code=="unreachable"{"SlackUnreachableError"}else{"SlackApiError"}});
             }
             checks.push(c);
+        }
+        if member.secret("SLACK_BOT_TOKEN").is_empty() {
+            let key = gb_config::team::person_secret_name(&member.person_id, "SLACK_BOT_TOKEN");
+            let mut c = Check::new(
+                "slack",
+                "slack_access",
+                "error",
+                crate::i18n::t(
+                    lang,
+                    "integrations.slack.setup.bot_missing",
+                    &[("key", &key)],
+                ),
+            )
+            .member(member, true);
+            c.context = json!({"error_type":"ServiceError"});
+            checks.push(c);
+            continue;
         }
         let bot_start = checks.len();
         match call("auth.test", member.secret("SLACK_BOT_TOKEN"), &[]).await {
@@ -563,7 +670,7 @@ pub(crate) async fn diagnose(
                     "slack",
                     "slack_access",
                     "error",
-                    format!("{}: {code}", message("bot_failed")),
+                    diagnostic_error(lang, "bot_failed", "auth.test", &code),
                 )
                 .member(member, true);
                 c.context = json!({"error_type":if code=="unreachable"{"SlackUnreachableError"}else{"SlackApiError"}});
@@ -619,10 +726,15 @@ pub(crate) async fn diagnose(
                     }
                     if code == "slack_access" {
                         checks.truncate(bot_start);
-                        c.message = format!(
-                            "{}: {}",
-                            c.message,
-                            outcome.as_ref().err().map(String::as_str).unwrap_or("")
+                        c.message = diagnostic_error(
+                            lang,
+                            "bot_failed",
+                            if resolved.is_empty() {
+                                "conversations.list"
+                            } else {
+                                "conversations.history"
+                            },
+                            outcome.as_ref().err().map(String::as_str).unwrap_or(""),
                         );
                         c.context = json!({"error_type":if outcome.as_ref().err().is_some_and(|s|s=="unreachable"){"SlackUnreachableError"}else{"SlackApiError"}});
                         checks.push(c);
