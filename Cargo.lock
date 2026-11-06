@@ -2188,7 +2188,6 @@ dependencies = [
  "cap-std",
  "chrono",
  "croner",
- "dotenvy",
  "futures-util",
  "gb-base",
  "gb-config",

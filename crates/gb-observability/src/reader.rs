@@ -13,6 +13,11 @@ fn stamp(value: &Value) -> (i64, String) {
     (
         chrono::DateTime::parse_from_rfc3339(s)
             .map(|d| d.timestamp_micros())
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f"))
+                    .map(|d| d.and_utc().timestamp_micros())
+            })
             .unwrap_or(0),
         s.into(),
     )
@@ -128,10 +133,19 @@ impl Diagnostics {
                     let path = self.sessions.join(format!("{}.jsonl", safe_id(&id)));
                     let query = query.unwrap_or_default().to_lowercase();
                     read_records(&path)?.into_iter().any(|record| {
-                        serde_json::Value::Object(record)
-                            .to_string()
-                            .to_lowercase()
-                            .contains(&query)
+                        ["message", "type", "span"].iter().any(|key| {
+                            record
+                                .get(*key)
+                                .and_then(Value::as_str)
+                                .is_some_and(|value| value.to_lowercase().contains(&query))
+                        }) || ["payload", "attributes"].iter().any(|key| {
+                            record
+                                .get(*key)
+                                .filter(|value| !value.is_null() && **value != json!({}))
+                                .is_some_and(|value| {
+                                    value.to_string().to_lowercase().contains(&query)
+                                })
+                        })
                     })
                 } else {
                     false
@@ -172,11 +186,16 @@ impl Diagnostics {
         let Some(id) = id else {
             return Ok(json!({"trace_id":"", "records":[]}));
         };
-        let mut records = read_records(&self.sessions.join(format!("{}.jsonl", safe_id(id))))?;
+        let mut records: Vec<_> =
+            read_records(&self.sessions.join(format!("{}.jsonl", safe_id(id))))?
+                .into_iter()
+                .map(Value::Object)
+                .collect();
+        records.sort_by_key(stamp);
         let start = records.len().saturating_sub(limit);
         Ok(json!({
             "trace_id": format!("system:{id}"),
-            "records": records.drain(start..).map(|r| record(&Value::Object(r))).collect::<Vec<_>>(),
+            "records": records.drain(start..).map(|r| record(&r)).collect::<Vec<_>>(),
         }))
     }
 

@@ -123,7 +123,7 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
         let destination = metadata["destination"]
             .as_str()
             .ok_or_else(|| client.invalid_response())?;
-        let destination = gb_base::host_path::normalize(Path::new(destination))?;
+        let destination = super::caller_path(Path::new(destination))?;
         let attachment = metadata["attachment"]
             .as_array()
             .filter(|values| !values.is_empty());

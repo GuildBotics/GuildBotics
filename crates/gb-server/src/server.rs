@@ -21,7 +21,10 @@ pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 
 /// The port as this machine names it.
 pub fn port() -> anyhow::Result<u16> {
-    let raw = std::env::var(PORT_ENV).unwrap_or_default();
+    parse_port(&std::env::var(PORT_ENV).unwrap_or_default())
+}
+
+fn parse_port(raw: &str) -> anyhow::Result<u16> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(DEFAULT_PORT);
@@ -173,9 +176,11 @@ impl Server {
         announce(port)?;
         // A workspace that cannot be opened leaves the server running for
         // the screens to choose another.
+        let language = crate::client::language().await;
         let workspace = gb_workspace::selection::restore(&data, |name| std::env::var_os(name))
             .unwrap_or_else(|e| {
-                tracing::error!("cannot open the selected workspace: {e:#}");
+                let error = crate::workspace::registry_error(e, language);
+                tracing::error!("{error:#}");
                 None
             });
         let work = tokio_util::task::TaskTracker::new();
@@ -362,6 +367,24 @@ mod tests {
             u32::try_from(record["pid"].as_u64()?).ok()?,
             u16::try_from(record["port"].as_u64()?).ok()?,
         ))
+    }
+
+    #[test]
+    fn port_settings_allow_only_decimal_tcp_ports() {
+        for (raw, expected) in [
+            ("", DEFAULT_PORT),
+            ("  ", DEFAULT_PORT),
+            (" 008765 ", 8765),
+            ("65535", 65535),
+        ] {
+            assert_eq!(parse_port(raw).unwrap(), expected);
+        }
+        for raw in ["0", "-1", "+42", "65536", "localhost", "42.5", "１２"] {
+            assert!(
+                parse_port(raw).unwrap_err().to_string().contains(PORT_ENV),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

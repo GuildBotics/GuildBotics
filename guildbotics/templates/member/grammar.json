@@ -7,7 +7,8 @@
       },
       {
         "spelling": "--check-credentials",
-        "flag": true
+        "flag": true,
+        "help": "Also verify the member's provider credentials."
       },
       {
         "spelling": "--format",
@@ -19,12 +20,14 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Show non-secret member context."
   },
   "help": {
     "options": [],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Print the member capability reference (commands and cross-cutting rules). This is the same reference embedded in ``member context``; use it to reread the available commands without re-running the full context."
   },
   "memory record": {
     "options": [
@@ -38,35 +41,43 @@
         "choices": [
           "personal",
           "team"
-        ]
+        ],
+        "help": "Store as personal or team memory."
       },
       {
         "spelling": "--title",
-        "required": true
+        "required": true,
+        "help": "Document title."
       },
       {
         "spelling": "--summary",
-        "default": ""
+        "default": "",
+        "help": "One-line summary shown in recall hits and the digest."
       },
       {
         "spelling": "--keyword",
-        "multiple": true
+        "multiple": true,
+        "help": "Recall keyword. May be repeated."
       },
       {
         "spelling": "--ticket",
-        "multiple": true
+        "multiple": true,
+        "help": "Related ticket URL (source anchor). May be repeated."
       },
       {
         "spelling": "--pr",
-        "multiple": true
+        "multiple": true,
+        "help": "Related PR URL (source anchor). May be repeated."
       },
       {
         "spelling": "--channel",
-        "multiple": true
+        "multiple": true,
+        "help": "Related chat channel URL (source anchor). May be repeated."
       },
       {
         "spelling": "--thread",
-        "multiple": true
+        "multiple": true,
+        "help": "Related chat thread URL (source anchor). May be repeated."
       },
       {
         "spelling": "--kind",
@@ -74,11 +85,13 @@
         "choices": [
           "note",
           "policy"
-        ]
+        ],
+        "help": "Document kind; 'policy' requires --policy-approved."
       },
       {
         "spelling": "--pin",
-        "flag": true
+        "flag": true,
+        "help": "Pin as a standing rule included in member context."
       },
       {
         "spelling": "--content-file",
@@ -90,11 +103,13 @@
       },
       {
         "spelling": "--policy-approved",
-        "flag": true
+        "flag": true,
+        "help": "Confirm that a human approved this policy memory change."
       },
       {
         "spelling": "--set",
-        "multiple": true
+        "multiple": true,
+        "help": "Extra metadata as key=value. May be repeated."
       },
       {
         "spelling": "--format",
@@ -106,7 +121,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Create a memory document and move it to the front of the digest."
   },
   "memory recall": {
     "options": [
@@ -116,18 +132,21 @@
       },
       {
         "spelling": "--query",
-        "multiple": true
+        "multiple": true,
+        "help": "Literal search query; repeat for OR matching."
       },
       {
         "spelling": "--meta-only",
-        "flag": true
+        "flag": true,
+        "help": "Return hit metadata without body excerpts."
       },
       {
         "spelling": "--limit",
         "default": 20,
         "integer": true,
         "min": 1,
-        "max": 200
+        "max": 200,
+        "help": "Maximum number of hits."
       },
       {
         "spelling": "--format",
@@ -139,7 +158,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Search personal and team memory by literal OR queries and return compact hits."
   },
   "memory get": {
     "options": [
@@ -149,13 +169,15 @@
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "Memory document id."
       },
       {
         "spelling": "--team",
         "default": null,
         "flag": true,
-        "flag_value": "team"
+        "flag_value": "team",
+        "help": "Operate on team memory instead of personal memory."
       },
       {
         "spelling": "--format",
@@ -167,7 +189,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Read one memory document's metadata and body without changing recency."
   },
   "memory update": {
     "options": [
@@ -177,65 +200,79 @@
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "Memory document id."
       },
       {
         "spelling": "--team",
         "default": null,
         "flag": true,
-        "flag_value": "team"
+        "flag_value": "team",
+        "help": "Operate on team memory instead of personal memory."
       },
       {
-        "spelling": "--title"
+        "spelling": "--title",
+        "help": "New document title."
       },
       {
-        "spelling": "--summary"
+        "spelling": "--summary",
+        "help": "New one-line summary."
       },
       {
         "spelling": "--keyword",
-        "multiple": true
+        "multiple": true,
+        "help": "Replace all recall keywords. May be repeated."
       },
       {
         "spelling": "--add-keyword",
-        "multiple": true
+        "multiple": true,
+        "help": "Add a recall keyword. May be repeated."
       },
       {
         "spelling": "--remove-keyword",
-        "multiple": true
+        "multiple": true,
+        "help": "Remove a recall keyword. May be repeated."
       },
       {
         "spelling": "--ticket",
-        "multiple": true
+        "multiple": true,
+        "help": "Related ticket URL (source anchor). May be repeated."
       },
       {
         "spelling": "--pr",
-        "multiple": true
+        "multiple": true,
+        "help": "Related PR URL (source anchor). May be repeated."
       },
       {
         "spelling": "--channel",
-        "multiple": true
+        "multiple": true,
+        "help": "Related chat channel URL (source anchor). May be repeated."
       },
       {
         "spelling": "--thread",
-        "multiple": true
+        "multiple": true,
+        "help": "Related chat thread URL (source anchor). May be repeated."
       },
       {
         "spelling": "--pin",
         "default": null,
         "flag": true,
-        "flag_value": true
+        "flag_value": true,
+        "help": "Pin as a standing rule included in member context."
       },
       {
         "spelling": "--unpin",
         "flag": true,
-        "flag_value": false
+        "flag_value": false,
+        "help": "Remove the pin."
       },
       {
         "spelling": "--kind",
         "choices": [
           "note",
           "policy"
-        ]
+        ],
+        "help": "Change the document kind; 'policy' requires --policy-approved."
       },
       {
         "spelling": "--content-file",
@@ -247,11 +284,13 @@
       },
       {
         "spelling": "--policy-approved",
-        "flag": true
+        "flag": true,
+        "help": "Confirm that a human approved this policy memory change."
       },
       {
         "spelling": "--set",
-        "multiple": true
+        "multiple": true,
+        "help": "Extra metadata as key=value. May be repeated."
       },
       {
         "spelling": "--format",
@@ -263,7 +302,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Replace selected body or metadata fields and move the document to the digest front."
   },
   "memory touch": {
     "options": [
@@ -273,13 +313,15 @@
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "Memory document id."
       },
       {
         "spelling": "--team",
         "default": null,
         "flag": true,
-        "flag_value": "team"
+        "flag_value": "team",
+        "help": "Operate on team memory instead of personal memory."
       },
       {
         "spelling": "--format",
@@ -291,7 +333,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Mark a useful memory as actually used by moving it to the digest front."
   },
   "memory archive": {
     "options": [
@@ -301,17 +344,20 @@
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "Memory document id."
       },
       {
         "spelling": "--team",
         "default": null,
         "flag": true,
-        "flag_value": "team"
+        "flag_value": "team",
+        "help": "Operate on team memory instead of personal memory."
       },
       {
         "spelling": "--policy-approved",
-        "flag": true
+        "flag": true,
+        "help": "Confirm that a human approved this policy memory change."
       },
       {
         "spelling": "--format",
@@ -323,7 +369,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Move a stale memory under archived/ and remove it from recall and digest."
   },
   "memory promote": {
     "options": [
@@ -333,7 +380,8 @@
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "Memory document id."
       },
       {
         "spelling": "--format",
@@ -345,7 +393,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Move a personal memory into team memory without changing the document id."
   },
   "chat identity": {
     "options": [
@@ -363,7 +412,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Show the member's chat identity."
   },
   "chat updates": {
     "options": [
@@ -381,7 +431,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable."
   },
   "chat inspect channel": {
     "options": [
@@ -391,26 +442,31 @@
       },
       {
         "spelling": "--channel-id",
-        "default": ""
+        "default": "",
+        "help": "Channel id of the target channel."
       },
       {
         "spelling": "--channel-name",
-        "default": ""
+        "default": "",
+        "help": "Channel name (alternative to --channel-id)."
       },
       {
         "spelling": "--since",
-        "default": null
+        "default": null,
+        "help": "Only include messages that occurred at or after this time (ISO 8601; local time without an offset)."
       },
       {
         "spelling": "--until",
-        "default": null
+        "default": null,
+        "help": "Only include messages that occurred at or before this time (ISO 8601; local time without an offset)."
       },
       {
         "spelling": "--limit",
         "default": 50,
         "integer": true,
         "min": 1,
-        "max": 200
+        "max": 200,
+        "help": "Maximum number of messages."
       },
       {
         "spelling": "--format",
@@ -422,7 +478,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Read recent channel messages."
   },
   "chat resolve-channel": {
     "options": [
@@ -432,7 +489,8 @@
       },
       {
         "spelling": "--channel-name",
-        "required": true
+        "required": true,
+        "help": "Channel name to resolve."
       },
       {
         "spelling": "--format",
@@ -444,7 +502,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name."
   },
   "chat inspect thread": {
     "options": [
@@ -454,26 +513,31 @@
       },
       {
         "spelling": "--channel-id",
-        "default": ""
+        "default": "",
+        "help": "Channel id of the target channel."
       },
       {
         "spelling": "--channel-name",
-        "default": ""
+        "default": "",
+        "help": "Channel name (alternative to --channel-id)."
       },
       {
         "spelling": "--thread-id",
-        "default": ""
+        "default": "",
+        "help": "Thread id (with --channel-id)."
       },
       {
         "spelling": "--message-url",
-        "default": ""
+        "default": "",
+        "help": "Chat message URL (alternative to --channel-id with --thread-id)."
       },
       {
         "spelling": "--limit",
         "default": 100,
         "integer": true,
         "min": 1,
-        "max": 200
+        "max": 200,
+        "help": "Maximum number of messages."
       },
       {
         "spelling": "--format",
@@ -484,11 +548,13 @@
         ]
       },
       {
-        "spelling": "--cursor"
+        "spelling": "--cursor",
+        "help": "Return messages before this opaque position."
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Read a thread before replying or reacting."
   },
   "chat post": {
     "options": [
@@ -498,11 +564,13 @@
       },
       {
         "spelling": "--channel-id",
-        "default": ""
+        "default": "",
+        "help": "Channel id of the target channel."
       },
       {
         "spelling": "--channel-name",
-        "default": ""
+        "default": "",
+        "help": "Channel name (alternative to --channel-id)."
       },
       {
         "spelling": "--content-file",
@@ -522,7 +590,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Post a new channel message."
   },
   "chat reply": {
     "options": [
@@ -532,19 +601,23 @@
       },
       {
         "spelling": "--channel-id",
-        "default": ""
+        "default": "",
+        "help": "Channel id of the target channel."
       },
       {
         "spelling": "--channel-name",
-        "default": ""
+        "default": "",
+        "help": "Channel name (alternative to --channel-id)."
       },
       {
         "spelling": "--thread-id",
-        "default": ""
+        "default": "",
+        "help": "Thread id (with --channel-id)."
       },
       {
         "spelling": "--message-url",
-        "default": ""
+        "default": "",
+        "help": "Chat message URL (alternative to --channel-id with --thread-id)."
       },
       {
         "spelling": "--content-file",
@@ -564,7 +637,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Reply in a thread in the member voice."
   },
   "chat reaction add": {
     "options": [
@@ -574,19 +648,23 @@
       },
       {
         "spelling": "--channel-id",
-        "default": ""
+        "default": "",
+        "help": "Channel id of the target channel."
       },
       {
         "spelling": "--channel-name",
-        "default": ""
+        "default": "",
+        "help": "Channel name (alternative to --channel-id)."
       },
       {
         "spelling": "--message-id",
-        "default": ""
+        "default": "",
+        "help": "Message id (with --channel-id)."
       },
       {
         "spelling": "--message-url",
-        "default": ""
+        "default": "",
+        "help": "Chat message URL (alternative to --channel-id with --message-id)."
       },
       {
         "spelling": "--reaction",
@@ -596,7 +674,8 @@
           "agree",
           "celebrate",
           "support"
-        ]
+        ],
+        "help": "Semantic reaction to add."
       },
       {
         "spelling": "--format",
@@ -608,7 +687,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Add a semantic reaction."
   },
   "chat noop": {
     "options": [
@@ -634,7 +714,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Record a deliberate no-op for the chat run's event."
   },
   "chat complete": {
     "options": [
@@ -649,7 +730,8 @@
           "done",
           "asking",
           "blocked"
-        ]
+        ],
+        "help": "Run outcome."
       },
       {
         "spelling": "--content-file",
@@ -669,7 +751,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Finish the chat workflow run on its event with evidence."
   },
   "git show": {
     "options": [
@@ -679,12 +762,14 @@
       },
       {
         "spelling": "--repo",
-        "required": true
+        "required": true,
+        "help": "Repository path of the code host."
       },
       {
         "spelling": "--path",
         "required": true,
-        "multiple": true
+        "multiple": true,
+        "help": "Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root."
       },
       {
         "spelling": "--format",
@@ -696,7 +781,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval."
   },
   "git prepare": {
     "options": [
@@ -706,19 +792,23 @@
       },
       {
         "spelling": "--issue-url",
-        "default": ""
+        "default": "",
+        "help": "Ticket URL to prepare a workspace for."
       },
       {
         "spelling": "--pr-url",
-        "default": ""
+        "default": "",
+        "help": "PR URL whose head branch to check out."
       },
       {
         "spelling": "--repo",
-        "default": ""
+        "default": "",
+        "help": "Repository path (owner/repo on GitHub): with --branch, or with --issue-url for a ticket that belongs to no repository."
       },
       {
         "spelling": "--branch",
-        "default": ""
+        "default": "",
+        "help": "Branch to create or check out (with --repo)."
       },
       {
         "spelling": "--format",
@@ -730,7 +820,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them."
   },
   "git commit": {
     "options": [
@@ -741,7 +832,8 @@
       {
         "spelling": "--repo-path",
         "required": true,
-        "path": "git"
+        "path": "git",
+        "help": "Path to the member repository workspace."
       },
       {
         "spelling": "--content-file",
@@ -757,7 +849,8 @@
         "choices": [
           "member",
           "current"
-        ]
+        ],
+        "help": "Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session."
       },
       {
         "spelling": "--format",
@@ -769,7 +862,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Commit already-staged changes with the member identity. Stage the files you want with plain git (e.g. ``git add``) first; this command commits only what is staged and applies the member name/email to that single commit without changing the repository's git config."
   },
   "git push": {
     "options": [
@@ -780,7 +874,8 @@
       {
         "spelling": "--repo-path",
         "required": true,
-        "path": "git"
+        "path": "git",
+        "help": "Path to the member repository workspace."
       },
       {
         "spelling": "--workspace-mode",
@@ -788,7 +883,8 @@
         "choices": [
           "member",
           "current"
-        ]
+        ],
+        "help": "Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session."
       },
       {
         "spelling": "--format",
@@ -800,7 +896,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Push the current branch with the member credential and report readiness for matching open PRs."
   },
   "git publish": {
     "options": [
@@ -811,7 +908,8 @@
       {
         "spelling": "--repo-path",
         "required": true,
-        "path": "git"
+        "path": "git",
+        "help": "Path to the member repository workspace."
       },
       {
         "spelling": "--content-file",
@@ -827,7 +925,8 @@
         "choices": [
           "member",
           "current"
-        ]
+        ],
+        "help": "Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session."
       },
       {
         "spelling": "--format",
@@ -839,7 +938,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Commit already-staged changes with the member identity, then push. Stage the files you want with plain git (e.g. ``git add``) first; this commits only what is staged with the member name/email and pushes the branch using the member credential."
   },
   "ticket comment": {
     "options": [
@@ -849,7 +949,8 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Ticket URL."
       },
       {
         "spelling": "--content-file",
@@ -869,7 +970,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Comment on a ticket in the member voice."
   },
   "ticket create": {
     "options": [
@@ -879,11 +981,13 @@
       },
       {
         "spelling": "--tracker",
-        "required": true
+        "required": true,
+        "help": "Where the ticket is kept: a repository path (owner/repo) on GitHub."
       },
       {
         "spelling": "--title",
-        "required": true
+        "required": true,
+        "help": "Ticket title."
       },
       {
         "spelling": "--content-file",
@@ -895,19 +999,23 @@
       },
       {
         "spelling": "--label",
-        "multiple": true
+        "multiple": true,
+        "help": "Label already defined in the tracker. Repeat for several labels."
       },
       {
         "spelling": "--add-to-board/--no-add-to-board",
         "default": true,
-        "flag": true
+        "flag": true,
+        "help": "Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board."
       },
       {
         "spelling": "--interactive",
-        "flag": true
+        "flag": true,
+        "help": "Create for interactive work; unsupported providers refuse it."
       },
       {
-        "spelling": "--assignee"
+        "spelling": "--assignee",
+        "help": "Assignee's person_id from the member context roster, including humans."
       },
       {
         "spelling": "--lane",
@@ -915,18 +1023,22 @@
           "new",
           "ready",
           "in_progress"
-        ]
+        ],
+        "help": "Initial lane; defaults to ready with a parent or blockers, new otherwise."
       },
       {
-        "spelling": "--parent"
+        "spelling": "--parent",
+        "help": "Parent ticket URL."
       },
       {
         "spelling": "--blocked-by",
-        "multiple": true
+        "multiple": true,
+        "help": "Blocking ticket URL. Repeat for several blockers."
       },
       {
         "spelling": "--human-approved",
-        "flag": true
+        "flag": true,
+        "help": "Confirm that a human instructed or approved this change."
       },
       {
         "spelling": "--format",
@@ -938,7 +1050,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive."
   },
   "ticket update": {
     "options": [
@@ -948,7 +1061,8 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Ticket URL."
       },
       {
         "spelling": "--content-file",
@@ -960,50 +1074,60 @@
       },
       {
         "spelling": "--title",
-        "default": null
+        "default": null,
+        "help": "Replace the ticket title."
       },
       {
         "spelling": "--interactive/--no-interactive",
         "default": null,
-        "flag": true
+        "flag": true,
+        "help": "Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it."
       },
       {
         "spelling": "--add-label",
-        "multiple": true
+        "multiple": true,
+        "help": "Add a label already defined in the tracker. Repeat for several labels."
       },
       {
         "spelling": "--remove-label",
-        "multiple": true
+        "multiple": true,
+        "help": "Remove a label from the ticket. Repeat for several labels."
       },
       {
         "spelling": "--state",
         "choices": [
           "open",
           "closed"
-        ]
+        ],
+        "help": "Close or reopen the ticket; requires --human-approved."
       },
       {
         "spelling": "--state-reason",
         "choices": [
           "completed",
           "not_planned"
-        ]
+        ],
+        "help": "Why the ticket is closed; requires --state closed."
       },
       {
         "spelling": "--parent",
-        "default": null
+        "default": null,
+        "help": "URL of the ticket this one becomes a part of; \"\" makes it a part of none."
       },
       {
         "spelling": "--add-blocked-by",
-        "multiple": true
+        "multiple": true,
+        "help": "URL of a ticket that must be closed before this one is started. Repeat for several tickets."
       },
       {
         "spelling": "--remove-blocked-by",
-        "multiple": true
+        "multiple": true,
+        "help": "URL of a ticket this one is no longer blocked by. Repeat for several tickets."
       },
       {
         "spelling": "--human-approved",
-        "flag": true
+        "flag": true,
+        "help": "Confirm that a human instructed or approved this change."
       },
       {
         "spelling": "--format",
@@ -1015,7 +1139,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。"
   },
   "pr create": {
     "options": [
@@ -1025,19 +1150,23 @@
       },
       {
         "spelling": "--repo",
-        "required": true
+        "required": true,
+        "help": "Target repository path (owner/repo on GitHub)."
       },
       {
         "spelling": "--head",
-        "required": true
+        "required": true,
+        "help": "Head branch containing the changes."
       },
       {
         "spelling": "--base",
-        "default": ""
+        "default": "",
+        "help": "Base branch for the pull request. Defaults to the repository default branch."
       },
       {
         "spelling": "--title",
-        "required": true
+        "required": true,
+        "help": "Pull request title."
       },
       {
         "spelling": "--content-file",
@@ -1049,12 +1178,14 @@
       },
       {
         "spelling": "--issue-url",
-        "multiple": true
+        "multiple": true,
+        "help": "Related ticket URL to link to the PR. May be repeated."
       },
       {
         "spelling": "--closes-issue/--refs-issue",
         "default": false,
-        "flag": true
+        "flag": true,
+        "help": "Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue."
       },
       {
         "spelling": "--draft",
@@ -1062,7 +1193,8 @@
         "choices": [
           "true",
           "false"
-        ]
+        ],
+        "help": "Open the pull request as a draft."
       },
       {
         "spelling": "--format",
@@ -1074,7 +1206,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue."
   },
   "pr update": {
     "options": [
@@ -1084,7 +1217,8 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--content-file",
@@ -1096,20 +1230,24 @@
       },
       {
         "spelling": "--title",
-        "default": null
+        "default": null,
+        "help": "Replace the pull request title."
       },
       {
         "spelling": "--issue-url",
-        "multiple": true
+        "multiple": true,
+        "help": "Replace all PR ticket links with these URLs. May be repeated."
       },
       {
         "spelling": "--closes-issue/--refs-issue",
         "default": false,
-        "flag": true
+        "flag": true,
+        "help": "Close every --issue-url ticket on merge, or only refer to it (default)."
       },
       {
         "spelling": "--drop-issue-links",
-        "flag": true
+        "flag": true,
+        "help": "Remove all PR ticket links. Cannot be combined with --issue-url."
       },
       {
         "spelling": "--format",
@@ -1121,7 +1259,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body."
   },
   "pr comment": {
     "options": [
@@ -1131,7 +1270,8 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--content-file",
@@ -1151,7 +1291,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Comment on a PR conversation."
   },
   "pr review": {
     "options": [
@@ -1161,7 +1302,8 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--event",
@@ -1170,11 +1312,13 @@
           "approve",
           "request_changes",
           "comment"
-        ]
+        ],
+        "help": "Review verdict submitted on the head --head names."
       },
       {
         "spelling": "--head",
-        "required": true
+        "required": true,
+        "help": "The head commit (head_sha) the member read; refused when the PR's head has moved since."
       },
       {
         "spelling": "--content-file",
@@ -1194,7 +1338,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it."
   },
   "pr review-comment": {
     "options": [
@@ -1204,22 +1349,26 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--head",
-        "required": true
+        "required": true,
+        "help": "The head commit (head_sha) the member read; refused when the PR's head has moved since."
       },
       {
         "spelling": "--path",
-        "required": true
+        "required": true,
+        "help": "File path in the PR diff."
       },
       {
         "spelling": "--line",
         "required": true,
         "integer": true,
         "min": 1,
-        "max": null
+        "max": null,
+        "help": "Line number on the chosen diff side. [x\\>=1; required]"
       },
       {
         "spelling": "--side",
@@ -1227,14 +1376,16 @@
         "choices": [
           "LEFT",
           "RIGHT"
-        ]
+        ],
+        "help": "Diff side of the line."
       },
       {
         "spelling": "--start-line",
         "default": null,
         "integer": true,
         "min": 1,
-        "max": null
+        "max": null,
+        "help": "Start line for a multi-line comment. [x\\>=1]"
       },
       {
         "spelling": "--start-side",
@@ -1242,7 +1393,8 @@
         "choices": [
           "LEFT",
           "RIGHT"
-        ]
+        ],
+        "help": "Diff side of --start-line."
       },
       {
         "spelling": "--content-file",
@@ -1262,7 +1414,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again."
   },
   "pr reply": {
     "options": [
@@ -1272,11 +1425,13 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--reply-target-id",
-        "required": true
+        "required": true,
+        "help": "reply_target_id from repository/pr_inspect include_comments=true."
       },
       {
         "spelling": "--content-file",
@@ -1296,7 +1451,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Reply to an inline review thread."
   },
   "pr artifact download": {
     "options": [
@@ -1306,16 +1462,19 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--name",
-        "required": true
+        "required": true,
+        "help": "Exact artifact name."
       },
       {
         "spelling": "--dest",
         "default": ".",
-        "path": "download"
+        "path": "download",
+        "help": "Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository."
       },
       {
         "spelling": "--format",
@@ -1327,7 +1486,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection."
   },
   "ticket attachment download": {
     "options": [
@@ -1337,16 +1497,19 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Ticket URL."
       },
       {
         "spelling": "--id",
-        "required": true
+        "required": true,
+        "help": "The id the ticket's ticket_attachments read gave the attachment."
       },
       {
         "spelling": "--dest",
         "default": ".",
-        "path": "download"
+        "path": "download",
+        "help": "Directory to write the file into. Defaults to the current directory. Remove downloaded files after reading when this is inside a repository."
       },
       {
         "spelling": "--format",
@@ -1358,7 +1521,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading."
   },
   "ticket reaction add": {
     "options": [
@@ -1368,11 +1532,13 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Ticket URL."
       },
       {
         "spelling": "--comment-id",
-        "required": true
+        "required": true,
+        "help": "The id the item's read gave the comment (or review) to react to."
       },
       {
         "spelling": "--reaction",
@@ -1382,7 +1548,8 @@
           "agree",
           "celebrate",
           "support"
-        ]
+        ],
+        "help": "Semantic reaction to add."
       },
       {
         "spelling": "--format",
@@ -1394,7 +1561,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "React to a comment of the ticket, by the id its read gave it."
   },
   "pr reaction add": {
     "options": [
@@ -1404,11 +1572,13 @@
       },
       {
         "spelling": "--url",
-        "required": true
+        "required": true,
+        "help": "Pull request URL."
       },
       {
         "spelling": "--comment-id",
-        "required": true
+        "required": true,
+        "help": "The id the item's read gave the comment (or review) to react to."
       },
       {
         "spelling": "--reaction",
@@ -1418,7 +1588,8 @@
           "agree",
           "celebrate",
           "support"
-        ]
+        ],
+        "help": "Semantic reaction to add."
       },
       {
         "spelling": "--format",
@@ -1430,7 +1601,8 @@
       }
     ],
     "read_only": false,
-    "content_required": false
+    "content_required": false,
+    "help": "React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it."
   },
   "task complete": {
     "options": [
@@ -1440,7 +1612,8 @@
       },
       {
         "spelling": "--waiting-for",
-        "multiple": true
+        "multiple": true,
+        "help": "Next member to act, by the context roster's person_id (repeatable; asking/blocked only)."
       },
       {
         "spelling": "--status",
@@ -1449,7 +1622,8 @@
           "done",
           "asking",
           "blocked"
-        ]
+        ],
+        "help": "Run outcome."
       },
       {
         "spelling": "--content-file",
@@ -1469,7 +1643,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified."
   },
   "task status": {
     "options": [
@@ -1487,7 +1662,8 @@
       }
     ],
     "read_only": true,
-    "content_required": false
+    "content_required": false,
+    "help": "Inspect the run's recorded evidence."
   },
   "checks await": {
     "options": [
@@ -1513,7 +1689,8 @@
       }
     ],
     "read_only": false,
-    "content_required": true
+    "content_required": true,
+    "help": "End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle."
   },
   "ticket read": {
     "read_only": true,
@@ -1532,19 +1709,23 @@
           "ticket_comments",
           "ticket_attachments",
           "ticket_pull_requests"
-        ]
+        ],
+        "help": "Resource to read; see member help for its conditions."
       },
       {
         "spelling": "--subject",
-        "required": true
+        "required": true,
+        "help": "What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker)."
       },
       {
         "spelling": "--params",
-        "default": ""
+        "default": "",
+        "help": "Resource conditions as a JSON object."
       },
       {
         "spelling": "--continuation",
-        "default": ""
+        "default": "",
+        "help": "Continuation returned for the same resource and conditions."
       },
       {
         "spelling": "--format",
@@ -1554,7 +1735,8 @@
           "markdown"
         ]
       }
-    ]
+    ],
+    "help": "Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "pr read": {
     "read_only": true,
@@ -1575,19 +1757,23 @@
           "pull_request_threads",
           "review_thread_comments",
           "pull_request_readiness"
-        ]
+        ],
+        "help": "Resource to read; see member help for its conditions."
       },
       {
         "spelling": "--subject",
-        "required": true
+        "required": true,
+        "help": "What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker)."
       },
       {
         "spelling": "--params",
-        "default": ""
+        "default": "",
+        "help": "Resource conditions as a JSON object."
       },
       {
         "spelling": "--continuation",
-        "default": ""
+        "default": "",
+        "help": "Continuation returned for the same resource and conditions."
       },
       {
         "spelling": "--format",
@@ -1597,7 +1783,8 @@
           "markdown"
         ]
       }
-    ]
+    ],
+    "help": "Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "repo-info read": {
     "read_only": true,
@@ -1612,19 +1799,23 @@
         "required": true,
         "choices": [
           "dependency_alerts"
-        ]
+        ],
+        "help": "Resource to read; see member help for its conditions."
       },
       {
         "spelling": "--subject",
-        "required": true
+        "required": true,
+        "help": "What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker)."
       },
       {
         "spelling": "--params",
-        "default": ""
+        "default": "",
+        "help": "Resource conditions as a JSON object."
       },
       {
         "spelling": "--continuation",
-        "default": ""
+        "default": "",
+        "help": "Continuation returned for the same resource and conditions."
       },
       {
         "spelling": "--format",
@@ -1634,6 +1825,7 @@
           "markdown"
         ]
       }
-    ]
+    ],
+    "help": "Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   }
 }

@@ -8,7 +8,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Context as _;
 use gb_base::files::{self, FileLock};
 use gb_base::host_path;
 
@@ -113,17 +112,39 @@ pub fn write_active(data: &Path, workspace: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct RegistryError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.path.display(), self.reason)
+    }
+}
+
+impl std::error::Error for RegistryError {}
+
 /// The workspaces this machine has opened.
 fn registered(data: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let path = data.join(REGISTRY_FILE);
-    let Some(bytes) = files::read_if_present(&path)? else {
+    let failed = |reason| RegistryError {
+        path: path.clone(),
+        reason,
+    };
+    let Some(bytes) =
+        host_path::read_file_if_present(&path).map_err(|error| failed(error.to_string()))?
+    else {
         return Ok(Vec::new());
     };
-    let named: Vec<String> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not a list of workspace paths", path.display()))?;
+    let named: Vec<String> =
+        serde_json::from_slice(&bytes).map_err(|error| failed(error.to_string()))?;
     named
         .iter()
-        .map(|name| Ok(host_path::normalize(Path::new(name))?))
+        .map(|name| {
+            host_path::normalize(Path::new(name)).map_err(|error| failed(error.to_string()).into())
+        })
         .collect()
 }
 
@@ -264,6 +285,22 @@ mod tests {
         select(&m, &m.root.join("link"));
         assert!(restore(&m.data, vars(None, None)).is_err());
         assert!(restore(&m.data, vars(Some(m.root.join("link").into()), None)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_registry_reached_through_a_link_is_not_read() {
+        let m = machine();
+        std::fs::create_dir_all(&m.data).unwrap();
+        let target = m.root.join("elsewhere.json");
+        std::fs::write(&target, "[]").unwrap();
+        let registry = m.data.join(REGISTRY_FILE);
+        std::os::unix::fs::symlink(&target, &registry).unwrap();
+        let error = register(&m.data, &m.root.join("workspace")).unwrap_err();
+        let problem = error.downcast_ref::<RegistryError>().unwrap();
+        assert_eq!(problem.path, registry);
+        assert!(problem.reason.contains("passes through a link"));
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "[]");
     }
 
     #[test]

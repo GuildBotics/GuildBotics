@@ -229,11 +229,14 @@ fn run_command(
     person: Option<String>,
     cwd: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin();
-    let mut message = String::new();
-    if !stdin.is_terminal() {
-        stdin.read_to_string(&mut message)?;
-    }
+    let message = || {
+        let mut stdin = std::io::stdin();
+        let mut message = String::new();
+        if !stdin.is_terminal() {
+            stdin.read_to_string(&mut message)?;
+        }
+        Ok(message)
+    };
     let output = block(gb_server::client::run_command(
         name, args, person, message, cwd,
     ))?;
@@ -308,22 +311,12 @@ fn start(services: bool) -> anyhow::Result<u8> {
 async fn serve(services: bool) -> anyhow::Result<u8> {
     // Both told of every signal from here on: one that comes while the
     // server starts stops Branvil too.
-    let (signal, cancel) = server_stops()?;
+    let (signal, cancel) = server_stops(gb_server::client::language().await)?;
     let branvil_stops = branvil::stop_signals()?;
     let branvil_stops = branvil::initialized()?.then_some(branvil_stops);
     let mut server = gb_server::Server::start().await?;
     server.start_services(services);
     let shutdown = server.shutdown_requests();
-    let watchdog = shutdown.clone();
-    tokio::spawn(async move {
-        watchdog.wait_for_cancel().await;
-        // The executable can terminate its own process safely even if async
-        // teardown becomes stuck. A stale PID cannot target another process.
-        std::thread::spawn(|| {
-            std::thread::sleep(service_cli::FORCE_AFTER);
-            std::process::exit(0);
-        });
-    });
 
     let Some((branvil_interrupt, branvil_terminate)) = branvil_stops else {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
@@ -402,7 +395,9 @@ enum Stop {
 /// When GuildBotics' port stops, and when it cancels the work it runs: the
 /// first SIGINT stops it once that work ends, and SIGTERM, which a service
 /// manager sends, or a second SIGINT cancels the work.
-fn server_stops() -> std::io::Result<(
+fn server_stops(
+    language: &'static str,
+) -> std::io::Result<(
     impl Future<Output = ()> + Send + 'static,
     impl Future<Output = ()> + Send + 'static,
 )> {
@@ -429,11 +424,15 @@ fn server_stops() -> std::io::Result<(
                 interrupt.recv().await;
                 *told.borrow() != Stop::None
             };
-            told.send_replace(if cancel {
-                Stop::Cancelling
+            let (next, message) = if cancel {
+                (Stop::Cancelling, "runtime.service_lock.cancelling")
             } else {
-                Stop::Waiting
-            });
+                (Stop::Waiting, "runtime.service_lock.stopping_after_work")
+            };
+            if *told.borrow() != next {
+                eprintln!("{}", gb_server::i18n::t(language, message, &[]));
+                told.send_replace(next);
+            }
         }
     });
     let reached = |stop: Stop| {

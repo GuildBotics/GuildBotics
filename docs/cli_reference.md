@@ -28,24 +28,30 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics server start`](#guildbotics-server-start)
 - [`guildbotics server stop`](#guildbotics-server-stop)
 - [`guildbotics member`](#guildbotics-member)
+- [`guildbotics member chat`](#guildbotics-member-chat)
 - [`guildbotics member chat complete`](#guildbotics-member-chat-complete)
 - [`guildbotics member chat identity`](#guildbotics-member-chat-identity)
+- [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect)
 - [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel)
 - [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread)
 - [`guildbotics member chat noop`](#guildbotics-member-chat-noop)
 - [`guildbotics member chat post`](#guildbotics-member-chat-post)
+- [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction)
 - [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add)
 - [`guildbotics member chat reply`](#guildbotics-member-chat-reply)
 - [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel)
 - [`guildbotics member chat updates`](#guildbotics-member-chat-updates)
+- [`guildbotics member checks`](#guildbotics-member-checks)
 - [`guildbotics member checks await`](#guildbotics-member-checks-await)
 - [`guildbotics member context`](#guildbotics-member-context)
+- [`guildbotics member git`](#guildbotics-member-git)
 - [`guildbotics member git commit`](#guildbotics-member-git-commit)
 - [`guildbotics member git prepare`](#guildbotics-member-git-prepare)
 - [`guildbotics member git publish`](#guildbotics-member-git-publish)
 - [`guildbotics member git push`](#guildbotics-member-git-push)
 - [`guildbotics member git show`](#guildbotics-member-git-show)
 - [`guildbotics member help`](#guildbotics-member-help)
+- [`guildbotics member memory`](#guildbotics-member-memory)
 - [`guildbotics member memory archive`](#guildbotics-member-memory-archive)
 - [`guildbotics member memory get`](#guildbotics-member-memory-get)
 - [`guildbotics member memory promote`](#guildbotics-member-memory-promote)
@@ -53,21 +59,29 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics member memory record`](#guildbotics-member-memory-record)
 - [`guildbotics member memory touch`](#guildbotics-member-memory-touch)
 - [`guildbotics member memory update`](#guildbotics-member-memory-update)
+- [`guildbotics member pr`](#guildbotics-member-pr)
+- [`guildbotics member pr artifact`](#guildbotics-member-pr-artifact)
 - [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download)
 - [`guildbotics member pr comment`](#guildbotics-member-pr-comment)
 - [`guildbotics member pr create`](#guildbotics-member-pr-create)
+- [`guildbotics member pr reaction`](#guildbotics-member-pr-reaction)
 - [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add)
 - [`guildbotics member pr read`](#guildbotics-member-pr-read)
 - [`guildbotics member pr reply`](#guildbotics-member-pr-reply)
 - [`guildbotics member pr review`](#guildbotics-member-pr-review)
 - [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment)
 - [`guildbotics member pr update`](#guildbotics-member-pr-update)
+- [`guildbotics member repo-info`](#guildbotics-member-repo-info)
 - [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read)
+- [`guildbotics member task`](#guildbotics-member-task)
 - [`guildbotics member task complete`](#guildbotics-member-task-complete)
 - [`guildbotics member task status`](#guildbotics-member-task-status)
+- [`guildbotics member ticket`](#guildbotics-member-ticket)
+- [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment)
 - [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download)
 - [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment)
 - [`guildbotics member ticket create`](#guildbotics-member-ticket-create)
+- [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction)
 - [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add)
 - [`guildbotics member ticket read`](#guildbotics-member-ticket-read)
 - [`guildbotics member ticket update`](#guildbotics-member-ticket-update)
@@ -411,575 +425,852 @@ Arguments:
 Start the GuildBotics server before running member commands. Use `member --workspace <path>` to verify the selected workspace.
 See the [member capability reference](../guildbotics/templates/member/reference.md) for examples and option semantics.
 
+```text
+Operate as a configured GuildBotics member.
+
+Usage: guildbotics member [OPTIONS]
+  chat  Chat identity, posting, replies, reactions, and run completion.
+  checks  End a run to await the CI checks of its pull requests.
+  context  Show non-secret member context.
+  git  Read repositories and prepare, commit, push, and publish member workspaces.
+  help  Print the member capability reference (commands and cross-cutting rules). This is the same reference embedded in ``member context``; use it to reread the available commands without re-running the full context.
+  memory  Record, recall, and maintain member memory documents.
+  pr  Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts.
+  repo-info  Read information about the repository as a whole.
+  task  Completion records of runs other than a chat event's.
+  ticket  Read, create, update, and comment on tickets, react to their comments, and download their attachments.
+  --workspace <PATH>  Require the server to have this workspace selected
+  --help  Print help
+```
+
+### guildbotics member chat
+
+```text
+Chat identity, posting, replies, reactions, and run completion.
+
+Usage: guildbotics member chat [OPTIONS]
+  complete  Finish the chat workflow run on its event with evidence.
+  identity  Show the member's chat identity.
+  inspect  Inspect chat channel or thread messages for interactive decisions.
+  noop  Record a deliberate no-op for the chat run's event.
+  post  Post a new channel message.
+  reaction  Chat reaction operations.
+  reply  Reply in a thread in the member voice.
+  resolve-channel  Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name.
+  updates  Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable.
+  --help  Print help
+```
+
 ### guildbotics member chat complete
 
 ```text
+Finish the chat workflow run on its event with evidence.
+
 Usage: guildbotics member chat complete [OPTIONS]
-  --person <VALUE> [required]
-  --status <done|asking|blocked> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --status <done|asking|blocked>  Run outcome. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat identity
 
 ```text
+Show the member's chat identity.
+
 Usage: guildbotics member chat identity [OPTIONS]
-  --person <VALUE> [required]
-  --format <json|markdown> [default: markdown]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --format <json|markdown> [default: markdown]  Output format.
+  --help  Print help
+```
+
+### guildbotics member chat inspect
+
+```text
+Inspect chat channel or thread messages for interactive decisions.
+
+Usage: guildbotics member chat inspect [OPTIONS]
+  channel  Read recent channel messages.
+  thread  Read a thread before replying or reacting.
   --help  Print help
 ```
 
 ### guildbotics member chat inspect channel
 
 ```text
+Read recent channel messages.
+
 Usage: guildbotics member chat inspect channel [OPTIONS]
-  --person <VALUE> [required]
-  --channel-id <VALUE> [default: ]
-  --channel-name <VALUE> [default: ]
-  --since <VALUE>
-  --until <VALUE>
-  --limit <VALUE> [default: 50; 1<=x<=200]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-id <VALUE> [default: ]  Channel id of the target channel.
+  --channel-name <VALUE> [default: ]  Channel name (alternative to --channel-id).
+  --since <VALUE>  Only include messages that occurred at or after this time (ISO 8601; local time without an offset).
+  --until <VALUE>  Only include messages that occurred at or before this time (ISO 8601; local time without an offset).
+  --limit <VALUE> [default: 50; 1<=x<=200]  Maximum number of messages.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat inspect thread
 
 ```text
+Read a thread before replying or reacting.
+
 Usage: guildbotics member chat inspect thread [OPTIONS]
-  --person <VALUE> [required]
-  --channel-id <VALUE> [default: ]
-  --channel-name <VALUE> [default: ]
-  --thread-id <VALUE> [default: ]
-  --message-url <VALUE> [default: ]
-  --limit <VALUE> [default: 100; 1<=x<=200]
-  --format <json|markdown> [default: json]
-  --cursor <VALUE>
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-id <VALUE> [default: ]  Channel id of the target channel.
+  --channel-name <VALUE> [default: ]  Channel name (alternative to --channel-id).
+  --thread-id <VALUE> [default: ]  Thread id (with --channel-id).
+  --message-url <VALUE> [default: ]  Chat message URL (alternative to --channel-id with --thread-id).
+  --limit <VALUE> [default: 100; 1<=x<=200]  Maximum number of messages.
+  --format <json|markdown> [default: json]  Output format.
+  --cursor <VALUE>  Return messages before this opaque position.
   --help  Print help
 ```
 
 ### guildbotics member chat noop
 
 ```text
+Record a deliberate no-op for the chat run's event.
+
 Usage: guildbotics member chat noop [OPTIONS]
-  --person <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat post
 
 ```text
+Post a new channel message.
+
 Usage: guildbotics member chat post [OPTIONS]
-  --person <VALUE> [required]
-  --channel-id <VALUE> [default: ]
-  --channel-name <VALUE> [default: ]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-id <VALUE> [default: ]  Channel id of the target channel.
+  --channel-name <VALUE> [default: ]  Channel name (alternative to --channel-id).
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member chat reaction
+
+```text
+Chat reaction operations.
+
+Usage: guildbotics member chat reaction [OPTIONS]
+  add  Add a semantic reaction.
   --help  Print help
 ```
 
 ### guildbotics member chat reaction add
 
 ```text
+Add a semantic reaction.
+
 Usage: guildbotics member chat reaction add [OPTIONS]
-  --person <VALUE> [required]
-  --channel-id <VALUE> [default: ]
-  --channel-name <VALUE> [default: ]
-  --message-id <VALUE> [default: ]
-  --message-url <VALUE> [default: ]
-  --reaction <ack|agree|celebrate|support> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-id <VALUE> [default: ]  Channel id of the target channel.
+  --channel-name <VALUE> [default: ]  Channel name (alternative to --channel-id).
+  --message-id <VALUE> [default: ]  Message id (with --channel-id).
+  --message-url <VALUE> [default: ]  Chat message URL (alternative to --channel-id with --message-id).
+  --reaction <ack|agree|celebrate|support>  Semantic reaction to add. [required]
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat reply
 
 ```text
+Reply in a thread in the member voice.
+
 Usage: guildbotics member chat reply [OPTIONS]
-  --person <VALUE> [required]
-  --channel-id <VALUE> [default: ]
-  --channel-name <VALUE> [default: ]
-  --thread-id <VALUE> [default: ]
-  --message-url <VALUE> [default: ]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-id <VALUE> [default: ]  Channel id of the target channel.
+  --channel-name <VALUE> [default: ]  Channel name (alternative to --channel-id).
+  --thread-id <VALUE> [default: ]  Thread id (with --channel-id).
+  --message-url <VALUE> [default: ]  Chat message URL (alternative to --channel-id with --thread-id).
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat resolve-channel
 
 ```text
+Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name.
+
 Usage: guildbotics member chat resolve-channel [OPTIONS]
-  --person <VALUE> [required]
-  --channel-name <VALUE> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --channel-name <VALUE>  Channel name to resolve. [required]
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member chat updates
 
 ```text
+Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable.
+
 Usage: guildbotics member chat updates [OPTIONS]
-  --person <VALUE> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member checks
+
+```text
+End a run to await the CI checks of its pull requests.
+
+Usage: guildbotics member checks [OPTIONS]
+  await  End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
   --help  Print help
 ```
 
 ### guildbotics member checks await
 
 ```text
+End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+
 Usage: guildbotics member checks await [OPTIONS]
-  --person <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member context
 
 ```text
+Show non-secret member context.
+
 Usage: guildbotics member context [OPTIONS]
-  --person <VALUE> [required]
-  --check-credentials
-  --format <json|markdown> [default: markdown]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --check-credentials  Also verify the member's provider credentials.
+  --format <json|markdown> [default: markdown]  Output format.
+  --help  Print help
+```
+
+### guildbotics member git
+
+```text
+Read repositories and prepare, commit, push, and publish member workspaces.
+
+Usage: guildbotics member git [OPTIONS]
+  commit  Commit already-staged changes with the member identity. Stage the files you want with plain git (e.g. ``git add``) first; this command commits only what is staged and applies the member name/email to that single commit without changing the repository's git config.
+  prepare  Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+  publish  Commit already-staged changes with the member identity, then push. Stage the files you want with plain git (e.g. ``git add``) first; this commits only what is staged with the member name/email and pushes the branch using the member credential.
+  push  Push the current branch with the member credential and report readiness for matching open PRs.
+  show  Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
   --help  Print help
 ```
 
 ### guildbotics member git commit
 
 ```text
+Commit already-staged changes with the member identity. Stage the files you want with plain git (e.g. ``git add``) first; this command commits only what is staged and applies the member name/email to that single commit without changing the repository's git config.
+
 Usage: guildbotics member git commit [OPTIONS]
-  --person <VALUE> [required]
-  --repo-path <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --workspace-mode <member|current> [default: member]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --repo-path <VALUE>  Path to the member repository workspace. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --workspace-mode <member|current> [default: member]  Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member git prepare
 
 ```text
+Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+
 Usage: guildbotics member git prepare [OPTIONS]
-  --person <VALUE> [required]
-  --issue-url <VALUE> [default: ]
-  --pr-url <VALUE> [default: ]
-  --repo <VALUE> [default: ]
-  --branch <VALUE> [default: ]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --issue-url <VALUE> [default: ]  Ticket URL to prepare a workspace for.
+  --pr-url <VALUE> [default: ]  PR URL whose head branch to check out.
+  --repo <VALUE> [default: ]  Repository path (owner/repo on GitHub): with --branch, or with --issue-url for a ticket that belongs to no repository.
+  --branch <VALUE> [default: ]  Branch to create or check out (with --repo).
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member git publish
 
 ```text
+Commit already-staged changes with the member identity, then push. Stage the files you want with plain git (e.g. ``git add``) first; this commits only what is staged with the member name/email and pushes the branch using the member credential.
+
 Usage: guildbotics member git publish [OPTIONS]
-  --person <VALUE> [required]
-  --repo-path <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --workspace-mode <member|current> [default: member]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --repo-path <VALUE>  Path to the member repository workspace. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --workspace-mode <member|current> [default: member]  Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member git push
 
 ```text
+Push the current branch with the member credential and report readiness for matching open PRs.
+
 Usage: guildbotics member git push [OPTIONS]
-  --person <VALUE> [required]
-  --repo-path <VALUE> [required]
-  --workspace-mode <member|current> [default: member]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --repo-path <VALUE>  Path to the member repository workspace. [required]
+  --workspace-mode <member|current> [default: member]  Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member git show
 
 ```text
+Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
+
 Usage: guildbotics member git show [OPTIONS]
-  --person <VALUE> [required]
-  --repo <VALUE> [required]
-  --path <VALUE> [required] (repeatable)
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --repo <VALUE>  Repository path of the code host. [required]
+  --path <VALUE>  Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root. [required] (repeatable)
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member help
 
 ```text
+Print the member capability reference (commands and cross-cutting rules). This is the same reference embedded in ``member context``; use it to reread the available commands without re-running the full context.
+
 Usage: guildbotics member help [OPTIONS]
+  --help  Print help
+```
+
+### guildbotics member memory
+
+```text
+Record, recall, and maintain member memory documents.
+
+Usage: guildbotics member memory [OPTIONS]
+  archive  Move a stale memory under archived/ and remove it from recall and digest.
+  get  Read one memory document's metadata and body without changing recency.
+  promote  Move a personal memory into team memory without changing the document id.
+  recall  Search personal and team memory by literal OR queries and return compact hits.
+  record  Create a memory document and move it to the front of the digest.
+  touch  Mark a useful memory as actually used by moving it to the digest front.
+  update  Replace selected body or metadata fields and move the document to the digest front.
   --help  Print help
 ```
 
 ### guildbotics member memory archive
 
 ```text
+Move a stale memory under archived/ and remove it from recall and digest.
+
 Usage: guildbotics member memory archive [OPTIONS]
-  --person <VALUE> [required]
-  --id <VALUE> [required]
-  --team
-  --policy-approved
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --id <VALUE>  Memory document id. [required]
+  --team  Operate on team memory instead of personal memory.
+  --policy-approved  Confirm that a human approved this policy memory change.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory get
 
 ```text
+Read one memory document's metadata and body without changing recency.
+
 Usage: guildbotics member memory get [OPTIONS]
-  --person <VALUE> [required]
-  --id <VALUE> [required]
-  --team
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --id <VALUE>  Memory document id. [required]
+  --team  Operate on team memory instead of personal memory.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory promote
 
 ```text
+Move a personal memory into team memory without changing the document id.
+
 Usage: guildbotics member memory promote [OPTIONS]
-  --person <VALUE> [required]
-  --id <VALUE> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --id <VALUE>  Memory document id. [required]
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory recall
 
 ```text
+Search personal and team memory by literal OR queries and return compact hits.
+
 Usage: guildbotics member memory recall [OPTIONS]
-  --person <VALUE> [required]
-  --query <VALUE> (repeatable)
-  --meta-only
-  --limit <VALUE> [default: 20; 1<=x<=200]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --query <VALUE>  Literal search query; repeat for OR matching. (repeatable)
+  --meta-only  Return hit metadata without body excerpts.
+  --limit <VALUE> [default: 20; 1<=x<=200]  Maximum number of hits.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory record
 
 ```text
+Create a memory document and move it to the front of the digest.
+
 Usage: guildbotics member memory record [OPTIONS]
-  --person <VALUE> [required]
-  --scope <personal|team> [default: personal]
-  --title <VALUE> [required]
-  --summary <VALUE> [default: ]
-  --keyword <VALUE> (repeatable)
-  --ticket <VALUE> (repeatable)
-  --pr <VALUE> (repeatable)
-  --channel <VALUE> (repeatable)
-  --thread <VALUE> (repeatable)
-  --kind <note|policy> [default: note]
-  --pin
-  --content-file <VALUE>
-  --content-stdin
-  --policy-approved
-  --set <VALUE> (repeatable)
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --scope <personal|team> [default: personal]  Store as personal or team memory.
+  --title <VALUE>  Document title. [required]
+  --summary <VALUE> [default: ]  One-line summary shown in recall hits and the digest.
+  --keyword <VALUE>  Recall keyword. May be repeated. (repeatable)
+  --ticket <VALUE>  Related ticket URL (source anchor). May be repeated. (repeatable)
+  --pr <VALUE>  Related PR URL (source anchor). May be repeated. (repeatable)
+  --channel <VALUE>  Related chat channel URL (source anchor). May be repeated. (repeatable)
+  --thread <VALUE>  Related chat thread URL (source anchor). May be repeated. (repeatable)
+  --kind <note|policy> [default: note]  Document kind; 'policy' requires --policy-approved.
+  --pin  Pin as a standing rule included in member context.
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --policy-approved  Confirm that a human approved this policy memory change.
+  --set <VALUE>  Extra metadata as key=value. May be repeated. (repeatable)
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory touch
 
 ```text
+Mark a useful memory as actually used by moving it to the digest front.
+
 Usage: guildbotics member memory touch [OPTIONS]
-  --person <VALUE> [required]
-  --id <VALUE> [required]
-  --team
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --id <VALUE>  Memory document id. [required]
+  --team  Operate on team memory instead of personal memory.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member memory update
 
 ```text
+Replace selected body or metadata fields and move the document to the digest front.
+
 Usage: guildbotics member memory update [OPTIONS]
-  --person <VALUE> [required]
-  --id <VALUE> [required]
-  --team
-  --title <VALUE>
-  --summary <VALUE>
-  --keyword <VALUE> (repeatable)
-  --add-keyword <VALUE> (repeatable)
-  --remove-keyword <VALUE> (repeatable)
-  --ticket <VALUE> (repeatable)
-  --pr <VALUE> (repeatable)
-  --channel <VALUE> (repeatable)
-  --thread <VALUE> (repeatable)
-  --pin
-  --unpin
-  --kind <note|policy>
-  --content-file <VALUE>
-  --content-stdin
-  --policy-approved
-  --set <VALUE> (repeatable)
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --id <VALUE>  Memory document id. [required]
+  --team  Operate on team memory instead of personal memory.
+  --title <VALUE>  New document title.
+  --summary <VALUE>  New one-line summary.
+  --keyword <VALUE>  Replace all recall keywords. May be repeated. (repeatable)
+  --add-keyword <VALUE>  Add a recall keyword. May be repeated. (repeatable)
+  --remove-keyword <VALUE>  Remove a recall keyword. May be repeated. (repeatable)
+  --ticket <VALUE>  Related ticket URL (source anchor). May be repeated. (repeatable)
+  --pr <VALUE>  Related PR URL (source anchor). May be repeated. (repeatable)
+  --channel <VALUE>  Related chat channel URL (source anchor). May be repeated. (repeatable)
+  --thread <VALUE>  Related chat thread URL (source anchor). May be repeated. (repeatable)
+  --pin  Pin as a standing rule included in member context.
+  --unpin  Remove the pin.
+  --kind <note|policy>  Change the document kind; 'policy' requires --policy-approved.
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --policy-approved  Confirm that a human approved this policy memory change.
+  --set <VALUE>  Extra metadata as key=value. May be repeated. (repeatable)
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member pr
+
+```text
+Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts.
+
+Usage: guildbotics member pr [OPTIONS]
+  artifact  CI artifact operations.
+  comment  Comment on a PR conversation.
+  create  Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
+  reaction  Reactions to pull request comments and reviews.
+  read  Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  reply  Reply to an inline review thread.
+  review  Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it.
+  review-comment  Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again.
+  update  Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
+  --help  Print help
+```
+
+### guildbotics member pr artifact
+
+```text
+CI artifact operations.
+
+Usage: guildbotics member pr artifact [OPTIONS]
+  download  Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection.
   --help  Print help
 ```
 
 ### guildbotics member pr artifact download
 
 ```text
+Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection.
+
 Usage: guildbotics member pr artifact download [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --name <VALUE> [required]
-  --dest <VALUE> [default: .]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --name <VALUE>  Exact artifact name. [required]
+  --dest <VALUE> [default: .]  Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr comment
 
 ```text
+Comment on a PR conversation.
+
 Usage: guildbotics member pr comment [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr create
 
 ```text
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
+
 Usage: guildbotics member pr create [OPTIONS]
-  --person <VALUE> [required]
-  --repo <VALUE> [required]
-  --head <VALUE> [required]
-  --base <VALUE> [default: ]
-  --title <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --issue-url <VALUE> (repeatable)
-  --closes-issue/--refs-issue [default: false]
-  --draft <true|false> [default: false]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --repo <VALUE>  Target repository path (owner/repo on GitHub). [required]
+  --head <VALUE>  Head branch containing the changes. [required]
+  --base <VALUE> [default: ]  Base branch for the pull request. Defaults to the repository default branch.
+  --title <VALUE>  Pull request title. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --issue-url <VALUE>  Related ticket URL to link to the PR. May be repeated. (repeatable)
+  --closes-issue/--refs-issue [default: false]  Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue.
+  --draft <true|false> [default: false]  Open the pull request as a draft.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member pr reaction
+
+```text
+Reactions to pull request comments and reviews.
+
+Usage: guildbotics member pr reaction [OPTIONS]
+  add  React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it.
   --help  Print help
 ```
 
 ### guildbotics member pr reaction add
 
 ```text
+React to a conversation comment, a review thread comment, or a review's body of the PR, by the id its read gave it.
+
 Usage: guildbotics member pr reaction add [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --comment-id <VALUE> [required]
-  --reaction <ack|agree|celebrate|support> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --comment-id <VALUE>  The id the item's read gave the comment (or review) to react to. [required]
+  --reaction <ack|agree|celebrate|support>  Semantic reaction to add. [required]
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr read
 
 ```text
+Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+
 Usage: guildbotics member pr read [OPTIONS]
-  --person <VALUE> [required]
-  --resource <pull_requests|pull_request_comments|pull_request_reviews|pull_request_files|pull_request_threads|review_thread_comments|pull_request_readiness> [required]
-  --subject <VALUE> [required]
-  --params <VALUE> [default: ]
-  --continuation <VALUE> [default: ]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --resource <pull_requests|pull_request_comments|pull_request_reviews|pull_request_files|pull_request_threads|review_thread_comments|pull_request_readiness>  Resource to read; see member help for its conditions. [required]
+  --subject <VALUE>  What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required]
+  --params <VALUE> [default: ]  Resource conditions as a JSON object.
+  --continuation <VALUE> [default: ]  Continuation returned for the same resource and conditions.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr reply
 
 ```text
+Reply to an inline review thread.
+
 Usage: guildbotics member pr reply [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --reply-target-id <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --reply-target-id <VALUE>  reply_target_id from repository/pr_inspect include_comments=true. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr review
 
 ```text
+Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it.
+
 Usage: guildbotics member pr review [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --event <approve|request_changes|comment> [required]
-  --head <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --event <approve|request_changes|comment>  Review verdict submitted on the head --head names. [required]
+  --head <VALUE>  The head commit (head_sha) the member read; refused when the PR's head has moved since. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr review-comment
 
 ```text
+Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again.
+
 Usage: guildbotics member pr review-comment [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --head <VALUE> [required]
-  --path <VALUE> [required]
-  --line <VALUE> [x>=1] [required]
-  --side <LEFT|RIGHT> [default: RIGHT]
-  --start-line <VALUE> [x>=1]
-  --start-side <LEFT|RIGHT>
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --head <VALUE>  The head commit (head_sha) the member read; refused when the PR's head has moved since. [required]
+  --path <VALUE>  File path in the PR diff. [required]
+  --line <VALUE> [x>=1]  Line number on the chosen diff side. [x\>=1; required] [required]
+  --side <LEFT|RIGHT> [default: RIGHT]  Diff side of the line.
+  --start-line <VALUE> [x>=1]  Start line for a multi-line comment. [x\>=1]
+  --start-side <LEFT|RIGHT>  Diff side of --start-line.
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member pr update
 
 ```text
+Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
+
 Usage: guildbotics member pr update [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --title <VALUE>
-  --issue-url <VALUE> (repeatable)
-  --closes-issue/--refs-issue [default: false]
-  --drop-issue-links
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Pull request URL. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --title <VALUE>  Replace the pull request title.
+  --issue-url <VALUE>  Replace all PR ticket links with these URLs. May be repeated. (repeatable)
+  --closes-issue/--refs-issue [default: false]  Close every --issue-url ticket on merge, or only refer to it (default).
+  --drop-issue-links  Remove all PR ticket links. Cannot be combined with --issue-url.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member repo-info
+
+```text
+Read information about the repository as a whole.
+
+Usage: guildbotics member repo-info [OPTIONS]
+  read  Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
   --help  Print help
 ```
 
 ### guildbotics member repo-info read
 
 ```text
+Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+
 Usage: guildbotics member repo-info read [OPTIONS]
-  --person <VALUE> [required]
-  --resource <dependency_alerts> [required]
-  --subject <VALUE> [required]
-  --params <VALUE> [default: ]
-  --continuation <VALUE> [default: ]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --resource <dependency_alerts>  Resource to read; see member help for its conditions. [required]
+  --subject <VALUE>  What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required]
+  --params <VALUE> [default: ]  Resource conditions as a JSON object.
+  --continuation <VALUE> [default: ]  Continuation returned for the same resource and conditions.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member task
+
+```text
+Completion records of runs other than a chat event's.
+
+Usage: guildbotics member task [OPTIONS]
+  complete  Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
+  status  Inspect the run's recorded evidence.
   --help  Print help
 ```
 
 ### guildbotics member task complete
 
 ```text
+Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
+
 Usage: guildbotics member task complete [OPTIONS]
-  --person <VALUE> [required]
-  --waiting-for <VALUE> (repeatable)
-  --status <done|asking|blocked> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --waiting-for <VALUE>  Next member to act, by the context roster's person_id (repeatable; asking/blocked only). (repeatable)
+  --status <done|asking|blocked>  Run outcome. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member task status
 
 ```text
+Inspect the run's recorded evidence.
+
 Usage: guildbotics member task status [OPTIONS]
-  --person <VALUE> [default: ]
-  --format <json|markdown> [default: json]
+  --person <VALUE> [default: ]  Person ID or name of the member.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member ticket
+
+```text
+Read, create, update, and comment on tickets, react to their comments, and download their attachments.
+
+Usage: guildbotics member ticket [OPTIONS]
+  attachment  Attachment operations.
+  comment  Comment on a ticket in the member voice.
+  create  Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
+  reaction  Reactions to ticket comments.
+  read  Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  update  Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。
+  --help  Print help
+```
+
+### guildbotics member ticket attachment
+
+```text
+Attachment operations.
+
+Usage: guildbotics member ticket attachment [OPTIONS]
+  download  Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading.
   --help  Print help
 ```
 
 ### guildbotics member ticket attachment download
 
 ```text
+Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading.
+
 Usage: guildbotics member ticket attachment download [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --id <VALUE> [required]
-  --dest <VALUE> [default: .]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Ticket URL. [required]
+  --id <VALUE>  The id the ticket's ticket_attachments read gave the attachment. [required]
+  --dest <VALUE> [default: .]  Directory to write the file into. Defaults to the current directory. Remove downloaded files after reading when this is inside a repository.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member ticket comment
 
 ```text
+Comment on a ticket in the member voice.
+
 Usage: guildbotics member ticket comment [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Ticket URL. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member ticket create
 
 ```text
+Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
+
 Usage: guildbotics member ticket create [OPTIONS]
-  --person <VALUE> [required]
-  --tracker <VALUE> [required]
-  --title <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --label <VALUE> (repeatable)
-  --add-to-board/--no-add-to-board [default: true]
-  --interactive
-  --assignee <VALUE>
-  --lane <new|ready|in_progress>
-  --parent <VALUE>
-  --blocked-by <VALUE> (repeatable)
-  --human-approved
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --tracker <VALUE>  Where the ticket is kept: a repository path (owner/repo) on GitHub. [required]
+  --title <VALUE>  Ticket title. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --label <VALUE>  Label already defined in the tracker. Repeat for several labels. (repeatable)
+  --add-to-board/--no-add-to-board [default: true]  Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board.
+  --interactive  Create for interactive work; unsupported providers refuse it.
+  --assignee <VALUE>  Assignee's person_id from the member context roster, including humans.
+  --lane <new|ready|in_progress>  Initial lane; defaults to ready with a parent or blockers, new otherwise.
+  --parent <VALUE>  Parent ticket URL.
+  --blocked-by <VALUE>  Blocking ticket URL. Repeat for several blockers. (repeatable)
+  --human-approved  Confirm that a human instructed or approved this change.
+  --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member ticket reaction
+
+```text
+Reactions to ticket comments.
+
+Usage: guildbotics member ticket reaction [OPTIONS]
+  add  React to a comment of the ticket, by the id its read gave it.
   --help  Print help
 ```
 
 ### guildbotics member ticket reaction add
 
 ```text
+React to a comment of the ticket, by the id its read gave it.
+
 Usage: guildbotics member ticket reaction add [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --comment-id <VALUE> [required]
-  --reaction <ack|agree|celebrate|support> [required]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Ticket URL. [required]
+  --comment-id <VALUE>  The id the item's read gave the comment (or review) to react to. [required]
+  --reaction <ack|agree|celebrate|support>  Semantic reaction to add. [required]
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member ticket read
 
 ```text
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+
 Usage: guildbotics member ticket read [OPTIONS]
-  --person <VALUE> [required]
-  --resource <tracker_tickets|tickets|ticket_comments|ticket_attachments|ticket_pull_requests> [required]
-  --subject <VALUE> [required]
-  --params <VALUE> [default: ]
-  --continuation <VALUE> [default: ]
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --resource <tracker_tickets|tickets|ticket_comments|ticket_attachments|ticket_pull_requests>  Resource to read; see member help for its conditions. [required]
+  --subject <VALUE>  What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required]
+  --params <VALUE> [default: ]  Resource conditions as a JSON object.
+  --continuation <VALUE> [default: ]  Continuation returned for the same resource and conditions.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 
 ### guildbotics member ticket update
 
 ```text
+Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。
+
 Usage: guildbotics member ticket update [OPTIONS]
-  --person <VALUE> [required]
-  --url <VALUE> [required]
-  --content-file <VALUE>
-  --content-stdin
-  --title <VALUE>
-  --interactive/--no-interactive
-  --add-label <VALUE> (repeatable)
-  --remove-label <VALUE> (repeatable)
-  --state <open|closed>
-  --state-reason <completed|not_planned>
-  --parent <VALUE>
-  --add-blocked-by <VALUE> (repeatable)
-  --remove-blocked-by <VALUE> (repeatable)
-  --human-approved
-  --format <json|markdown> [default: json]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --url <VALUE>  Ticket URL. [required]
+  --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --title <VALUE>  Replace the ticket title.
+  --interactive/--no-interactive  Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it.
+  --add-label <VALUE>  Add a label already defined in the tracker. Repeat for several labels. (repeatable)
+  --remove-label <VALUE>  Remove a label from the ticket. Repeat for several labels. (repeatable)
+  --state <open|closed>  Close or reopen the ticket; requires --human-approved.
+  --state-reason <completed|not_planned>  Why the ticket is closed; requires --state closed.
+  --parent <VALUE>  URL of the ticket this one becomes a part of; "" makes it a part of none.
+  --add-blocked-by <VALUE>  URL of a ticket that must be closed before this one is started. Repeat for several tickets. (repeatable)
+  --remove-blocked-by <VALUE>  URL of a ticket this one is no longer blocked by. Repeat for several tickets. (repeatable)
+  --human-approved  Confirm that a human instructed or approved this change.
+  --format <json|markdown> [default: json]  Output format.
   --help  Print help
 ```
 

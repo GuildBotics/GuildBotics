@@ -15,7 +15,7 @@ fn workspace_location(path: &Path, language: &str) -> anyhow::Result<PathBuf> {
 
 pub fn select(data: &Path, path: &Path, language: &str) -> anyhow::Result<PathBuf> {
     let workspace = workspace_location(path, language)?;
-    selection::write_active(data, &workspace)?;
+    selection::write_active(data, &workspace).map_err(|error| registry_error(error, language))?;
     Ok(workspace)
 }
 
@@ -35,7 +35,7 @@ pub fn resolve_with_message(
     missing: &str,
 ) -> anyhow::Result<PathBuf> {
     let workspace = read_selection_with_message(data, explicit, language, missing)?;
-    selection::register(data, &workspace)?;
+    selection::register(data, &workspace).map_err(|error| registry_error(error, language))?;
     Ok(workspace)
 }
 
@@ -72,4 +72,19 @@ pub fn active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
 
 pub fn state_file(data: &Path) -> PathBuf {
     data.join(selection::ACTIVE_FILE)
+}
+
+/// Turn a registry failure into the repair instructions at the host boundary.
+pub(crate) fn registry_error(error: anyhow::Error, language: &str) -> anyhow::Error {
+    let Some(problem) = error.downcast_ref::<selection::RegistryError>() else {
+        return error;
+    };
+    anyhow::anyhow!(crate::i18n::t(
+        language,
+        "safe_paths.registry",
+        &[
+            ("path", &problem.path.to_string_lossy()),
+            ("reason", &problem.reason)
+        ],
+    ))
 }

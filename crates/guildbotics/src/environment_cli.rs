@@ -189,7 +189,8 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
             }
             ImageCommand::List { format } => {
                 let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
-                let mut list = gb_server::environment::list_images(&data, Some(&workspace)).await?;
+                let mut list =
+                    gb_server::environment::list_images(&data, Some(&workspace), language).await?;
                 if matches!(format, OutputFormat::Json) {
                     list.as_object_mut().expect("image list").remove("problem");
                     println!("{}", serde_json::to_string_pretty(&list)?);
@@ -244,7 +245,9 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                     let digest =
                         gb_environment::runtime::held_image(&runtime, reference, &recipe.image)
                             .await
-                            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+                            .map_err(|e| {
+                                anyhow::anyhow!(gb_server::i18n::say(e.sentence(), language))
+                            })?
                             .ok_or_else(|| {
                                 anyhow::anyhow!(gb_server::i18n::t(
                                     language,

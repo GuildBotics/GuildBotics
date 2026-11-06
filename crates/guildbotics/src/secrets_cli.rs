@@ -73,9 +73,7 @@ fn prompt(label: &str) -> anyhow::Result<String> {
     write!(stderr, "{label} ")?;
     stderr.flush()?;
     if !io::stdin().is_terminal() {
-        let mut value = String::new();
-        io::stdin().read_line(&mut value)?;
-        return Ok(value.trim_end_matches(['\n', '\r']).to_owned());
+        return read_noninteractive(io::stdin().lock());
     }
     terminal::enable_raw_mode()?;
     let input = (|| -> io::Result<String> {
@@ -85,7 +83,11 @@ fn prompt(label: &str) -> anyhow::Result<String> {
                 && key.kind != KeyEventKind::Release
             {
                 match key.code {
-                    KeyCode::Enter => return Ok(value),
+                    KeyCode::Enter if !value.is_empty() => return Ok(value),
+                    KeyCode::Enter => {
+                        write!(stderr, "\r\n{label} ")?;
+                        stderr.flush()?;
+                    }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
                     }
@@ -104,8 +106,30 @@ fn prompt(label: &str) -> anyhow::Result<String> {
     Ok(input?)
 }
 
+fn read_noninteractive(mut input: impl io::BufRead) -> anyhow::Result<String> {
+    let mut line = String::new();
+    while input.read_line(&mut line)? != 0 {
+        let value = line.trim_end_matches(['\n', '\r']);
+        if !value.is_empty() {
+            return Ok(value.to_owned());
+        }
+        line.clear();
+    }
+    Err(io::Error::from(io::ErrorKind::UnexpectedEof).into())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secret_prompt_requires_a_value_before_eof() {
+        assert!(super::read_noninteractive(&b""[..]).is_err());
+        assert!(super::read_noninteractive(&b"\r\n\n"[..]).is_err());
+        assert_eq!(
+            super::read_noninteractive(&b"\n fixture \r\n"[..]).unwrap(),
+            " fixture "
+        );
+    }
+
     #[test]
     fn secrets_status_is_registered_on_the_main_cli() {
         use clap::Parser as _;

@@ -21,18 +21,25 @@ impl Checkout {
             .await
             .map_err(|_| client.git_error("current_repository", &[]))?;
         let root = std::fs::canonicalize(root)?;
-        let requested = gb_base::host_path::normalize(path)?;
-        let requested = std::fs::canonicalize(requested)?;
+        let requested = std::fs::canonicalize(gb_base::host_path::expand_home(path));
         anyhow::ensure!(
-            root == requested,
+            requested.is_ok_and(|requested| root == requested),
             client.git_error("current_path", &[("path", &root.to_string_lossy())]),
         );
         Ok(Self(root))
     }
 
     async fn call(&self, args: &[&str], input: &[u8]) -> anyhow::Result<Output> {
-        let mut process = tokio::process::Command::new("git")
-            .args(args)
+        self.invoke(tokio::process::Command::new("git").args(args), input)
+            .await
+    }
+
+    async fn invoke(
+        &self,
+        command: &mut tokio::process::Command,
+        input: &[u8],
+    ) -> anyhow::Result<Output> {
+        let mut process = command
             .current_dir(&self.0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -106,19 +113,20 @@ impl Checkout {
             .status
             .success();
         let sha = if staged || merge {
-            self.checked(
-                &[
-                    "-c",
-                    &format!("user.name={user}"),
-                    "-c",
-                    &format!("user.email={email}"),
-                    "commit",
-                    "--no-gpg-sign",
-                    "--file=-",
-                ],
-                format!("{}\n", message.trim()).as_bytes(),
-            )
-            .await?;
+            let output = self
+                .invoke(
+                    tokio::process::Command::new("git")
+                        .args(["commit", "--no-gpg-sign", "--file=-"])
+                        .envs([
+                            ("GIT_AUTHOR_NAME", user),
+                            ("GIT_AUTHOR_EMAIL", email),
+                            ("GIT_COMMITTER_NAME", user),
+                            ("GIT_COMMITTER_EMAIL", email),
+                        ]),
+                    format!("{}\n", message.trim()).as_bytes(),
+                )
+                .await?;
+            self.output(output)?;
             Some(self.text(&["rev-parse", "--verify", "HEAD"]).await?)
         } else {
             None
@@ -455,7 +463,10 @@ mod tests {
         let tip = commit("remote tip").await;
         let incremental = root.path().join("incremental.bundle");
         let full = root.path().join("full.bundle");
-        for (path, excluded) in [(&incremental, vec![missing.clone()]), (&full, vec![])] {
+        for (path, excluded) in [
+            (&incremental, vec![missing.clone(), "0".repeat(40)]),
+            (&full, vec![]),
+        ] {
             assert!(
                 origin
                     .bundle("refs/heads/main", &excluded, path.to_str().unwrap())
@@ -486,6 +497,36 @@ mod tests {
             },
             language: "en",
         };
+        let unneeded = root.path().join("unneeded.bundle");
+        assert!(
+            !origin
+                .bundle(
+                    "refs/heads/main",
+                    std::slice::from_ref(&tip),
+                    unneeded.to_str().unwrap()
+                )
+                .await
+                .unwrap()
+        );
+        assert!(!unneeded.exists());
+        assert!(
+            checkout
+                .track(
+                    &json!({"refs/heads/main": tip}),
+                    Some(full.to_str().unwrap()),
+                    &client,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !checkout
+                .call(&["cat-file", "-e", &tip], b"")
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
         let mut attempts = 0;
         checkout
             .receive_tracking(

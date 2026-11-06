@@ -1,5 +1,8 @@
 //! The environment's shared preflight, presented to the screens and CLI.
-use crate::api::{ApiError, Shared};
+use crate::{
+    api::{ApiError, Shared},
+    i18n,
+};
 use axum::{
     Json,
     extract::State,
@@ -538,9 +541,13 @@ pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Respon
     }
 }
 
-pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
+pub(crate) async fn images(State(api): State<Shared>, headers: HeaderMap) -> Json<Value> {
+    let language = headers
+        .get("x-guildbotics-language")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("en");
     Json(
-        match list_images(&api.data, api.workspace.as_deref()).await {
+        match list_images(&api.data, api.workspace.as_deref(), language).await {
             Ok(view) => view,
             Err(error) => json!({
                 "architecture":gb_environment::image::device_architecture(),
@@ -554,6 +561,7 @@ pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
 pub async fn list_images(
     data: &std::path::Path,
     workspace: Option<&std::path::Path>,
+    language: &str,
 ) -> anyhow::Result<Value> {
     let templates = gb_base::home::python_package().join("templates");
     let default = gb_environment::recipe::Recipe::load(&templates)
@@ -568,7 +576,7 @@ pub async fn list_images(
     };
     let images = gb_environment::runtime::images(&data.join("msb"), &default)
         .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        .map_err(|e| anyhow::anyhow!(i18n::say(e.sentence(), language)))?;
     Ok(image_projection(
         images,
         declared.as_ref(),

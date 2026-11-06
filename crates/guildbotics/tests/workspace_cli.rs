@@ -87,14 +87,19 @@ fn cli_workspace_selection_refuses_exchange_locations_before_registering_them() 
     let refused = workspace(&root, &["workspace", "use"], Some(&project));
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("inside granted directory"));
-    for explicit in [true, false] {
+    for (group, explicit) in [
+        ("environment", true),
+        ("environment", false),
+        ("secrets", true),
+        ("secrets", false),
+    ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_guildbotics"));
         command
             .env("HOME", &root)
             .env("GUILDBOTICS_HOME", root.join(".guildbotics"))
             .env("LANGUAGE", "en")
             .env_remove("GUILDBOTICS_CONFIG_DIR")
-            .arg("environment");
+            .arg(group);
         if explicit {
             command
                 .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
@@ -113,4 +118,34 @@ fn cli_workspace_selection_refuses_exchange_locations_before_registering_them() 
             .join(".guildbotics/data/active-workspace.json")
             .exists()
     );
+}
+
+#[test]
+fn corrupt_registry_reports_its_path_and_repair_instructions() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let data = root.join(".guildbotics/data");
+    let project = root.join("workspace");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let registry = data.join("workspaces.json");
+    for payload in ["{", "{\"a\": 1}", "[1]", "[\"/bad/../path\"]"] {
+        std::fs::write(&registry, payload).unwrap();
+        let refused = workspace(&root, &["workspace", "use"], Some(&project));
+        assert_eq!(refused.status.code(), Some(1));
+        let error = String::from_utf8(refused.stderr).unwrap();
+        assert!(
+            error.contains(&format!(
+                "Cannot read the workspace registry {}",
+                registry.display()
+            )),
+            "{error}"
+        );
+        assert!(
+            error.contains("Repair this file before selecting a workspace or running commands."),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&registry).unwrap(), payload);
+        assert!(!data.join("active-workspace.json").exists());
+    }
 }

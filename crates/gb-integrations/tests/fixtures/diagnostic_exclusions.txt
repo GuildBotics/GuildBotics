@@ -1,4 +1,2 @@
 # Retained translations for the removed Python HTTP client; never count these as live Rust usage.
-integrations.branvil.api.timeout	The embedded DataApi has no HTTP request timeout; the Python HTTP client was removed in #81/#88.
-integrations.branvil.api.unreachable	The embedded DataApi has no remote address to connect to; the Python HTTP client was removed in #81/#88.
 integrations.branvil.api.not_branvil	The embedded DataApi is statically Branvil, so no HTTP server identity probe remains after #81/#88.

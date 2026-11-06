@@ -104,7 +104,24 @@ fn collect(command: Command, path: &str, index: &mut String, sections: &mut Stri
             "\nStart the GuildBotics server before running member commands. Use `member --workspace <path>` to verify the selected workspace.\n\
             See the [member capability reference](../guildbotics/templates/member/reference.md) for examples and option semantics.\n",
         );
+        writeln!(
+            sections,
+            "
+```text
+{}```",
+            gb_server::member::usage("")
+        )
+        .unwrap();
+        let mut paths = BTreeSet::new();
         for name in gb_server::member::grammar().keys() {
+            let mut path = name.as_str();
+            paths.insert(path);
+            while let Some((parent, _)) = path.rsplit_once(' ') {
+                paths.insert(parent);
+                path = parent;
+            }
+        }
+        for name in paths {
             let full = format!("{path} {name}");
             writeln!(index, "- [`{full}`](#{})", full.replace(' ', "-")).unwrap();
             writeln!(
@@ -176,7 +193,8 @@ mod tests {
             "[default: 20; 1<=x<=200]",
             "[default: json]",
             "[required]",
-            "(repeatable)",
+            "Literal search query; repeat for OR matching.",
+            "Person ID or name of the member. [required]",
         ] {
             assert!(recall.contains(expected), "missing {expected} in {recall}");
         }

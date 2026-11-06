@@ -176,7 +176,7 @@ fn execute(
             let values = store.values().map_err(store_error)?;
             let contents = dotenv(&values);
             if let Some(path) = file {
-                let path = gb_base::host_path::normalize(&path)?;
+                let path = client::caller_path(&path)?;
                 gb_base::files::atomic_write(&path, contents.as_bytes())?;
                 println!(
                     "{}",
@@ -239,8 +239,98 @@ fn member_prefixes(identity: &Path) -> anyhow::Result<Vec<String>> {
     Ok(names)
 }
 
-fn read_dotenv(input: impl io::Read) -> Result<BTreeMap<String, String>, dotenvy::Error> {
-    dotenvy::from_read_iter(input).collect()
+fn read_dotenv(mut input: impl io::Read) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut text = String::new();
+    input.read_to_string(&mut text)?;
+    let mut rest = text.trim_start_matches('\u{feff}');
+    let mut values = BTreeMap::new();
+    while !rest.trim_start().is_empty() {
+        rest = rest.trim_start();
+        let (line, following) = rest.split_once('\n').unwrap_or((rest, ""));
+        if line.starts_with('#') {
+            rest = following;
+            continue;
+        }
+        let entry = rest
+            .strip_prefix("export")
+            .and_then(|value| {
+                value
+                    .starts_with([' ', '\t'])
+                    .then(|| value.trim_start_matches([' ', '\t']))
+            })
+            .unwrap_or(rest);
+        let Some((key, value)) = entry.split_once('=') else {
+            anyhow::bail!("missing dotenv assignment");
+        };
+        let key = key.trim_matches([' ', '\t']);
+        let key = key
+            .strip_prefix('\'')
+            .and_then(|quoted| quoted.strip_suffix('\''))
+            .unwrap_or(key);
+        anyhow::ensure!(
+            !key.is_empty()
+                && !key.contains(|c: char| c.is_whitespace() || matches!(c, '#' | '\'' | '"')),
+            "invalid dotenv key"
+        );
+        let raw_value = value;
+        let value = raw_value.trim_start_matches([' ', '\t']);
+        let (parsed, following) = match value.chars().next() {
+            Some(quote @ ('\'' | '"')) => quoted_value(value, quote)?,
+            _ => {
+                let (line, following) = value.split_once('\n').unwrap_or((value, ""));
+                let end = line
+                    .match_indices('#')
+                    .find(|(index, _)| {
+                        (*index == 0 && raw_value.len() != value.len())
+                            || line[..*index].ends_with([' ', '\t'])
+                    })
+                    .map_or(line.len(), |(index, _)| index);
+                (line[..end].trim_end().to_owned(), following)
+            }
+        };
+        values.insert(key.to_owned(), parsed);
+        rest = following;
+    }
+    Ok(values)
+}
+
+fn quoted_value(value: &str, quote: char) -> anyhow::Result<(String, &str)> {
+    let mut characters = value[1..].char_indices();
+    let mut parsed = String::new();
+    while let Some((index, character)) = characters.next() {
+        if character == quote {
+            let rest = &value[index + 2..];
+            let (tail, following) = rest.split_once('\n').unwrap_or((rest, ""));
+            let tail = tail.trim_start();
+            anyhow::ensure!(
+                tail.is_empty() || tail.starts_with('#'),
+                "invalid dotenv quote"
+            );
+            return Ok((parsed, following));
+        }
+        if character != '\\' {
+            parsed.push(character);
+            continue;
+        }
+        let Some((_, escaped)) = characters.next() else {
+            break;
+        };
+        match (quote, escaped) {
+            (_, '\\') | ('\'', '\'') | ('"', '"' | '$') => parsed.push(escaped),
+            ('"', 'a') => parsed.push('\x07'),
+            ('"', 'b') => parsed.push('\x08'),
+            ('"', 'f') => parsed.push('\x0c'),
+            ('"', 'n') => parsed.push('\n'),
+            ('"', 'r') => parsed.push('\r'),
+            ('"', 't') => parsed.push('\t'),
+            ('"', 'v') => parsed.push('\x0b'),
+            _ => {
+                parsed.push('\\');
+                parsed.push(escaped);
+            }
+        }
+    }
+    anyhow::bail!("unterminated dotenv quote")
 }
 
 fn dotenv(values: &BTreeMap<String, String>) -> String {
@@ -262,6 +352,7 @@ fn dotenv(values: &BTreeMap<String, String>) -> String {
                         out.push(character);
                     }
                     '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
                     _ => out.push(character),
                 }
             }
@@ -333,7 +424,7 @@ mod tests {
         );
         let exported = root.join("exported.env");
         command(Command::Export {
-            file: Some(exported.clone()),
+            file: Some(workspace.join("../exported.env")),
         })
         .unwrap();
         #[cfg(unix)]
@@ -416,6 +507,34 @@ mod tests {
             assert!(stdout.contains(expected), "{stdout}");
         }
         assert!(!root.path().join("export.env").exists());
+    }
+
+    #[test]
+    fn imports_frozen_exports_and_handwritten_dollars_without_interpolation() {
+        let values = read_dotenv(
+            br#"WORD=fixture
+PASSWORD=pa$WORD
+BRACED=abc${WORD}
+QUOTED="abc$WORD"
+PEM="-----BEGIN KEY-----\r\nfixture\r\n-----END KEY-----\r\n"
+"#
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(values["PASSWORD"], "pa$WORD");
+        assert_eq!(values["BRACED"], "abc${WORD}");
+        assert_eq!(values["QUOTED"], "abc$WORD");
+        assert_eq!(
+            values["PEM"],
+            "-----BEGIN KEY-----\r\nfixture\r\n-----END KEY-----\r\n"
+        );
+        for malformed in [
+            b"GOOD=fixture\nBROKEN=\"unfinished".as_slice(),
+            b"API_KEY'=replacement",
+            b"'API_KEY=replacement",
+        ] {
+            assert!(read_dotenv(malformed).is_err());
+        }
     }
 
     #[test]

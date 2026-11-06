@@ -388,6 +388,35 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
         "{in_japanese}"
     );
 
+    let owner_id = &token[4..20];
+    for nonce in [
+        json!(""),
+        json!("0".repeat(63)),
+        json!("g".repeat(64)),
+        json!(42),
+    ] {
+        let refused = server
+            .http
+            .post(server.url("/api/local-api/proof"))
+            .json(&json!({"token_id":owner_id,"nonce":nonce}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{nonce}"
+        );
+    }
+    let unknown = server
+        .http
+        .post(server.url("/api/local-api/proof"))
+        .json(&json!({"token_id":"0123456789abcdef","nonce":"0".repeat(64)}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
+
     for (header, value, status, code) in [
         (
             "host",
@@ -805,6 +834,19 @@ fn nothing_can_write_to_stdout_after_the_notice() {
 }
 
 #[test]
+fn failed_bind_releases_the_server_lock_for_the_next_start() {
+    let root = tempfile::tempdir().unwrap();
+    let reserved = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    let failed = server_command(root.path(), port).output().unwrap();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty(), "{failed:?}");
+    drop(reserved);
+    let server = Server::spawn(server_command(root.path(), port), root.path(), port);
+    assert!(server.owner_token().starts_with("gbt_"));
+}
+
+#[test]
 fn one_server_runs_per_machine_root() {
     let dir = tempfile::tempdir().unwrap();
     let first = Server::start(dir.path());
@@ -996,9 +1038,9 @@ fn open_can_print_a_branvil_entry_link() {
 
 /// A Ctrl-C while the server still starts -- here held, after its notice,
 /// by the lock of the workspaces' registry -- stops Branvil too, which has
-/// not started yet: one is enough to end the process.
+/// not started yet. The second signal escalates while startup is still held.
 #[test]
-fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
+fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
     let dir = tempfile::tempdir().unwrap();
     set_up_branvil(dir.path(), "127.0.0.1:0");
     let workspace = dir.path().join("workspace");
@@ -1009,13 +1051,27 @@ fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
     held.lock().unwrap();
     let port = free_port();
     let mut command = server_command(dir.path(), port);
-    command.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    command
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
+        .env("LANGUAGE", "en");
     let mut server = Server::spawn(command, dir.path(), port);
-    let interrupted = Command::new("kill")
-        .args(["-INT", &server.child.id().to_string()])
-        .output()
-        .unwrap();
-    assert!(interrupted.status.success());
+    for key in [
+        "runtime.service_lock.stopping_after_work",
+        "runtime.service_lock.cancelling",
+    ] {
+        let interrupted = Command::new("kill")
+            .args(["-INT", &server.child.id().to_string()])
+            .output()
+            .unwrap();
+        assert!(interrupted.status.success());
+        let expected = gb_server::i18n::t("en", key, &[]);
+        loop {
+            let line = server.stderr.recv_timeout(Duration::from_secs(5)).unwrap();
+            if line == expected {
+                break;
+            }
+        }
+    }
     drop(held);
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let status = loop {
@@ -1024,7 +1080,7 @@ fn a_ctrl_c_while_the_server_starts_stops_branvil_too() {
         }
         if std::time::Instant::now() >= deadline {
             server.child.kill().unwrap();
-            panic!("one Ctrl-C did not end the server");
+            panic!("Ctrl-C did not end the server");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -1902,6 +1958,13 @@ fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
     );
     let message = root.join("commit-message");
     std::fs::write(&message, "publish current workspace").unwrap();
+    let sub = checkout.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(
+        root.join("gitconfig"),
+        "[author]\n\tname = Configured Human\n\temail = configured@example.test\n",
+    )
+    .unwrap();
     let member = |action: &str, repository: &Path| {
         let mut cli = Command::new(BIN);
         for (key, _) in std::env::vars() {
@@ -1909,7 +1972,9 @@ fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
                 cli.env_remove(key);
             }
         }
-        cli.current_dir(&checkout)
+        cli.current_dir(&sub)
+            .env("GIT_AUTHOR_NAME", "Environment Human")
+            .env("GIT_COMMITTER_EMAIL", "environment@example.test")
             .env("HOME", &root)
             .env("GUILDBOTICS_HOME", root.join("home"))
             .env("LANGUAGE", "en")
@@ -1943,7 +2008,9 @@ fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
         "{wrong:?}"
     );
     assert!(!checkout.join("hook-ran").exists());
-    let published = member("publish", &checkout);
+    let missing = member("publish", Path::new("../missing"));
+    assert_eq!(missing.stderr, wrong.stderr);
+    let published = member("publish", Path::new(".."));
     assert_ok(&published);
     let published: Value = serde_json::from_slice(&published.stdout).unwrap();
     let head = git_checked(&checkout, &["rev-parse", "HEAD"]);
@@ -1954,8 +2021,8 @@ fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
         "publish current workspace"
     );
     assert_eq!(
-        git_checked(&checkout, &["log", "-1", "--format=%ae"]),
-        "yuki@example.test"
+        git_checked(&checkout, &["log", "-1", "--format=%an <%ae> / %cn <%ce>"]),
+        "Yuki <yuki@example.test> / Yuki <yuki@example.test>"
     );
     assert_eq!(
         std::fs::read_to_string(checkout.join("hook-ran")).unwrap(),

@@ -100,12 +100,22 @@ async fn connect_to(
         .timeout(super::TIMEOUT)
         .header("x-guildbotics-language", language)
         .json(&json!({"code":code, "redirect_uri":redirect, "code_verifier":verifier}));
-    let reply: Value = super::checked(call.send().await?).await?.json().await?;
-    let token = reply["token"]
-        .as_str()
-        .filter(|token| crate::auth::parse_token(token).is_some())
-        .ok_or_else(|| anyhow::anyhow!(text("cli.server.invalid_token")))?;
-    Ok(token.to_owned())
+    async {
+        let reply: Value = super::checked(call.send().await?).await?.json().await?;
+        reply["token"]
+            .as_str()
+            .filter(|token| crate::auth::parse_token(token).is_some())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!(text("cli.server.invalid_token")))
+    }
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.server.refused",
+            &[("reason", &error.to_string())],
+        ))
+    })
 }
 
 fn client_name(machine: &str) -> String {
@@ -181,10 +191,14 @@ mod tests {
         let router = Router::new().route("/api/apps/token", post(
             |State(exchanged): State<Arc<AtomicUsize>>, Json(body): Json<Value>| async move {
                 exchanged.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(body["code"], "server-code");
+                assert!(matches!(body["code"].as_str(), Some("server-code" | "refused-code")));
                 assert!(body["redirect_uri"].as_str().unwrap().ends_with("/callback"));
                 assert_eq!(body["code_verifier"].as_str().unwrap().len(), 64);
-                Json(json!({"token":"gbt_0123456789abcdef_fixture"}))
+                if body["code"] == "refused-code" {
+                    (StatusCode::BAD_REQUEST, Json(json!({"message":"fixture refused"})))
+                } else {
+                    (StatusCode::OK, Json(json!({"token":"gbt_0123456789abcdef_fixture"})))
+                }
             },
         )).with_state(exchanged.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -192,7 +206,7 @@ mod tests {
             .unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        for allow in [true, false] {
+        for code in [Some("server-code"), None, Some("refused-code")] {
             let result = connect_to(port, "Fixture", "en", |url| {
                 let url = url::Url::parse(url).unwrap();
                 assert_eq!(url.path(), "/-/authorize");
@@ -212,23 +226,24 @@ mod tests {
                     assert_eq!(refused.status(), StatusCode::NOT_FOUND);
                     let mut returned = callback;
                     returned.query_pairs_mut().append_pair("state", &state);
-                    if allow {
-                        returned
-                            .query_pairs_mut()
-                            .append_pair("code", "server-code");
+                    if let Some(code) = code {
+                        returned.query_pairs_mut().append_pair("code", code);
                     }
                     let accepted = http.get(returned).send().await.unwrap();
                     assert_eq!(accepted.status(), StatusCode::OK);
                 });
             })
             .await;
-            if allow {
-                assert_eq!(result.unwrap(), "gbt_0123456789abcdef_fixture");
-            } else {
-                assert!(result.unwrap_err().to_string().contains("did not allow"));
+            match code {
+                Some("server-code") => assert_eq!(result.unwrap(), "gbt_0123456789abcdef_fixture"),
+                None => assert!(result.unwrap_err().to_string().contains("did not allow")),
+                _ => assert_eq!(
+                    result.unwrap_err().to_string(),
+                    i18n::t("en", "cli.server.refused", &[("reason", "fixture refused")]),
+                ),
             }
-            assert_eq!(exchanged.load(Ordering::SeqCst), 1);
         }
+        assert_eq!(exchanged.load(Ordering::SeqCst), 2);
         server.abort();
     }
 }

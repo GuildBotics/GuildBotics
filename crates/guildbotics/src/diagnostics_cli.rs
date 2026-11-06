@@ -100,7 +100,7 @@ pub async fn run(command: DiagnosticsCommand) -> anyhow::Result<()> {
                 attr_value: attr_value.as_deref(),
                 include_assistant,
                 limit: limit as usize,
-                include_system: false,
+                include_system: true,
                 search_transcripts: true,
             },
         )?,

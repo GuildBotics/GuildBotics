@@ -43,8 +43,6 @@ pub async fn run(command: ServiceCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub const FORCE_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
-
 pub async fn stop(force: bool) -> anyhow::Result<()> {
     use std::time::Duration;
 
@@ -82,7 +80,7 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     };
     if force {
-        tokio::time::timeout(FORCE_AFTER + Duration::from_secs(5), wait)
+        tokio::time::timeout(Duration::from_secs(90), wait)
             .await
             .map_err(|_| anyhow::anyhow!(text("runtime.service_lock.teardown_timeout")))??;
         println!("{}", text("runtime.service_lock.stopped_after_cancel"));

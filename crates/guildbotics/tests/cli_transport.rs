@@ -391,6 +391,47 @@ async fn member_cli_renders_backend_plan_results_without_executing() {
     }
 }
 
+#[tokio::test]
+async fn member_attachment_resolves_a_relative_parent_on_the_caller() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let workspace = peer_workspace(&root);
+    let sub = root.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let peer = CliPeer::bind(&root).await;
+    let args = [
+        "member",
+        "ticket",
+        "attachment",
+        "download",
+        "--dest",
+        "../images",
+    ];
+    let mut cli = peer_cli(&root, &args);
+    cli.current_dir(sub)
+        .env("GUILDBOTICS_WORKSPACE_ROOT", workspace);
+    let child = tokio::spawn(async move { cli.output().await.unwrap() });
+    peer.prove().await;
+    let (socket, request) = peer.authorized("POST", "member/plan").await;
+    assert_eq!(request["arguments"], json!(&args[1..]));
+    let plan = member_plan(json!({"download":true,"arguments":&args[1..],"output_format":"json"}));
+    CliPeer::respond(socket, "200 OK", &plan).await;
+    let (socket, _) = peer.authorized("POST", "member/run").await;
+    assert!(!root.join("images").exists());
+    let reply = json!({"exit_code":0,"stdout":"{}","stderr":"","size":3,
+        "download":{"destination":"../images","attachment":["fixture.png","id"]}});
+    CliPeer::respond(socket, "200 OK", &format!("{reply}\npng")).await;
+    let output = tokio::time::timeout(Duration::from_secs(10), child)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let expected = root.join("images/fixture.png");
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["files"], json!([expected]));
+    assert_eq!(std::fs::read(expected).unwrap(), b"png");
+}
+
 fn member_plan(plan: Value) -> String {
     format!(
         "{}\n",
@@ -546,28 +587,33 @@ fn startup_rejects_the_old_commands_and_service_configuration_flags() {
 async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_force() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let peer = CliPeer::bind(root).await;
-    let mut cli = peer_cli(root, &["server", "stop", "--force"]);
-    cli.env("LANGUAGE", "en");
-    let stop = tokio::spawn(async move { cli.output().await.unwrap() });
-    let (socket, path, headers, _) = peer.next().await;
-    assert!(path.starts_with("POST /api/local-api/proof "));
-    assert!(!headers.contains("authorization:"));
-    CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
-    let refused = tokio::time::timeout(Duration::from_secs(10), stop)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&refused.stderr).contains(&gb_server::i18n::t(
-            "en",
-            "runtime.service_lock.api_unavailable",
-            &[]
-        ))
-    );
-    peer.expect_no_retry().await;
-    drop(peer);
+    for args in [
+        &["server", "stop", "--force"][..],
+        &["service", "start"],
+        &["service", "stop"],
+    ] {
+        let peer = CliPeer::bind(root).await;
+        let mut cli = peer_cli(root, args);
+        cli.env("LANGUAGE", "en");
+        let stop = tokio::spawn(async move { cli.output().await.unwrap() });
+        let (socket, path, headers, _) = peer.next().await;
+        assert!(path.starts_with("POST /api/local-api/proof "));
+        assert!(!headers.contains("authorization:"));
+        CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
+        let refused = tokio::time::timeout(Duration::from_secs(10), stop)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains(&gb_server::i18n::t(
+                "en",
+                "runtime.service_lock.api_unavailable",
+                &[]
+            ))
+        );
+        peer.expect_no_retry().await;
+    }
 
     for force in [false, true] {
         let peer = CliPeer::bind(root).await;
@@ -614,6 +660,33 @@ async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_forc
 }
 
 #[tokio::test]
+async fn run_reports_an_unselected_workspace_before_waiting_for_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let workspace = peer_workspace(&root);
+    let mut cli = peer_cli(&root, &["run", "ask"]);
+    let mut child = cli
+        .current_dir(workspace)
+        .env("LANGUAGE", "en")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    let output = tokio::time::timeout(Duration::from_secs(5), child.wait_with_output())
+        .await
+        .expect("workspace failure must not wait for EOF")
+        .unwrap();
+    drop(input);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("workspace"),
+        "{output:?}"
+    );
+    assert!(!root.join("home/data/workspaces.json").exists());
+}
+
+#[tokio::test]
 async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let root = gb_base::host_path::normalize(dir.path()).unwrap();
@@ -630,6 +703,7 @@ async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
         "health-error",
         "malformed",
         "disconnect",
+        "proof-failed",
         "missing-token",
     ] {
         if state == "missing-token" {
@@ -640,7 +714,12 @@ async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
         cli.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
             .env("LANGUAGE", "en");
         let running = tokio::spawn(async move { cli.output().await.unwrap() });
-        if state != "missing-token" {
+        if state == "proof-failed" {
+            let (socket, request, headers, _) = peer.next().await;
+            assert!(request.starts_with("POST /api/local-api/proof "));
+            assert!(!headers.contains("authorization:"));
+            CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
+        } else if state != "missing-token" {
             peer.prove().await;
             let (socket, _) = peer.authorized("GET", "health").await;
             match state {
@@ -864,6 +943,7 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
     assert!(run_records(&workspace).is_empty());
     for args in [
         &["run", "solo@alice", "--cwd", "workspace", "topic=review"][..],
+        &["run", "solo@alice", "--person", "", "--cwd", "workspace"][..],
         &[
             "run",
             "solo@another",
@@ -883,7 +963,7 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
         );
     }
     let records = run_records(&workspace);
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 3);
     for record in records {
         assert_eq!(record["status"], "failed");
         assert_eq!(record["source"], "manual");

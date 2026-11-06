@@ -4,7 +4,10 @@
 //! and a fresh nonce, and the token is sent only once the answer proves that
 //! the listener knows the token's digest.
 
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde_json::{Value, json};
 
@@ -151,7 +154,7 @@ pub async fn run_command(
     spec: &str,
     args: Vec<String>,
     person: Option<String>,
-    message: String,
+    message: impl FnOnce() -> std::io::Result<String>,
     cwd: Option<std::path::PathBuf>,
 ) -> anyhow::Result<String> {
     use crate::commands::RunRequest;
@@ -172,11 +175,11 @@ pub async fn run_command(
     let request = RunRequest {
         command: name.to_owned(),
         args,
-        person: person.or_else(|| {
+        person: person.filter(|person| !person.is_empty()).or_else(|| {
             let inline = inline.trim();
             (!inline.is_empty()).then(|| inline.to_owned())
         }),
-        message,
+        message: message()?,
         cwd: Some(cwd),
         expected_workspace: Some(workspace.clone()),
         expected_command_file_id: None,
@@ -282,26 +285,22 @@ async fn answer_git_credential(
             )
         )?,
         Err(error) => {
-            let reason = error
-                .downcast_ref::<gb_ports::ServiceError>()
-                .map(|error| {
+            let message = match error.downcast_ref::<gb_ports::ServiceError>() {
+                Some(error) => {
                     let args = error.translation_args();
                     let args = args
                         .iter()
                         .map(|(key, value)| (key.as_str(), value.as_str()))
                         .collect::<Vec<_>>();
                     i18n::t(language, error.translation_key(), &args)
-                })
-                .unwrap_or_else(|| error.to_string());
-            writeln!(
-                stderr,
-                "{}",
-                i18n::t(
+                }
+                None => i18n::t(
                     language,
                     "integrations.branvil.owner_git.unavailable",
-                    &[("reason", &reason)]
-                )
-            )?;
+                    &[("reason", &error.to_string())],
+                ),
+            };
+            writeln!(stderr, "{message}")?;
             stdout.write_all(b"quit=1\n")?;
         }
     }
@@ -314,19 +313,10 @@ pub async fn entry_link() -> Result<String, String> {
     let port = crate::server::port().map_err(|e| e.to_string())?;
     let data = gb_base::home::data().map_err(|e| format!("{e:#}"))?;
     let language = language().await;
-    let local = OwnerClient::connect(&data, port, language)
+    let owner = entry_client(&data, port, language, connect::credential)
         .await
-        .map_err(|e| e.to_string())?;
-    let owner = match local {
-        Some(owner) => Some(owner),
-        None => match connect::credential(port) {
-            Some(token) => OwnerClient::with_token(port, language, token)
-                .await
-                .map_err(|e| e.to_string())?,
-            None => None,
-        },
-    }
-    .ok_or_else(|| i18n::t(language, "cli.server.unreachable", &[]))?;
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| i18n::t(language, "cli.server.unreachable", &[]))?;
     let refused = |reason: String| i18n::t(language, "cli.server.refused", &[("reason", &reason)]);
     let answer = owner
         .post("/session/links", Some(&json!({})), Some(TIMEOUT))
@@ -336,6 +326,51 @@ pub async fn entry_link() -> Result<String, String> {
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| i18n::t(language, "cli.server.invalid_link", &[]))
+}
+
+async fn entry_client(
+    data: &Path,
+    port: u16,
+    language: &'static str,
+    consent: impl FnOnce(u16) -> Option<String>,
+) -> anyhow::Result<Option<OwnerClient>> {
+    if let Some(owner) = OwnerClient::connect(data, port, language).await? {
+        return Ok(Some(owner));
+    }
+    match consent(port) {
+        Some(token) => OwnerClient::with_token(port, language, token).await,
+        None => Ok(None),
+    }
+}
+
+/// Resolve a CLI user's file or directory, including existing symlink ancestors.
+fn caller_path(path: &Path) -> std::io::Result<PathBuf> {
+    let expanded = gb_base::host_path::expand_home(path);
+    for ancestor in expanded.ancestors() {
+        if !ancestor.ends_with("..") {
+            continue;
+        }
+        let Some(parent) = ancestor
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        else {
+            continue;
+        };
+        match parent.metadata() {
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(std::io::ErrorKind::NotADirectory.into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    match expanded.canonicalize() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            gb_base::shared_writes::resolved(&expanded)
+        }
+        result => result,
+    }
 }
 
 /// Whether the listener on the port answers a fresh nonce as only the holder
@@ -360,6 +395,202 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 mod tests {
     use super::answer_git_credential;
 
+    #[cfg(unix)]
+    #[test]
+    fn caller_paths_accept_missing_destinations_but_not_a_file_as_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("file"), "fixture").unwrap();
+        assert_eq!(
+            super::caller_path(&root.join("sub/../destination")).unwrap(),
+            root.join("destination")
+        );
+        assert_eq!(
+            super::caller_path(&root.join("file/../destination"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotADirectory,
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_uses_fresh_nonces_and_sends_auth_and_language_only_after_success() {
+        use super::*;
+        use axum::{Json, Router, http::HeaderMap, routing::post};
+        use std::sync::{Arc, Mutex};
+
+        const TOKEN: &str = "gbt_0123456789abcdef_consent";
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let app = Router::new()
+            .route(
+                "/api/local-api/proof",
+                post({
+                    let seen = seen.clone();
+                    move |headers: HeaderMap, Json(body): Json<Value>| {
+                        let seen = seen.clone();
+                        async move {
+                            assert!(!headers.contains_key("authorization"));
+                            assert!(!headers.contains_key("x-guildbotics-language"));
+                            let nonce = body["nonce"].as_str().unwrap();
+                            let mut seen = seen.lock().unwrap();
+                            assert!(!seen.iter().any(|value| value == nonce));
+                            seen.push(nonce.to_owned());
+                            let (id, secret) = auth::parse_token(TOKEN).unwrap();
+                            let proof = if body["token_id"] == id {
+                                auth::proof(&loopback_auth::digest(secret), id, nonce)
+                            } else {
+                                String::new()
+                            };
+                            Json(json!({"proof":proof}))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/session/links",
+                post(|headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}").as_str());
+                    assert_eq!(headers["x-guildbotics-language"], "ja");
+                    Json(json!({"url":"fixture"}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let data = tempfile::tempdir().unwrap();
+        assert!(
+            OwnerClient::connect(data.path(), port, "ja")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(seen.lock().unwrap().is_empty());
+        let token_path = auth::directory(data.path(), port).join(auth::OWNER_TOKEN);
+        std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+        std::fs::write(&token_path, "gbt_abcdef0123456789_stale").unwrap();
+        assert!(
+            entry_client(data.path(), port, "ja", |_| None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let consent = entry_client(data.path(), port, "ja", |selected| {
+            assert_eq!(selected, port);
+            Some(TOKEN.into())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            consent
+                .post("/session/links", None, Some(TIMEOUT))
+                .await
+                .unwrap()["url"],
+            "fixture"
+        );
+        std::fs::write(token_path, TOKEN).unwrap();
+        let owner = entry_client(data.path(), port, "ja", |_| {
+            panic!("owner proof precedes keychain lookup")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        owner
+            .post("/session/links", None, Some(TIMEOUT))
+            .await
+            .unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 4);
+        peer.abort();
+    }
+
+    #[tokio::test]
+    async fn a_bad_proof_never_authenticates_an_owner_or_consent_token() {
+        use super::*;
+        use axum::{Router, http::HeaderMap, routing::post};
+        use std::sync::{Arc, Mutex};
+
+        const OWNER: &str = "gbt_0123456789abcdef_owner";
+        const CONSENT: &str = "gbt_abcdef0123456789_consent";
+        for mode in ["replay", "non-json", "array", "number", "non-ascii", "slow"] {
+            let ids = Arc::new(Mutex::new(Vec::new()));
+            let app = Router::new().route(
+                "/api/local-api/proof",
+                post({
+                    let ids = ids.clone();
+                    move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
+                        let ids = ids.clone();
+                        async move {
+                            assert!(!headers.contains_key("authorization"));
+                            assert!(!headers.contains_key("x-guildbotics-language"));
+                            let id = body["token_id"].as_str().unwrap();
+                            ids.lock().unwrap().push(id.to_owned());
+                            match mode {
+                                "replay" => {
+                                    let (_, secret) = auth::parse_token(if id.starts_with("012") {
+                                        OWNER
+                                    } else {
+                                        CONSENT
+                                    })
+                                    .unwrap();
+                                    let proof = auth::proof(
+                                        &loopback_auth::digest(secret),
+                                        id,
+                                        &"0".repeat(64),
+                                    );
+                                    json!({"proof":proof}).to_string()
+                                }
+                                "non-json" => "{".into(),
+                                "array" => "[{}]".into(),
+                                "number" => "{\"proof\":42}".into(),
+                                "non-ascii" => "{\"proof\":\"偽\"}".into(),
+                                "slow" => {
+                                    tokio::time::sleep(PROOF_TIMEOUT + Duration::from_secs(1))
+                                        .await;
+                                    let (_, secret) = auth::parse_token(if id.starts_with("012") {
+                                        OWNER
+                                    } else {
+                                        CONSENT
+                                    })
+                                    .unwrap();
+                                    let nonce = body["nonce"].as_str().unwrap();
+                                    let proof =
+                                        auth::proof(&loopback_auth::digest(secret), id, nonce);
+                                    json!({"proof":proof}).to_string()
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let peer = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let data = tempfile::tempdir().unwrap();
+            let token_path = auth::directory(data.path(), port).join(auth::OWNER_TOKEN);
+            std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+            std::fs::write(token_path, OWNER).unwrap();
+            assert!(
+                entry_client(data.path(), port, "ja", |_| Some(CONSENT.into()))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{mode}"
+            );
+            assert_eq!(
+                *ids.lock().unwrap(),
+                ["0123456789abcdef", "abcdef0123456789"],
+                "{mode}"
+            );
+            peer.abort();
+        }
+    }
+
     #[tokio::test]
     async fn git_helper_emits_credentials_for_the_origin_and_ends_the_search_on_failure() {
         let origin = "http://127.0.0.1:7878";
@@ -382,7 +613,12 @@ mod tests {
                 async |asked| {
                     assert_eq!(asked, origin);
                     if fail {
-                        anyhow::bail!("Branvil is not reachable.");
+                        return Err(gb_ports::ServiceError::Diagnostic {
+                            class: gb_ports::ServiceErrorClass::Unavailable,
+                            key: "integrations.branvil.api.unreachable",
+                            args: [("base_url".into(), origin.into())].into(),
+                        }
+                        .into());
                     }
                     Ok(Some(gb_ports::GitCredential {
                         username: "otota".into(),
@@ -394,10 +630,11 @@ mod tests {
             .unwrap();
             if fail {
                 assert_eq!(output, b"quit=1\n");
-                assert!(
-                    String::from_utf8(error)
-                        .unwrap()
-                        .contains("Branvil is not reachable.")
+                assert_eq!(
+                    String::from_utf8(error).unwrap(),
+                    format!(
+                        "Branvil is not reachable at {origin}. Check that Branvil is running on this machine.\n"
+                    )
                 );
             } else {
                 assert_eq!(output, b"username=otota\npassword=bvt_fixture\n");

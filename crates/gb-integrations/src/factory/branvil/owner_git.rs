@@ -132,8 +132,7 @@ async fn acquire(
     }
     for id in expired {
         let response = api
-            .request(Method::DELETE, &format!("{collection}/{}", segment(&id)))
-            .send()
+            .send(api.request(Method::DELETE, &format!("{collection}/{}", segment(&id))))
             .await?;
         let status = response.status();
         anyhow::ensure!(
@@ -183,13 +182,38 @@ impl Api<'_> {
             .bearer_auth(self.token)
     }
 
+    fn transport_error(&self, error: reqwest::Error) -> anyhow::Error {
+        let args = [("base_url", self.url.to_owned())];
+        if error.is_timeout() {
+            super::diagnostic("integrations.branvil.api.timeout", args).into()
+        } else if error.is_decode() {
+            invalid()
+        } else {
+            super::diagnostic("integrations.branvil.api.unreachable", args).into()
+        }
+    }
+
+    async fn send(&self, request: reqwest::RequestBuilder) -> anyhow::Result<reqwest::Response> {
+        request
+            .send()
+            .await
+            .map_err(|error| self.transport_error(error))
+    }
+
+    async fn decode(&self, response: reqwest::Response) -> anyhow::Result<Value> {
+        anyhow::ensure!(response.status().is_success(), invalid());
+        response
+            .json()
+            .await
+            .map_err(|error| self.transport_error(error))
+    }
+
     async fn owner(&self) -> anyhow::Result<Option<String>> {
-        let response = self.request(Method::GET, "/me").send().await?;
+        let response = self.send(self.request(Method::GET, "/me")).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
             return Ok(None);
         }
-        anyhow::ensure!(response.status().is_success(), invalid());
-        let answer: Value = response.json().await?;
+        let answer = self.decode(response).await?;
         let name = answer["name"]
             .as_str()
             .filter(|name| !name.is_empty() && !name.contains(['\r', '\n']));
@@ -199,9 +223,7 @@ impl Api<'_> {
     }
 
     async fn json(&self, request: reqwest::RequestBuilder) -> anyhow::Result<Value> {
-        let response = request.send().await?;
-        anyhow::ensure!(response.status().is_success(), invalid());
-        Ok(response.json().await?)
+        self.decode(self.send(request).await?).await
     }
 }
 

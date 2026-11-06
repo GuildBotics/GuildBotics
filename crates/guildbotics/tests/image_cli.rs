@@ -403,8 +403,13 @@ fn status_shares_declaration_runtime_snapshot_and_logins_between_text_and_json()
     let reason = facts["runtime"]["reason"].as_str().unwrap();
     assert!(!reason.is_empty());
     assert!(text.contains(&format!("runtime: unavailable: {reason}")));
-    for name in ["build", "remove"] {
-        let refused = invoke(&[name]);
+    for args in [
+        &["build"][..],
+        &["remove"],
+        &["image", "list"],
+        &["image", "declare", "fixture"],
+    ] {
+        let refused = invoke(args);
         assert_eq!(refused.status.code(), Some(1), "{refused:?}");
         assert!(String::from_utf8_lossy(&refused.stderr).contains(reason));
     }
