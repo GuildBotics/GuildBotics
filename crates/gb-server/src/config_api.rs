@@ -16,7 +16,6 @@ use gb_config::repository::{
     ConfigRepository, InvalidRevisionPath, Revisions, StaleConfigWriteError,
 };
 use gb_config::team::valid_person_id;
-use gb_environment::contract::LocationRefused;
 use gb_setup::{
     InvalidInput, PersonSetupInput, ProjectSetupInput, SecretsUnavailable, Sentence, Setup,
     SetupError,
@@ -186,17 +185,24 @@ fn invalid(headers: &HeaderMap, reason: &str) -> Response {
     .into_response()
 }
 
-fn refused_location(refused: LocationRefused, headers: &HeaderMap, code: &str) -> Response {
+fn refused_location(
+    refused: gb_environment::Sentence,
+    headers: &HeaderMap,
+    code: &str,
+) -> Response {
     let answer = ApiError::new(StatusCode::BAD_REQUEST, code, headers);
     match refused {
-        LocationRefused::Unsafe(reason) => answer.reason(reason),
-        LocationRefused::Granted { path, granted } => answer.locale(
-            "safe_paths.workspace_granted",
-            vec![
-                ("path".into(), path.display().to_string()),
-                ("granted".into(), granted.display().to_string()),
-            ],
+        gb_environment::Sentence::Key(key, params) => answer.locale(
+            key,
+            params
+                .into_iter()
+                .map(|(name, value)| (name.into(), value))
+                .collect(),
         ),
+        other => {
+            let language = answer.language;
+            answer.reason(crate::i18n::say(other, language))
+        }
     }
     .into_response()
 }
@@ -226,7 +232,7 @@ pub(crate) async fn init(
             "config_dir must be <workspace>/.guildbotics/config",
         );
     };
-    let workspace = match gb_environment::contract::workspace_location(workspace, &api.home) {
+    let workspace = match gb_environment::contract::new_workspace_location(workspace, &api.home) {
         Ok(workspace) => workspace,
         Err(refused) => return refused_location(refused, &headers, "invalid_workspace_location"),
     };
@@ -343,7 +349,7 @@ async fn switch(
         if let Some(previous) = previous {
             gb_observability::Diagnostics::open(&previous).finish_system_session()?;
         }
-        gb_workspace::selection::select(&data, &next)?;
+        gb_workspace::selection::write_active(&data, &next)?;
         Ok(())
     })
     .await;

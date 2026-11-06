@@ -61,6 +61,7 @@ pub struct Api {
     pub(crate) keychain: Arc<dyn gb_config::secrets::Keychain>,
     /// How long a config change waits for a lock held elsewhere.
     pub(crate) write_timeout: std::time::Duration,
+    pub(crate) shutdown: crate::server::Shutdown,
 }
 
 /// The workspace the server opened, if any, and what it built from it,
@@ -104,6 +105,7 @@ impl Api {
                 .unwrap_or_else(|_| data.parent().unwrap_or(&data).join("identity")),
             keychain: Arc::new(gb_config::secrets::SystemKeychain),
             write_timeout: gb_base::shared_writes::SharedWrites::new(PathBuf::new(), None).timeout,
+            shutdown: crate::server::Shutdown::default(),
             data,
         }
     }
@@ -266,12 +268,13 @@ routes!(
     owner_routes,
     OWNER_ROUTES,
     (get, "/health", health),
+    (post, "/shutdown", crate::server::shutdown),
     (get, "/scheduler/status", crate::service_runtime::status),
     (post, "/scheduler/start", crate::service_runtime::start),
     (post, "/scheduler/stop", crate::service_runtime::stop),
     (get, "/service/settings", crate::service_settings::get),
     (patch, "/service/settings", crate::service_settings::patch),
-    (post, "/session/links", entry_link),
+    (post, "/apps/authorizations", authorize_app),
     (get, "/session", session),
     (post, "/commands/run", crate::commands::run),
     (post, "/member/run", crate::member::execute, 4 << 20),
@@ -381,6 +384,9 @@ routes!(
     (post, "/local-api/proof", proof),
     // The entry code is the credential; a browser holds nothing else yet.
     (post, "/session", start_session),
+    (post, "/apps/token", app_token),
+    // This route admits an application token as well as the owner.
+    (post, "/session/links", entry_link),
 );
 
 pub fn router(api: Shared) -> Router {
@@ -414,13 +420,16 @@ async fn guard(State(api): State<Shared>, req: Request, next: Next) -> Response 
 async fn authenticate(State(api): State<Shared>, req: Request, next: Next) -> Response {
     match api.auth.authenticate(req.method(), req.headers()) {
         Ok(()) => next.run(req).await,
-        Err(Denied::Unauthorized) => {
-            ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized", req.headers()).into_response()
-        }
-        Err(Denied::CsrfMismatch) => {
-            ApiError::new(StatusCode::FORBIDDEN, "csrf_mismatch", req.headers()).into_response()
-        }
+        Err(denied) => auth_denial(denied, req.headers()),
     }
+}
+
+fn auth_denial(denied: Denied, headers: &HeaderMap) -> Response {
+    let (status, code) = match denied {
+        Denied::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+        Denied::CsrfMismatch => (StatusCode::FORBIDDEN, "csrf_mismatch"),
+    };
+    ApiError::new(status, code, headers).into_response()
 }
 
 /// The server, the workspace it opened by the identity a client compares
@@ -515,11 +524,50 @@ fn same_origin_path(path: &str) -> bool {
         && !path.chars().any(|c| c.is_whitespace() || c == '#')
 }
 
+async fn authorize_app(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    Body(request): Body<crate::auth::Authorization>,
+) -> Response {
+    match api.auth.authorize(request) {
+        Some(redirect) => {
+            (StatusCode::CREATED, Json(json!({ "redirect": redirect }))).into_response()
+        }
+        None => ApiError::new(StatusCode::BAD_REQUEST, "invalid", &headers).into_response(),
+    }
+}
+
+async fn app_token(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    Body(request): Body<crate::auth::Exchange>,
+) -> Response {
+    match api.auth.app_token(request) {
+        Ok(Some(token)) => (StatusCode::CREATED, Json(token)).into_response(),
+        Ok(None) => ApiError::new(StatusCode::BAD_REQUEST, "invalid", &headers).into_response(),
+        Err(error) => {
+            tracing::error!("cannot save app token: {error:#}");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &headers,
+            )
+            .into_response()
+        }
+    }
+}
+
 async fn entry_link(
     State(api): State<Shared>,
     headers: HeaderMap,
     Body(input): Body<EntryLinkRequest>,
 ) -> Response {
+    if let Err(denied) = api
+        .auth
+        .authenticate_for(&axum::http::Method::POST, &headers, true)
+    {
+        return auth_denial(denied, &headers);
+    }
     if !same_origin_path(&input.next) {
         return ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -594,6 +642,7 @@ mod tests {
                 ("delete", "/device/workspaces"),
                 "the device-local workspace registry",
             ),
+            (("post", "/shutdown"), "server lifetime"),
             (("post", "/scheduler/start"), "service lifetime"),
             (("post", "/scheduler/stop"), "service lifetime"),
             (
@@ -611,6 +660,11 @@ mod tests {
             ),
             (("post", "/session/links"), "an entry code held in memory"),
             (("post", "/session"), "machine-local authentication records"),
+            (
+                ("post", "/apps/authorizations"),
+                "one-time consent code held in memory",
+            ),
+            (("post", "/apps/token"), "machine-local app token digest"),
             (
                 ("post", "/local-api/proof"),
                 "computes a proof without writing",

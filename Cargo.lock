@@ -2104,6 +2104,7 @@ name = "gb-integrations"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "branvil",
  "chrono",
  "futures-util",
@@ -2356,6 +2357,7 @@ dependencies = [
  "anyhow",
  "branvil",
  "clap",
+ "crossterm",
  "flate2",
  "gb-base",
  "gb-environment",

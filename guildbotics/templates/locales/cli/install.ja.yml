@@ -1,0 +1,6 @@
+ja:
+  home_required: "GuildBotics CLI の導入前に HOME を設定してください。"
+  cli: "CLI を %{path} に導入しました。"
+  skill: "%{tool} 用のスキルを %{path} に導入しました。"
+  kept: "%{tool} 用のスキルは %{path} にあるものを保持しました。"
+  not_installed: "%{tool} が見つからないため、スキルの導入を見送りました。"

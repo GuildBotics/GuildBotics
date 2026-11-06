@@ -97,6 +97,89 @@ fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
     .map_err(|e| e.to_string())
 }
 
+/// A workspace may be selected to repair an invalid grant file, but may not
+/// itself live inside a directory that file would grant to its commands.
+pub fn workspace_location(path: &Path, home: &Path) -> Result<PathBuf, Sentence> {
+    location(path, home, false)
+}
+
+/// As [`workspace_location`], for a workspace about to be created: its name
+/// may end in directories that do not exist yet.
+pub fn new_workspace_location(path: &Path, home: &Path) -> Result<PathBuf, Sentence> {
+    location(path, home, true)
+}
+
+fn location(path: &Path, home: &Path, missing: bool) -> Result<PathBuf, Sentence> {
+    let home =
+        gb_base::host_path::normalize(home).map_err(|error| Sentence::Text(error.to_string()))?;
+    let workspace = gb_base::host_path::directory(path, missing).map_err(|error| match error {
+        gb_base::host_path::PathProblem::Unavailable(path, reason)
+            if reason.kind() == std::io::ErrorKind::PermissionDenied =>
+        {
+            let mut args = vec![("path", path.display().to_string())];
+            let key = if cfg!(target_os = "macos") && path.starts_with(home.join("Documents")) {
+                args.push(("app", String::new()));
+                "intelligences.agent_environment.filesystem.macos_documents"
+            } else {
+                "intelligences.agent_environment.filesystem.permission_denied"
+            };
+            Sentence::Key(key, args)
+        }
+        error => Sentence::Text(error.to_string()),
+    })?;
+    let shared: Shared = load(
+        &workspace
+            .join(".guildbotics/config/intelligences")
+            .join(FILE),
+    )
+    .unwrap_or_default();
+    let local: Local = load(&workspace.join(".guildbotics/local").join(FILE)).unwrap_or_default();
+    let grants = std::iter::once(home.join("Documents/GuildBotics"))
+        .chain(
+            shared
+                .documents
+                .into_iter()
+                .filter_map(|grant| target(&grant.path, &home, false).ok()),
+        )
+        .chain(
+            local
+                .paths
+                .into_iter()
+                .filter_map(|grant| target(&grant.path, &home, true).ok()),
+        );
+    for grant in grants {
+        if workspace_in_grant(&workspace, &grant) {
+            return Err(Sentence::Key(
+                "safe_paths.workspace_granted",
+                vec![
+                    ("path", workspace.display().to_string()),
+                    ("granted", grant.display().to_string()),
+                ],
+            ));
+        }
+    }
+    Ok(workspace)
+}
+
+fn workspace_in_grant(workspace: &Path, grant: &Path) -> bool {
+    if cfg!(windows) {
+        return windows_path_contains(grant, workspace);
+    }
+    // Compare at each level before inspecting the next grant component. This
+    // also handles case-insensitive volumes without opening unrelated grants.
+    let mut prefix = PathBuf::new();
+    for (component, ancestor) in grant
+        .components()
+        .zip(workspace.ancestors().collect::<Vec<_>>().into_iter().rev())
+    {
+        prefix.push(component);
+        if prefix != ancestor && !same_file::is_same_file(&prefix, ancestor).unwrap_or(false) {
+            return false;
+        }
+    }
+    grant.components().count() <= workspace.components().count()
+}
+
 /// A host-owned precise child may be mounted read-only; user grants must
 /// neither contain protected state nor be contained by it.
 pub fn validate_source(
@@ -176,91 +259,6 @@ pub fn validate_mount_source(path: &Path, access: &Resolved) -> Result<PathBuf, 
         return Err("Mount source is not a regular file or directory".into());
     }
     Ok(source)
-}
-
-/// A directory that cannot hold a workspace: it is inside `granted`, a
-/// directory the workspace's commands are given (the exchange directory
-/// among them), or not a directory name that opens without a link.
-#[derive(Debug, PartialEq)]
-pub enum LocationRefused {
-    Unsafe(String),
-    Granted { path: PathBuf, granted: PathBuf },
-}
-
-/// Refuses workspace state inside its own grants or the exchange directory,
-/// as the Python version's `validate_workspace_location`. The grants are
-/// read leniently: selecting a workspace is how its configuration is
-/// repaired, and never authorizes running anything in it.
-pub fn workspace_location(workspace: &Path, home: &Path) -> Result<PathBuf, LocationRefused> {
-    let path = gb_base::host_path::directory(workspace, true)
-        .map_err(|e| LocationRefused::Unsafe(e.to_string()))?;
-    let home =
-        gb_base::host_path::normalize(home).map_err(|e| LocationRefused::Unsafe(e.to_string()))?;
-    let mut granted = vec![home.join("Documents/GuildBotics")];
-    let shared: Shared =
-        load(&path.join(".guildbotics/config/intelligences").join(FILE)).unwrap_or_default();
-    let local: Local = load(&path.join(".guildbotics/local").join(FILE)).unwrap_or_default();
-    granted.extend(
-        shared
-            .documents
-            .iter()
-            .filter_map(|g| target(&g.path, &home, false).ok()),
-    );
-    granted.extend(
-        local
-            .paths
-            .iter()
-            .filter_map(|g| target(&g.path, &home, true).ok()),
-    );
-    let exchange = granted[0].clone();
-    for granted in granted {
-        // An exchange directory that cannot be inspected cannot be ruled out.
-        let inside = contains(&granted, &path).or_else(|e| {
-            if granted == exchange {
-                Err(LocationRefused::Unsafe(format!(
-                    "{}: {e}",
-                    granted.display()
-                )))
-            } else {
-                Ok(false)
-            }
-        })?;
-        if inside {
-            return Err(LocationRefused::Granted { path, granted });
-        }
-    }
-    Ok(path)
-}
-
-/// Whether `path` is `granted` or under it, by its spelling or by the
-/// identity of the directories it goes through: another spelling of the
-/// same directory (a link, or another letter case on a file system that
-/// ignores it) is the same directory.
-fn contains(granted: &Path, path: &Path) -> std::io::Result<bool> {
-    if path.starts_with(granted) {
-        return Ok(true);
-    }
-    let directory = match std::fs::metadata(granted) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let identity = (directory.dev(), directory.ino());
-        Ok(path.ancestors().any(|ancestor| {
-            std::fs::metadata(ancestor).is_ok_and(|m| (m.dev(), m.ino()) == identity)
-        }))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = directory;
-        let granted = std::fs::canonicalize(granted)?;
-        Ok(path
-            .ancestors()
-            .any(|ancestor| std::fs::canonicalize(ancestor).is_ok_and(|a| a == granted)))
-    }
 }
 
 pub fn resolve(
@@ -465,7 +463,14 @@ fn network_with_resolvers(
     }
     let policy: Network = match value.get("network") {
         None => Network::default(),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| Sentence::Text(e.to_string()))?,
+        Some(v) if v.is_object() => {
+            serde_json::from_value(v.clone()).map_err(|e| Sentence::Text(e.to_string()))?
+        }
+        Some(_) => {
+            return Err(Sentence::Text(
+                "Network declaration must be a mapping".into(),
+            ));
+        }
     };
     policy.validate().map_err(Sentence::Text)?;
     let mut nameservers = Vec::new();

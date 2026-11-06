@@ -1,5 +1,8 @@
 //! The environment's shared preflight, presented to the screens and CLI.
-use crate::api::{ApiError, Shared};
+use crate::{
+    api::{ApiError, Shared},
+    i18n,
+};
 use axum::{
     Json,
     extract::State,
@@ -52,20 +55,12 @@ fn image_projection(
     }).collect::<Vec<_>>(),"problem":""})
 }
 
-pub fn workspace(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    gb_workspace::selection::restore(&gb_base::home::data()?, |key| std::env::var_os(key))?
-        .ok_or_else(|| anyhow::anyhow!("No workspace is selected"))
-}
-
 /// Compare and update the shared declaration within the configuration writer.
 pub fn declare(
     workspace: &std::path::Path,
     reference: Option<String>,
     digests: std::collections::BTreeMap<String, String>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<gb_config::agent_environment::BaseImage>> {
     use gb_config::{agent_environment::PATH, repository::ConfigRepository};
     let repository = ConfigRepository::new(gb_base::shared_writes::SharedWrites::new(
         gb_base::home::identity_root()?,
@@ -77,7 +72,7 @@ pub fn declare(
         .map(|s| (PATH.into(), s.blob_id.clone()))
         .into_iter()
         .collect();
-    repository.write(
+    let receipt = repository.write(
         &expected,
         |view, writer| {
             let mut value = match view.read_config(PATH)? {
@@ -87,11 +82,13 @@ pub fn declare(
                 )?)?,
             };
             update_image(&mut value, reference, digests)?;
-            writer.write_json(&view.path(PATH)?, &value)
+            let image = serde_json::from_value(value["image"].clone())?;
+            writer.write_json(&view.path(PATH)?, &value)?;
+            Ok(image)
         },
         |view| view.revisions(&[PATH]),
     )?;
-    Ok(())
+    Ok(receipt.result)
 }
 
 fn update_image(
@@ -135,7 +132,7 @@ fn update_image(
                     text.strip_prefix("sha256:").is_some_and(|v| v.len() == 64
                         && v.bytes()
                             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())),
-                    "Invalid image digest"
+                    "Invalid image digest {text}"
                 );
             }
             value["image"] = json!({"reference":reference,"digests":kept});
@@ -542,31 +539,47 @@ pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Respon
     }
 }
 
-pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
+pub(crate) async fn images(State(api): State<Shared>, headers: HeaderMap) -> Json<Value> {
+    let language = headers
+        .get("x-guildbotics-language")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("en");
+    Json(
+        match list_images(&api.data, api.selected().workspace.as_deref(), language).await {
+            Ok(view) => view,
+            Err(error) => json!({
+                "architecture":gb_environment::image::device_architecture(),
+                "images":[],
+                "problem":error.to_string(),
+            }),
+        },
+    )
+}
+
+pub async fn list_images(
+    data: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+    language: &str,
+) -> anyhow::Result<Value> {
     let templates = gb_base::home::python_package().join("templates");
-    let architecture = gb_environment::image::device_architecture();
-    let result = async {
-        let default = gb_environment::recipe::Recipe::load(&templates)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .image;
-        let declared = match &api.selected().workspace {
-            Some(workspace) => gb_config::agent_environment::image(
-                &workspace.join(".guildbotics/config"),
-                &templates,
-            )
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-            None => None,
-        };
-        let images = gb_environment::runtime::images(&api.data.join("msb"), &default)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        Ok::<_, anyhow::Error>(image_projection(images, declared.as_ref(), architecture))
-    }
-    .await;
-    Json(match result {
-        Ok(view) => view,
-        Err(error) => json!({"architecture":architecture,"images":[],"problem":error.to_string()}),
-    })
+    let default = gb_environment::recipe::Recipe::load(&templates)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .image;
+    let declared = match workspace {
+        Some(workspace) => {
+            gb_config::agent_environment::image(&workspace.join(".guildbotics/config"), &templates)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+        }
+        None => None,
+    };
+    let images = gb_environment::runtime::images(&data.join("msb"), &default)
+        .await
+        .map_err(|e| anyhow::anyhow!(i18n::say(e.sentence(), language)))?;
+    Ok(image_projection(
+        images,
+        declared.as_ref(),
+        gb_environment::image::device_architecture(),
+    ))
 }
 
 fn build_timeout(language: &str) -> String {
@@ -579,6 +592,11 @@ fn build_timeout(language: &str) -> String {
     )
 }
 
+pub enum BuildOutcome {
+    UpToDate(PathBuf),
+    Built(PathBuf),
+}
+
 /// Build from one declaration reading; only a completed replacement prunes old snapshots.
 pub async fn build(
     workspace: &std::path::Path,
@@ -587,10 +605,11 @@ pub async fn build(
     force: bool,
     language: &str,
     on_line: impl Fn(&str) + Send + Sync + 'static,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<BuildOutcome> {
     use gb_environment::{contract, image, recipe::Recipe, runtime, snapshot};
     let runtime_home = data.join("msb");
-    runtime::ensure(&runtime_home).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    runtime::ensure(&runtime_home)
+        .map_err(|e| anyhow::anyhow!(crate::i18n::say(e.sentence(), language)))?;
     let config = workspace.join(".guildbotics/config");
     let templates = gb_base::home::python_package().join("templates");
     let resources = gb_config::agent_environment::resources(&config, &templates)?;
@@ -600,7 +619,7 @@ pub async fn build(
     if let Some(image) = &declared {
         held = runtime::held_image(&runtime_home, &image.reference, &recipe.image)
             .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            .map_err(|e| anyhow::anyhow!(crate::i18n::say(e.sentence(), language)))?;
         let command = image::load_command(home).map_err(anyhow::Error::msg)?;
         let status = image::status(image, image::device_architecture(), held.clone(), &command);
         if let Some(reason) = status.refusal {
@@ -616,7 +635,7 @@ pub async fn build(
     let name = recipe.name(held.as_deref());
     let current = snapshot::status(workspace, &name)?;
     if !force && current.state == snapshot::State::Ready {
-        return Ok(current.path);
+        return Ok(BuildOutcome::UpToDate(current.path));
     }
     let network = contract::network(&config, &templates, false)
         .map_err(|reason| anyhow::anyhow!(crate::commands::say(reason, language)))?;
@@ -656,7 +675,7 @@ pub async fn build(
     )
     .await
     .map_err(anyhow::Error::msg)?;
-    Ok(result.path)
+    Ok(BuildOutcome::Built(result.path))
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -713,7 +732,7 @@ pub(crate) async fn build_route(
 async fn build_task(
     workspace: &std::path::Path,
     cancelled: tokio_util::sync::CancellationToken,
-    build: impl Future<Output = anyhow::Result<PathBuf>>,
+    build: impl Future<Output = anyhow::Result<BuildOutcome>>,
 ) {
     tokio::select! {
         biased;
@@ -730,7 +749,8 @@ async fn build_task(
 pub async fn load_ci(
     workspace: &std::path::Path,
     archive: &std::path::Path,
-) -> anyhow::Result<Vec<String>> {
+    on_load: impl FnOnce(&std::path::Path),
+) -> anyhow::Result<Option<Vec<String>>> {
     use gb_config::secrets::{DeviceKey, Scope, SecretStore, SystemKeychain};
     let project = gb_config::yaml_value(&std::fs::read_to_string(
         workspace.join(".guildbotics/config/team/project.yml"),
@@ -740,7 +760,7 @@ pub async fn load_ci(
         .and_then(Value::as_str)
         != Some("branvil")
     {
-        return Ok(vec![]);
+        return Ok(None);
     }
     let identity = gb_base::home::identity_root()?;
     let config = gb_config::yaml_value(&std::fs::read_to_string(
@@ -760,6 +780,7 @@ pub async fn load_ci(
         .ok_or_else(|| anyhow::anyhow!("Branvil admin credential is unavailable"))?;
     let path = std::fs::canonicalize(archive)?;
     anyhow::ensure!(path.is_file(), "The archive is not a regular file");
+    on_load(&path);
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
@@ -775,7 +796,7 @@ pub async fn load_ci(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
     loop {
         if let Some(loaded) = ci_result(&state["operation"], &path)? {
-            return Ok(loaded);
+            return Ok(Some(loaded));
         }
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,

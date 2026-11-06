@@ -46,6 +46,43 @@ fn only_whole_trace_completion_can_succeed() {
 
 #[test]
 fn workflow_evidence_and_dispatch_have_explicit_precedence() {
+    for (events, expected) in [
+        (
+            &[
+                "command.started",
+                "span.finished",
+                "workflow.completion_missing",
+                "chat_dispatch.retry_scheduled",
+            ][..],
+            "retry_scheduled",
+        ),
+        (
+            &[
+                "command.started",
+                "span.finished",
+                "workflow.completion_missing",
+            ][..],
+            "incomplete",
+        ),
+        (
+            &["span.finished", "chat_dispatch.abandoned"][..],
+            "abandoned",
+        ),
+        (
+            &[
+                "span.finished",
+                "workflow.completion_missing",
+                "workflow.completed",
+            ][..],
+            "success",
+        ),
+        (&["cli_agent.failed", "workflow.completed"][..], "success"),
+    ] {
+        assert_eq!(
+            status(&events.iter().map(|name| event(name)).collect::<Vec<_>>()),
+            expected
+        );
+    }
     let ranked = [
         (event("chat_dispatch.abandoned"), "abandoned"),
         (event("workflow.rate_limited"), "rate_limited"),
@@ -98,8 +135,8 @@ fn workflow_evidence_and_dispatch_have_explicit_precedence() {
 #[test]
 fn titles_follow_candidate_order_and_skip_read_only_payloads() {
     let records = [
-        json!({"attributes":{"target.title":"first"}}),
-        json!({"attributes":{"target.title":"later"}}),
+        json!({"attributes":{"target.title":"first","target.label":"first"}}),
+        json!({"attributes":{"target.title":"later","target.label":"later"}}),
     ];
     let attrs = first_seen_attributes(&records);
     assert_eq!(
@@ -241,8 +278,8 @@ fn reader_uses_workflow_evidence_and_earliest_target_despite_append_order() {
     let root = tempfile::tempdir().unwrap();
     let store = gb_observability::Diagnostics::open(root.path());
     for record in [
-        json!({"kind":"event","type":"target.recorded","trace_id":"t","timestamp":"2026-11-03T10:00:02Z","attributes":{"target.title":"later"}}),
-        json!({"kind":"event","type":"target.recorded","trace_id":"t","timestamp":"2026-11-03T10:00:01Z","attributes":{"target.title":"first"}}),
+        json!({"kind":"event","type":"target.recorded","trace_id":"t","timestamp":"2026-11-03T10:00:02Z","attributes":{"target.title":"later","target.label":"later"}}),
+        json!({"kind":"event","type":"target.recorded","trace_id":"t","timestamp":"2026-11-03T10:00:01Z","attributes":{"target.title":"first","target.label":"first"}}),
         json!({"kind":"event","type":"workflow.completed","trace_id":"t","timestamp":"2026-11-03T10:00:03Z","payload":{"status":"awaiting_checks"}}),
     ] {
         store.record(record.as_object().unwrap().clone());
@@ -250,4 +287,14 @@ fn reader_uses_workflow_evidence_and_earliest_target_despite_append_order() {
     let traces = store.traces(None, None, None, None, None, 100).unwrap();
     assert_eq!(traces["traces"][0]["status"], "awaiting_checks");
     assert_eq!(traces["traces"][0]["title"], "first");
+    let detail = store.trace_detail("t").unwrap();
+    assert_eq!(detail["summary"]["title"], "first");
+    assert_eq!(detail["summary"]["attributes"]["target.label"], "first");
+    let by_label = |label| {
+        store
+            .traces(None, None, None, Some("target.label"), Some(label), 100)
+            .unwrap()
+    };
+    assert_eq!(by_label("first")["traces"].as_array().unwrap().len(), 1);
+    assert_eq!(by_label("later")["traces"], json!([]));
 }

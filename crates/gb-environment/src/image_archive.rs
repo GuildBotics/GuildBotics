@@ -46,14 +46,25 @@ pub fn architecture(path: &Path) -> Result<String, Error> {
     Ok(String::new())
 }
 
-pub fn validate(path: &Path, device: &str) -> Result<(), Error> {
-    let architecture = architecture(path)
-        .map_err(|error| format!("Could not read image archive {}: {error}", path.display()))?;
+pub fn validate(path: &Path, device: &str) -> Result<(), crate::Sentence> {
+    let architecture = architecture(path).map_err(|error| {
+        crate::Sentence::Key(
+            "intelligences.agent_environment.image.unreadable_archive",
+            vec![
+                ("path", path.display().to_string()),
+                ("reason", error.to_string()),
+            ],
+        )
+    })?;
     if !architecture.is_empty() && architecture != device {
-        return Err(format!(
-            "The archive {} holds an image built for {architecture}, which this device ({device}) cannot run.",
-            path.display()
-        ).into());
+        return Err(crate::Sentence::Key(
+            "intelligences.agent_environment.image.wrong_architecture",
+            vec![
+                ("path", path.display().to_string()),
+                ("architecture", architecture),
+                ("device", device.to_owned()),
+            ],
+        ));
     }
     Ok(())
 }

@@ -2,7 +2,8 @@
 //! process, and Branvil's commands as `guildbotics branvil`.
 
 use std::ffi::OsString;
-use std::io::IsTerminal;
+use std::future::Future;
+use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -22,8 +23,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    GenerateCliReference {
+        #[arg(long)]
+        check: bool,
+    },
     /// Manage this device's isolated environment
     Environment {
+        /// Select the workspace whose environment declaration to use
         #[arg(long, global = true)]
         workspace: Option<std::path::PathBuf>,
         #[command(subcommand)]
@@ -34,6 +41,51 @@ enum Command {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Operate as a configured member through the running server
+    #[command(disable_help_flag = true)]
+    Member {
+        /// Member subcommand and its options
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<String>,
+    },
+    /// Supply Git with this machine's credential for the remote
+    GitCredential {
+        /// Credential helper action from Git
+        action: String,
+    },
+    /// Install this executable and the GuildBotics skill for this user
+    Install,
+    /// Select the active workspace for the server and AI CLI tools
+    Workspace {
+        #[command(subcommand)]
+        command: workspace_cli::WorkspaceCommand,
+    },
+    /// Run a command in the selected workspace's isolated environment
+    Run {
+        /// Member ID or name. Overrides a member specified as COMMAND@PERSON
+        #[arg(long)]
+        person: Option<String>,
+        /// Working directory for the command
+        #[arg(long)]
+        cwd: Option<std::path::PathBuf>,
+        /// Command name, optionally followed by @PERSON
+        command: String,
+        /// Arguments for the command
+        args: Vec<String>,
+    },
+    /// Read a workspace's recorded diagnostics
+    Diagnostics(diagnostics_cli::DiagnosticsCommand),
+    /// Print the binary's version
+    Version,
+    /// Manage workspace or shared identity secrets
+    Secrets(secrets_cli::Secrets),
+    /// Start or stop scheduled commands, ticket patrol, and chat events
+    Service {
+        #[command(subcommand)]
+        command: service_cli::ServiceCommand,
+    },
+    /// Connect this machine's CLI through the server's consent screen
+    Connect,
     /// Open the GuildBotics screens in the browser. The browser enters with a
     /// single-use link that expires after 60 seconds
     Open {
@@ -41,6 +93,9 @@ enum Command {
         /// another machine
         #[arg(long)]
         print: bool,
+        /// Open the Branvil screens
+        #[arg(long)]
+        branvil: bool,
     },
     /// Branvil's commands (code hosting: `guildbotics branvil --help`)
     #[command(disable_help_flag = true)]
@@ -50,7 +105,13 @@ enum Command {
     },
 }
 
+mod cli_reference;
+mod diagnostics_cli;
 mod environment_cli;
+mod install_cli;
+mod secrets_cli;
+mod service_cli;
+mod workspace_cli;
 use environment_cli::EnvironmentCommand;
 
 #[derive(Subcommand)]
@@ -62,7 +123,17 @@ enum ServerCommand {
     /// GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once
     /// `guildbotics branvil init` has set it up, as `guildbotics branvil serve`
     /// without options runs it (BRANVIL_DATA_DIR chooses its data directory)
-    Start,
+    Start {
+        /// Start services even when automatic startup is disabled
+        #[arg(long)]
+        services: bool,
+    },
+    /// Stop the server and wait for its work to end
+    Stop {
+        /// Cancel in-flight work and force termination if teardown takes too long
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -80,29 +151,99 @@ fn main() -> ExitCode {
         }
     }
     match Cli::parse().command {
+        Command::GenerateCliReference { check } => outcome(cli_reference::run(check).map(|()| 0)),
         Command::Environment { command, workspace } => {
-            match environment_cli::run(command, workspace) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("guildbotics: {e:#}");
-                    ExitCode::FAILURE
-                }
-            }
+            outcome(block(environment_cli::run(command, workspace)).map(|()| 0))
         }
         Command::Branvil { args } => {
             branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
         }
-        Command::Open { print } => open(print),
-        Command::Server {
-            command: ServerCommand::Start,
-        } => match start() {
-            Ok(code) => ExitCode::from(code),
-            Err(e) => {
-                eprintln!("guildbotics: {e:#}");
-                ExitCode::FAILURE
+        Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
+        Command::GitCredential { action } => {
+            outcome(block(gb_server::client::git_credential(&action)).map(|()| 0))
+        }
+        Command::Install => outcome(block(install_cli::run()).map(|()| 0)),
+        Command::Workspace { command } => outcome(block(workspace_cli::run(command)).map(|()| 0)),
+        Command::Run {
+            person,
+            cwd,
+            command,
+            args,
+        } => outcome(run_command(&command, args, person, cwd).map(|()| 0)),
+        Command::Diagnostics(command) => outcome(block(diagnostics_cli::run(command)).map(|()| 0)),
+        Command::Version => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Command::Secrets(command) => outcome(block(secrets_cli::run(command)).map(|()| 0)),
+        Command::Service { command } => outcome(block(service_cli::run(command)).map(|()| 0)),
+        Command::Connect => outcome(
+            block(gb_server::client::connect::run(|url| {
+                browse(url);
+            }))
+            .map(|()| 0),
+        ),
+        Command::Open {
+            print,
+            branvil: true,
+        } => {
+            let mut args = vec![OsString::new(), OsString::from("open")];
+            if print {
+                args.push("--print".into());
             }
-        },
+            branvil::main(BRANVIL, args)
+        }
+        Command::Open {
+            print,
+            branvil: false,
+        } => open(print),
+        Command::Server {
+            command: ServerCommand::Start { services },
+        } => outcome(start(services)),
+        Command::Server {
+            command: ServerCommand::Stop { force },
+        } => outcome(block(service_cli::stop(force)).map(|()| 0)),
     }
+}
+
+fn block<T>(command: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(command)
+}
+
+fn outcome(result: anyhow::Result<u8>) -> ExitCode {
+    match result {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_command(
+    name: &str,
+    args: Vec<String>,
+    person: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    let message = || {
+        let mut stdin = std::io::stdin();
+        let mut message = String::new();
+        if !stdin.is_terminal() {
+            stdin.read_to_string(&mut message)?;
+        }
+        Ok(message)
+    };
+    let output = block(gb_server::client::run_command(
+        name, args, person, message, cwd,
+    ))?;
+    if !output.is_empty() {
+        println!("{output}");
+    }
+    Ok(())
 }
 
 /// Opens the screens with an entry link, or prints it when asked to or when
@@ -148,7 +289,7 @@ fn browse(url: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn start() -> anyhow::Result<u8> {
+fn start(services: bool) -> anyhow::Result<u8> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_LOG").unwrap_or_else(|_| {
@@ -161,19 +302,22 @@ fn start() -> anyhow::Result<u8> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(serve())
+        .block_on(serve(services))
 }
 
 /// Runs GuildBotics' port and Branvil until a signal stops them, or until
 /// either one ends, which stops the other. The machine's lock comes first and
 /// goes last: whoever stops the server waits for Branvil too.
-async fn serve() -> anyhow::Result<u8> {
+async fn serve(services: bool) -> anyhow::Result<u8> {
     // Both told of every signal from here on: one that comes while the
     // server starts stops Branvil too.
-    let (signal, cancel) = server_stops()?;
+    let (signal, cancel) = server_stops(gb_server::client::language().await)?;
     let branvil_stops = branvil::stop_signals()?;
     let branvil_stops = branvil::initialized()?.then_some(branvil_stops);
     let mut server = gb_server::Server::start().await?;
+    server.start_services(services);
+    let shutdown = server.shutdown_requests();
+
     let Some((branvil_interrupt, branvil_terminate)) = branvil_stops else {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
         let (_held, served) = server.serve(signal, cancel).await;
@@ -184,19 +328,24 @@ async fn serve() -> anyhow::Result<u8> {
     let branvil_ended = Arc::new(Notify::new());
     let interrupt = {
         let guildbotics_failed = guildbotics_failed.clone();
+        let shutdown = shutdown.clone();
         async move {
             tokio::select! {
                 () = branvil_interrupt => {},
                 () = guildbotics_failed.notified() => {},
+                () = shutdown.wait() => {},
             }
+        }
+    };
+    let terminate = async move {
+        tokio::select! {
+            () = branvil_terminate => {},
+            () = shutdown.wait_for_cancel() => {},
         }
     };
     let (ready, data_api) = tokio::sync::oneshot::channel();
     let running = tokio::spawn(branvil::serve_with_data_api(
-        BRANVIL,
-        interrupt,
-        branvil_terminate,
-        ready,
+        BRANVIL, interrupt, terminate, ready,
     ));
     let data_api = match data_api.await {
         Ok(api) => api,
@@ -246,7 +395,9 @@ enum Stop {
 /// When GuildBotics' port stops, and when it cancels the work it runs: the
 /// first SIGINT stops it once that work ends, and SIGTERM, which a service
 /// manager sends, or a second SIGINT cancels the work.
-fn server_stops() -> std::io::Result<(
+fn server_stops(
+    language: &'static str,
+) -> std::io::Result<(
     impl Future<Output = ()> + Send + 'static,
     impl Future<Output = ()> + Send + 'static,
 )> {
@@ -273,11 +424,15 @@ fn server_stops() -> std::io::Result<(
                 interrupt.recv().await;
                 *told.borrow() != Stop::None
             };
-            told.send_replace(if cancel {
-                Stop::Cancelling
+            let (next, message) = if cancel {
+                (Stop::Cancelling, "runtime.service_lock.cancelling")
             } else {
-                Stop::Waiting
-            });
+                (Stop::Waiting, "runtime.service_lock.stopping_after_work")
+            };
+            if *told.borrow() != next {
+                eprintln!("{}", gb_server::i18n::t(language, message, &[]));
+                told.send_replace(next);
+            }
         }
     });
     let reached = |stop: Stop| {

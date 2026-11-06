@@ -15,3 +15,4 @@ ja:
   waiting_for_work: "実行中の作業の完了を待っています（`guildbotics server stop --force` でキャンセルします）..."
   services_started: "サービスを開始しました。"
   services_stopped: "サービスを停止しました。"
+  teardown_timeout: "実行中の作業をキャンセルしたあともサーバーが終了しませんでした。"

@@ -1,0 +1,3 @@
+en:
+  empty_command: "Command name cannot be empty."
+  invalid_output: "The GuildBotics server returned an invalid command result."

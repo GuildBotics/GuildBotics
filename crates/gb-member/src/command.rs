@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Deserialize)]
 pub struct Grammar {
+    pub help: String,
     pub options: Vec<OptionSpec>,
     pub read_only: bool,
     pub content_required: bool,
@@ -16,6 +17,7 @@ pub struct Grammar {
 #[derive(Deserialize)]
 pub struct OptionSpec {
     pub spelling: String,
+    pub help: Option<String>,
     #[serde(default)]
     pub required: bool,
     #[serde(default)]
@@ -33,6 +35,16 @@ pub struct OptionSpec {
     pub path: Option<String>,
 }
 impl OptionSpec {
+    pub fn description(&self) -> &str {
+        match self.spelling.as_str() {
+            "--person" => "Person ID or name of the member.",
+            "--format" => "Output format.",
+            "--content-stdin" => "Read the command's entire free-form content from standard input.",
+            "--content-file" => "Read the command's entire free-form content from a UTF-8 file.",
+            _ => self.help.as_deref().unwrap_or_default(),
+        }
+    }
+
     fn primary(&self) -> &str {
         self.spelling.split('/').next().unwrap()
     }
@@ -52,6 +64,108 @@ pub fn grammar() -> &'static BTreeMap<String, Grammar> {
         .expect("member grammar")
     })
 }
+fn description(command: &str) -> &str {
+    match command {
+        "" => "Operate as a configured GuildBotics member.",
+        "chat" => "Chat identity, posting, replies, reactions, and run completion.",
+        "chat inspect" => "Inspect chat channel or thread messages for interactive decisions.",
+        "chat reaction" => "Chat reaction operations.",
+        "checks" => "End a run to await the CI checks of its pull requests.",
+        "git" => "Read repositories and prepare, commit, push, and publish member workspaces.",
+        "memory" => "Record, recall, and maintain member memory documents.",
+        "pr" => {
+            "Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts."
+        }
+        "pr artifact" => "CI artifact operations.",
+        "pr reaction" => "Reactions to pull request comments and reviews.",
+        "repo-info" => "Read information about the repository as a whole.",
+        "task" => "Completion records of runs other than a chat event's.",
+        "ticket" => {
+            "Read, create, update, and comment on tickets, react to their comments, and download their attachments."
+        }
+        "ticket attachment" => "Attachment operations.",
+        "ticket reaction" => "Reactions to ticket comments.",
+        _ => grammar().get(command).map_or("", |entry| &entry.help),
+    }
+}
+
+/// Render member help from the grammar the backend uses to parse it.
+pub fn usage(command: &str) -> String {
+    use std::fmt::Write;
+
+    let path = if command.is_empty() {
+        "guildbotics member".to_owned()
+    } else {
+        format!("guildbotics member {command}")
+    };
+    let mut usage = format!("{}\n\nUsage: {path} [OPTIONS]\n", description(command));
+    if let Some(grammar) = grammar().get(command) {
+        for option in &grammar.options {
+            let argument = if option.flag {
+                String::new()
+            } else if let Some(choices) = &option.choices {
+                format!(" <{}>", choices.join("|"))
+            } else {
+                " <VALUE>".into()
+            };
+            let default = option.default.as_ref().map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string())
+            });
+            let bounds = match (option.min, option.max) {
+                (Some(min), Some(max)) => format!("{min}<=x<={max}"),
+                (Some(min), None) => format!("x>={min}"),
+                (None, Some(max)) => format!("x<={max}"),
+                _ => String::new(),
+            };
+            write!(usage, "  {}{argument}", option.spelling).unwrap();
+            if let Some(default) = default {
+                write!(usage, " [default: {default}").unwrap();
+                if !bounds.is_empty() {
+                    write!(usage, "; {bounds}").unwrap();
+                }
+                usage.push(']');
+            } else if !bounds.is_empty() {
+                write!(usage, " [{bounds}]").unwrap();
+            }
+            write!(usage, "  {}", option.description()).unwrap();
+            if option.required {
+                usage.push_str(" [required]");
+            }
+            if option.multiple {
+                usage.push_str(" (repeatable)");
+            }
+            usage.push('\n');
+        }
+    } else {
+        let prefix = if command.is_empty() {
+            String::new()
+        } else {
+            format!("{command} ")
+        };
+        let children = grammar()
+            .keys()
+            .filter_map(|name| {
+                name.strip_prefix(&prefix)
+                    .and_then(|tail| tail.split_whitespace().next())
+            })
+            .collect::<BTreeSet<_>>();
+        for child in children {
+            let child_path = format!("{prefix}{child}");
+            writeln!(usage, "  {child}  {}", description(&child_path)).unwrap();
+        }
+        if command.is_empty() {
+            usage.push_str(
+                "  --workspace <PATH>  Require the server to have this workspace selected\n",
+            );
+        }
+    }
+    usage.push_str("  --help  Print help\n");
+    usage
+}
+
 pub struct Parsed {
     pub command: String,
     pub options: Map<String, Value>,
@@ -349,7 +463,12 @@ mod tests {
     fn grammar_classifies_writes_by_metadata_and_current_git_plans_preserve_defaults() {
         for (path, schema) in grammar() {
             assert!(!schema.options.is_empty() || path == "help");
-            if path.ends_with(" read") || path == "git show" {
+            if path.ends_with(" read")
+                || matches!(
+                    path.as_str(),
+                    "git show" | "pr artifact download" | "ticket attachment download"
+                )
+            {
                 assert!(schema.read_only);
             }
         }
@@ -369,6 +488,108 @@ mod tests {
         assert_eq!(parsed.plan()["git"]["repo_path"], "/caller");
         assert!(parse(&args(&["pr", "review", "--help"])).unwrap().help);
     }
+    #[test]
+    fn every_member_command_and_option_has_help_and_content_uses_shared_sources() {
+        for (command, schema) in grammar() {
+            assert!(!schema.help.trim().is_empty(), "{command}");
+            let help = usage(command);
+            assert!(help.starts_with(&schema.help));
+            for option in &schema.options {
+                let description = option.description();
+                assert!(
+                    !description.trim().is_empty(),
+                    "{command}: {}",
+                    option.spelling
+                );
+                assert!(
+                    help.lines()
+                        .any(|line| line.contains(&option.spelling) && line.contains(description))
+                );
+            }
+            let mut path = command.as_str();
+            while let Some((parent, _)) = path.rsplit_once(' ') {
+                assert!(!description(parent).is_empty(), "{parent}");
+                path = parent;
+            }
+            if schema
+                .options
+                .iter()
+                .any(|option| option.spelling == "--content-stdin")
+            {
+                assert!(help.contains("--content-stdin") && help.contains("--content-file"));
+                for old in [
+                    "--title-file",
+                    "--body-file",
+                    "--body-stdin",
+                    "--message-file",
+                    "--message-stdin",
+                    "--reason-file",
+                    "--summary-file",
+                ] {
+                    assert!(!help.contains(old), "{command}: {old}");
+                }
+            }
+        }
+        assert!(usage("").contains("git  Read repositories"));
+        assert!(usage("git push").contains("'current' for the repository currently open"));
+    }
+
+    #[test]
+    fn required_content_commands_reject_empty_stdin() {
+        let mut required = BTreeSet::new();
+        for (command, schema) in grammar() {
+            if !schema.content_required {
+                continue;
+            }
+            let mut input: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
+            for option in schema.options.iter().filter(|option| option.required) {
+                input.push(option.primary().to_owned());
+                input.push(
+                    if option.integer {
+                        "1"
+                    } else if let Some(choices) = &option.choices {
+                        &choices[0]
+                    } else {
+                        "fixture"
+                    }
+                    .to_owned(),
+                );
+            }
+            input.push("--content-stdin".into());
+            let parsed = parse(&input).unwrap_or_else(|error| panic!("{command}: {error:?}"));
+            assert!(
+                matches!(
+                    parsed.content(""),
+                    Err(MemberError::Capability("cli.member.content.empty"))
+                ),
+                "{command}"
+            );
+            required.insert(command.as_str());
+        }
+        assert_eq!(
+            required,
+            [
+                "chat complete",
+                "chat noop",
+                "chat post",
+                "chat reply",
+                "checks await",
+                "git commit",
+                "git publish",
+                "memory record",
+                "pr comment",
+                "pr create",
+                "pr reply",
+                "pr review",
+                "pr review-comment",
+                "task complete",
+                "ticket comment",
+                "ticket create",
+            ]
+            .into()
+        );
+    }
+
     #[test]
     fn every_path_option_is_classified_by_its_transfer_owner() {
         let mut paths = BTreeMap::new();

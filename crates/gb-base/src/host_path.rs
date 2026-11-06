@@ -33,17 +33,22 @@ impl fmt::Display for PathProblem {
 
 impl std::error::Error for PathProblem {}
 
-/// Expands `~` and makes the name absolute, without touching the file
-/// system. The links the OS itself puts at the top (`/tmp`, `/var`, `/etc` on
-/// macOS) are spelled as what they name.
-pub fn normalize(path: &Path) -> Result<PathBuf, PathProblem> {
-    let expanded = match path.strip_prefix("~") {
+/// Expands a leading `~` using the caller's home directory.
+pub fn expand_home(path: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
         Ok(rest) => match std::env::var_os("HOME") {
             Some(home) if !home.is_empty() => PathBuf::from(home).join(rest),
             _ => path.to_path_buf(),
         },
         Err(_) => path.to_path_buf(),
-    };
+    }
+}
+
+/// Expands `~` and makes the name absolute, without touching the file
+/// system. The links the OS itself puts at the top (`/tmp`, `/var`, `/etc` on
+/// macOS) are spelled as what they name.
+pub fn normalize(path: &Path) -> Result<PathBuf, PathProblem> {
+    let expanded = expand_home(path);
     // Before it is made absolute: on Windows that resolves `..` by spelling.
     if expanded.as_os_str().as_encoded_bytes().contains(&0)
         || expanded.components().any(|c| c == Component::ParentDir)
@@ -117,6 +122,51 @@ pub fn open_directory(path: &Path, create: bool) -> Result<cap_std::fs::Dir, Pat
         directory = directory.open_dir_nofollow(part).map_err(failed)?;
     }
     Ok(directory)
+}
+
+/// Read a regular host file without following a link at its name or any parent.
+pub fn read_file_if_present(path: &Path) -> Result<Option<Vec<u8>>, PathProblem> {
+    use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+    use std::io::{ErrorKind, Read};
+
+    let path = normalize(path)?;
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(PathProblem::Invalid(path));
+    };
+    let failed = |error| PathProblem::Unavailable(path.clone(), error);
+    let dir = match open_directory(parent, false) {
+        Ok(dir) => dir,
+        Err(PathProblem::Unavailable(_, error)) if error.kind() == ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = match dir.symlink_metadata(name) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(failed(error)),
+    };
+    if metadata.is_symlink() {
+        return Err(PathProblem::Link(path));
+    }
+    let not_regular = || failed(std::io::Error::other("Expected a regular file"));
+    if !metadata.is_file() {
+        return Err(not_regular());
+    }
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = dir.open_with(name, &options).map_err(failed)?;
+    if !file.metadata().map_err(failed)?.is_file() {
+        return Err(not_regular());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(failed)?;
+    Ok(Some(bytes))
 }
 
 /// What one component turned out to be.

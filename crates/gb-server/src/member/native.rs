@@ -108,7 +108,11 @@ impl Native {
         }
         if parsed.help || parsed.command == "help" {
             return Ok(Reply {
-                stdout: gb_member::context::help().into(),
+                stdout: if parsed.help {
+                    command::usage(&parsed.command)
+                } else {
+                    gb_member::context::help().into()
+                },
                 ..Default::default()
             });
         }
@@ -679,7 +683,30 @@ impl Executor for Native {
                 .and_then(|v| v["language"].as_str().map(str::to_owned))
                 .unwrap_or_else(|| "en".into());
             if describe {
-                return match command::parse(&request.arguments){Ok(parsed)=>Reply{metadata:[("plan".into(),if parsed.help{json!({"result":{"exit_code":0,"stdout":gb_member::context::help(),"stderr":""}})}else{parsed.plan()})].into_iter().collect(),..Default::default()},Err(error)=>Reply{exit_code:2,stderr:error.render(|key,args|crate::i18n::t(&language,key,&args.iter().map(|(k,v)|(k.as_str(),v.as_str())).collect::<Vec<_>>())),..Default::default()}};
+                return match command::parse(&request.arguments) {
+                    Ok(parsed) => {
+                        let plan = if parsed.help {
+                            json!({"result":{"exit_code":0,"stdout":command::usage(&parsed.command),"stderr":""}})
+                        } else {
+                            parsed.plan()
+                        };
+                        Reply {
+                            metadata: [("plan".into(), plan)].into_iter().collect(),
+                            ..Default::default()
+                        }
+                    }
+                    Err(error) => Reply {
+                        exit_code: 2,
+                        stderr: error.render(|key, args| {
+                            let params = args
+                                .iter()
+                                .map(|(k, v)| (k.as_str(), v.as_str()))
+                                .collect::<Vec<_>>();
+                            crate::i18n::t(&language, key, &params)
+                        }),
+                        ..Default::default()
+                    },
+                };
             }
             let native = self.clone();
             let incoming = incoming.map(Path::to_owned);

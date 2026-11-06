@@ -1,5 +1,6 @@
 //! Branvil's authenticated data API; no HTTP client is involved.
 mod code;
+pub(super) mod owner_git;
 mod patrol;
 mod tickets;
 use super::{IntegrationEvent, IntegrationObserver};

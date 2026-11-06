@@ -3,6 +3,8 @@
 //! `a/b.<language>.yml`, under the language's own key, falling back to
 //! English and then to the key itself.
 
+use gb_environment::Sentence;
+
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
@@ -158,6 +160,90 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/app_api/ui.ja.yml"),
     ),
     (
+        "safe_paths",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/safe_paths.en.yml"),
+    ),
+    (
+        "safe_paths",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/safe_paths.ja.yml"),
+    ),
+    (
+        "cli.install",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/install.en.yml"),
+    ),
+    (
+        "cli.install",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/install.ja.yml"),
+    ),
+    (
+        "capabilities.member_git",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/capabilities/member_git.en.yml"),
+    ),
+    (
+        "capabilities.member_git",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/capabilities/member_git.ja.yml"),
+    ),
+    (
+        "cli.git_credential",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/git_credential.en.yml"),
+    ),
+    (
+        "cli.git_credential",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/git_credential.ja.yml"),
+    ),
+    (
+        "integrations.branvil.owner_git",
+        "en",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/branvil/owner_git.en.yml"
+        ),
+    ),
+    (
+        "integrations.branvil.owner_git",
+        "ja",
+        include_str!(
+            "../../../guildbotics/templates/locales/integrations/branvil/owner_git.ja.yml"
+        ),
+    ),
+    (
+        "cli.secrets",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/secrets.en.yml"),
+    ),
+    (
+        "cli.secrets",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/secrets.ja.yml"),
+    ),
+    (
+        "cli.workspace",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/workspace.en.yml"),
+    ),
+    (
+        "cli.workspace",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/workspace.ja.yml"),
+    ),
+    (
+        "cli.run",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/cli/run.en.yml"),
+    ),
+    (
+        "cli.run",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/cli/run.ja.yml"),
+    ),
+    (
         "cli.server",
         "en",
         include_str!("../../../guildbotics/templates/locales/cli/server.en.yml"),
@@ -214,6 +300,18 @@ pub fn t(language: &str, key: &str, params: &[(&str, &str)]) -> String {
         text = text.replace(&format!("{{{name}}}"), value);
     }
     text
+}
+
+/// Render a sentence emitted by the agent environment.
+pub fn say(sentence: Sentence, language: &str) -> String {
+    match sentence {
+        Sentence::Text(text) => text,
+        Sentence::AtPath(path, reason) => format!("{}: {}", path.display(), say(*reason, language)),
+        Sentence::Key(key, params) => {
+            let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            t(language, key, &params)
+        }
+    }
 }
 
 fn lookup(language: &str, key: &str) -> Option<String> {

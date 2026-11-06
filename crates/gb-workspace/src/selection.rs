@@ -8,7 +8,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Context as _;
 use gb_base::files::{self, FileLock};
 use gb_base::host_path;
 
@@ -17,7 +16,7 @@ pub const WORKSPACE_ROOT_ENV: &str = "GUILDBOTICS_WORKSPACE_ROOT";
 /// Names the workspace by its `<workspace>/.guildbotics/config`.
 pub const CONFIG_DIR_ENV: &str = "GUILDBOTICS_CONFIG_DIR";
 
-const ACTIVE_FILE: &str = "active-workspace.json";
+pub const ACTIVE_FILE: &str = "active-workspace.json";
 const REGISTRY_FILE: &str = "workspaces.json";
 const REGISTRY_LOCK: &str = "workspaces.lock";
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,20 +27,27 @@ pub fn restore(
     data: &Path,
     variable: impl Fn(&str) -> Option<OsString>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    let workspace = match explicit(variable(WORKSPACE_ROOT_ENV), variable(CONFIG_DIR_ENV))? {
-        Some(explicit) => explicit,
-        None => match read_active(data)? {
-            Some(active) => active,
-            None => return Ok(None),
-        },
+    let Some(workspace) = resolve(data, variable)? else {
+        return Ok(None);
     };
     register(data, &workspace)?;
     Ok(Some(workspace))
 }
 
+/// Read the explicit or persisted selection without modifying the registry.
+pub fn resolve(
+    data: &Path,
+    variable: impl Fn(&str) -> Option<OsString>,
+) -> anyhow::Result<Option<PathBuf>> {
+    match specified(variable(WORKSPACE_ROOT_ENV), variable(CONFIG_DIR_ENV))? {
+        Some(explicit) => Ok(Some(explicit)),
+        None => read_active(data),
+    }
+}
+
 /// What the variables name, the root over the config directory, which names
 /// a workspace only when it is one's `.guildbotics/config`.
-fn explicit(
+pub fn specified(
     root: Option<OsString>,
     config_dir: Option<OsString>,
 ) -> anyhow::Result<Option<PathBuf>> {
@@ -75,7 +81,7 @@ fn explicit(
 }
 
 /// The workspace last selected on this machine, when it still is a directory.
-fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
+pub fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
     let Ok(bytes) = std::fs::read(data.join(ACTIVE_FILE)) else {
         return Ok(None);
     };
@@ -92,17 +98,53 @@ fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(workspace.is_dir().then_some(workspace))
 }
 
+/// Save the selected workspace after registering it for filesystem protection.
+pub fn write_active(data: &Path, workspace: &Path) -> anyhow::Result<()> {
+    register(data, workspace)?;
+    let record = serde_json::json!({
+        "workspace": workspace,
+        "config_dir": workspace.join(".guildbotics/config"),
+    });
+    files::atomic_write(
+        &data.join(ACTIVE_FILE),
+        files::dump_shared_json(&record).as_bytes(),
+    )?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct RegistryError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.path.display(), self.reason)
+    }
+}
+
+impl std::error::Error for RegistryError {}
+
 /// The workspaces this machine has opened, in the order it opened them.
 pub fn registered(data: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let path = data.join(REGISTRY_FILE);
-    let Some(bytes) = files::read_if_present(&path)? else {
+    let failed = |reason| RegistryError {
+        path: path.clone(),
+        reason,
+    };
+    let Some(bytes) =
+        host_path::read_file_if_present(&path).map_err(|error| failed(error.to_string()))?
+    else {
         return Ok(Vec::new());
     };
-    let named: Vec<String> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not a list of workspace paths", path.display()))?;
+    let named: Vec<String> =
+        serde_json::from_slice(&bytes).map_err(|error| failed(error.to_string()))?;
     named
         .iter()
-        .map(|name| Ok(host_path::normalize(Path::new(name))?))
+        .map(|name| {
+            host_path::normalize(Path::new(name)).map_err(|error| failed(error.to_string()).into())
+        })
         .collect()
 }
 
@@ -151,22 +193,6 @@ fn update_registry(
         )?;
     }
     Ok(locations)
-}
-
-/// Selects `workspace`, a directory, on this machine: registered, and the
-/// one a server opens from now on.
-pub fn select(data: &Path, workspace: &Path) -> anyhow::Result<()> {
-    let workspace = host_path::directory(workspace, false)?;
-    register(data, &workspace)?;
-    let state = serde_json::json!({
-        "workspace": workspace,
-        "config_dir": workspace.join(".guildbotics/config"),
-    });
-    files::atomic_write(
-        &data.join(ACTIVE_FILE),
-        (serde_json::to_string_pretty(&state)? + "\n").as_bytes(),
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -283,6 +309,22 @@ mod tests {
         select(&m, &m.root.join("link"));
         assert!(restore(&m.data, vars(None, None)).is_err());
         assert!(restore(&m.data, vars(Some(m.root.join("link").into()), None)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_registry_reached_through_a_link_is_not_read() {
+        let m = machine();
+        std::fs::create_dir_all(&m.data).unwrap();
+        let target = m.root.join("elsewhere.json");
+        std::fs::write(&target, "[]").unwrap();
+        let registry = m.data.join(REGISTRY_FILE);
+        std::os::unix::fs::symlink(&target, &registry).unwrap();
+        let error = register(&m.data, &m.root.join("workspace")).unwrap_err();
+        let problem = error.downcast_ref::<RegistryError>().unwrap();
+        assert_eq!(problem.path, registry);
+        assert!(problem.reason.contains("passes through a link"));
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "[]");
     }
 
     #[test]

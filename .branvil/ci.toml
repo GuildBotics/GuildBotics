@@ -138,6 +138,25 @@ commands = [
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
+# Drive the public command line and its HTTP server with the same Rust binary.
+[[jobs]]
+name = "rust-cli-blackbox"
+paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox/**", "tests/conftest.py", "docs/cli_reference.md", "pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0
+uv sync --extra test
+cargo build --locked -p guildbotics
+target/debug/guildbotics generate-cli-reference --check
+export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
+export GUILDBOTICS_BLACKBOX_SERVER="$GUILDBOTICS_BLACKBOX_CLI server start"
+export GUILDBOTICS_BLACKBOX_PROVIDER=local
+uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py::test_service_start_and_stop
+''']
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }
+
 # Exercise the Rust provider and Branvil in the same process.
 [[jobs]]
 name = "branvil-integration"

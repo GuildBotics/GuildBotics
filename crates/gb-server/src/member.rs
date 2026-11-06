@@ -8,6 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+pub use gb_member::command::{grammar, usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -21,7 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_METADATA: usize = 4 << 20;
 const MAX_BUNDLE: usize = 1 << 30;
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Identity,
@@ -30,7 +31,7 @@ pub enum Phase {
     Push,
     Tracking,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemberRequest {
     pub version: String,
@@ -46,7 +47,7 @@ pub struct MemberRequest {
     #[serde(default)]
     pub data: serde_json::Map<String, Value>,
 }
-#[derive(Default, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub struct Result {
     pub exit_code: i32,
     pub stdout: String,

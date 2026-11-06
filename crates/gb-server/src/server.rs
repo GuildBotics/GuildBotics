@@ -2,7 +2,7 @@
 //! of the machine names, telling whoever started it that it listens.
 
 use std::future::Future;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -14,13 +14,17 @@ use crate::i18n;
 
 /// Names the port the server listens on.
 pub const PORT_ENV: &str = "GUILDBOTICS_SERVER_PORT";
+const LOCK: &str = "run/app-api.lock";
 const DEFAULT_PORT: u16 = 8765;
 /// The line on stdout that tells a launcher the server listens on the port.
 pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 
 /// The port as this machine names it.
 pub fn port() -> anyhow::Result<u16> {
-    let raw = std::env::var(PORT_ENV).unwrap_or_default();
+    parse_port(&std::env::var(PORT_ENV).unwrap_or_default())
+}
+
+fn parse_port(raw: &str) -> anyhow::Result<u16> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(DEFAULT_PORT);
@@ -39,7 +43,7 @@ pub struct ServerLock(#[allow(dead_code)] FileLock);
 
 impl ServerLock {
     pub fn hold(data: &Path, port: u16) -> anyhow::Result<ServerLock> {
-        let Some(lock) = FileLock::try_hold(&data.join("run/app-api.lock"))? else {
+        let Some(lock) = FileLock::try_hold(&data.join(LOCK))? else {
             anyhow::bail!(i18n::t("en", "runtime.service_lock.already_running", &[]));
         };
         let record = serde_json::json!({"pid": std::process::id(), "port": port});
@@ -50,6 +54,44 @@ impl ServerLock {
         file.sync_all()?;
         Ok(ServerLock(lock))
     }
+}
+
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+pub struct RunningServer {
+    pub pid: u32,
+    pub port: u16,
+}
+
+/// Reads the holder of the machine's lock. A stale record on an unlocked
+/// file is not a running server.
+pub fn running(data: &Path, language: &str) -> anyhow::Result<Option<RunningServer>> {
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(data.join(LOCK))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if FileLock::try_file(file.try_clone()?)?.is_some() {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(1))?;
+    let mut record = Vec::new();
+    file.take(4096).read_to_end(&mut record)?;
+    let owner: RunningServer = serde_json::from_slice(&record).map_err(|_| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "runtime.service_lock.invalid_metadata",
+            &[]
+        ))
+    })?;
+    anyhow::ensure!(
+        owner.pid != 0 && owner.port != 0,
+        i18n::t(language, "runtime.service_lock.invalid_metadata", &[])
+    );
+    Ok(Some(owner))
 }
 
 /// Tells the launcher, as the only line stdout ever carries, that this
@@ -68,11 +110,50 @@ fn announce(port: u16) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Remote stop requests take the same drain and cancellation paths as signals.
+#[derive(Clone, Default)]
+pub struct Shutdown {
+    stop: tokio_util::sync::CancellationToken,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Shutdown {
+    pub async fn wait(&self) {
+        self.stop.cancelled().await;
+    }
+
+    pub async fn wait_for_cancel(&self) {
+        self.cancel.cancelled().await;
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[derive(Default)]
+pub(crate) struct ShutdownRequest {
+    force: bool,
+}
+
+pub(crate) async fn shutdown(
+    axum::extract::State(api): axum::extract::State<api::Shared>,
+    api::Body(body): api::Body<ShutdownRequest>,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    if body.force {
+        api.shutdown.cancel.cancel();
+    }
+    api.shutdown.stop.cancel();
+    (
+        axum::http::StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({})),
+    )
+}
+
 /// The server, holding the machine's lock and listening on its port.
 pub struct Server {
     lock: ServerLock,
     listener: tokio::net::TcpListener,
     api: Arc<Api>,
+    start_services: bool,
 }
 
 /// The machine's lock, which its holder keeps until everything the process
@@ -93,6 +174,7 @@ impl Server {
                 lock,
                 listener,
                 api,
+                start_services: false,
             },
             port,
         )
@@ -113,9 +195,11 @@ impl Server {
         announce(port)?;
         // A workspace that cannot be opened leaves the server running for
         // the screens to choose another.
+        let language = crate::client::language().await;
         let workspace = gb_workspace::selection::restore(&data, |name| std::env::var_os(name))
             .unwrap_or_else(|e| {
-                tracing::error!("cannot open the selected workspace: {e:#}");
+                let error = crate::workspace::registry_error(e, language);
+                tracing::error!("{error:#}");
                 None
             });
         let api = Arc::new(Api::new(
@@ -140,8 +224,17 @@ impl Server {
             lock,
             listener,
             api,
+            start_services: false,
         })
     }
+    pub fn start_services(&mut self, start: bool) {
+        self.start_services = start;
+    }
+
+    pub fn shutdown_requests(&self) -> Shutdown {
+        self.api.shutdown.clone()
+    }
+
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
         let workspace = self.api.selected().workspace.clone();
         self.api
@@ -163,13 +256,14 @@ impl Server {
     ) -> (Held, anyhow::Result<()>) {
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
         let autostart_api = self.api.clone();
+        let start_services = self.start_services;
         let autostart = tokio::spawn(async move {
             // Waits out a switch, then starts the service of what is selected.
             let _admitted = autostart_api.switching.clone().read_owned().await;
             let selected = autostart_api.selected();
             if let Some(workspace) = &selected.workspace {
                 match crate::service_settings::Settings::read(workspace) {
-                    Ok(settings) if settings.start_with_server => {
+                    Ok(settings) if start_services || settings.start_with_server => {
                         if let Err(error) = selected.service.start().await {
                             tracing::error!("cannot automatically start service: {error:#}");
                         }
@@ -183,8 +277,13 @@ impl Server {
         let cancel_autostart = autostart.abort_handle();
         let service = self.api.clone();
         let cancelling_service = service.clone();
+        let cancel_request = service.shutdown.clone();
+        let stop_request = service.shutdown.clone();
         let cancelling = tokio::spawn(async move {
-            cancel.await;
+            tokio::select! {
+                () = cancel => {},
+                () = cancel_request.wait_for_cancel() => {},
+            }
             cancel_autostart.abort();
             cancelled.cancel();
             cancelling_service.selected().service.stop(true).await;
@@ -193,7 +292,10 @@ impl Server {
         let service_api = self.api.clone();
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(async move {
-                stop.await;
+                tokio::select! {
+                    () = stop => {},
+                    () = stop_request.wait() => {},
+                }
                 stop_autostart.abort();
                 service.selected().service.stop(false).await;
             })
@@ -240,40 +342,55 @@ impl Selected {
         let Some(workspace) = workspace else {
             return Selected::default();
         };
-        let native = || -> anyhow::Result<_> {
-            let mut native =
-                crate::member::native::Native::new(workspace.clone(), api.data.clone())?;
-            native.branvil = branvil.clone();
-            Ok(native)
-        };
-        let service = (|| -> anyhow::Result<_> {
-            let native = native()?;
-            let host = Arc::new(gb_environment::Host {
-                data: api.data.clone(),
-                home: std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
-                package: native.package.clone(),
-                identity_root: native.identity_root.clone(),
-            });
-            Ok(crate::service_runtime::Controller::new(native, host))
-        })()
-        .unwrap_or_default();
-        let member = (|| -> anyhow::Result<_> {
-            let mut native = native()?;
-            native.runtime_work = Some(api.work.clone());
-            native.backend()
-        })()
-        .inspect_err(|_| {
-            tracing::error!("cannot initialize the member backend for the selected workspace")
-        })
-        .ok();
+        let mut service = service_controller(Some(&workspace), &api.data);
+        if let Some(branvil) = &branvil {
+            service.attach_branvil(branvil.clone());
+        }
         Selected {
-            workspace: Some(workspace),
-            member,
+            member: member_backend(&workspace, &api.data, &api.work, branvil),
             service,
+            workspace: Some(workspace),
         }
     }
+}
+
+/// Keep workspace recovery screens available when member assembly fails.
+pub(crate) fn service_controller(
+    workspace: Option<&Path>,
+    data: &Path,
+) -> crate::service_runtime::Controller {
+    let built = (|| -> anyhow::Result<_> {
+        let workspace = workspace.ok_or_else(|| anyhow::anyhow!("workspace not selected"))?;
+        let native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        let host = Arc::new(gb_environment::Host {
+            data: data.into(),
+            home: std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        Ok(crate::service_runtime::Controller::new(native, host))
+    })();
+    built.unwrap_or_default()
+}
+
+pub(crate) fn member_backend(
+    workspace: &Path,
+    data: &Path,
+    work: &tokio_util::task::TaskTracker,
+    branvil: Option<branvil::api::DataApi>,
+) -> Option<Arc<crate::member::Backend>> {
+    let built = (|| -> anyhow::Result<_> {
+        let mut native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        native.runtime_work = Some(work.clone());
+        native.branvil = branvil;
+        native.backend().map(Some)
+    })();
+    built.unwrap_or_else(|_| {
+        tracing::error!("cannot initialize the member backend for the selected workspace");
+        None
+    })
 }
 
 #[cfg(test)]
@@ -294,6 +411,24 @@ mod tests {
             u32::try_from(record["pid"].as_u64()?).ok()?,
             u16::try_from(record["port"].as_u64()?).ok()?,
         ))
+    }
+
+    #[test]
+    fn port_settings_allow_only_decimal_tcp_ports() {
+        for (raw, expected) in [
+            ("", DEFAULT_PORT),
+            ("  ", DEFAULT_PORT),
+            (" 008765 ", 8765),
+            ("65535", 65535),
+        ] {
+            assert_eq!(parse_port(raw).unwrap(), expected);
+        }
+        for raw in ["0", "-1", "+42", "65536", "localhost", "42.5", "１２"] {
+            assert!(
+                parse_port(raw).unwrap_err().to_string().contains(PORT_ENV),
+                "{raw}"
+            );
+        }
     }
 
     #[test]
@@ -357,6 +492,7 @@ mod tests {
             lock: ServerLock::hold(&native.data, port).unwrap(),
             listener,
             api: api.clone(),
+            start_services: false,
         };
         let stop = CancellationToken::new();
         let serving = tokio::spawn({
@@ -384,6 +520,105 @@ mod tests {
         result.unwrap();
         assert!(response.unwrap().unwrap().status().is_success());
         assert!(!selected.service.service.status().await.running);
+    }
+
+    #[tokio::test]
+    async fn server_keeps_its_lock_through_drain_and_releases_it_after_forced_work_cancels() {
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        for method in ["api-force", "interrupt-then-cancel", "immediate-cancel"] {
+            let root = tempfile::tempdir().unwrap();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let api = Arc::new(Api::new(
+                Selected::default(),
+                crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+                ServerAuth::open(root.path(), port).unwrap(),
+                "fixture".into(),
+                root.path().into(),
+            ));
+            let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+            let (started, entered) = tokio::sync::oneshot::channel();
+            let (settled, cancelled) = tokio::sync::oneshot::channel();
+            api.work.spawn({
+                let signal = api.cancelled.clone();
+                async move {
+                    started.send(()).unwrap();
+                    signal.cancelled().await;
+                    settled.send(()).unwrap();
+                }
+            });
+            let server = Server {
+                lock: ServerLock::hold(root.path(), port).unwrap(),
+                listener,
+                api: api.clone(),
+                start_services: false,
+            };
+            let stop = CancellationToken::new();
+            let force = CancellationToken::new();
+            let mut serving = tokio::spawn(server.serve(
+                stop.clone().cancelled_owned(),
+                force.clone().cancelled_owned(),
+            ));
+            let endpoint = format!("http://127.0.0.1:{port}/api");
+            let http = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            assert!(
+                http.get(format!("{endpoint}/health"))
+                    .bearer_auth(token.trim())
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+                    .is_success()
+            );
+            entered.await.unwrap();
+            if method == "api-force" {
+                let response = http
+                    .post(format!("{endpoint}/shutdown"))
+                    .bearer_auth(token.trim())
+                    .json(&serde_json::json!({"force":true}))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+            } else {
+                if method == "interrupt-then-cancel" {
+                    stop.cancel();
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(100), &mut serving)
+                            .await
+                            .is_err()
+                    );
+                    assert!(!api.cancelled.is_cancelled());
+                    assert!(running(root.path(), "en").unwrap().is_some());
+                }
+                force.cancel();
+                stop.cancel();
+            }
+            tokio::time::timeout(Duration::from_secs(5), cancelled)
+                .await
+                .unwrap()
+                .unwrap();
+            let (held, result) = tokio::time::timeout(Duration::from_secs(5), serving)
+                .await
+                .unwrap()
+                .unwrap();
+            result.unwrap();
+            assert!(running(root.path(), "en").unwrap().is_some());
+            drop(held);
+            // A parallel test may be forking a child that briefly inherits
+            // the descriptor before exec closes it.
+            let reopened = FileLock::hold(&root.path().join(LOCK), Duration::from_secs(1))
+                .unwrap_or_else(|error| panic!("{method} did not release its lock: {error}"));
+            drop(reopened);
+        }
     }
 
     #[test]
