@@ -757,7 +757,17 @@ fn run_cli_refuses_humans_before_loading_or_running_a_command() {
             "{error}"
         );
         assert!(!error.contains("Traceback"));
-        assert!(!workspace.join(".guildbotics/local/run").exists());
+        assert!(
+            gb_observability::runs::RunStore::open(&workspace)
+                .records()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !workspace
+                .join(".guildbotics/local/run/diagnostics.jsonl")
+                .exists()
+        );
     }
 }
 
