@@ -155,6 +155,7 @@ pub async fn run(
         guest: "/run/guildbotics/resolved".into(),
         host: Some(resolved_dir.path().into()),
         readonly: true,
+        quota_mib: None,
     });
     shape.mounts.extend(session.mounts.clone());
     shape.env.extend(session.env.clone());
@@ -261,12 +262,14 @@ pub fn shape(
         guest: CODE_ROOT.into(),
         host: Some(checked_directory(&host.package)?),
         readonly: true,
+        quota_mib: None,
     }];
     if command.access.read_only {
         mounts.push(Mount {
             guest: cwd.clone(),
             host: None,
             readonly: false,
+            quota_mib: None,
         });
     }
     let registered = device::registered_workspaces(&host.data)
@@ -415,6 +418,7 @@ fn inspected_mounts(
                     guest: guest_path(&checked)?,
                     host: Some(checked),
                     readonly: true,
+                    quota_mib: None,
                 },
             ));
         }

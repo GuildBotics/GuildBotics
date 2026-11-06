@@ -136,6 +136,7 @@ fn worktree_planning_preserves_covering_readonly_and_nested_mount_boundaries() {
         guest: cwd.join("nested").to_str().unwrap().into(),
         host: Some(cwd.join("nested")),
         readonly: true,
+        quota_mib: None,
     }];
     let plan = contract::copy_plan(
         &workspace,

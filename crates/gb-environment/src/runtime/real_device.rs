@@ -126,6 +126,7 @@ async fn hold_synthetic_login(home: &Path, snapshot: &Path) {
             guest: "/run/owner-probe".into(),
             host: None,
             readonly: false,
+            quota_mib: None,
         }],
         network: &Network::default(),
         worktree: None,
