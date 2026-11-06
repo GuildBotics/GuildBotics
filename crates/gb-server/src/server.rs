@@ -551,7 +551,11 @@ mod tests {
             result.unwrap();
             assert!(running(root.path(), "en").unwrap().is_some());
             drop(held);
-            assert!(running(root.path(), "en").unwrap().is_none());
+            // A parallel test may be forking a child that briefly inherits
+            // the descriptor before exec closes it.
+            let reopened = FileLock::hold(&root.path().join(LOCK), Duration::from_secs(1))
+                .unwrap_or_else(|error| panic!("{method} did not release its lock: {error}"));
+            drop(reopened);
         }
     }
 
