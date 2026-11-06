@@ -2,7 +2,7 @@ import { createTheme } from "@mantine/core";
 import { StrictMode } from "react";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2587,7 +2587,10 @@ describe("MembersSection", () => {
       // The server opens another workspace, by way of none selected; the
       // member the page names reads differently there.
       vi.mocked(getMemberConfig).mockResolvedValue(
-        memberConfigDetail({ person_name: "Alice in the other workspace" }),
+        memberConfigDetail({
+          config_dir: "/other/.guildbotics/config",
+          person_name: "Alice in the other workspace",
+        }),
       );
       for (const workspace of [null, "/other"]) {
         vi.mocked(getConfigStatus).mockResolvedValue(
@@ -2611,18 +2614,41 @@ describe("MembersSection", () => {
     },
   );
 
-  it("saves a member to the workspace config the server read it in", async () => {
+  async function openWorkspace(queryClient: QueryClient, workspace: string) {
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({
+        project_file_exists: true,
+        workspace,
+        config_dir: `${workspace}/.guildbotics/config`,
+      }),
+    );
+    await queryClient.refetchQueries({ queryKey: ["config"] });
+  }
+
+  it("composes a member's form only from a read of the workspace it shows", async () => {
     const user = userEvent.setup();
-    // The read was answered by another workspace than the one this screen shows.
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
+    // The server has opened another workspace, which answers the read, while
+    // this screen still shows the first one.
     vi.mocked(getMemberConfig).mockResolvedValue(
       memberConfigDetail({
         config_dir: "/other/.guildbotics/config",
+        person_name: "Alice there",
         revisions: { "team/members/alice/member.yml": "read-there" },
       }),
     );
-    renderSetupPage("/setup?section=members&person_id=alice");
-    const name = await screen.findByLabelText(t("setup.members.personName"));
-    await waitFor(() => expect(name).toHaveValue("Alice"));
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    // The read is dropped, and the screen reads again which workspace is open.
+    await waitFor(() => expect(getMemberConfig).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    expect(screen.queryByDisplayValue("Alice there")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
+
+    // Once the screen shows that workspace, the read composes the form there.
+    await openWorkspace(queryClient, "/other");
+    const name = await screen.findByDisplayValue("Alice there");
     fireEvent.change(name, { target: { value: "Alice B" } });
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
@@ -2630,6 +2656,34 @@ describe("MembersSection", () => {
       config_dir: "/other/.guildbotics/config",
       expected_revisions: { "team/members/alice/member.yml": "read-there" },
     });
+  });
+
+  it("never composes a rebuilt member form from a read begun in the previous workspace", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
+    let answerFirst: (member: MemberConfig) => void = () => {};
+    vi.mocked(getMemberConfig)
+      .mockImplementationOnce(() => new Promise((done) => (answerFirst = done)))
+      .mockResolvedValue(
+        memberConfigDetail({
+          config_dir: "/other/.guildbotics/config",
+          person_name: "Alice there",
+        }),
+      );
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    await waitFor(() => expect(getMemberConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(queryClient.getQueryData(["config"])).toMatchObject({ workspace: "/workspace" }),
+    );
+
+    await openWorkspace(queryClient, "/other");
+    expect(await screen.findByDisplayValue("Alice there")).toBeInTheDocument();
+    // The first workspace's read answers late; the form stays the new one's.
+    await act(async () => {
+      answerFirst(memberConfigDetail({ person_name: "Alice here" }));
+      await new Promise((settled) => setTimeout(settled, 0));
+    });
+    expect(screen.queryByDisplayValue("Alice here")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Alice there")).toBeInTheDocument();
   });
 
   it("shows the add form when there are no members", async () => {
