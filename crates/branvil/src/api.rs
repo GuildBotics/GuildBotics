@@ -1,6 +1,7 @@
 //! Authenticated in-process access to the same operations used by HTTP.
 use crate::app::Shared;
 use crate::auth::{self, Caller};
+pub use crate::domain::apps::{AppToken, TokenRequest};
 use crate::domain::tickets::{NewComment, NewReaction, ReactionAdded};
 pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
@@ -39,6 +40,16 @@ impl DataApi {
         }
         Ok(guard)
     }
+    /// Whether the embedded service accepts work.
+    pub fn health(&self) -> AppResult<()> {
+        let _open = self.guard()?;
+        Ok(())
+    }
+    /// Spend a PKCE-bound local application code, as the HTTP endpoint does.
+    pub async fn exchange(&self, input: TokenRequest) -> AppResult<AppToken> {
+        let _open = self.guard()?;
+        crate::domain::apps::exchange(&self.app, input).await
+    }
     pub fn base_url(&self) -> &str {
         &self.app.base_url
     }
@@ -59,6 +70,12 @@ pub struct MemberApi {
     token: String,
 }
 impl MemberApi {
+    /// Issue the same single-use browser entry link as the HTTP endpoint.
+    pub async fn entry_link(&self) -> AppResult<members::EntryLink> {
+        let _open = self.api.guard()?;
+        members::entry_link(&self.api.app, &self.caller().await?)
+    }
+
     pub async fn upstream_dependency_alerts(
         &self,
         repo: &str,

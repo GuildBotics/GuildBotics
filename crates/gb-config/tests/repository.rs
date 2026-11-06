@@ -181,3 +181,51 @@ fn only_the_revisions_sent_are_compared_each_in_its_own_root() {
         assert!(error.is::<InvalidRevisionPath>(), "{outside}: {error:#}");
     }
 }
+
+#[test]
+fn identity_config_compares_and_locks_without_a_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity = dir.path().join("identity");
+    let mut writes = SharedWrites::new(identity.clone(), Some(dir.path().join("unused")));
+    writes.timeout = Duration::from_millis(20);
+    let repo = ConfigRepository::for_identity(writes);
+    let old = repo.revisions(&["connections/branvil.yml"]).unwrap();
+    let receipt = repo
+        .write(
+            &old,
+            |view, writer| {
+                writer.write_text(
+                    &view.path("connections/branvil.yml")?,
+                    "base_url: http://127.0.0.1:7878\n",
+                )
+            },
+            |view| view.revisions(&["connections/branvil.yml"]),
+        )
+        .unwrap();
+    assert_ne!(receipt.revisions, old);
+    assert!(
+        identity
+            .join(".guildbotics/config/connections/branvil.yml")
+            .is_file()
+    );
+    assert!(!dir.path().join("unused").exists());
+    assert!(
+        repo.write(
+            &old,
+            |_, _| -> anyhow::Result<()> { panic!("stale write") },
+            |_| Ok(Revisions::new())
+        )
+        .unwrap_err()
+        .is::<StaleConfigWriteError>()
+    );
+    let _held = IdentityLock::acquire(&identity, Duration::from_secs(1)).unwrap();
+    assert!(
+        repo.write(
+            &receipt.revisions,
+            |_, _| -> anyhow::Result<()> { panic!("locked write") },
+            |_| Ok(Revisions::new())
+        )
+        .unwrap_err()
+        .is::<SharedWriteBusyError>()
+    );
+}

@@ -75,8 +75,6 @@ const memberContext = (human: boolean): MemberContext => ({
   personId: "my-bot",
   savedPersonId: "",
   memberKey: "my-bot",
-  gitEmail: "",
-  setGitEmail: () => undefined,
   chatChannels: [],
   chatChannelsField: null,
   services: SERVICES,
@@ -195,9 +193,10 @@ describe("Branvil connection", () => {
       await screen.findByRole("button", { name: t("setup.branvil.connection.connect") }),
     );
 
-    expect(providerOperation).toHaveBeenCalledWith("branvil", "connect", {
-      base_url: BRANVIL_BASE_URL,
-    });
+    expect(providerOperation).toHaveBeenCalledWith("branvil", "connect", {});
+    expect(
+      screen.queryByRole("textbox", { name: t("setup.branvil.baseUrl") }),
+    ).not.toBeInTheDocument();
     expect(openExternal).toHaveBeenCalledWith(`${BRANVIL_BASE_URL}/-/authorize?state=consent-1`);
     expect(screen.getByText(t("setup.branvil.connection.pending"))).toBeVisible();
     expect(
@@ -255,7 +254,12 @@ describe("Branvil service fields", () => {
     renderWithProviders(<Services />);
 
     // One connection, the identities', shown with the first kind.
-    expect(screen.getAllByLabelText(t("setup.branvil.baseUrl"))).toHaveLength(1);
+    expect(
+      screen.queryByRole("textbox", { name: t("setup.branvil.baseUrl") }),
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(`${t("setup.branvil.baseUrl")}: ${BRANVIL_BASE_URL}`),
+    ).toBeVisible();
     expect(
       await screen.findAllByText(t("setup.branvil.connection.connected", { owner: "otota" })),
     ).toHaveLength(1);

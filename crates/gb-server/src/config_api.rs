@@ -29,6 +29,7 @@ use crate::events::Origin;
 /// What the setup of the workspace `workspace` writes through.
 struct Context {
     repository: ConfigRepository,
+    providers: crate::setup_providers::Registry,
     templates: PathBuf,
     machine_root: PathBuf,
     keychain: Arc<dyn gb_config::secrets::Keychain>,
@@ -37,7 +38,7 @@ impl Context {
     fn setup(&self) -> Setup<'_> {
         Setup {
             repository: &self.repository,
-            providers: &crate::setup_providers::Registry,
+            providers: &self.providers,
             templates: &self.templates,
             device: gb_config::secrets::DeviceKey {
                 machine_root: self.machine_root.clone(),
@@ -49,7 +50,7 @@ impl Context {
 
 /// Runs `apply` on the setup of `workspace` on a blocking thread, where a
 /// lock may be waited for and a provider's part awaited.
-async fn with_setup<T: Send + 'static>(
+pub(crate) async fn with_setup<T: Send + 'static>(
     api: &Shared,
     workspace: PathBuf,
     apply: impl FnOnce(&Setup<'_>) -> anyhow::Result<T> + Send + 'static,
@@ -58,6 +59,7 @@ async fn with_setup<T: Send + 'static>(
     writes.timeout = api.write_timeout;
     let context = Context {
         repository: ConfigRepository::new(writes)?,
+        providers: crate::setup_providers::Registry(Some(api.clone())),
         templates: gb_base::home::python_package().join("templates"),
         machine_root: api.data.parent().unwrap_or(&api.data).to_path_buf(),
         keychain: api.keychain.clone(),
@@ -73,7 +75,7 @@ fn wait<T>(future: impl Future<Output = T>) -> T {
 /// How a refused change is answered: a stale screen, a revision outside
 /// config, a lock held elsewhere, what the setup refuses, a form the request
 /// got wrong, a secret store that cannot be used, or a defect.
-fn failure(error: anyhow::Error, headers: &HeaderMap) -> Response {
+pub(crate) fn failure(error: anyhow::Error, headers: &HeaderMap) -> Response {
     let answer = |status, code: &str| ApiError::new(status, code, headers);
     if let Some(stale) = error.downcast_ref::<StaleConfigWriteError>() {
         return answer(StatusCode::CONFLICT, "config_changed")

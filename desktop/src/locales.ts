@@ -831,6 +831,7 @@ export const resources = {
           declarationMissing: "The environment declaration is unavailable",
         },
         members: {
+          gitEmail: "Git email",
           avatar: {
             upload: "Upload File",
             addFirstTooltip: "You can set the avatar after adding the member.",
@@ -1923,6 +1924,7 @@ export const resources = {
           declarationMissing: "環境の宣言を取得できません",
         },
         members: {
+          gitEmail: "Gitメールアドレス",
           avatar: {
             upload: "ファイルをアップロード",
             addFirstTooltip: "メンバーを追加後に設定ができます",

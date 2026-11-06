@@ -448,7 +448,6 @@ describe("App", () => {
         title: "GitHub",
         kinds: ["code_hosting_service" as const, "ticket_service" as const],
         avatar: true,
-        credentials_from: [],
       },
     ];
 

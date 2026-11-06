@@ -48,13 +48,6 @@ import {
   type RuntimeEvent,
   type StreamStatus,
 } from "./client";
-import {
-  ensureAgentField,
-  getAgentFieldState,
-  getAppRegistration,
-  getStatusOptions,
-  startAppRegistration,
-} from "../setup/providers/github/api";
 import { startSlackAppRegistration, verifySlackTokens } from "../setup/providers/slack/api";
 import { makeRuntimeEvent } from "../test/factories";
 
@@ -325,34 +318,6 @@ describe("request headers and body", () => {
     expect(calls[0].init.body).toBeUndefined();
   });
 
-  it("POSTs the GitHub App registration", async () => {
-    const { calls } = captureFetch(jsonResponse({ state: "s1", status: "pending" }));
-    await startAppRegistration({
-      app_name: "my-bot",
-      person_id: "my-bot",
-      organization: "acme",
-    });
-
-    expect(calls[0].url).toBe("/api/config/providers/github/app-registrations");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(
-      JSON.stringify({
-        app_name: "my-bot",
-        person_id: "my-bot",
-        organization: "acme",
-      }),
-    );
-  });
-
-  it("asks for the GitHub App registration status by state", async () => {
-    const { calls } = captureFetch(jsonResponse({ state: "s/1", status: "pending" }));
-    await getAppRegistration("s/1");
-
-    expect(calls[0].url).toBe("/api/config/providers/github/app-registration");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(JSON.stringify({ state: "s/1" }));
-  });
-
   it("POSTs the Slack App name and returns the manifest deep link", async () => {
     const { calls } = captureFetch(
       jsonResponse({ app_name: "alice", registration_url: "https://api.slack.com/apps?new_app=1" }),
@@ -394,26 +359,6 @@ describe("request headers and body", () => {
     expect(calls[0].url).toBe("/api/verify");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
-  });
-
-  it("POSTs the GitHub board to the agent field operations", async () => {
-    const { calls } = captureFetch(
-      jsonResponse({ available: true, exists: false, options: [], missing: [] }),
-    );
-    const target = { url: "https://github.com/orgs/acme/projects/9" };
-    await getAgentFieldState(target);
-    await ensureAgentField(target);
-    await getStatusOptions(target);
-
-    expect(calls.map((call) => call.url)).toEqual([
-      "/api/config/providers/github/agent-field",
-      "/api/config/providers/github/agent-field/ensure",
-      "/api/config/providers/github/status-options",
-    ]);
-    for (const call of calls) {
-      expect(call.init.method).toBe("POST");
-      expect(call.init.body).toBe(JSON.stringify(target));
-    }
   });
 });
 

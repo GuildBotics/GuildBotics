@@ -41,6 +41,8 @@ pub struct Api {
     /// The code host the server runs, which the selected workspace's member
     /// backend and service reach in process.
     pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
+    pub(crate) consents:
+        tokio::sync::Mutex<std::collections::BTreeMap<String, crate::provider_api::Consent>>,
     pub events: crate::events::EventBus,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
@@ -92,6 +94,7 @@ impl Api {
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
             branvil: std::sync::OnceLock::new(),
+            consents: Default::default(),
             events,
             inputs,
             auth,
@@ -267,6 +270,52 @@ macro_rules! routes {
 routes!(
     owner_routes,
     OWNER_ROUTES,
+    (
+        post,
+        "/config/providers/slack/app-registrations",
+        crate::provider_api::slack::registration
+    ),
+    (
+        post,
+        "/config/providers/slack/verify-tokens",
+        crate::provider_api::slack::verify
+    ),
+    (
+        post,
+        "/config/members/{name}/avatar/{provider}",
+        crate::provider_api::slack::avatar
+    ),
+    (get, "/config/providers", crate::provider_api::providers),
+    (
+        post,
+        "/config/providers/branvil/connect",
+        crate::provider_api::connect
+    ),
+    (
+        post,
+        "/config/providers/branvil/connection",
+        crate::provider_api::connection
+    ),
+    (
+        post,
+        "/config/providers/branvil/workspaces",
+        crate::provider_api::workspaces
+    ),
+    (
+        post,
+        "/config/providers/branvil/workspaces/create",
+        crate::provider_api::create_workspace
+    ),
+    (
+        post,
+        "/config/providers/branvil/agents",
+        crate::provider_api::agents
+    ),
+    (
+        post,
+        "/config/providers/branvil/entry",
+        crate::provider_api::entry
+    ),
     (get, "/health", health),
     (post, "/shutdown", crate::server::shutdown),
     (get, "/scheduler/status", crate::service_runtime::status),
@@ -395,6 +444,10 @@ pub fn router(api: Shared) -> Router {
     let anyone = public_routes();
     Router::new()
         .nest("/api", owners.merge(anyone))
+        .route(
+            crate::provider_api::CALLBACK_PATH,
+            get(crate::provider_api::connected),
+        )
         .merge(crate::ui::router(crate::ui::directory()))
         .layer(middleware::from_fn_with_state(api.clone(), guard))
         .with_state(api)
@@ -635,6 +688,38 @@ mod tests {
         let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
             (
+                ("post", "/config/providers/branvil/connect"),
+                "holds an in-memory PKCE consent",
+            ),
+            (
+                ("post", "/config/providers/branvil/connection"),
+                "reads the identity connection and consumes a completed consent",
+            ),
+            (
+                ("post", "/config/providers/branvil/workspaces"),
+                "reads Branvil workspaces",
+            ),
+            (
+                ("post", "/config/providers/branvil/workspaces/create"),
+                "creates a Branvil workspace, without GuildBotics config writes",
+            ),
+            (
+                ("post", "/config/providers/branvil/agents"),
+                "reads Branvil agents",
+            ),
+            (
+                ("post", "/config/providers/branvil/entry"),
+                "issues a Branvil browser entry code",
+            ),
+            (
+                ("post", "/config/providers/slack/app-registrations"),
+                "builds a Slack manifest URL",
+            ),
+            (
+                ("post", "/config/providers/slack/verify-tokens"),
+                "read-only Slack token, scope and channel probes",
+            ),
+            (
                 ("post", "/workspace"),
                 "selects a workspace: the device-local registry and selection",
             ),
@@ -687,9 +772,16 @@ mod tests {
             .chain(PUBLIC_ROUTES)
             .copied()
             .filter(|(method, _)| matches!(*method, "post" | "put" | "patch" | "delete"))
+            .chain(
+                crate::provider_api::CONFIG_WRITERS
+                    .iter()
+                    .copied()
+                    .filter(|(method, _)| *method == "get"),
+            )
             .collect();
         let declared: BTreeSet<_> = config
             .iter()
+            .chain(crate::provider_api::CONFIG_WRITERS)
             .copied()
             .chain(elsewhere.iter().map(|(route, reason)| {
                 assert!(!reason.is_empty());

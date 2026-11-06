@@ -4,8 +4,6 @@ import { providerOperation } from "../../../api/client";
  * this machine. */
 export const BRANVIL_BASE_URL = "http://127.0.0.1:7878";
 
-export const ORIGIN = /^https?:\/\/[^/\s?#@]+\/?$/;
-
 /** GuildBotics' connection to Branvil, as the backend reports it. It is the
  * identities' -- one for every workspace -- not a workspace's. */
 export type Connection = {
@@ -30,9 +28,9 @@ function operation<T>(name: string, body: object = {}): Promise<T> {
   return providerOperation("branvil", name, body);
 }
 
-/** Start connecting to the Branvil at ``baseUrl``, on its owner's consent. */
-export function startConnection(baseUrl: string): Promise<ConsentStarted> {
-  return operation("connect", { base_url: baseUrl });
+/** Start connecting to the server's embedded Branvil, on its owner's consent. */
+export function startConnection(): Promise<ConsentStarted> {
+  return operation("connect");
 }
 
 export function getConnection(state = ""): Promise<Connection> {

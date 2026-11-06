@@ -1,17 +1,10 @@
-import { Button, Code, CopyButton, Group, Stack, Text, TextInput } from "@mantine/core";
+import { Button, Code, CopyButton, Group, Stack, Text } from "@mantine/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { openExternal } from "../../../openExternal";
-import {
-  BRANVIL_BASE_URL,
-  ORIGIN,
-  branvilKey,
-  getConnection,
-  startConnection,
-  type Connection,
-} from "./api";
+import { branvilKey, getConnection, startConnection, type Connection } from "./api";
 import { openBranvil } from "./openBranvil";
 
 const POLL_INTERVAL_MS = 2000;
@@ -56,8 +49,6 @@ export function BranvilConnection() {
   const [consent, setConsent] = useState("");
   const [error, setError] = useState("");
   const connection = useConnection(consent).data;
-  const [entered, setBaseUrl] = useState<string | null>(null);
-  const baseUrl = (entered ?? (connection?.base_url || BRANVIL_BASE_URL)).trim();
   const pending = Boolean(consent) && (connection?.status ?? "pending") === "pending";
 
   const run = (action: () => Promise<void>) => async () => {
@@ -69,7 +60,7 @@ export function BranvilConnection() {
     }
   };
   const connect = run(async () => {
-    const started = await startConnection(baseUrl);
+    const started = await startConnection();
     setConsent(started.state);
     await openExternal(started.url);
   });
@@ -78,14 +69,11 @@ export function BranvilConnection() {
 
   return (
     <Stack gap={4}>
-      <TextInput
-        label={t("setup.branvil.baseUrl")}
-        aria-label={t("setup.branvil.baseUrl")}
-        description={t("setup.branvil.baseUrlHint")}
-        value={baseUrl}
-        onChange={(event) => setBaseUrl(event.currentTarget.value)}
-        error={baseUrl && !ORIGIN.test(baseUrl) ? t("setup.branvil.baseUrlInvalid") : undefined}
-      />
+      {connection?.base_url && (
+        <Text size="sm">
+          {t("setup.branvil.baseUrl")}: {connection.base_url}
+        </Text>
+      )}
       <Group gap="xs">
         {connected ? (
           <>
@@ -100,12 +88,7 @@ export function BranvilConnection() {
             </Button>
           </>
         ) : (
-          <Button
-            size="compact-sm"
-            loading={pending}
-            disabled={!ORIGIN.test(baseUrl)}
-            onClick={() => void connect()}
-          >
+          <Button size="compact-sm" loading={pending} onClick={() => void connect()}>
             {t("setup.branvil.connection.connect")}
           </Button>
         )}
