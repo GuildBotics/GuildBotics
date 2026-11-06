@@ -28,6 +28,16 @@ impl fmt::Display for StaleConfigWriteError {
     }
 }
 impl std::error::Error for StaleConfigWriteError {}
+/// A revision names a path outside the config directory: the request is
+/// wrong, not the screen it came from.
+#[derive(Debug)]
+pub struct InvalidRevisionPath(pub String);
+impl fmt::Display for InvalidRevisionPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for InvalidRevisionPath {}
 pub struct ConfigSnapshot {
     pub relative_path: String,
     pub path: PathBuf,
@@ -40,6 +50,7 @@ impl ConfigSnapshot {
             .map_err(|_| anyhow::anyhow!("invalid config YAML: {}", self.relative_path))
     }
 }
+#[derive(Debug)]
 pub struct ConfigWriteReceipt<T> {
     pub result: T,
     pub revisions: Revisions,
@@ -65,6 +76,10 @@ impl ConfigRepository {
     ) -> anyhow::Result<crate::secrets::SecretStore<'a>> {
         crate::secrets::SecretStore::new(&self.writes, crate::secrets::Scope::Identity, device)
     }
+    /// The machine's identity root, whose config holds the members' identities.
+    pub fn identity_root(&self) -> &Path {
+        &self.writes.identity
+    }
     /// The identity repository shares the same outer lock as this workspace.
     pub fn identity_view(&self) -> ConfigView {
         ConfigView {
@@ -85,6 +100,12 @@ impl ConfigRepository {
     pub fn read_config(&self, path: &str) -> anyhow::Result<Option<ConfigSnapshot>> {
         self.view.read_config(path)
     }
+    /// The workspace's config, read without a lock: a reader that reports
+    /// revisions takes them from the very bytes it read, so a later save
+    /// from what it read is compared against what it saw.
+    pub fn view(&self) -> &ConfigView {
+        &self.view
+    }
     pub fn revisions(&self, paths: &[&str]) -> anyhow::Result<Revisions> {
         self.writes.transaction(|_| self.view.revisions(paths))
     }
@@ -97,38 +118,49 @@ impl ConfigRepository {
         apply: impl FnOnce(&ConfigView, &mut Writer<'_>) -> anyhow::Result<T>,
         report: impl FnOnce(&ConfigView) -> anyhow::Result<Revisions>,
     ) -> anyhow::Result<ConfigWriteReceipt<T>> {
-        let paths: Vec<_> = expected.keys().map(String::as_str).collect();
-        self.write_checked(expected, &[], &paths, apply, report)
+        self.write_checked(expected, &[], apply, report)
     }
-    /// Compare both roots in one transaction. An omitted required path must
-    /// not exist. Names must be disjoint because receipts use relative paths.
+    /// Compares, in one transaction with both roots locked, the revisions
+    /// `expected` names: those of `identity_paths` in the identity root,
+    /// every other one in the workspace's, as the Python version's nested
+    /// writes compare them. A path left out is not compared, and an empty
+    /// revision says the path must not exist.
     pub fn write_checked<T>(
         &self,
         expected: &Revisions,
         identity_paths: &[&str],
-        workspace_paths: &[&str],
         apply: impl FnOnce(&ConfigView, &mut Writer<'_>) -> anyhow::Result<T>,
         report: impl FnOnce(&ConfigView) -> anyhow::Result<Revisions>,
     ) -> anyhow::Result<ConfigWriteReceipt<T>> {
-        anyhow::ensure!(
-            !identity_paths.iter().any(|p| workspace_paths.contains(p)),
-            "revision paths overlap across roots"
-        );
+        let identity_view = self.identity_view();
+        let root = |path: &str| {
+            if identity_paths.contains(&path) {
+                &identity_view
+            } else {
+                &self.view
+            }
+        };
+        for path in expected.keys() {
+            let name = path.strip_suffix('/').unwrap_or(path);
+            root(path)
+                .path(name)
+                .map_err(|reason| InvalidRevisionPath(format!("{path}: {reason}")))?;
+        }
         self.writes.transaction(|writer| {
-            let mut current = self.identity_view().revisions(identity_paths)?;
-            current.extend(self.view.revisions(workspace_paths)?);
-            for path in identity_paths.iter().chain(workspace_paths) {
-                if current.get(*path).map(String::as_str)
-                    != Some(expected.get(*path).map(String::as_str).unwrap_or(""))
+            // The identity root first, as the Python version's outer write;
+            // a refusal answers the revisions of the root it was refused in.
+            for identity in [true, false] {
+                let mut current = Revisions::new();
+                for path in expected.keys() {
+                    if identity_paths.contains(&path.as_str()) == identity {
+                        current.extend(root(path).revisions(&[path])?);
+                    }
+                }
+                if let Some((path, _)) = current.iter().find(|(path, now)| expected[*path] != **now)
                 {
-                    let root = if identity_paths.contains(path) {
-                        "identity/config"
-                    } else {
-                        "config"
-                    };
                     return Err(StaleConfigWriteError {
-                        relative_path: format!("{root}/{}", path.trim_end_matches('/')),
-                        revisions: current,
+                        relative_path: format!("config/{}", path.trim_end_matches('/')),
+                        revisions: current.clone(),
                     }
                     .into());
                 }

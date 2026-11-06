@@ -61,29 +61,19 @@ impl<'a> ServiceIntegrationFactory<'a> {
         }
     }
     fn secret(&self, name: &str) -> Result<String, ServiceError> {
-        let prefix = self.config.person_id.replace('-', "_").to_uppercase() + "_";
-        let members = self
-            .secrets
-            .identity_root()
-            .join(".guildbotics/config/team/members");
-        let entries = match std::fs::read_dir(members) {
-            Ok(entries) => Some(entries),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => return Err(ServiceError::Failed),
-        };
-        for entry in entries.into_iter().flatten() {
-            let entry = entry.map_err(|_| ServiceError::Failed)?;
-            if !entry.path().is_dir() || !entry.path().join("identity.yml").is_file() {
-                continue;
-            }
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if id != self.config.person_id && id.replace('-', "_").to_uppercase() + "_" == prefix {
-                return Err(ServiceError::CredentialPrefixConflict {
-                    member: self.config.person_id.clone(),
-                    conflicting_member: id,
-                });
-            }
-        }
+        let prefix = gb_config::team::person_secret_prefix(
+            self.secrets.identity_root(),
+            &self.config.person_id,
+        )
+        .map_err(
+            |error| match error.downcast::<gb_config::team::PrefixConflict>() {
+                Ok(conflict) => ServiceError::CredentialPrefixConflict {
+                    member: conflict.person_id,
+                    conflicting_member: conflict.conflicting.join(", "),
+                },
+                Err(_) => ServiceError::Failed,
+            },
+        )?;
         self.secrets
             .get(&(prefix + name))
             .map(|s| s.unwrap_or_default())
@@ -93,11 +83,7 @@ impl<'a> ServiceIntegrationFactory<'a> {
         let value = self.secret(name)?;
         if value.is_empty() {
             Err(ServiceError::MissingCredential {
-                name: format!(
-                    "{}_{}",
-                    self.config.person_id.replace('-', "_").to_uppercase(),
-                    name
-                ),
+                name: gb_config::team::person_secret_name(&self.config.person_id, name),
             })
         } else {
             Ok(value)
@@ -171,9 +157,9 @@ impl<'a> ServiceIntegrationFactory<'a> {
                     self.observer.clone(),
                 )
                 .with_member(self.config.person_id.clone())
-                .with_token_name(format!(
-                    "{}_SLACK_BOT_TOKEN",
-                    self.config.person_id.replace('-', "_").to_uppercase()
+                .with_token_name(gb_config::team::person_secret_name(
+                    &self.config.person_id,
+                    "SLACK_BOT_TOKEN",
                 )),
             )),
             _ => Err(Self::unsupported_provider(

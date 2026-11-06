@@ -178,6 +178,91 @@ pub fn validate_mount_source(path: &Path, access: &Resolved) -> Result<PathBuf, 
     Ok(source)
 }
 
+/// A directory that cannot hold a workspace: it is inside `granted`, a
+/// directory the workspace's commands are given (the exchange directory
+/// among them), or not a directory name that opens without a link.
+#[derive(Debug, PartialEq)]
+pub enum LocationRefused {
+    Unsafe(String),
+    Granted { path: PathBuf, granted: PathBuf },
+}
+
+/// Refuses workspace state inside its own grants or the exchange directory,
+/// as the Python version's `validate_workspace_location`. The grants are
+/// read leniently: selecting a workspace is how its configuration is
+/// repaired, and never authorizes running anything in it.
+pub fn workspace_location(workspace: &Path, home: &Path) -> Result<PathBuf, LocationRefused> {
+    let path = gb_base::host_path::directory(workspace, true)
+        .map_err(|e| LocationRefused::Unsafe(e.to_string()))?;
+    let home =
+        gb_base::host_path::normalize(home).map_err(|e| LocationRefused::Unsafe(e.to_string()))?;
+    let mut granted = vec![home.join("Documents/GuildBotics")];
+    let shared: Shared =
+        load(&path.join(".guildbotics/config/intelligences").join(FILE)).unwrap_or_default();
+    let local: Local = load(&path.join(".guildbotics/local").join(FILE)).unwrap_or_default();
+    granted.extend(
+        shared
+            .documents
+            .iter()
+            .filter_map(|g| target(&g.path, &home, false).ok()),
+    );
+    granted.extend(
+        local
+            .paths
+            .iter()
+            .filter_map(|g| target(&g.path, &home, true).ok()),
+    );
+    let exchange = granted[0].clone();
+    for granted in granted {
+        // An exchange directory that cannot be inspected cannot be ruled out.
+        let inside = contains(&granted, &path).or_else(|e| {
+            if granted == exchange {
+                Err(LocationRefused::Unsafe(format!(
+                    "{}: {e}",
+                    granted.display()
+                )))
+            } else {
+                Ok(false)
+            }
+        })?;
+        if inside {
+            return Err(LocationRefused::Granted { path, granted });
+        }
+    }
+    Ok(path)
+}
+
+/// Whether `path` is `granted` or under it, by its spelling or by the
+/// identity of the directories it goes through: another spelling of the
+/// same directory (a link, or another letter case on a file system that
+/// ignores it) is the same directory.
+fn contains(granted: &Path, path: &Path) -> std::io::Result<bool> {
+    if path.starts_with(granted) {
+        return Ok(true);
+    }
+    let directory = match std::fs::metadata(granted) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let identity = (directory.dev(), directory.ino());
+        Ok(path.ancestors().any(|ancestor| {
+            std::fs::metadata(ancestor).is_ok_and(|m| (m.dev(), m.ino()) == identity)
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        let granted = std::fs::canonicalize(granted)?;
+        Ok(path
+            .ancestors()
+            .any(|ancestor| std::fs::canonicalize(ancestor).is_ok_and(|a| a == granted)))
+    }
+}
+
 pub fn resolve(
     workspace: &Path,
     home: &Path,

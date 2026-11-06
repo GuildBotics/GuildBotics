@@ -79,6 +79,13 @@ async fn start(
     request: RunRequest,
 ) -> Result<Response, Response> {
     let error = |status, code| ApiError::new(status, code, headers);
+    // Admitted for the selected workspace, which cannot be switched until
+    // the run is the server's work.
+    let admitted = api
+        .switching
+        .try_read()
+        .map_err(|_| error(StatusCode::CONFLICT, "command_workspace_changing").into_response())?;
+    let selected = api.selected();
     if request.command.is_empty() {
         return Err(error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error").into_response());
     }
@@ -90,7 +97,7 @@ async fn start(
     // The run is accepted for the workspace it was asked for before anything
     // is derived from it.
     if let Some(expected) = &request.expected_workspace {
-        let same = api.workspace.as_ref().is_some_and(|workspace| {
+        let same = selected.workspace.as_ref().is_some_and(|workspace| {
             std::fs::canonicalize(expected)
                 .ok()
                 .zip(std::fs::canonicalize(workspace).ok())
@@ -100,12 +107,13 @@ async fn start(
             return Err(error(StatusCode::CONFLICT, "command_workspace_changed").into_response());
         }
     }
-    let Some(workspace) = &api.workspace else {
+    let Some(workspace) = &selected.workspace else {
         return Err(error(StatusCode::BAD_REQUEST, "config_not_found")
             .context(json!({"path": ""}))
             .into_response());
     };
     let home = api
+        .selected()
         .service
         .host()
         .map(|host| host.home.clone())
@@ -129,7 +137,7 @@ async fn start(
         })?,
         None => home.join(EXCHANGE_DIRECTORY),
     };
-    let host = match api.service.host() {
+    let host = match selected.service.host() {
         Some(host) => host,
         None => std::sync::Arc::new(gb_environment::Host {
             data: api.data.clone(),
@@ -251,7 +259,7 @@ async fn start(
     let (name, person_id) = (request.command, person.person_id.clone());
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let inputs = api.inputs.mount_if_available().await;
-    let member = api.member.clone();
+    let member = selected.member.clone();
     let mut admission = crate::execution::Admission {
         generation: None,
         command: name.clone(), workspace: workspace.clone(),
@@ -263,6 +271,7 @@ async fn start(
         exclusive: !command.access.read_only, record_start: true, cleanup: api.work.clone(),
     };
     let work = api
+        .selected()
         .service
         .execution
         .spawn(move |generation| async move {
@@ -335,6 +344,7 @@ async fn start(
         .map_err(|_| error(StatusCode::CONFLICT, "work_rejected").into_response())?;
     // The server still owns a caller-disconnected request's manual work.
     let work = api.work.spawn(work);
+    drop(admitted);
 
     let ran = match work.await {
         Ok(Ok(Ok(Some(ran)))) => ran,
@@ -382,10 +392,12 @@ async fn manual_ticket(
     use crate::{dispatcher::DispatchFailure, workflow_runtime::Refused};
     let error = |status, code| ApiError::new(status, code, headers);
     let mut runtime = api
+        .selected()
         .service
         .workflow(person, api.work.clone())
         .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
     let work = api
+        .selected()
         .service
         .execution
         .spawn(move |generation| async move {
@@ -640,17 +652,17 @@ mod tests {
         });
         let count = Arc::new(AtomicUsize::new(0));
         let factory = crate::keep_awake::test_count(&workspace, count.clone());
-        let api = Arc::new(crate::api::Api {
-            service: crate::service_runtime::Controller::new(native.clone(), host),
-            member: None,
-            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            auth: crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            instance_id: "fixture".into(),
-            data: native.data,
-            workspace: Some(workspace),
-            work: Default::default(),
-            cancelled: Default::default(),
-        });
+        let api = Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(workspace),
+                service: crate::service_runtime::Controller::new(native.clone(), host),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            "fixture".into(),
+            native.data,
+        ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let response = crate::api::router(api.clone())
             .oneshot(

@@ -262,15 +262,24 @@ impl Controller {
 pub(crate) async fn status(
     axum::extract::State(api): axum::extract::State<crate::api::Shared>,
 ) -> axum::Json<serde_json::Value> {
-    axum::Json(api.service.view().await)
+    axum::Json(api.selected().service.view().await)
 }
 pub(crate) async fn start(
     axum::extract::State(api): axum::extract::State<crate::api::Shared>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match api.service.start().await {
-        Ok(_) => axum::Json(api.service.view().await).into_response(),
+    let Some(_admitted) = api.admit() else {
+        return crate::api::ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "command_workspace_changing",
+            &headers,
+        )
+        .into_response();
+    };
+    let selected = api.selected();
+    match selected.service.start().await {
+        Ok(_) => axum::Json(selected.service.view().await).into_response(),
         Err(error) => {
             tracing::error!("cannot start service: {error:#}");
             if let Some(held) = error.downcast_ref::<crate::service::AlreadyRunning>() {
@@ -298,7 +307,7 @@ pub(crate) async fn start(
                 )
                 .into_response();
             }
-            startup_error(&error, api.workspace.is_some(), &headers).into_response()
+            startup_error(&error, api.selected().workspace.is_some(), &headers).into_response()
         }
     }
 }
@@ -343,8 +352,8 @@ pub(crate) async fn stop(
     axum::extract::State(api): axum::extract::State<crate::api::Shared>,
     crate::api::Body(request): crate::api::Body<Stop>,
 ) -> axum::Json<serde_json::Value> {
-    api.service.stop(request.force).await;
-    axum::Json(api.service.view().await)
+    api.selected().service.stop(request.force).await;
+    axum::Json(api.selected().service.view().await)
 }
 
 pub struct NativeWorker {

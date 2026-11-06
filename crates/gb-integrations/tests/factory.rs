@@ -18,6 +18,16 @@ impl Keychain for FakeKeychain {
         Ok(())
     }
 }
+/// A keychain the test fails on if anything reads it.
+struct Untouchable;
+impl Keychain for Untouchable {
+    fn read(&self) -> anyhow::Result<Option<String>> {
+        panic!("the keychain must not be read")
+    }
+    fn create(&self, _: &str) -> anyhow::Result<()> {
+        panic!("the keychain must not be created")
+    }
+}
 fn config(root: &std::path::Path) -> IntegrationConfig {
     IntegrationConfig {
         local_root: root.join("services"),
@@ -203,6 +213,26 @@ fn member_scoped_secrets_and_collision_withholding() {
     c.identity_root = d.path().join("unrelated-root");
     let collision = ServiceIntegrationFactory::new(c, &secrets, None, Arc::new(|_| {})).unwrap();
     let error = collision.listener_key().unwrap_err();
+    // The collision is found before any secret is read: a store whose
+    // keychain cannot be touched answers the same.
+    let untouchable = SecretStore::new(
+        &writes,
+        Scope::Identity,
+        DeviceKey {
+            machine_root: d.path().join("machine"),
+            keychain: &Untouchable,
+        },
+    )
+    .unwrap();
+    let mut colliding = config(d.path());
+    colliding.chat_provider = "slack".into();
+    colliding.person_id = "aiko-bob".into();
+    let refused =
+        ServiceIntegrationFactory::new(colliding, &untouchable, None, Arc::new(|_| {})).unwrap();
+    assert!(matches!(
+        refused.listener_key(),
+        Err(ServiceError::CredentialPrefixConflict { .. })
+    ));
     assert_eq!(
         error,
         ServiceError::CredentialPrefixConflict {

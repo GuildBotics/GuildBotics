@@ -274,3 +274,215 @@ fn existing_symlink_ancestors_decide_the_lock_scope() {
         "{\n  \"a\": 0,\n  \"z\": {\n    \"a\": \"名\",\n    \"b\": 1\n  }\n}\n"
     );
 }
+
+/// Every way a writer changes a file, applied to `path` (a directory
+/// `tree` for the removal of one).
+#[allow(clippy::type_complexity)]
+fn every_change<'a>(
+    path: &'a Path,
+    tree: &'a Path,
+) -> Vec<(
+    &'static str,
+    Box<dyn Fn(&mut Writer<'_>) -> anyhow::Result<()> + 'a>,
+)> {
+    vec![
+        ("write_bytes", Box::new(move |w| w.write_bytes(path, b"x"))),
+        ("write_text", Box::new(move |w| w.write_text(path, "x"))),
+        ("write_json", Box::new(move |w| w.write_json(path, &1))),
+        ("delete", Box::new(move |w| w.delete(path))),
+        ("remove_tree", Box::new(move |w| w.remove_tree(tree))),
+        ("append_text", Box::new(move |w| w.append_text(path, "x"))),
+        (
+            "update_text",
+            Box::new(move |w| w.update_text(path, |_| Ok(Some("x".into()))).map(drop)),
+        ),
+        (
+            "update_json",
+            Box::new(move |w| {
+                w.update_json(path, |_| Ok(Some(serde_json::json!(1))))
+                    .map(drop)
+            }),
+        ),
+    ]
+}
+
+#[test]
+fn every_change_waits_for_the_other_writer_and_succeeds_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let writes = writes(dir.path());
+    let workspace = writes.workspace.clone().unwrap();
+    let path = workspace.join(".guildbotics/state/a.json");
+    let tree = workspace.join(".guildbotics/state/tree");
+    let local = workspace.join(".guildbotics/local/a");
+    {
+        let _held = FileLock::hold(
+            &writes
+                .identity
+                .join(".guildbotics/local/run/shared-write.lock"),
+            Duration::ZERO,
+        )
+        .unwrap();
+        for (name, change) in every_change(&path, &tree) {
+            let called = std::cell::Cell::new(false);
+            let refused = writes
+                .at(&path, |w| {
+                    called.set(true);
+                    change(w)
+                })
+                .unwrap_err();
+            assert!(refused.is::<SharedWriteBusyError>(), "{name}");
+            assert!(
+                !called.get(),
+                "{name}: nothing is read or written while waiting"
+            );
+            // A writer for a device-local path cannot reach a shared one.
+            assert!(writes.at(&local, |w| change(w)).is_err(), "{name}");
+            assert!(!path.exists() && !tree.exists(), "{name}");
+        }
+    }
+    for (name, change) in every_change(&path, &tree) {
+        fs::create_dir_all(tree.join("child")).unwrap();
+        fs::write(&path, "1").unwrap();
+        writes
+            .at(&path, |w| change(w))
+            .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+    }
+    writes
+        .at(&path, |w| {
+            w.write_text(&path, "a")?;
+            w.update_text(&path, |_| Ok(None))
+        })
+        .unwrap();
+    assert!(
+        !path.exists(),
+        "a rewrite answering nothing removes the file"
+    );
+}
+
+#[test]
+fn a_shared_target_under_a_missing_parent_stays_locked_and_is_created_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let writes = writes(dir.path());
+    let workspace = writes.workspace.clone().unwrap();
+    let path = workspace.join(".guildbotics/state/new/thing.json");
+    assert_eq!(
+        shared_relative_path(&path, Some(&workspace))
+            .unwrap()
+            .unwrap(),
+        Path::new("state/new/thing.json")
+    );
+    {
+        let _held = FileLock::hold(
+            &writes
+                .identity
+                .join(".guildbotics/local/run/shared-write.lock"),
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert!(
+            writes
+                .at(&path, |w| w.write_json(&path, &1))
+                .unwrap_err()
+                .is::<SharedWriteBusyError>()
+        );
+        assert!(!path.parent().unwrap().exists());
+    }
+    writes.at(&path, |w| w.write_json(&path, &1)).unwrap();
+    writes
+        .at(&path, |w| {
+            w.update_json(&path, |old| {
+                Ok(Some(serde_json::json!(old.unwrap().as_u64().unwrap() + 1)))
+            })
+        })
+        .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "2\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_ancestor_or_file_stops_before_writing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let writes = writes(dir.path());
+    let state = writes.workspace.clone().unwrap().join(".guildbotics/state");
+    fs::create_dir_all(state.join("locked")).unwrap();
+    fs::write(state.join("regular"), "file").unwrap();
+    fs::set_permissions(state.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    for (path, kind) in [
+        (
+            state.join("locked/child/a.json"),
+            std::io::ErrorKind::PermissionDenied,
+        ),
+        (
+            state.join("regular/a.json"),
+            std::io::ErrorKind::NotADirectory,
+        ),
+    ] {
+        let error = writes.at(&path, |w| w.write_json(&path, &1)).unwrap_err();
+        assert!(
+            !error.is::<SharedWriteBusyError>(),
+            "{}: {error:#}",
+            path.display()
+        );
+        let io = error
+            .chain()
+            .find_map(|e| e.downcast_ref::<std::io::Error>())
+            .unwrap_or_else(|| panic!("{error:#}"));
+        assert_eq!(io.kind(), kind, "{}", path.display());
+    }
+    fs::set_permissions(state.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!state.join("locked/child").exists());
+    let unreadable = state.join("unreadable.json");
+    fs::write(&unreadable, "{}").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = writes.at(&unreadable, |w| {
+        assert!(
+            w.update_text(&unreadable, |_| panic!("apply must not run"))
+                .is_err()
+        );
+        assert!(
+            w.update_json(&unreadable, |_| panic!("apply must not run"))
+                .is_err()
+        );
+        Ok(())
+    });
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+    refused.unwrap();
+    assert_eq!(fs::read_to_string(&unreadable).unwrap(), "{}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_to_a_shared_file_keeps_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let writes = writes(dir.path());
+    let state = writes.workspace.clone().unwrap().join(".guildbotics/state");
+    fs::create_dir_all(&state).unwrap();
+    let alias = dir.path().join("alias.jsonl");
+    std::os::unix::fs::symlink(state.join("new.jsonl"), &alias).unwrap();
+    assert!(
+        shared_relative_path(&alias, writes.workspace.as_deref())
+            .unwrap()
+            .is_some()
+    );
+    {
+        let _held = FileLock::hold(
+            &writes
+                .identity
+                .join(".guildbotics/local/run/shared-write.lock"),
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert!(
+            writes
+                .at(&alias, |w| w.append_text(&alias, "{}\n"))
+                .unwrap_err()
+                .is::<SharedWriteBusyError>()
+        );
+        assert!(!state.join("new.jsonl").exists());
+    }
+    writes
+        .at(&alias, |w| w.append_text(&alias, "{}\n"))
+        .unwrap();
+    assert_eq!(fs::read_to_string(state.join("new.jsonl")).unwrap(), "{}\n");
+}

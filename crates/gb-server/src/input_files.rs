@@ -625,17 +625,13 @@ mod tests {
     }
 
     fn api(root: &Path) -> Shared {
-        std::sync::Arc::new(crate::api::Api {
-            service: Default::default(),
-            member: None,
-            inputs: InputFileStore::deferred(&root.join("command_inputs")),
-            auth: crate::auth::ServerAuth::open(root, 8765).unwrap(),
-            instance_id: "fixture".into(),
-            data: root.into(),
-            workspace: None,
-            work: tokio_util::task::TaskTracker::new(),
-            cancelled: tokio_util::sync::CancellationToken::new(),
-        })
+        std::sync::Arc::new(crate::api::Api::new(
+            Default::default(),
+            InputFileStore::deferred(&root.join("command_inputs")),
+            crate::auth::ServerAuth::open(root, 8765).unwrap(),
+            "fixture".into(),
+            root.into(),
+        ))
     }
 
     async fn request(

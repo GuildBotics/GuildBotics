@@ -210,13 +210,19 @@ async fn start(
     describe: bool,
     exchange: Option<Exchange>,
 ) -> Response {
-    let Some(backend) = api.member.clone() else {
+    // Held until the run ends: the workspace it runs for stays selected.
+    let Some(admitted) = api.admit() else {
+        return ApiError::new(StatusCode::CONFLICT, "command_workspace_changing", &headers)
+            .into_response();
+    };
+    let Some(backend) = api.selected().member.clone() else {
         return ApiError::new(StatusCode::CONFLICT, "member_workspace_mismatch", &headers)
             .key(
                 "member_workspace_mismatch",
                 vec![(
                     "workspace",
-                    api.workspace
+                    api.selected()
+                        .workspace
                         .as_ref()
                         .map(|path| path.display().to_string())
                         .unwrap_or_else(|| "—".into()),
@@ -235,7 +241,8 @@ async fn start(
                 if key == "member_workspace_mismatch" {
                     vec![(
                         "workspace",
-                        api.workspace
+                        api.selected()
+                            .workspace
                             .as_ref()
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|| "—".into()),
@@ -266,6 +273,7 @@ async fn start(
     let timeout = backend.timeout;
     let (send, receive) = tokio::sync::oneshot::channel();
     api.work.spawn(async move {
+        let _admitted = admitted;
         let outgoing = exchange.temporary.path().join("out.bundle");
         let mut result = backend
             .executor
@@ -360,29 +368,28 @@ mod tests {
     fn api(root: &Path, delay: bool) -> (Shared, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
         (
-            Arc::new(crate::api::Api {
-                service: Default::default(),
-                member: Some(Arc::new(Backend {
-                    version: "build-1".into(),
-                    workspace_id: "workspace".into(),
-                    executor: Arc::new(Echo {
-                        calls: calls.clone(),
-                        delay,
-                    }),
-                    timeout: if delay {
-                        Duration::from_millis(1)
-                    } else {
-                        Duration::from_secs(30)
-                    },
-                })),
-                inputs: crate::input_files::InputFileStore::deferred(&root.join("inputs")),
-                auth: crate::auth::ServerAuth::open(root, 8765).unwrap(),
-                instance_id: "fixture".into(),
-                data: root.into(),
-                workspace: None,
-                work: tokio_util::task::TaskTracker::new(),
-                cancelled: tokio_util::sync::CancellationToken::new(),
-            }),
+            Arc::new(crate::api::Api::new(
+                crate::api::Selected {
+                    member: Some(Arc::new(Backend {
+                        version: "build-1".into(),
+                        workspace_id: "workspace".into(),
+                        executor: Arc::new(Echo {
+                            calls: calls.clone(),
+                            delay,
+                        }),
+                        timeout: if delay {
+                            Duration::from_millis(1)
+                        } else {
+                            Duration::from_secs(30)
+                        },
+                    })),
+                    ..Default::default()
+                },
+                crate::input_files::InputFileStore::deferred(&root.join("inputs")),
+                crate::auth::ServerAuth::open(root, 8765).unwrap(),
+                "fixture".into(),
+                root.into(),
+            )),
             calls,
         )
     }
@@ -557,9 +564,13 @@ mod tests {
     async fn mismatched_workspace_and_shutdown_return_localized_restart_guidance() {
         for language in ["en", "ja"] {
             let temp = tempfile::tempdir().unwrap();
-            let (mut api, _) = api(temp.path(), false);
+            let (api, _) = api(temp.path(), false);
             let selected = temp.path().join("selected-workspace");
-            Arc::get_mut(&mut api).unwrap().workspace = Some(selected.clone());
+            api.select(crate::api::Selected {
+                workspace: Some(selected.clone()),
+                member: api.selected().member.clone(),
+                ..Default::default()
+            });
             let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
             let body = json!({"version":"build-1","workspace_id":"other","arguments":["help"]});
             let response = crate::api::router(api.clone())
@@ -597,15 +608,18 @@ mod tests {
             for selected in [false, true] {
                 for path in ["/api/member/plan", "/api/member/run"] {
                     let temp = tempfile::tempdir().unwrap();
-                    let (mut api, _) = api(temp.path(), false);
-                    Arc::get_mut(&mut api).unwrap().member = None;
+                    let (api, _) = api(temp.path(), false);
+                    api.select(Default::default());
                     let expected = if selected {
                         temp.path().display().to_string()
                     } else {
                         "—".into()
                     };
                     if selected {
-                        Arc::get_mut(&mut api).unwrap().workspace = Some(temp.path().into());
+                        api.select(crate::api::Selected {
+                            workspace: Some(temp.path().into()),
+                            ..Default::default()
+                        });
                     }
                     let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
                     let response = crate::api::router(api)

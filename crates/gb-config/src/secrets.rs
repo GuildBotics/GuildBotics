@@ -140,6 +140,7 @@ impl Keychain for SystemKeychain {
 }
 
 /// Explicit roots keep the machine key lock separate from workspace state.
+#[derive(Clone)]
 pub struct DeviceKey<'a> {
     pub machine_root: PathBuf,
     pub keychain: &'a dyn Keychain,

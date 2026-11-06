@@ -9,8 +9,10 @@ pub mod chat_receiver;
 pub mod chat_state;
 pub mod client;
 mod commands;
+mod config_api;
 pub mod dispatcher;
 pub mod environment;
+pub mod events;
 pub mod execution;
 pub mod host_window;
 mod i18n;
@@ -26,6 +28,7 @@ mod server;
 pub mod service;
 pub mod service_runtime;
 pub mod service_settings;
+mod setup_providers;
 #[cfg(test)]
 mod test_chat;
 #[cfg(test)]

@@ -83,6 +83,25 @@ impl Trace {
             "command":self.command,"workflow":self.workflow,"attributes":self.attributes})
     }
 
+    /// The correlation an event of the server's event bus carries: the
+    /// trace's, and its span's without the call id.
+    pub fn event_fields(&self) -> Map<String, Value> {
+        let Value::Object(fields) = json!({
+            "trace_id": self.id,
+            "span_id": self.span.as_ref().map(|s| &s.id),
+            "parent_id": self.span.as_ref().and_then(|s| s.parent_id.as_ref()),
+            "span": self.span.as_ref().map(|s| s.name.as_str()).unwrap_or(""),
+            "source": self.source,
+            "person_id": self.person_id,
+            "command": self.command,
+            "workflow": self.workflow,
+            "attributes": self.attributes,
+        }) else {
+            unreachable!("an object")
+        };
+        fields
+    }
+
     /// Adds an attribute every record of the trace carries; a null adds none.
     pub fn attribute(mut self, key: &str, value: impl Into<Value>) -> Trace {
         match value.into() {

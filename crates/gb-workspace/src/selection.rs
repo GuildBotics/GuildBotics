@@ -92,8 +92,8 @@ fn read_active(data: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(workspace.is_dir().then_some(workspace))
 }
 
-/// The workspaces this machine has opened.
-fn registered(data: &Path) -> anyhow::Result<Vec<PathBuf>> {
+/// The workspaces this machine has opened, in the order it opened them.
+pub fn registered(data: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let path = data.join(REGISTRY_FILE);
     let Some(bytes) = files::read_if_present(&path)? else {
         return Ok(Vec::new());
@@ -109,22 +109,62 @@ fn registered(data: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// Remembers `workspace` in the machine's registry.
 pub fn register(data: &Path, workspace: &Path) -> anyhow::Result<()> {
     let workspace = host_path::directory(workspace, true)?;
+    update_registry(data, |locations| {
+        if locations.contains(&workspace) {
+            return false;
+        }
+        locations.push(workspace);
+        true
+    })
+    .map(|_| ())
+}
+
+/// Forgets `workspace`, named as it was registered, without reaching it:
+/// a registration may name a path that no longer opens. Nothing on disk
+/// but the registry changes. The workspaces left are answered.
+pub fn unregister(data: &Path, workspace: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let workspace = host_path::normalize(workspace)?;
+    update_registry(data, |locations| {
+        locations.retain(|location| *location != workspace);
+        true
+    })
+}
+
+/// Changes the registry under its lock; `apply` says whether to write it.
+fn update_registry(
+    data: &Path,
+    apply: impl FnOnce(&mut Vec<PathBuf>) -> bool,
+) -> anyhow::Result<Vec<PathBuf>> {
     let data = host_path::directory(data, true)?;
     let data = data.as_path();
     let _lock = FileLock::hold(&data.join(REGISTRY_LOCK), REGISTRY_TIMEOUT)?;
     let mut locations = registered(data)?;
-    if locations.contains(&workspace) {
-        return Ok(());
+    if apply(&mut locations) {
+        // As `json.dumps` writes a list: one space after each comma.
+        let names: Vec<String> = locations
+            .iter()
+            .map(|p| serde_json::to_string(&p.to_string_lossy()).expect("a string is JSON"))
+            .collect();
+        files::atomic_write(
+            &data.join(REGISTRY_FILE),
+            format!("[{}]\n", names.join(", ")).as_bytes(),
+        )?;
     }
-    locations.push(workspace);
-    // As `json.dumps` writes a list: one space after each comma.
-    let names: Vec<String> = locations
-        .iter()
-        .map(|p| serde_json::to_string(&p.to_string_lossy()).expect("a string is JSON"))
-        .collect();
+    Ok(locations)
+}
+
+/// Selects `workspace`, a directory, on this machine: registered, and the
+/// one a server opens from now on.
+pub fn select(data: &Path, workspace: &Path) -> anyhow::Result<()> {
+    let workspace = host_path::directory(workspace, false)?;
+    register(data, &workspace)?;
+    let state = serde_json::json!({
+        "workspace": workspace,
+        "config_dir": workspace.join(".guildbotics/config"),
+    });
     files::atomic_write(
-        &data.join(REGISTRY_FILE),
-        format!("[{}]\n", names.join(", ")).as_bytes(),
+        &data.join(ACTIVE_FILE),
+        (serde_json::to_string_pretty(&state)? + "\n").as_bytes(),
     )?;
     Ok(())
 }

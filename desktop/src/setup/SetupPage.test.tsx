@@ -1690,12 +1690,7 @@ function memberConfig(): MemberConfig {
 }
 
 function configWriteResponse(revisions: Record<string, string> = {}) {
-  return {
-    revisions,
-    project: null,
-    member: null,
-    intelligence: null,
-  };
+  return { revisions };
 }
 
 type ProjectFormValues = Parameters<typeof toProjectSetupRequest>[0];

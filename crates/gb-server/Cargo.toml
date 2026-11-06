@@ -35,6 +35,7 @@ gb-ports = { path = "../gb-ports" }
 branvil = { path = "../branvil" }
 gb-environment = { path = "../gb-environment" }
 gb-observability = { path = "../gb-observability" }
+gb-setup = { path = "../gb-setup" }
 gb-wire = { path = "../gb-wire" }
 gb-workspace = { path = "../gb-workspace" }
 loopback-auth = { path = "../loopback-auth" }

@@ -1077,9 +1077,6 @@ export type IntelligenceConfigUpdateRequest = {
 export type ConfigWriteResponse = {
   /** Where the written files now stand, for the next save from this screen. */
   revisions: ConfigRevisions;
-  project: { files: Array<{ path: string; action: string }> } | null;
-  member: { files: Array<{ path: string; action: string }> } | null;
-  intelligence?: { files: Array<{ path: string; action: string }> } | null;
 };
 
 export type ApiErrorPayload = {

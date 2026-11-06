@@ -3,12 +3,12 @@
 
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gb_base::files::FileLock;
 
-use crate::api::{self, Api};
+use crate::api::{self, Api, Selected};
 use crate::auth::ServerAuth;
 use crate::i18n;
 
@@ -100,22 +100,15 @@ impl Server {
                 tracing::error!("cannot open the selected workspace: {e:#}");
                 None
             });
-        let work = tokio_util::task::TaskTracker::new();
-        let member = workspace
-            .as_ref()
-            .and_then(|workspace| member_backend(workspace, &data, &work, None));
-        let api = Arc::new(Api {
-            service: service_controller(workspace.as_deref(), &data),
-            member,
-            inputs: crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
-            instance_id: loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
+            loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
-            workspace,
-            work,
-            cancelled: tokio_util::sync::CancellationToken::new(),
-        });
-        if let Some(workspace) = &api.workspace {
+        ));
+        api.select(Selected::open(workspace, &api, None));
+        if let Some(workspace) = &api.selected().workspace {
             let diagnostics = gb_observability::Diagnostics::open(workspace);
             let instance = api.instance_id.clone();
             if let Err(e) =
@@ -132,12 +125,13 @@ impl Server {
         })
     }
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
-        let api =
-            Arc::get_mut(&mut self.api).ok_or_else(|| anyhow::anyhow!("server already shared"))?;
-        if let Some(workspace) = &api.workspace {
-            api.member = member_backend(workspace, &api.data, &api.work, Some(branvil.clone()));
-            api.service.attach_branvil(branvil);
-        }
+        let workspace = self.api.selected().workspace.clone();
+        self.api
+            .branvil
+            .set(branvil.clone())
+            .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
+        self.api
+            .select(Selected::open(workspace, &self.api, Some(branvil)));
         Ok(())
     }
 
@@ -152,10 +146,13 @@ impl Server {
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
         let autostart_api = self.api.clone();
         let autostart = tokio::spawn(async move {
-            if let Some(workspace) = &autostart_api.workspace {
+            // Waits out a switch, then starts the service of what is selected.
+            let _admitted = autostart_api.switching.clone().read_owned().await;
+            let selected = autostart_api.selected();
+            if let Some(workspace) = &selected.workspace {
                 match crate::service_settings::Settings::read(workspace) {
                     Ok(settings) if settings.start_with_server => {
-                        if let Err(error) = autostart_api.service.start().await {
+                        if let Err(error) = selected.service.start().await {
                             tracing::error!("cannot automatically start service: {error:#}");
                         }
                     }
@@ -172,19 +169,15 @@ impl Server {
             cancel.await;
             cancel_autostart.abort();
             cancelled.cancel();
-            cancelling_service.service.stop(true).await;
+            cancelling_service.selected().service.stop(true).await;
         });
-        let diagnostics = self
-            .api
-            .workspace
-            .as_ref()
-            .map(|w| gb_observability::Diagnostics::open(w));
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
+        let service_api = self.api.clone();
         let served = axum::serve(self.listener, api::router(self.api))
             .with_graceful_shutdown(async move {
                 stop.await;
                 stop_autostart.abort();
-                service.service.stop(false).await;
+                service.selected().service.stop(false).await;
             })
             .await;
         autostart.abort();
@@ -198,6 +191,11 @@ impl Server {
         gb_environment::snapshot::drain_builds().await;
         gb_environment::runtime::drain_vms().await;
         cancelling.abort();
+        let diagnostics = service_api
+            .selected()
+            .workspace
+            .as_deref()
+            .map(gb_observability::Diagnostics::open);
         if let Some(diagnostics) = diagnostics {
             match tokio::task::spawn_blocking(move || diagnostics.finish_system_session()).await {
                 Ok(Ok(())) => (),
@@ -208,40 +206,52 @@ impl Server {
     }
 }
 
-/// Keep workspace recovery screens available when member assembly fails.
-fn service_controller(workspace: Option<&Path>, data: &Path) -> crate::service_runtime::Controller {
-    let built = (|| -> anyhow::Result<_> {
-        let workspace = workspace.ok_or_else(|| anyhow::anyhow!("workspace not selected"))?;
-        let native = crate::member::native::Native::new(workspace.into(), data.into())?;
-        let host = Arc::new(gb_environment::Host {
-            data: data.into(),
-            home: std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
-            package: native.package.clone(),
-            identity_root: native.identity_root.clone(),
-        });
-        Ok(crate::service_runtime::Controller::new(native, host))
-    })();
-    built.unwrap_or_default()
-}
-
-fn member_backend(
-    workspace: &Path,
-    data: &Path,
-    work: &tokio_util::task::TaskTracker,
-    branvil: Option<branvil::api::DataApi>,
-) -> Option<Arc<crate::member::Backend>> {
-    let built = (|| -> anyhow::Result<_> {
-        let mut native = crate::member::native::Native::new(workspace.into(), data.into())?;
-        native.runtime_work = Some(work.clone());
-        native.branvil = branvil;
-        native.backend().map(Some)
-    })();
-    built.unwrap_or_else(|_| {
-        tracing::error!("cannot initialize the member backend for the selected workspace");
-        None
-    })
+impl Selected {
+    /// What the server builds from `workspace`: its member backend and its
+    /// service. Either that cannot be built is left out, and the screens
+    /// stay to repair or replace the workspace.
+    pub(crate) fn open(
+        workspace: Option<PathBuf>,
+        api: &Api,
+        branvil: Option<branvil::api::DataApi>,
+    ) -> Selected {
+        let Some(workspace) = workspace else {
+            return Selected::default();
+        };
+        let native = || -> anyhow::Result<_> {
+            let mut native =
+                crate::member::native::Native::new(workspace.clone(), api.data.clone())?;
+            native.branvil = branvil.clone();
+            Ok(native)
+        };
+        let service = (|| -> anyhow::Result<_> {
+            let native = native()?;
+            let host = Arc::new(gb_environment::Host {
+                data: api.data.clone(),
+                home: std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
+                package: native.package.clone(),
+                identity_root: native.identity_root.clone(),
+            });
+            Ok(crate::service_runtime::Controller::new(native, host))
+        })()
+        .unwrap_or_default();
+        let member = (|| -> anyhow::Result<_> {
+            let mut native = native()?;
+            native.runtime_work = Some(api.work.clone());
+            native.backend()
+        })()
+        .inspect_err(|_| {
+            tracing::error!("cannot initialize the member backend for the selected workspace")
+        })
+        .ok();
+        Selected {
+            workspace: Some(workspace),
+            member,
+            service,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -307,19 +317,20 @@ mod tests {
             .await
             .unwrap();
         let port = listener.local_addr().unwrap().port();
-        let api = Arc::new(Api {
-            service: crate::service_runtime::Controller::new(native.clone(), host),
-            member: None,
-            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            auth: ServerAuth::open(&native.data, port).unwrap(),
-            instance_id: "fixture".into(),
-            data: native.data.clone(),
-            workspace: Some(native.workspace.clone()),
-            work: Default::default(),
-            cancelled: Default::default(),
-        });
+        let api = Arc::new(Api::new(
+            Selected {
+                workspace: Some(native.workspace.clone()),
+                member: None,
+                service: crate::service_runtime::Controller::new(native.clone(), host),
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(&native.data, port).unwrap(),
+            "fixture".into(),
+            native.data.clone(),
+        ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
-        let assembly = api.service.hold_start_for_test().await;
+        let selected = api.selected();
+        let assembly = selected.service.hold_start_for_test().await;
         let server = Server {
             lock: ServerLock::hold(&native.data, port).unwrap(),
             listener,
@@ -350,7 +361,7 @@ mod tests {
         let (_held, result) = serving.await.unwrap();
         result.unwrap();
         assert!(response.unwrap().unwrap().status().is_success());
-        assert!(!api.service.service.status().await.running);
+        assert!(!selected.service.service.status().await.running);
     }
 
     #[test]
@@ -360,15 +371,16 @@ mod tests {
         let path = gb_workspace::identity::workspace_identity_path(workspace.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "not json").unwrap();
-        assert!(
-            member_backend(
-                workspace.path(),
-                data.path(),
-                &tokio_util::task::TaskTracker::new(),
-                None
-            )
-            .is_none()
+        let api = Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&data.path().join("inputs")),
+            ServerAuth::open(data.path(), 8765).unwrap(),
+            "fixture".into(),
+            data.path().into(),
         );
+        let selected = Selected::open(Some(workspace.path().into()), &api, None);
+        assert!(selected.member.is_none());
+        assert_eq!(selected.workspace.as_deref(), Some(workspace.path()));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "not json");
     }
 }

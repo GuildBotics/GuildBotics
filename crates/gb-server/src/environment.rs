@@ -308,7 +308,7 @@ pub(crate) async fn usage(
     axum::extract::Query(input): axum::extract::Query<UsageInput>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(workspace) = api.workspace.clone() else {
+    let Some(workspace) = api.selected().workspace.clone() else {
         return ApiError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "config_not_found",
@@ -515,7 +515,7 @@ pub async fn status(
 }
 
 pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Response {
-    let Some(workspace) = api.workspace.clone() else {
+    let Some(workspace) = api.selected().workspace.clone() else {
         return ApiError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "config_not_found",
@@ -549,7 +549,7 @@ pub(crate) async fn images(State(api): State<Shared>) -> Json<Value> {
         let default = gb_environment::recipe::Recipe::load(&templates)
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .image;
-        let declared = match &api.workspace {
+        let declared = match &api.selected().workspace {
             Some(workspace) => gb_config::agent_environment::image(
                 &workspace.join(".guildbotics/config"),
                 &templates,
@@ -669,7 +669,7 @@ pub(crate) async fn build_route(
     headers: HeaderMap,
     crate::api::Body(input): crate::api::Body<BuildInput>,
 ) -> Response {
-    let Some(workspace) = api.workspace.clone() else {
+    let Some(workspace) = api.selected().workspace.clone() else {
         return ApiError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "config_not_found",
@@ -811,11 +811,10 @@ fn upkeep_decision(view: &Value, last_problem: &mut String) -> (bool, Option<Str
     (build, notice)
 }
 
-/// The service owns this task and cancels it before releasing its lock.
+/// Keeps the selected workspace's snapshot built while the server runs; each
+/// pass keeps up the workspace selected then. The server cancels it as it
+/// stops.
 pub(crate) async fn upkeep(api: Shared) {
-    let Some(workspace) = api.workspace.clone() else {
-        return;
-    };
     // Linux guests used by CI have no nested KVM. They still report state,
     // but cannot start the runtime's background build microVM here.
     #[cfg(target_os = "linux")]
@@ -825,8 +824,13 @@ pub(crate) async fn upkeep(api: Shared) {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let last_problem = Mutex::new(String::new());
+    // The workspace each pass keeps up is the one selected then, and what
+    // was last told is told again for another one.
+    let last = Mutex::new((None::<PathBuf>, String::new()));
     gb_environment::snapshot::upkeep(|| async {
+        let Some(workspace) = api.selected().workspace.clone() else {
+            return;
+        };
         let host = gb_environment::Host {
             data: api.data.clone(),
             home: home.clone(),
@@ -835,7 +839,13 @@ pub(crate) async fn upkeep(api: Shared) {
         };
         let status = gb_environment::device::read(&host, &workspace).await;
         let view = status.rendered(|sentence| crate::commands::say(sentence, "en"));
-        let (should_build, notice) = upkeep_decision(&view, &mut last_problem.lock().unwrap());
+        let (should_build, notice) = {
+            let mut last = last.lock().unwrap();
+            if last.0.as_ref() != Some(&workspace) {
+                *last = (Some(workspace.clone()), String::new());
+            }
+            upkeep_decision(&view, &mut last.1)
+        };
         if let Some(notice) = notice {
             tracing::warn!("Environment upkeep: {notice}");
             output(&workspace, &notice);
@@ -993,17 +1003,16 @@ mod tests {
         let data = root.path().join("data");
         let auth = crate::auth::ServerAuth::open(&data, 38761).unwrap();
         let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
-        let api = std::sync::Arc::new(crate::api::Api {
-            service: Default::default(),
-            member: None,
-            inputs: crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
+        let api = std::sync::Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(root.path().join("workspace")),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
             auth,
-            instance_id: "fixture".into(),
+            "fixture".into(),
             data,
-            workspace: Some(root.path().join("workspace")),
-            work: tokio_util::task::TaskTracker::new(),
-            cancelled: tokio_util::sync::CancellationToken::new(),
-        });
+        ));
         let app = crate::api::router(api);
         for (agent, authorized, expected) in [
             ("claude", false, StatusCode::UNAUTHORIZED),
