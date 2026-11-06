@@ -187,6 +187,35 @@ pub fn member(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Re
     Ok(member)
 }
 
+/// The AI CLI tool the brain slot `slot` runs for `person`: its adapter, or
+/// "" when its CLI slot is not mapped; `None` for a slot that runs an
+/// inference model or that the mapping does not have.
+pub fn brain_tool(
+    roots: &CommandRoots,
+    person: &str,
+    slot: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(config) = mapping(roots, person, "brain")?.remove(slot) else {
+        return Ok(None);
+    };
+    if config["kind"] != "ai_cli" {
+        return Ok(None);
+    }
+    let cli = config["cli_agent"].as_str().unwrap_or("default");
+    let Some(relative) = mapping(roots, person, "cli_agent")?
+        .remove(cli)
+        .and_then(|v| v.as_str().map(str::to_owned))
+    else {
+        return Ok(Some(String::new()));
+    };
+    safe(&relative)?;
+    let adapter = relative
+        .split('/')
+        .nth(1)
+        .context("Invalid CLI definition")?;
+    Ok(Some(adapter.to_owned()))
+}
+
 /// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
 /// the environment maps package paths to its read-only code mount once.
 pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {

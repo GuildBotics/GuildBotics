@@ -77,7 +77,15 @@ impl EventBus {
         item.extend(correlation(origin));
         item.insert("payload".into(), payload.into());
         item.insert("timestamp".into(), timestamp());
-        let item = Value::Object(item);
+        self.deliver(Value::Object(item), true);
+    }
+
+    /// Hands `item`, an event already recorded, to every subscriber.
+    pub fn announce(&self, item: &Map<String, Value>) {
+        self.deliver(Value::Object(item.clone()), false);
+    }
+
+    fn deliver(&self, item: Value, record: bool) {
         let store = {
             let mut state = self.state();
             if state.history.len() == self.limit {
@@ -91,7 +99,7 @@ impl EventBus {
                 .retain(|subscriber| subscriber.send(item.clone()).is_ok());
             state.store.clone()
         };
-        if let (Some(store), Value::Object(item)) = (store, item) {
+        if let (true, Some(store), Value::Object(item)) = (record, store, item) {
             store.record(item);
         }
     }

@@ -143,18 +143,35 @@ fn update_image(
 
 fn project_tool(row: &mut Value, catalog: &Value, language: &str) {
     let name = row["name"].as_str().unwrap_or_default().to_owned();
-    let label = catalog
+    let label = tool_label(catalog, &name).to_owned();
+    row["label"] = json!(label);
+    row["config_reference"] = json!(format!("cli_agents/{name}/default.yml"));
+    row["credentials_saved"] = row["saved"].clone();
+    row["usage_supported"] = json!(true);
+    row["problem"] = json!(tool_refusal(row, &label, language));
+    if row["problem"] == "" && row["usage_check"]["status"] == "failed" {
+        row["problem"] = json!(crate::i18n::t(
+            language,
+            "app_api.errors.cli_agent_usage_failed",
+            &[("label", row["label"].as_str().unwrap_or_default())]
+        ));
+    }
+}
+
+/// The tool `name` as the catalog shows it.
+fn tool_label<'a>(catalog: &'a Value, name: &'a str) -> &'a str {
+    catalog
         .as_array()
         .into_iter()
         .flatten()
         .find(|tool| tool["name"] == name)
         .and_then(|tool| tool["label"].as_str())
-        .unwrap_or(&name)
-        .to_owned();
-    row["label"] = json!(label);
-    row["config_reference"] = json!(format!("cli_agents/{name}/default.yml"));
-    row["credentials_saved"] = row["saved"].clone();
-    row["usage_supported"] = json!(true);
+        .unwrap_or(name)
+}
+
+/// Why the tool of `row` cannot start a turn on this device: not provisioned,
+/// or its login is missing, unreadable or refused; "" when it can.
+fn tool_refusal(row: &Value, label: &str, language: &str) -> String {
     let reason = if row["provisioned"] != true {
         Some("not_provisioned")
     } else {
@@ -167,25 +184,41 @@ fn project_tool(row: &mut Value, catalog: &Value, language: &str) {
             _ => None,
         }
     };
-    row["problem"] = json!(
-        reason
-            .map(|key| crate::i18n::t(
+    reason
+        .map(|key| {
+            crate::i18n::t(
                 language,
                 &format!("intelligences.agent_environment.tool.{key}"),
                 &[
-                    ("tool", label.as_str()),
+                    ("tool", label),
                     ("command", row["login_command"].as_str().unwrap_or_default()),
-                ]
-            ))
-            .unwrap_or_default()
-    );
-    if row["problem"] == "" && row["usage_check"]["status"] == "failed" {
-        row["problem"] = json!(crate::i18n::t(
-            language,
-            "app_api.errors.cli_agent_usage_failed",
-            &[("label", row["label"].as_str().unwrap_or_default())]
-        ));
-    }
+                ],
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Why each AI CLI tool cannot start a turn on this device, by name: "" for
+/// one that can.
+pub(crate) fn tool_refusals(
+    host: &gb_environment::Host,
+    language: &str,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let catalog: Value = serde_json::from_slice(&std::fs::read(
+        host.package
+            .join("templates/environment/cli_provision.json"),
+    )?)?;
+    let tools = crate::host_window::tool_status(&host.data, &host.home, &catalog);
+    Ok(tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            let name = row["name"].as_str().unwrap_or_default();
+            let label = tool_label(&catalog, name);
+            (name.to_owned(), tool_refusal(row, label, language))
+        })
+        .collect())
 }
 
 #[derive(Default)]

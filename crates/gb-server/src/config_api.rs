@@ -99,6 +99,15 @@ pub(crate) fn failure(error: anyhow::Error, headers: &HeaderMap) -> Response {
         }
         .into_response();
     }
+    if let Some(refused) = error.downcast_ref::<gb_config::command_writes::Refused>() {
+        let status = StatusCode::from_u16(refused.status).unwrap_or(StatusCode::BAD_REQUEST);
+        let answer = answer(status, refused.code).context(refused.context.clone());
+        return match &refused.reason {
+            Some(reason) => answer.reason(reason.clone()),
+            None => answer.key(refused.key, refused.params.clone()),
+        }
+        .into_response();
+    }
     if let Some(invalid) = error.downcast_ref::<InvalidInput>() {
         return answer(StatusCode::UNPROCESSABLE_ENTITY, "validation_error")
             .context(json!({"errors": [{"msg": invalid.0}]}))
@@ -852,7 +861,7 @@ fn transcripts(workspace: &Path) -> Value {
     })
 }
 
-fn unconfigured(headers: &HeaderMap, sentence: &'static str) -> Response {
+pub(crate) fn unconfigured(headers: &HeaderMap, sentence: &'static str) -> Response {
     ApiError::new(StatusCode::CONFLICT, "workspace_not_configured", headers)
         .key(sentence, vec![])
         .into_response()

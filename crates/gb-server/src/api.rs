@@ -43,7 +43,9 @@ pub struct Api {
     pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
     pub(crate) consents:
         tokio::sync::Mutex<std::collections::BTreeMap<String, crate::provider_api::Consent>>,
-    pub events: crate::events::EventBus,
+    pub events: Arc<crate::events::EventBus>,
+    /// The one manual run that writes, by its trace, while it runs.
+    pub(crate) manual: Arc<std::sync::Mutex<Option<String>>>,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
@@ -83,7 +85,7 @@ impl Api {
         instance_id: String,
         data: PathBuf,
     ) -> Api {
-        let events = crate::events::EventBus::default();
+        let events = Arc::new(crate::events::EventBus::default());
         events.record_in(
             selected
                 .workspace
@@ -96,6 +98,7 @@ impl Api {
             branvil: std::sync::OnceLock::new(),
             consents: Default::default(),
             events,
+            manual: Arc::default(),
             inputs,
             auth,
             instance_id,
@@ -202,6 +205,13 @@ impl ApiError {
     pub(crate) fn reason(mut self, reason: String) -> ApiError {
         self.sentence = Sentence::Reason(reason);
         self
+    }
+
+    /// What a screen is told of the refusal as an event: its code and context.
+    pub(crate) fn payload(&self) -> serde_json::Map<String, Value> {
+        let mut payload = self.context.as_object().cloned().unwrap_or_default();
+        payload.insert("code".into(), self.code.clone().into());
+        payload
     }
 
     pub(crate) fn context(mut self, context: Value) -> ApiError {
@@ -421,7 +431,43 @@ routes!(
         crate::config_api::save_transcript_settings
     ),
     (get, "/team", crate::screens::team),
+    (get, "/commands/options", crate::command_catalog::options),
+    (post, "/verify", crate::verify::verify),
+    (post, "/commands/author", crate::command_authoring::author),
+    (
+        get,
+        "/commands/routine-options",
+        crate::command_catalog::routine_options
+    ),
+    (
+        get,
+        "/commands/files/{id}/execution-status",
+        crate::command_catalog::execution_status
+    ),
     (get, "/commands/files", crate::screens::files),
+    (
+        post,
+        "/commands/files",
+        crate::command_files_api::create,
+        crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
+    (
+        put,
+        "/commands/files/{id}",
+        crate::command_files_api::update,
+        crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
+    (
+        delete,
+        "/commands/files/{id}",
+        crate::command_files_api::delete
+    ),
+    (
+        post,
+        "/commands/author/apply",
+        crate::command_files_api::apply,
+        10 * crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
     (get, "/commands/files/{id}", crate::screens::file),
     (get, "/diagnostics/traces", crate::screens::traces),
     (get, "/diagnostics/traces/{id}", crate::screens::trace),
@@ -757,6 +803,14 @@ mod tests {
             (
                 ("post", "/commands/run"),
                 "starts a run, no edited config snapshot",
+            ),
+            (
+                ("post", "/commands/author"),
+                "runs the read-only authoring assistant; its changes are applied apart",
+            ),
+            (
+                ("post", "/verify"),
+                "reads the workspace and records its check as a trace",
             ),
             (
                 ("post", "/commands/input-files"),

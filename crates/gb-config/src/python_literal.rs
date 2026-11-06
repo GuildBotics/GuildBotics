@@ -241,6 +241,13 @@ fn main_tokens(source: &str) -> Option<Vec<Token>> {
     None
 }
 
+/// Whether `source` defines a top-level `main`, or `Unreadable` when it does
+/// not even read as Python's tokens.
+pub(crate) fn defines_main(source: &str) -> Result<bool, Unreadable> {
+    top_statements(source, true)?;
+    Ok(main_tokens(source).is_some())
+}
+
 pub(crate) fn screen_arguments(source: &str) -> Value {
     let Some(tokens) = main_tokens(source) else {
         return serde_json::json!([]);

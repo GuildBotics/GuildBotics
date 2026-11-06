@@ -2114,10 +2114,21 @@ fn recording_redactor(
     ))
 }
 
-fn host_secret(
+pub(crate) fn host_secret(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
     name: &str,
+) -> Result<Option<String>, String> {
+    host_secret_in(host, workspace, name, &gb_config::secrets::SystemKeychain)
+}
+
+/// The secret `name` as [`host_secret`] reads it, with the machine's key in
+/// `keychain`.
+pub(crate) fn host_secret_in(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    name: &str,
+    keychain: &dyn gb_config::secrets::Keychain,
 ) -> Result<Option<String>, String> {
     if let Ok(value) = std::env::var(name)
         && !value.is_empty()
@@ -2128,7 +2139,6 @@ fn host_secret(
         host.identity_root.clone(),
         Some(workspace.into()),
     );
-    let keychain = gb_config::secrets::SystemKeychain;
     let mut value = None;
     for scope in [
         gb_config::secrets::Scope::Identity,
@@ -2139,7 +2149,7 @@ fn host_secret(
             scope,
             gb_config::secrets::DeviceKey {
                 machine_root: host.data.parent().unwrap_or(&host.data).into(),
-                keychain: &keychain,
+                keychain,
             },
         )
         .map_err(|_| "The host secret store is unavailable.".to_owned())?;

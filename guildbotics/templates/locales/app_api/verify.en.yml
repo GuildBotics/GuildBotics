@@ -1,0 +1,24 @@
+en:
+  config_project_file:
+    ok: "Project config file was found."
+    error: "project.yml was not found in the config directory."
+  secret_store:
+    ok: "OS secret store is available."
+    error: "OS secret store is unavailable."
+  team_load:
+    ok: "Team config was loaded."
+    error: "Team config could not be loaded."
+  active_members:
+    ok: "Active members are configured."
+    error: "No active members are configured."
+  llm_provider:
+    warning: "Default LLM provider could not be inferred."
+  key:
+    ok: "%{key} is configured."
+    error: "%{key} is not configured."
+  agent_environment:
+    ok: "The isolated agent environment can run commands on this device."
+  cli_agent_mapping:
+    warning: "Default AI CLI tool could not be inferred."
+  cli_agent_environment:
+    ok: "AI CLI tool '%{tool}' can start in the isolated agent environment."

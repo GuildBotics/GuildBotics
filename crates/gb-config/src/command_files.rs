@@ -107,17 +107,24 @@ impl CommandRoots {
         let metadata = display_metadata(path, language);
         result["content"] = String::from_utf8_lossy(&bytes).into_owned().into();
         result["revision"] = revision(&bytes).into();
-        result["arguments"] = if path.extension().is_some_and(|s| s == "py") {
-            crate::python_literal::screen_arguments(&String::from_utf8_lossy(&bytes))
-        } else {
-            arguments(&metadata, &name).unwrap_or_else(|| json!([]))
-        };
+        result["arguments"] = screen_arguments(path, &metadata, &name);
         result["inputs"] = inputs(&metadata);
         Ok(result)
     }
 }
 
-fn collect(
+/// The arguments a caller may give the command at `path`, as the screens
+/// show them: none when its declaration is invalid.
+pub(crate) fn screen_arguments(path: &Path, metadata: &Value, name: &str) -> Value {
+    if path.extension().is_some_and(|s| s == "py") {
+        let source = std::fs::read(path).unwrap_or_default();
+        crate::python_literal::screen_arguments(&String::from_utf8_lossy(&source))
+    } else {
+        arguments(metadata, name).unwrap_or_else(|| json!([]))
+    }
+}
+
+pub(crate) fn collect(
     root: &Path,
     directory: &Path,
     language: &str,
@@ -145,7 +152,7 @@ fn collect(
     Ok(())
 }
 
-fn display_metadata(path: &Path, language: &str) -> Value {
+pub(crate) fn display_metadata(path: &Path, language: &str) -> Value {
     let mut metadata = command_metadata(path).unwrap_or_default().metadata;
     if let Ok(source) = std::fs::read_to_string(path) {
         if path.extension().is_some_and(|s| s == "md") {
@@ -189,28 +196,101 @@ pub(crate) fn python_text(value: &Value) -> String {
     }
 }
 
-fn inputs(metadata: &Value) -> Value {
-    let defaults = json!({"defined_args":"auto", "extra_args":"hidden", "message":"optional"});
-    let Some(raw) = metadata.get("inputs") else {
-        return defaults;
+/// The command's input policy; the defaults when its declaration is invalid.
+pub(crate) fn inputs(metadata: &Value) -> Value {
+    input_policy(metadata.get("inputs")).unwrap_or_else(
+        |_| json!({"defined_args":"auto", "extra_args":"hidden", "message":"optional"}),
+    )
+}
+
+/// The input policy `value` declares, or why it is no valid one.
+pub(crate) fn input_policy(value: Option<&Value>) -> Result<Value, String> {
+    let mut result = json!({"defined_args":"auto", "extra_args":"hidden", "message":"optional"});
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(result);
     };
-    let Some(raw) = raw.as_object() else {
-        return defaults;
-    };
-    let mut result = defaults.clone();
-    for (key, value) in raw {
-        let allowed: &[&str] = match key.as_str() {
-            "defined_args" => &["auto", "hidden"],
-            "extra_args" => &["hidden", "optional"],
-            "message" => &["hidden", "optional", "required"],
-            _ => return defaults,
-        };
-        if !value.as_str().is_some_and(|s| allowed.contains(&s)) {
-            return defaults;
-        }
-        result[key] = value.clone();
+    let raw = value
+        .as_object()
+        .ok_or("Command 'inputs' must be a mapping.")?;
+    let fields: [(&str, &[&str]); 3] = [
+        ("defined_args", &["auto", "hidden"]),
+        ("extra_args", &["hidden", "optional"]),
+        ("message", &["hidden", "optional", "required"]),
+    ];
+    let unknown: BTreeSet<_> = raw
+        .keys()
+        .filter(|k| !fields.iter().any(|(f, _)| f == k))
+        .collect();
+    if !unknown.is_empty() {
+        let names: Vec<_> = unknown.into_iter().map(String::as_str).collect();
+        return Err(format!(
+            "Command 'inputs' has unsupported fields: {}.",
+            names.join(", ")
+        ));
     }
-    result
+    for (key, allowed) in fields {
+        if let Some(value) = raw.get(key) {
+            if !value.as_str().is_some_and(|s| allowed.contains(&s)) {
+                return Err(format!(
+                    "Command 'inputs.{key}' must be one of: {}.",
+                    allowed.join(", ")
+                ));
+            }
+            result[key] = value.clone();
+        }
+    }
+    Ok(result)
+}
+
+/// The arguments `metadata` declares under `args`: name, whether required,
+/// and the default; or why they are no valid declaration.
+pub(crate) fn argument_definitions(
+    metadata: &Value,
+) -> Result<Vec<(String, bool, Option<String>)>, String> {
+    let Some(raw) = metadata.get("args").filter(|v| !v.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let raw = raw.as_object().ok_or("Command 'args' must be a mapping.")?;
+    let valid = Regex::new(r"^(?:[A-Za-z_]\w*|\d+)$").unwrap();
+    let mut definitions = Vec::new();
+    for (name, definition) in raw {
+        if !valid.is_match(name) {
+            return Err(format!("Invalid command argument name: '{name}'."));
+        }
+        let definition = definition
+            .as_object()
+            .ok_or_else(|| format!("Command argument '{name}' must be a mapping."))?;
+        let unknown: BTreeSet<_> = definition
+            .keys()
+            .filter(|k| *k != "default" && *k != "required")
+            .map(String::as_str)
+            .collect();
+        let unknown: Vec<_> = unknown.into_iter().collect();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "Command argument '{name}' has unsupported fields: {}.",
+                unknown.join(", ")
+            ));
+        }
+        let default = definition.get("default");
+        if default.is_some_and(|v| v.is_null() || v.is_array() || v.is_object()) {
+            return Err(format!(
+                "Command argument '{name}' default must be a scalar value."
+            ));
+        }
+        let required = definition
+            .get("required")
+            .map(Value::as_bool)
+            .unwrap_or(Some(default.is_none()))
+            .ok_or_else(|| format!("Command argument '{name}' required must be true or false."))?;
+        if required && default.is_some() {
+            return Err(format!(
+                "Command argument '{name}' cannot be required and have a default."
+            ));
+        }
+        definitions.push((name.clone(), required, default.map(python_text)));
+    }
+    Ok(definitions)
 }
 
 fn argument(name: &str, required: bool, default: String) -> Value {
@@ -220,34 +300,9 @@ fn argument(name: &str, required: bool, default: String) -> Value {
 fn arguments(metadata: &Value, command: &str) -> Option<Value> {
     let mut result = Vec::new();
     let mut declared = BTreeSet::new();
-    let valid = Regex::new(r"^(?:[A-Za-z_]\w*|\d+)$").unwrap();
-    if let Some(raw) = metadata.get("args").filter(|v| !v.is_null()) {
-        for (name, definition) in raw.as_object()? {
-            if !valid.is_match(name) {
-                return None;
-            }
-            let definition = definition.as_object()?;
-            if definition.keys().any(|k| k != "default" && k != "required") {
-                return None;
-            }
-            let default = definition.get("default");
-            if default.is_some_and(|v| v.is_null() || v.is_array() || v.is_object()) {
-                return None;
-            }
-            let required = definition
-                .get("required")
-                .map(Value::as_bool)
-                .unwrap_or(Some(default.is_none()))?;
-            if required && default.is_some() {
-                return None;
-            }
-            result.push(argument(
-                name,
-                required,
-                default.map(python_text).unwrap_or_default(),
-            ));
-            declared.insert(name.clone());
-        }
+    for (name, required, default) in argument_definitions(metadata).ok()? {
+        result.push(argument(&name, required, default.unwrap_or_default()));
+        declared.insert(name);
     }
     let text = ["body", "description"]
         .iter()
@@ -305,7 +360,7 @@ fn arguments(metadata: &Value, command: &str) -> Option<Value> {
     Some(result.into())
 }
 
-fn truthy(value: &Value) -> bool {
+pub(crate) fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -316,7 +371,7 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-fn default_label(name: &str) -> String {
+pub(crate) fn default_label(name: &str) -> String {
     let source = name
         .rsplit('/')
         .next()
@@ -350,7 +405,7 @@ fn default_label(name: &str) -> String {
 
 // Python shlex.split(comments=False, posix=True). Validate every word, even
 // though naming needs only the first; invalid entries invalidate arguments.
-fn command_words(source: &str) -> Option<Vec<String>> {
+pub(crate) fn command_words(source: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote = None;

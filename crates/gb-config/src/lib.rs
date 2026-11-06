@@ -4,7 +4,9 @@
 //! environment boots with.
 
 pub mod agent_environment;
+pub mod catalog;
 pub mod command_files;
+pub mod command_writes;
 pub mod commands;
 pub mod credential_vault;
 mod python_literal;

@@ -153,7 +153,13 @@ pub(crate) fn is_command_file(path: &Path) -> bool {
 
 /// What the command at `path` declares of the access of its AI CLI turns.
 pub fn command_access(path: &Path) -> Result<CommandAccess, CommandProblem> {
-    let declared = command_metadata(path)?;
+    declared_access(&command_metadata(path)?)
+}
+
+/// What `declared` says of the access of the command's AI CLI turns.
+pub(crate) fn declared_access(
+    declared: &python_literal::Declaration,
+) -> Result<CommandAccess, CommandProblem> {
     let metadata = &declared.metadata;
     let read_only = match metadata.get("read_only") {
         None => false,
@@ -196,19 +202,22 @@ pub fn command_metadata(path: &Path) -> Result<python_literal::Declaration, Comm
     if !matches!(extension.as_deref(), Some("md" | "yml" | "yaml" | "py")) {
         return Ok(Default::default());
     }
+    let text = std::fs::read_to_string(path).map_err(|_| unreadable())?;
+    source_metadata(extension.as_deref().unwrap_or(""), &text).map_err(|()| unreadable())
+}
+
+/// The metadata `text` holds as the source of a command with `extension`.
+pub(crate) fn source_metadata(
+    extension: &str,
+    text: &str,
+) -> Result<python_literal::Declaration, ()> {
     // As the Python version splits lines: at `\r\n`, `\r` and `\n`.
-    let text = std::fs::read_to_string(path)
-        .map_err(|_| unreadable())?
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
-    let mut declared = match extension.as_deref() {
-        Some("py") => python_literal::command_metadata(&text).map_err(|_| unreadable())?,
-        Some("md") => mapping(
-            frontmatter(&text)
-                .map_or(Ok(Value::Null), yaml::value)
-                .map_err(|()| unreadable())?,
-        ),
-        _ => mapping(yaml::value(&text).map_err(|()| unreadable())?),
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut declared = match extension {
+        "py" => python_literal::command_metadata(&text).map_err(|_| ())?,
+        "md" => mapping(frontmatter(&text).map_or(Ok(Value::Null), yaml::value)?),
+        "yml" | "yaml" => mapping(yaml::value(&text)?),
+        _ => Default::default(),
     };
     declared.metadata.retain(|_, value| !value.is_null());
     Ok(declared)

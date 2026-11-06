@@ -1,0 +1,24 @@
+ja:
+  config_project_file:
+    ok: "プロジェクトの設定ファイルがあります。"
+    error: "設定ディレクトリに project.yml がありません。"
+  secret_store:
+    ok: "OS のシークレットストアを使えます。"
+    error: "OS のシークレットストアを使えません。"
+  team_load:
+    ok: "チームの設定を読み込めました。"
+    error: "チームの設定を読み込めませんでした。"
+  active_members:
+    ok: "有効なメンバーが設定されています。"
+    error: "有効なメンバーが設定されていません。"
+  llm_provider:
+    warning: "既定の LLM プロバイダーを判別できませんでした。"
+  key:
+    ok: "%{key} は設定されています。"
+    error: "%{key} は設定されていません。"
+  agent_environment:
+    ok: "このデバイスの隔離環境でコマンドを実行できます。"
+  cli_agent_mapping:
+    warning: "既定の AI CLI ツールを判別できませんでした。"
+  cli_agent_environment:
+    ok: "AI CLI ツール '%{tool}' を隔離環境で起動できます。"

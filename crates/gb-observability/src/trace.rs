@@ -11,9 +11,13 @@ use serde_json::{Map, Value, json};
 use crate::diagnostics::Diagnostics;
 
 /// One bounded unit of work, and where its records go.
+/// Who is told of each event a trace records, as it is recorded.
+pub type Announce = std::sync::Arc<dyn Fn(&Map<String, Value>) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct Trace {
     diagnostics: Diagnostics,
+    announce: Option<Announce>,
     id: String,
     source: String,
     person_id: String,
@@ -37,6 +41,11 @@ pub trait Failure {
     fn code(&self) -> &str {
         ""
     }
+
+    /// What the run's caller is told of the failure, when it is told.
+    fn message(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Trace {
@@ -51,6 +60,7 @@ impl Trace {
     pub fn open(diagnostics: &Diagnostics, source: &str) -> Trace {
         Trace {
             diagnostics: diagnostics.clone(),
+            announce: None,
             id: uuid::Uuid::new_v4().simple().to_string(),
             source: source.into(),
             person_id: String::new(),
@@ -59,6 +69,12 @@ impl Trace {
             attributes: Map::new(),
             span: None,
         }
+    }
+
+    /// Tells `announce` of every event this trace records from now on.
+    pub fn announced(mut self, announce: Announce) -> Trace {
+        self.announce = Some(announce);
+        self
     }
 
     pub fn person(mut self, person_id: &str) -> Trace {
@@ -154,8 +170,13 @@ impl Trace {
         command: &str,
         payload: Map<String, Value>,
     ) {
-        self.diagnostics
-            .record(self.record_value(event_type, person_id, command, payload));
+        let record = self.record_value(event_type, person_id, command, payload);
+        if let Some(announce) = &self.announce
+            && record["kind"] == "event"
+        {
+            announce(&record);
+        }
+        self.diagnostics.record(record);
     }
 
     /// Append a domain event only when this trace transcript does not already contain its type.
@@ -174,6 +195,7 @@ impl Trace {
         JoinedTrace {
             trace: Trace {
                 diagnostics: diagnostics.clone(),
+                announce: None,
                 id: id.into(),
                 source: String::new(),
                 person_id: String::new(),
@@ -231,6 +253,9 @@ impl Trace {
             Err(failure) => {
                 payload.insert("error_type".into(), failure.error_type().into());
                 payload.insert("code".into(), failure.code().into());
+                if let Some(message) = failure.message() {
+                    payload.insert("message".into(), message.into());
+                }
                 self.record(
                     if failure.deferred(&self.source) {
                         "command.deferred"

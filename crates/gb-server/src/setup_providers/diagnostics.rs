@@ -39,6 +39,33 @@ fn say(lang: &str, key: &str, args: &[(&str, &str)]) -> String {
     crate::i18n::t(lang, key, args)
 }
 impl Registry {
+    /// The providers `project`'s services name, each once, in the
+    /// registry's order.
+    pub fn named(project: &Value) -> Vec<&'static str> {
+        PROVIDERS
+            .iter()
+            .map(|(provider, _)| *provider)
+            .filter(|provider| {
+                project["services"].as_object().is_some_and(|services| {
+                    services.values().any(|service| {
+                        service["name"]
+                            .as_str()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(provider))
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// The secrets of the provider's connection, which every workspace's
+    /// members use and the identities' store holds.
+    pub fn identity_secret_keys(provider: &str) -> &'static [&'static str] {
+        match provider {
+            "branvil" => &["BRANVIL_ADMIN_TOKEN"],
+            _ => &[],
+        }
+    }
+
     /// The settings the provider requires before a service starts.
     pub fn verify(
         &self,

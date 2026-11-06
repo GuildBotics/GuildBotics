@@ -8,6 +8,8 @@ from guildbotics.commands.utils import stringify_output
 from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.port import ServiceError
 
+COMMAND_METADATA = {"requires": ["chat_service"]}
+
 
 async def main(
     context: Any,

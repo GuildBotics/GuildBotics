@@ -228,10 +228,17 @@
      "en": "Read a page of dependency vulnerability alerts or one alert; requires a ready execution environment.",
      "ja": "依存ライブラリの脆弱性アラートを1ページまたは個別に確認します。実行環境の準備が必要です。"
     },
-    "read_only": true
+    "read_only": true,
+    "requires": [
+     "code_hosting_service"
+    ]
    },
    "templates/commands/workflows/chat_conversation_workflow.py": {},
-   "templates/commands/workflows/chat_post_command.py": {},
+   "templates/commands/workflows/chat_post_command.py": {
+    "requires": [
+     "chat_service"
+    ]
+   },
    "templates/commands/workflows/ticket_driven_workflow.py": {
     "name": {
      "en": "Ticket-driven workflow",

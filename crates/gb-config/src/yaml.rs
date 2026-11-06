@@ -102,6 +102,15 @@ fn resolved(text: &str) -> Result<String, ()> {
     serde_json::to_string(text).map_err(|_| ())
 }
 
+/// Where `text` stops being YAML: its line and column, both from 1.
+pub(crate) fn syntax_error(text: &str) -> Option<(usize, usize)> {
+    Parser::new_from_str(text).find_map(|event| {
+        event
+            .err()
+            .map(|e| (e.marker().line(), e.marker().col() + 1))
+    })
+}
+
 /// The document `text` holds; null when it holds none.
 pub fn value(text: &str) -> Result<Value, ()> {
     let mut replacements = Vec::new();

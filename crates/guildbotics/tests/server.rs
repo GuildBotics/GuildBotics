@@ -1278,13 +1278,20 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
             &json!(project)
         )
     );
-    // Only the server's startup is recorded; refused commands leave no trace.
+    // Refused commands open no trace: only the server's startup is recorded,
+    // and the screens are told of the runs refused for their member.
     let run = workspace.join(".guildbotics/local/run");
     let index = std::fs::read_to_string(run.join("diagnostics.jsonl")).unwrap();
-    let records: Vec<Value> = index
+    let (refusals, records): (Vec<Value>, Vec<Value>) = index
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .partition(|record| record["type"] == "command.failed");
+    assert_eq!(refusals.len(), 2, "{refusals:?}");
+    for refusal in &refusals {
+        assert!(refusal["trace_id"].is_null());
+        assert_eq!(refusal["payload"]["code"], "person_not_found");
+        assert_eq!(refusal["payload"]["identifier"], "nobody");
+    }
     assert_eq!(records.len(), 1, "{records:?}");
     let started = &records[0];
     assert_eq!(started["type"], "system.started");
