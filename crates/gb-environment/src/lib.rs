@@ -60,6 +60,14 @@ pub enum Failure {
     Runtime(Sentence),
 }
 
+impl Failure {
+    pub fn sentence(self) -> Sentence {
+        match self {
+            Self::Command(sentence) | Self::Runtime(sentence) => sentence,
+        }
+    }
+}
+
 /// Where the host keeps what a command's microVM is made of.
 pub struct Host {
     /// The machine's own state: `<machine root>/data`, which holds the

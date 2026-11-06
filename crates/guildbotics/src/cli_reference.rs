@@ -143,6 +143,33 @@ mod tests {
     }
 
     #[test]
+    fn every_visible_host_command_and_option_has_help() {
+        fn verify(command: &Command, path: &str) {
+            assert!(
+                command.get_about().or(command.get_long_about()).is_some(),
+                "{path} needs a description"
+            );
+            for option in command
+                .get_arguments()
+                .filter(|arg| !arg.is_positional() && !arg.is_hide_set())
+            {
+                assert!(
+                    option.get_help().or(option.get_long_help()).is_some(),
+                    "{path}: {} needs a description",
+                    option.get_id()
+                );
+            }
+            for child in command
+                .get_subcommands()
+                .filter(|child| !child.is_hide_set())
+            {
+                verify(child, &format!("{path} {}", child.get_name()));
+            }
+        }
+        verify(&Cli::command(), "guildbotics");
+    }
+
+    #[test]
     fn help_shows_defaults_required_and_repeatable() {
         let recall = gb_server::member::usage("memory recall");
         for expected in [

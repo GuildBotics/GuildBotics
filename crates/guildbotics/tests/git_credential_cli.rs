@@ -42,3 +42,44 @@ fn git_credential_protocol_ignores_non_get_and_unserved_remotes() {
     assert!(!error.contains("fake-do-not-echo") && !error.contains("/a/b"));
     assert!(!home.path().join(".guildbotics").exists());
 }
+
+#[test]
+fn git_credential_refuses_origins_other_than_the_configured_branvil() {
+    let home = tempfile::tempdir().unwrap();
+    let identity = home.path().join("identity/.guildbotics/config");
+    std::fs::create_dir_all(identity.join("connections")).unwrap();
+    std::fs::write(
+        identity.join("connections/branvil.yml"),
+        "base_url: http://127.0.0.1:7878\n",
+    )
+    .unwrap();
+    // A store that cannot be read makes accidental credential access observable.
+    std::fs::write(identity.join("secrets.yml"), "broken: [").unwrap();
+    for (protocol, host) in [
+        ("http", "127.0.0.1:7879"),
+        ("https", "127.0.0.1:7878"),
+        ("https", "github.com"),
+    ] {
+        let response = answer(
+            home.path(),
+            "get",
+            &format!("protocol={protocol}\nhost={host}\n\n"),
+        );
+        assert!(
+            response.status.success() && response.stdout.is_empty(),
+            "{response:?}"
+        );
+        assert_eq!(
+            String::from_utf8(response.stderr).unwrap(),
+            format!(
+                "GuildBotics is connected to no service at {protocol}://{host} on this machine.\n"
+            ),
+        );
+    }
+    assert!(
+        !home
+            .path()
+            .join(".guildbotics/data/run/branvil-git.lock")
+            .exists()
+    );
+}

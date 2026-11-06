@@ -1802,3 +1802,328 @@ fn open_passes_one_entry_link_to_the_browser() {
             .starts_with(&expected)
     );
 }
+
+#[test]
+fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    let config = workspace.join(".guildbotics/config/team");
+    std::fs::write(
+        config.join("project.yml"),
+        "name: Git CLI\nlanguage: en\nservices:\n  code_hosting_service:\n    name: local\n    owner: acme/team\n",
+    ).unwrap();
+    let identity = root.join("home/identity/.guildbotics/config/team/members/yuki/identity.yml");
+    std::fs::write(
+        identity,
+        "person_id: yuki\nname: Yuki\nperson_type: agent\naccount_info:\n  git_email: yuki@example.test\n",
+    ).unwrap();
+    let local = workspace.join(".guildbotics/local/services/code");
+    let owner = local.join("acme%2Fteam%2Fowner/repository.git");
+    let other = local.join("acme%2Fteam%2Fother/repository.git");
+    let seed = root.join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    let git_checked = |cwd: &Path, args: &[&str]| {
+        let output = git(cwd, &root, "", args);
+        assert_ok(&output);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git_checked(&seed, &["init", "-q", "-b", "main"]);
+    git_checked(&seed, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let original = git_checked(&seed, &["rev-parse", "HEAD"]);
+    for remote in [&owner, &other] {
+        std::fs::create_dir_all(remote.parent().unwrap()).unwrap();
+        git_checked(
+            &seed,
+            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+        );
+    }
+    let checkout = root.join("checkout");
+    git_checked(
+        &seed,
+        &[
+            "clone",
+            "-q",
+            other.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ],
+    );
+    let push_url = reqwest::Url::from_file_path(&owner).unwrap();
+    git_checked(
+        &checkout,
+        &["remote", "set-url", "--push", "origin", push_url.as_str()],
+    );
+    let fetch_url = reqwest::Url::from_file_path(&other).unwrap();
+    git_checked(
+        &checkout,
+        &["remote", "set-url", "origin", fetch_url.as_str()],
+    );
+    for (name, script) in [
+        (
+            "pre-commit",
+            "#!/bin/sh\nprintf '%s' \"host${GUILDBOTICS_TEST_GUEST-}\" > hook-ran\n",
+        ),
+        ("pre-push", "#!/bin/sh\ntouch push-ran\nexit 1\n"),
+    ] {
+        let path = checkout.join(".git/hooks").join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(checkout.join("change"), "new content").unwrap();
+    git_checked(&checkout, &["add", "change"]);
+    let port = free_port();
+    let mut command = server_command(&root, port);
+    command
+        .env("HOME", &root)
+        .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+    let server = Server::spawn(command, &root, port);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let status = runtime.block_on(async {
+        server
+            .http
+            .get(server.url("/api/health"))
+            .bearer_auth(server.owner_token())
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    });
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{:?}",
+        server.stderr.try_iter().collect::<Vec<_>>()
+    );
+    let message = root.join("commit-message");
+    std::fs::write(&message, "publish current workspace").unwrap();
+    let member = |action: &str, repository: &Path| {
+        let mut cli = Command::new(BIN);
+        for (key, _) in std::env::vars() {
+            if key.starts_with("GIT_") {
+                cli.env_remove(key);
+            }
+        }
+        cli.current_dir(&checkout)
+            .env("HOME", &root)
+            .env("GUILDBOTICS_HOME", root.join("home"))
+            .env("LANGUAGE", "en")
+            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
+            .args([
+                "member",
+                "git",
+                action,
+                "--workspace-mode",
+                "current",
+                "--person",
+                "yuki",
+                "--format",
+                "json",
+                "--repo-path",
+            ])
+            .arg(repository)
+            .stdin(Stdio::null());
+        if action == "publish" {
+            cli.arg("--content-file").arg(&message);
+        }
+        cli.output().unwrap()
+    };
+    let wrong = member("publish", &seed);
+    assert_eq!(wrong.status.code(), Some(1), "{wrong:?}");
+    assert!(
+        String::from_utf8_lossy(&wrong.stderr).contains("current workspace repository"),
+        "{wrong:?}"
+    );
+    assert!(!checkout.join("hook-ran").exists());
+    let published = member("publish", &checkout);
+    assert_ok(&published);
+    let published: Value = serde_json::from_slice(&published.stdout).unwrap();
+    let head = git_checked(&checkout, &["rev-parse", "HEAD"]);
+    assert_eq!(published["commit_sha"], head);
+    assert_eq!(published["pushed"], true);
+    assert_eq!(
+        published["commits"][0]["message"],
+        "publish current workspace"
+    );
+    assert_eq!(
+        git_checked(&checkout, &["log", "-1", "--format=%ae"]),
+        "yuki@example.test"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("hook-ran")).unwrap(),
+        "host"
+    );
+    assert!(!checkout.join("push-ran").exists());
+    assert_eq!(git_checked(&owner, &["rev-parse", "refs/heads/main"]), head);
+    assert_eq!(
+        git_checked(&other, &["rev-parse", "refs/heads/main"]),
+        original
+    );
+    assert_eq!(
+        git_checked(&checkout, &["rev-parse", "refs/remotes/origin/main"]),
+        head
+    );
+
+    git_checked(
+        &seed,
+        &["commit", "-q", "--allow-empty", "-m", "other change"],
+    );
+    let ahead = git_checked(&seed, &["rev-parse", "HEAD"]);
+    git_checked(
+        &seed,
+        &["push", "-q", "--force", owner.to_str().unwrap(), "main"],
+    );
+    let tracking_lock = checkout.join(".git/refs/remotes/origin/main.lock");
+    std::fs::write(&tracking_lock, "fixture conflict").unwrap();
+    let twice_refused = member("push", &checkout);
+    assert_eq!(twice_refused.status.code(), Some(1));
+    let reason = String::from_utf8_lossy(&twice_refused.stderr);
+    assert!(
+        reason.contains("Failed to push 'main'") && reason.contains("main.lock"),
+        "{reason}"
+    );
+    assert_eq!(
+        git_checked(&owner, &["rev-parse", "refs/heads/main"]),
+        ahead
+    );
+    std::fs::remove_file(&tracking_lock).unwrap();
+    let rejected = member("push", &checkout);
+    assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("Failed to push 'main'"),
+        "{rejected:?}"
+    );
+    assert_eq!(
+        git_checked(&owner, &["rev-parse", "refs/heads/main"]),
+        ahead
+    );
+    assert_eq!(
+        git_checked(&checkout, &["rev-parse", "refs/remotes/origin/main"]),
+        ahead
+    );
+    assert_eq!(git_checked(&checkout, &["rev-parse", "HEAD"]), head);
+
+    git_checked(&checkout, &["switch", "-c", "next"]);
+    let tracking_lock = tracking_lock.with_file_name("next.lock");
+    std::fs::write(&tracking_lock, "fixture conflict").unwrap();
+    let tracking_refused = member("push", &checkout);
+    assert_eq!(tracking_refused.status.code(), Some(1));
+    let reason = String::from_utf8_lossy(&tracking_refused.stderr);
+    assert!(
+        reason.contains("next.lock") && !reason.contains("Failed to push"),
+        "{reason}"
+    );
+    assert_eq!(git_checked(&owner, &["rev-parse", "refs/heads/next"]), head);
+    std::fs::remove_file(tracking_lock).unwrap();
+    git_checked(&checkout, &["switch", "--orphan", "empty"]);
+    let empty = member("push", &checkout);
+    assert_eq!(empty.status.code(), Some(1), "{empty:?}");
+    assert!(
+        String::from_utf8_lossy(&empty.stderr).contains("Branch 'empty' has no commit to push."),
+        "{empty:?}"
+    );
+    server.stop();
+}
+
+impl Server {
+    async fn scheduler_running(&self) -> bool {
+        let response = self
+            .http
+            .get(self.url("/api/scheduler/status"))
+            .bearer_auth(self.owner_token())
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .unwrap();
+        let (status, _, result) = body(response).await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        result["scheduler"]["running"].as_bool().unwrap()
+    }
+}
+
+#[tokio::test]
+async fn server_starts_without_a_workspace_with_or_without_services_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    for requested in [false, true] {
+        let port = free_port();
+        let mut command = server_command(dir.path(), port);
+        if requested {
+            command.arg("--services");
+        }
+        let server = Server::spawn(command, dir.path(), port);
+        assert!(server.health().await["workspace"].is_null());
+        assert!(!server.scheduler_running().await);
+        server.stop();
+        assert!(
+            gb_server::running(&dir.path().join("home/data"), "en")
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_starts_services_from_settings_or_flag_and_serves_after_a_startup_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = host_name(dir.path());
+    let workspace = workspace_with_a_member(&root);
+    gb_base::files::atomic_write(&root.join("home/data/msb"), b"disable runtime upkeep").unwrap();
+    let settings = workspace.join(".guildbotics/local/service.yml");
+    for (autostart, flag, invalid) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, false, true),
+    ] {
+        let mut settings_text = format!(
+            "start_with_server: {autostart}\nscheduled: true\nroutine: false\nevent_queue: false\n"
+        );
+        if invalid {
+            settings_text.push_str("invalid: [\n");
+        }
+        gb_base::files::atomic_write(&settings, settings_text.as_bytes()).unwrap();
+        let port = free_port();
+        let mut command = server_command(&root, port);
+        command
+            .env("HOME", &root)
+            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
+        if flag {
+            command.arg("--services");
+        }
+        let server = Server::spawn(command, &root, port);
+        assert_eq!(server.health().await["workspace"], json!(workspace));
+        if invalid {
+            assert!(!server.scheduler_running().await);
+            let start = service_command(&root, &["start"]);
+            assert_eq!(start.status.code(), Some(1), "{start:?}");
+            assert!(
+                String::from_utf8_lossy(&start.stderr).contains("service.yml"),
+                "{start:?}"
+            );
+        } else {
+            if !(autostart || flag) {
+                assert!(!server.scheduler_running().await);
+                assert_ok(&service_command(&root, &["start"]));
+            }
+            tokio::time::timeout(Duration::from_secs(15), async {
+                while !server.scheduler_running().await {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_ok(&service_command(&root, &["stop"]));
+            assert!(!server.scheduler_running().await);
+        }
+        assert_eq!(server.health().await["workspace"], json!(workspace));
+        server.stop();
+    }
+}

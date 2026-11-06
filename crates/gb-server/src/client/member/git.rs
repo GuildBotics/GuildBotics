@@ -53,7 +53,10 @@ impl Checkout {
     }
 
     async fn checked(&self, args: &[&str], input: &[u8]) -> anyhow::Result<String> {
-        let output = self.call(args, input).await?;
+        self.output(self.call(args, input).await?)
+    }
+
+    fn output(&self, output: Output) -> anyhow::Result<String> {
         anyhow::ensure!(
             output.status.success(),
             String::from_utf8_lossy(&output.stderr).trim().to_owned()
@@ -171,6 +174,25 @@ impl Checkout {
             .collect())
     }
 
+    async fn receive_tracking(
+        &self,
+        tracking: &Path,
+        client: &Client,
+        mut receive: impl AsyncFnMut(Vec<String>, &Path) -> anyhow::Result<Value>,
+    ) -> anyhow::Result<()> {
+        let path = tracking.to_str().ok_or_else(|| client.invalid_response())?;
+        let mut known = self.known().await?;
+        for _ in 0..2 {
+            let refs = receive(known, tracking).await?;
+            let bundle = (tokio::fs::metadata(tracking).await?.len() > 0).then_some(path);
+            if self.track(&refs["refs"], bundle, client).await? {
+                return Ok(());
+            }
+            known = Vec::new();
+        }
+        Err(client.invalid_response())
+    }
+
     async fn track(
         &self,
         refs: &Value,
@@ -234,14 +256,25 @@ pub(super) async fn run(
     };
     let branch = checkout.reference().await?;
     let reference = format!("refs/heads/{branch}");
-    let head = checkout
-        .text(&[
-            "rev-parse",
-            "-q",
-            "--verify",
-            &format!("{reference}^{{commit}}"),
-        ])
+    let resolved = checkout
+        .call(
+            &[
+                "rev-parse",
+                "-q",
+                "--verify",
+                &format!("{reference}^{{commit}}"),
+            ],
+            b"",
+        )
         .await?;
+    if resolved.status.code() == Some(1) {
+        anyhow::bail!(crate::i18n::t(
+            client.language,
+            "capabilities.member_git.branch_empty",
+            &[("branch", &branch)]
+        ));
+    }
+    let head = checkout.output(resolved)?;
     let remotes = checkout
         .text(&["remote", "get-url", "--push", "--all", "origin"])
         .await?;
@@ -266,7 +299,6 @@ pub(super) async fn run(
     let upload = temporary.path().join("upload.bundle");
     let tracking = temporary.path().join("tracking.bundle");
     let upload_name = upload.to_str().ok_or_else(|| client.invalid_response())?;
-    let tracking_name = tracking.to_str().ok_or_else(|| client.invalid_response())?;
 
     let pushed = async {
         for held in [&known[..], &[]] {
@@ -290,25 +322,23 @@ pub(super) async fn run(
         Err(client.invalid_response())
     }
     .await;
-    let tracked = async {
-        let mut known = checkout.known().await?;
-        for _ in 0..2 {
+    let tracked = checkout
+        .receive_tracking(&tracking, client, async |known, bundle| {
             let mut data = data.clone();
             data["known"] = json!(known);
-            let refs = client
-                .phase(&mut request, Phase::Tracking, data, None, Some(&tracking))
-                .await?;
-            let bundle = (tokio::fs::metadata(&tracking).await?.len() > 0).then_some(tracking_name);
-            if checkout.track(&refs["refs"], bundle, client).await? {
-                return Ok(());
-            }
-            known.clear();
+            client
+                .phase(&mut request, Phase::Tracking, data, None, Some(bundle))
+                .await
+        })
+        .await;
+    let mut pushed = match (pushed, tracked) {
+        (Ok(receipt), Ok(())) => receipt,
+        (Err(error), Err(tracking_error)) => {
+            eprintln!("Warning: {tracking_error:#}");
+            return Err(error);
         }
-        Err(client.invalid_response())
-    }
-    .await;
-    let mut pushed = pushed?;
-    tracked?;
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
+    };
     if let Some(commit) = commit {
         let status = if !commit["commit_sha"].is_null() || pushed["pushed"] == true {
             "published"
@@ -385,5 +415,111 @@ impl Client {
             self.payload(&mut stream, &result, 0).await?;
         }
         Ok(serde_json::from_str(&result.stdout)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn tracking_retries_once_after_a_real_bundle_with_a_missing_prerequisite() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = Checkout(root.path().join("origin"));
+        std::fs::create_dir(&origin.0).unwrap();
+        origin.text(&["init", "-q", "-b", "main"]).await.unwrap();
+        let commit = async |message: &str| {
+            origin
+                .text(&[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    message,
+                ])
+                .await
+                .unwrap();
+            origin.text(&["rev-parse", "HEAD"]).await.unwrap()
+        };
+        let base = commit("base").await;
+        let checkout = Checkout(root.path().join("checkout"));
+        origin
+            .text(&["clone", "-q", ".", checkout.0.to_str().unwrap()])
+            .await
+            .unwrap();
+        let missing = commit("missing prerequisite").await;
+        let tip = commit("remote tip").await;
+        let incremental = root.path().join("incremental.bundle");
+        let full = root.path().join("full.bundle");
+        for (path, excluded) in [(&incremental, vec![missing.clone()]), (&full, vec![])] {
+            assert!(
+                origin
+                    .bundle("refs/heads/main", &excluded, path.to_str().unwrap())
+                    .await
+                    .unwrap()
+            );
+        }
+        let header = |path: &Path| {
+            let bytes = std::fs::read(path).unwrap();
+            let end = bytes
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .unwrap();
+            String::from_utf8(bytes[..end].to_vec()).unwrap()
+        };
+        assert!(
+            header(&incremental)
+                .lines()
+                .any(|line| line.starts_with(&format!("-{missing} ")))
+        );
+        assert!(!header(&full).lines().any(|line| line.starts_with('-')));
+        let client = Client {
+            owner: crate::client::OwnerClient {
+                http: crate::client::http().unwrap(),
+                base: String::new(),
+                token: String::new(),
+                language: "en",
+            },
+            language: "en",
+        };
+        let mut attempts = 0;
+        checkout
+            .receive_tracking(
+                &root.path().join("returned.bundle"),
+                &client,
+                async |known, path| {
+                    assert_eq!(
+                        checkout
+                            .text(&["rev-parse", "refs/remotes/origin/main"])
+                            .await
+                            .unwrap(),
+                        base
+                    );
+                    let bundle = if attempts == 0 {
+                        assert!(known.contains(&base) && !known.contains(&missing));
+                        &incremental
+                    } else {
+                        assert!(known.is_empty());
+                        &full
+                    };
+                    attempts += 1;
+                    std::fs::copy(bundle, path).unwrap();
+                    Ok(json!({"refs": {"refs/remotes/origin/main": tip}}))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(
+            checkout
+                .text(&["rev-parse", "refs/remotes/origin/main"])
+                .await
+                .unwrap(),
+            tip
+        );
     }
 }

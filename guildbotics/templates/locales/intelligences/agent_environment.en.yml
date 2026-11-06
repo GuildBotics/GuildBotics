@@ -51,6 +51,7 @@ en:
     not_a_mapping: "%{where}: the declaration must be a mapping"
     no_device_resolver: "%{where}: dns.nameservers is '%{host}' but this device has no IPv4 resolver; name the nameservers explicitly"
   image:
+    workspace_required: "No GuildBotics workspace is selected."
     empty: "This device holds no image."
     declared: "declared"
     missing: "The base image %{reference} is not loaded on this device (%{architecture}). Load it with `%{command}`."

@@ -172,7 +172,7 @@ Commands:
 
 Options:
       --workspace <WORKSPACE>
-
+          Select the workspace whose environment declaration to use
 
   -h, --help
           Print help
@@ -205,7 +205,7 @@ Usage: guildbotics environment build [OPTIONS]
 
 Options:
       --force
-
+          Rebuild even when the snapshot already matches the declaration
 
   -h, --help
           Print help
@@ -287,7 +287,7 @@ Arguments:
 
 Options:
       --tag <TAG>
-
+          Add a reference to the archive's own tags
 
   -h, --help
           Print help
@@ -340,10 +340,10 @@ Arguments:
 
 Options:
       --default
+          Restore the GuildBotics default image
 
-
-      --digest <DIGESTS>
-
+      --digest <ARCH=DIGEST>
+          Set the image digest for an architecture. Repeatable
 
   -h, --help
           Print help

@@ -100,10 +100,23 @@ fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
 /// A workspace may be selected to repair an invalid grant file, but may not
 /// itself live inside a directory that file would grant to its commands.
 pub fn workspace_location(path: &Path, home: &Path) -> Result<PathBuf, Sentence> {
-    let workspace = gb_base::host_path::directory(path, false)
-        .map_err(|error| Sentence::Text(error.to_string()))?;
     let home =
         gb_base::host_path::normalize(home).map_err(|error| Sentence::Text(error.to_string()))?;
+    let workspace = gb_base::host_path::directory(path, false).map_err(|error| match error {
+        gb_base::host_path::PathProblem::Unavailable(path, reason)
+            if reason.kind() == std::io::ErrorKind::PermissionDenied =>
+        {
+            let mut args = vec![("path", path.display().to_string())];
+            let key = if cfg!(target_os = "macos") && path.starts_with(home.join("Documents")) {
+                args.push(("app", String::new()));
+                "intelligences.agent_environment.filesystem.macos_documents"
+            } else {
+                "intelligences.agent_environment.filesystem.permission_denied"
+            };
+            Sentence::Key(key, args)
+        }
+        error => Sentence::Text(error.to_string()),
+    })?;
     let shared: Shared = load(
         &workspace
             .join(".guildbotics/config/intelligences")
@@ -440,7 +453,14 @@ fn network_with_resolvers(
     }
     let policy: Network = match value.get("network") {
         None => Network::default(),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| Sentence::Text(e.to_string()))?,
+        Some(v) if v.is_object() => {
+            serde_json::from_value(v.clone()).map_err(|e| Sentence::Text(e.to_string()))?
+        }
+        Some(_) => {
+            return Err(Sentence::Text(
+                "Network declaration must be a mapping".into(),
+            ));
+        }
     };
     policy.validate().map_err(Sentence::Text)?;
     let mut nameservers = Vec::new();

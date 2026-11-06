@@ -44,6 +44,7 @@ ja:
     not_a_mapping: "%{where}: 宣言はマッピングでなければなりません"
     no_device_resolver: "%{where}: dns.nameservers が '%{host}' ですが、この端末には IPv4 のリゾルバがありません。nameservers を明示してください"
   image:
+    workspace_required: "GuildBotics のワークスペースが選択されていません。"
     empty: "この端末にイメージはありません。"
     declared: "宣言済み"
     missing: "ベースイメージ %{reference} はこの端末（%{architecture}）に読み込まれていません。`%{command}` で読み込んでください。"

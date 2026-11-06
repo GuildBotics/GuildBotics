@@ -20,7 +20,21 @@ pub fn select(data: &Path, path: &Path, language: &str) -> anyhow::Result<PathBu
 }
 
 pub fn resolve(data: &Path, explicit: Option<PathBuf>, language: &str) -> anyhow::Result<PathBuf> {
-    let workspace = read_selection(data, explicit, language)?;
+    resolve_with_message(
+        data,
+        explicit,
+        language,
+        "cli.member.client.workspace_required",
+    )
+}
+
+pub fn resolve_with_message(
+    data: &Path,
+    explicit: Option<PathBuf>,
+    language: &str,
+    missing: &str,
+) -> anyhow::Result<PathBuf> {
+    let workspace = read_selection_with_message(data, explicit, language, missing)?;
     selection::register(data, &workspace)?;
     Ok(workspace)
 }
@@ -30,15 +44,24 @@ pub fn read_selection(
     explicit: Option<PathBuf>,
     language: &str,
 ) -> anyhow::Result<PathBuf> {
+    read_selection_with_message(
+        data,
+        explicit,
+        language,
+        "cli.member.client.workspace_required",
+    )
+}
+
+fn read_selection_with_message(
+    data: &Path,
+    explicit: Option<PathBuf>,
+    language: &str,
+    missing: &str,
+) -> anyhow::Result<PathBuf> {
     let named = match explicit {
         Some(path) => path,
-        None => selection::resolve(data, |key| std::env::var_os(key))?.ok_or_else(|| {
-            anyhow::anyhow!(crate::i18n::t(
-                language,
-                "cli.member.client.workspace_required",
-                &[]
-            ))
-        })?,
+        None => selection::resolve(data, |key| std::env::var_os(key))?
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::t(language, missing, &[])))?,
     };
     workspace_location(&named, language)
 }

@@ -150,6 +150,16 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/cli/install.ja.yml"),
     ),
     (
+        "capabilities.member_git",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/capabilities/member_git.en.yml"),
+    ),
+    (
+        "capabilities.member_git",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/capabilities/member_git.ja.yml"),
+    ),
+    (
         "cli.git_credential",
         "en",
         include_str!("../../../guildbotics/templates/locales/cli/git_credential.en.yml"),

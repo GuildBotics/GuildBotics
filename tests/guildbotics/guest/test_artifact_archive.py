@@ -212,3 +212,38 @@ def test_case_alias_parent_collision_is_translated(monkeypatch, tmp_path, second
         )
     assert [entry.name for entry in destination.iterdir()] == ["A"]
     assert (destination / "A").read_bytes() == b"first"
+
+
+@pytest.mark.parametrize("attachment", [False, True])
+@pytest.mark.parametrize("existing_file", [False, True])
+def test_relative_download_destinations_are_resolved_in_the_command_directory(
+    tmp_path, attachment, existing_file
+):
+    directory = tmp_path / "command"
+    directory.mkdir()
+    destination = directory / "relative"
+    if existing_file:
+        destination.write_bytes(b"keep this file")
+    arguments = [sys.executable, "-m", "guildbotics.guest.artifact_archive", "relative"]
+    data = b"contents"
+    if attachment:
+        arguments.extend(["download.txt", "atc_1"])
+    else:
+        data = _archive({"download.txt": data})
+
+    result = subprocess.run(
+        arguments,
+        cwd=directory,
+        input=data,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    if existing_file:
+        assert result.returncode == 1
+        assert str(destination.resolve()).encode() in result.stderr
+        assert destination.read_bytes() == b"keep this file"
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (destination / "download.txt").read_bytes() == b"contents"
+    assert not (tmp_path / "relative").exists()

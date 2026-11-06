@@ -532,6 +532,49 @@ mod tests {
     }
 
     #[test]
+    fn credential_carrier_spellings_are_owned_by_authentication() {
+        fn offenders(dir: &Path, carriers: &[&str], found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let kind = entry.file_type().unwrap();
+                if kind.is_dir() {
+                    offenders(&path, carriers, found);
+                } else if kind.is_file()
+                    && path.extension().is_some_and(|ext| ext == "rs")
+                    && !path.ends_with("gb-server/src/auth.rs")
+                {
+                    let source = std::fs::read_to_string(&path).unwrap().to_ascii_lowercase();
+                    if carriers.iter().any(|carrier| source.contains(carrier)) {
+                        found.push(path);
+                    }
+                }
+            }
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let carriers = [OWNER_TOKEN, COOKIE_PREFIX, CSRF_HEADER];
+        let mut found = Vec::new();
+        for source in ["gb-server/src", "guildbotics/src"] {
+            offenders(&root.join(source), &carriers, &mut found);
+        }
+        assert!(
+            found.is_empty(),
+            "unexpected credential carrier spellings in {found:?}"
+        );
+
+        let canary = tempfile::tempdir().unwrap();
+        let misplaced = canary.path().join("transport.rs");
+        std::fs::write(
+            &misplaced,
+            format!("const COOKIE: &str = {COOKIE_PREFIX:?};"),
+        )
+        .unwrap();
+        offenders(canary.path(), &carriers, &mut found);
+        assert_eq!(found, [misplaced]);
+    }
+
+    #[test]
     fn the_proof_is_the_hmac_of_the_tokens_digest() {
         let data = tempfile::tempdir().unwrap();
         let auth = ServerAuth::open(data.path(), 8765).unwrap();

@@ -42,7 +42,9 @@ pub(crate) struct RunRequest {
     pub(crate) cwd: Option<PathBuf>,
     /// The workspace the caller means, which must still be the selected one.
     pub(crate) expected_workspace: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expected_command_file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expected_command_file_revision: Option<String>,
 }
 
@@ -227,6 +229,17 @@ async fn start(
     };
     let person =
         person(&team, request.person.as_deref(), headers).map_err(|e| e.into_response())?;
+    let language = i18n::language(
+        headers
+            .get("x-guildbotics-language")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    if person.person_type == "human" {
+        return Err(error(StatusCode::BAD_REQUEST, "human_subject")
+            .reason(i18n::t(language, "cli.member.human_subject", &[]))
+            .into_response());
+    }
     // The one reading of the command: the file it runs and what it declares.
     let roots = CommandRoots {
         config,
@@ -310,12 +323,6 @@ async fn start(
         cwd,
         pipe: request.message,
     };
-    let language = i18n::language(
-        headers
-            .get("x-guildbotics-language")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or(""),
-    );
     // The run is the server's work, not the request's: it runs to its end
     // when the caller goes away, and a stop waits for it unless it cancels
     // it. A cancelled run's trace says so as it is dropped, and its microVM
@@ -647,6 +654,62 @@ fn internal(what: &str, error_type: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn run_member_selection_preserves_the_explicit_configured_and_implicit_order() {
+        use axum::http::HeaderMap;
+        use gb_config::team::Team;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let identity = dir.path().join("identity");
+        let project = config.join("team/project.yml");
+        for (id, name, active, kind) in [
+            ("yuki", "Yuki", true, "agent"),
+            ("akira", "Akira", true, "agent"),
+            ("aiko", "Aiko", false, "agent"),
+            ("ai", "Ai", true, "human"),
+        ] {
+            gb_base::files::atomic_write(
+                &config.join(format!("team/members/{id}/member.yml")),
+                format!("is_active: {active}\n").as_bytes(),
+            )
+            .unwrap();
+            gb_base::files::atomic_write(
+                &identity.join(format!(
+                    ".guildbotics/config/team/members/{id}/identity.yml"
+                )),
+                format!("person_id: {id}\nname: {name}\nperson_type: {kind}\n").as_bytes(),
+            )
+            .unwrap();
+        }
+        let load = |default: &str| {
+            gb_base::files::atomic_write(
+                &project,
+                format!("name: Test\ndefault_person_id: '{default}'\n").as_bytes(),
+            )
+            .unwrap();
+            Team::load(&config, &identity).unwrap()
+        };
+        let headers = HeaderMap::new();
+        let selected = |team: &Team, named| {
+            super::person(team, named, &headers)
+                .map(|member| member.person_id.clone())
+                .unwrap_or_else(|_| panic!("expected a member: {named:?}"))
+        };
+        let mut team = load("");
+        assert_eq!(selected(&team, Some("Aiko")), "aiko");
+        assert_eq!(selected(&team, None), "akira");
+        team.members.retain(|member| member.person_id != "akira");
+        assert_eq!(selected(&team, None), "yuki");
+        team.members.retain(|member| member.person_id != "yuki");
+        assert!(super::person(&team, None, &headers).is_err());
+        let team = load("yuki");
+        assert_eq!(selected(&team, None), "yuki");
+        assert_eq!(selected(&team, Some("akira")), "akira");
+        assert!(super::person(&team, Some("unknown"), &headers).is_err());
+        assert!(super::person(&load("removed"), None, &headers).is_err());
+    }
+
     #[tokio::test]
     async fn command_entry_holds_during_success_failure_and_cancellation() {
         use std::sync::{

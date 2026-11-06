@@ -455,6 +455,106 @@ mod tests {
         assert!(!api.service.service.status().await.running);
     }
 
+    #[tokio::test]
+    async fn server_keeps_its_lock_through_drain_and_releases_it_after_forced_work_cancels() {
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        for method in ["api-force", "interrupt-then-cancel", "immediate-cancel"] {
+            let root = tempfile::tempdir().unwrap();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let api = Arc::new(Api {
+                service: Default::default(),
+                member: None,
+                inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+                auth: ServerAuth::open(root.path(), port).unwrap(),
+                instance_id: "fixture".into(),
+                data: root.path().into(),
+                workspace: None,
+                work: Default::default(),
+                cancelled: Default::default(),
+                shutdown: Default::default(),
+            });
+            let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+            let (started, entered) = tokio::sync::oneshot::channel();
+            let (settled, cancelled) = tokio::sync::oneshot::channel();
+            api.work.spawn({
+                let signal = api.cancelled.clone();
+                async move {
+                    started.send(()).unwrap();
+                    signal.cancelled().await;
+                    settled.send(()).unwrap();
+                }
+            });
+            let server = Server {
+                lock: ServerLock::hold(root.path(), port).unwrap(),
+                listener,
+                api: api.clone(),
+                start_services: false,
+            };
+            let stop = CancellationToken::new();
+            let force = CancellationToken::new();
+            let mut serving = tokio::spawn(server.serve(
+                stop.clone().cancelled_owned(),
+                force.clone().cancelled_owned(),
+            ));
+            let endpoint = format!("http://127.0.0.1:{port}/api");
+            let http = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            assert!(
+                http.get(format!("{endpoint}/health"))
+                    .bearer_auth(token.trim())
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+                    .is_success()
+            );
+            entered.await.unwrap();
+            if method == "api-force" {
+                let response = http
+                    .post(format!("{endpoint}/shutdown"))
+                    .bearer_auth(token.trim())
+                    .json(&serde_json::json!({"force":true}))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+            } else {
+                if method == "interrupt-then-cancel" {
+                    stop.cancel();
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(100), &mut serving)
+                            .await
+                            .is_err()
+                    );
+                    assert!(!api.cancelled.is_cancelled());
+                    assert!(running(root.path(), "en").unwrap().is_some());
+                }
+                force.cancel();
+                stop.cancel();
+            }
+            tokio::time::timeout(Duration::from_secs(5), cancelled)
+                .await
+                .unwrap()
+                .unwrap();
+            let (held, result) = tokio::time::timeout(Duration::from_secs(5), serving)
+                .await
+                .unwrap()
+                .unwrap();
+            result.unwrap();
+            assert!(running(root.path(), "en").unwrap().is_some());
+            drop(held);
+            assert!(running(root.path(), "en").unwrap().is_none());
+        }
+    }
+
     #[test]
     fn damaged_workspace_identity_disables_member_without_disabling_recovery() {
         let workspace = tempfile::tempdir().unwrap();

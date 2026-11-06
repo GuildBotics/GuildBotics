@@ -177,7 +177,23 @@ fn content_hash(content: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::content_hash;
+    use super::{PROVISION, content_hash};
+    use serde_json::Value;
+
+    #[test]
+    fn every_tool_in_the_provision_catalog_names_its_user_skills_directory() {
+        let entries: Vec<Value> = serde_json::from_str(PROVISION).unwrap();
+        assert!(!entries.is_empty());
+        for tool in entries {
+            assert!(
+                tool["provision"]["user_skills"]
+                    .as_str()
+                    .is_some_and(|path| !path.is_empty()),
+                "{} does not declare a user skills directory",
+                tool["name"],
+            );
+        }
+    }
 
     #[test]
     fn the_content_hash_is_fnv_1a_64() {

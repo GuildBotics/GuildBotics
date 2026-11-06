@@ -29,16 +29,16 @@ pub async fn run(command: ServiceCommand) -> anyhow::Result<()> {
     let (path, body, message) = match command {
         ServiceCommand::Start => (
             "/scheduler/start",
-            json!({}),
+            None,
             "runtime.service_lock.services_started",
         ),
         ServiceCommand::Stop { force } => (
             "/scheduler/stop",
-            json!({"force": force}),
+            Some(json!({"force": force})),
             "runtime.service_lock.services_stopped",
         ),
     };
-    owner.post(path, &body, None).await?;
+    owner.post(path, body.as_ref(), None).await?;
     println!("{}", text(message));
     Ok(())
 }
@@ -64,7 +64,7 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
         owner
             .post(
                 "/shutdown",
-                &json!({"force": force}),
+                Some(&json!({"force": force})),
                 Some(Duration::from_secs(5)),
             )
             .await

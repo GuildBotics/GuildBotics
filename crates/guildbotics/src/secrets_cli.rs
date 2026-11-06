@@ -408,6 +408,73 @@ mod tests {
     }
 
     #[test]
+    fn secrets_status_and_stdout_export_report_the_store_without_a_file() {
+        const FIXTURE: &str = "GUILDBOTICS_TEST_SECRETS_STDOUT_ROOT";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            use clap::Parser as _;
+            let parsed = crate::Cli::try_parse_from(["guildbotics", "secrets", "status"]).unwrap();
+            assert!(matches!(
+                parsed.command,
+                crate::Command::Secrets(Secrets {
+                    command: Command::Status,
+                    ..
+                })
+            ));
+            let root = PathBuf::from(root);
+            let keychain = MemoryKeychain::default();
+            let writes =
+                gb_base::shared_writes::SharedWrites::new(root.clone(), Some(root.clone()));
+            let scope = Scope::Workspace;
+            let store = SecretStore::new(
+                &writes,
+                scope,
+                DeviceKey {
+                    machine_root: root.clone(),
+                    keychain: &keychain,
+                },
+            )
+            .unwrap();
+            let secret = format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+                "x".repeat(1679)
+            );
+            let source = root.join("import.env");
+            std::fs::write(
+                &source,
+                dotenv(&BTreeMap::from([
+                    ("OPENAI_API_KEY".into(), "sk-fixture".into()),
+                    ("ALICE_GITHUB_PRIVATE_KEY".into(), secret.clone()),
+                ])),
+            )
+            .unwrap();
+            for command in [
+                Command::Import { file: source },
+                Command::Status,
+                Command::Export { file: None },
+            ] {
+                execute(command, &store, &keychain, &root, &root, scope, "en").unwrap();
+            }
+            assert_eq!(store.get("ALICE_GITHUB_PRIVATE_KEY").unwrap(), Some(secret));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env(FIXTURE, root.path().canonicalize().unwrap())
+            .args(["--exact", "secrets_cli::tests::secrets_status_and_stdout_export_report_the_store_without_a_file", "--nocapture"])
+            .output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        for expected in [
+            "os_secret_store: available",
+            "locked: no",
+            "OPENAI_API_KEY=sk-fixture",
+        ] {
+            assert!(stdout.contains(expected), "{stdout}");
+        }
+        assert!(!root.path().join("export.env").exists());
+    }
+
+    #[test]
     fn dotenv_exports_plain_and_multiline_values_without_interpolation() {
         let values = BTreeMap::from([
             ("KEY".into(), "abc-12".into()),

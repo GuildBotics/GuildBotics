@@ -302,18 +302,32 @@ mod tests {
         assert_eq!(raced.unwrap().password, first.password);
         assert_eq!(requests.lock().unwrap().issued.len(), 1);
         assert_eq!(acquire().await.unwrap().password, first.password);
-        requests.lock().unwrap().list = vec![
-            json!({"id":"old", "label":format!("git:Old machine ({suffix})")}),
-            json!({"id":"other", "label":"git:Other machine (deadbeef)"}),
-            json!({"id":"keep", "label":format!("app:Other app ({suffix})")}),
-        ];
+        {
+            let mut observed = requests.lock().unwrap();
+            let first_label = observed.issued[0].clone();
+            observed.list = vec![
+                json!({"id":"first", "label":first_label}),
+                json!({"id":"old", "label":format!("git:Old machine ({suffix})")}),
+                json!({"id":"other", "label":"git:Other machine (deadbeef)"}),
+                json!({"id":"keep", "label":format!("app:Other app ({suffix})")}),
+            ];
+        }
+        *cache.lock().unwrap() = None;
+        let second = acquire().await.unwrap();
+        assert_ne!(second.password, first.password);
+        assert_eq!(requests.lock().unwrap().revoked, ["first", "old"]);
+        {
+            let mut observed = requests.lock().unwrap();
+            assert!(observed.issued[1].ends_with(&format!("({suffix})")));
+            observed
+                .list
+                .retain(|token| matches!(token["id"].as_str(), Some("other" | "keep")));
+        }
         *cache.lock().unwrap() = Some("revoked-token".into());
-        assert_ne!(acquire().await.unwrap().password, first.password);
-        assert_eq!(requests.lock().unwrap().revoked, ["old"]);
-        assert!(requests.lock().unwrap().issued[1].ends_with(&format!("({suffix})")));
+        assert_ne!(acquire().await.unwrap().password, second.password);
         *cache.lock().unwrap() = Some("another-member".into());
         assert_eq!(acquire().await.unwrap().username, "owner");
-        assert_eq!(requests.lock().unwrap().issued.len(), 3);
+        assert_eq!(requests.lock().unwrap().issued.len(), 4);
         server.abort();
     }
 

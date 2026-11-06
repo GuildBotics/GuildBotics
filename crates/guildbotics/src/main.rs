@@ -30,6 +30,7 @@ enum Command {
     },
     /// Manage this device's isolated environment
     Environment {
+        /// Select the workspace whose environment declaration to use
         #[arg(long, global = true)]
         workspace: Option<std::path::PathBuf>,
         #[command(subcommand)]

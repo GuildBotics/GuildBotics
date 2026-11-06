@@ -95,10 +95,13 @@ impl OwnerClient {
     pub async fn post(
         &self,
         path: &str,
-        body: &Value,
+        body: Option<&Value>,
         timeout: Option<Duration>,
     ) -> anyhow::Result<Value> {
-        let mut request = self.request(reqwest::Method::POST, path).json(body);
+        let mut request = self.request(reqwest::Method::POST, path);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
@@ -182,19 +185,48 @@ pub async fn run_command(
         && let Some(health) = owner.health().await
         && health["workspace"] == json!(workspace)
     {
-        let answer = owner
-            .post("/commands/run", &serde_json::to_value(request)?, None)
+        let response = owner
+            .request(reqwest::Method::POST, "/commands/run")
+            .json(&request)
+            .send()
             .await?;
-        return command_output(answer, language);
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await?;
+            let error = serde_json::from_str::<Value>(&text).unwrap_or_default();
+            if let Some(message) = error["message"].as_str() {
+                anyhow::bail!("{message}");
+            }
+            anyhow::bail!("HTTP {status}: {text}");
+        }
+        return command_output(response.json().await?, language);
     }
     crate::commands::run_locally(request, &workspace, &data, language).await
 }
 
 pub async fn git_credential(action: &str) -> anyhow::Result<()> {
-    use std::io::{self, BufRead, Write};
+    let language = language().await;
+    answer_git_credential(
+        action,
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+        std::io::stderr().lock(),
+        language,
+        async |origin: String| gb_integrations::factory::human_git_credential(&origin).await,
+    )
+    .await
+}
 
+async fn answer_git_credential(
+    action: &str,
+    input: impl std::io::BufRead,
+    mut stdout: impl std::io::Write,
+    mut stderr: impl std::io::Write,
+    language: &str,
+    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
+) -> anyhow::Result<()> {
     let mut attributes = std::collections::BTreeMap::new();
-    for line in io::stdin().lock().split(b'\n') {
+    for line in input.split(b'\n') {
         let line = line?;
         let text = String::from_utf8_lossy(&line);
         let text = text.trim_end_matches('\r');
@@ -213,7 +245,6 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
     let value = |name| attributes.get(name).map(String::as_str).unwrap_or_default();
     let protocol = value("protocol");
     let host = value("host");
-    let language = language().await;
     // The protocol fields are untrusted. Do not echo a userinfo or control
     // sequence masquerading as the remote's host.
     let origin = format!("{protocol}://{host}");
@@ -223,8 +254,7 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b".:_-[]".contains(&b));
     let origin = if safe { origin.as_str() } else { "" };
-    let mut stdout = io::stdout().lock();
-    match gb_integrations::factory::human_git_credential(origin).await {
+    match lookup(origin.to_owned()).await {
         Ok(Some(credential)) => {
             stdout.write_all(
                 format!(
@@ -234,14 +264,15 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
                 .as_bytes(),
             )?;
         }
-        Ok(None) => eprintln!(
+        Ok(None) => writeln!(
+            stderr,
             "{}",
             i18n::t(
                 language,
                 "cli.git_credential.not_served",
                 &[("origin", origin)]
             )
-        ),
+        )?,
         Err(error) => {
             let reason = error
                 .downcast_ref::<gb_ports::ServiceError>()
@@ -254,14 +285,15 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
                     i18n::t(language, error.translation_key(), &args)
                 })
                 .unwrap_or_else(|| error.to_string());
-            eprintln!(
+            writeln!(
+                stderr,
                 "{}",
                 i18n::t(
                     language,
                     "integrations.branvil.owner_git.unavailable",
                     &[("reason", &reason)]
                 )
-            );
+            )?;
             stdout.write_all(b"quit=1\n")?;
         }
     }
@@ -289,7 +321,7 @@ pub async fn entry_link() -> Result<String, String> {
     .ok_or_else(|| i18n::t(language, "cli.server.unreachable", &[]))?;
     let refused = |reason: String| i18n::t(language, "cli.server.refused", &[("reason", &reason)]);
     let answer = owner
-        .post("/session/links", &json!({}), Some(TIMEOUT))
+        .post("/session/links", Some(&json!({})), Some(TIMEOUT))
         .await
         .map_err(|e| refused(e.to_string()))?;
     answer["url"]
@@ -314,4 +346,55 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
     };
     let proof = answer.json::<Value>().await.unwrap_or_default();
     proof["proof"].as_str() == Some(&auth::proof(digest, id, &nonce))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::answer_git_credential;
+
+    #[tokio::test]
+    async fn git_helper_emits_credentials_for_the_origin_and_ends_the_search_on_failure() {
+        let origin = "http://127.0.0.1:7878";
+        for (input, fail) in [
+            (
+                "capability[]=authtype\r\ncapability[]=state\r\nprotocol=http\r\nhost=127.0.0.1:7878\r\npath=git/acme/demo.git\r\nwwwauth[]=Basic realm=branvil\r\n\r\n",
+                false,
+            ),
+            ("protocol=http\nhost=127.0.0.1:7878", false),
+            ("protocol=http\nhost=127.0.0.1:7878\n\n", true),
+        ] {
+            let mut output = Vec::new();
+            let mut error = Vec::new();
+            answer_git_credential(
+                "get",
+                input.as_bytes(),
+                &mut output,
+                &mut error,
+                "en",
+                async |asked| {
+                    assert_eq!(asked, origin);
+                    if fail {
+                        anyhow::bail!("Branvil is not reachable.");
+                    }
+                    Ok(Some(gb_ports::GitCredential {
+                        username: "otota".into(),
+                        password: "bvt_fixture".into(),
+                    }))
+                },
+            )
+            .await
+            .unwrap();
+            if fail {
+                assert_eq!(output, b"quit=1\n");
+                assert!(
+                    String::from_utf8(error)
+                        .unwrap()
+                        .contains("Branvil is not reachable.")
+                );
+            } else {
+                assert_eq!(output, b"username=otota\npassword=bvt_fixture\n");
+                assert!(error.is_empty());
+            }
+        }
+    }
 }

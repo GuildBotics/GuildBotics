@@ -1894,10 +1894,12 @@ pub async fn remove_snapshot(path: PathBuf) -> Result<(), String> {
 }
 
 /// Remove SDK metadata together with artifacts while retaining provider logins.
-pub async fn remove_snapshots(home: &Path, workspace: &Path) -> Result<(), String> {
-    ensure(home).map_err(|e| format!("{e:?}"))?;
-    backend(home).await.map_err(|e| format!("{e:?}"))?;
-    crate::snapshot::remove(workspace, remove_snapshot).await
+pub async fn remove_snapshots(home: &Path, workspace: &Path) -> Result<Vec<String>, Failure> {
+    ensure(home)?;
+    backend(home).await?;
+    crate::snapshot::remove(workspace, remove_snapshot)
+        .await
+        .map_err(|error| Failure::Command(Sentence::Text(error)))
 }
 
 fn worktree_argv(operation: &str, copy: &crate::worktree::Copy) -> Vec<String> {
