@@ -2,5 +2,3 @@
 integrations.branvil.api.timeout	The embedded DataApi has no HTTP request timeout; the Python HTTP client was removed in #81/#88.
 integrations.branvil.api.unreachable	The embedded DataApi has no remote address to connect to; the Python HTTP client was removed in #81/#88.
 integrations.branvil.api.not_branvil	The embedded DataApi is statically Branvil, so no HTTP server identity probe remains after #81/#88.
-integrations.branvil.api.not_connected	The embedded service replaces Setup connection to an external HTTP server removed in #81/#88.
-integrations.branvil.api.admin_refused	The embedded service has no external administrator connection handshake; that HTTP handshake was removed in #81/#88.
