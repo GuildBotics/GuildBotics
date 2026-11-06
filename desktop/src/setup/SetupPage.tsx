@@ -3368,8 +3368,7 @@ function MembersSection({
   // project form's field already names while a switch is under way.
   const configDir = config?.config_dir ?? "";
   const shouldSeedDefaultRoutine = Boolean(services.ticket_service);
-  // The accounts of the providers the project uses, and of those whose
-  // credentials a used provider is handed, each in its own tab.
+  // Accounts of the project and of the member's other workspaces.
   const serviceProviders = useServiceProviders();
   const usedProviders = new Set(Object.values(services).map((service) => service?.name));
   // A member's accounts are its identity's, so one it already has with a
@@ -3379,13 +3378,7 @@ function MembersSection({
   )
     .filter(([, view]) => Object.values(view).some(Boolean))
     .map(([name]) => name);
-  const accountProviders = new Set([
-    ...usedProviders,
-    ...heldAccounts,
-    ...serviceProviders
-      .filter((provider) => usedProviders.has(provider.name))
-      .flatMap((provider) => provider.credentials_from),
-  ]);
+  const accountProviders = new Set([...usedProviders, ...heldAccounts]);
   const accountTabs = serviceProviders.filter(
     (provider) => accountProviders.has(provider.name) && PROVIDER_UIS[provider.name]?.member,
   );
@@ -3468,15 +3461,10 @@ function MembersSection({
     personId,
     savedPersonId: formMode === "edit" ? (editingPersonId ?? "") : "",
     memberKey: memberFormKey,
-    gitEmail,
-    setGitEmail,
     chatChannels: isHumanMember ? [] : chatChannels,
     chatChannelsField: null,
     services,
   };
-  const personIdHolder = accountTabs.find((provider) =>
-    PROVIDER_UIS[provider.name].member!.holdsPersonId?.(accountForm(provider.name)),
-  );
   const accountErrors = Object.fromEntries(
     accountTabs.map((provider) => [
       provider.name,
@@ -4121,23 +4109,12 @@ function MembersSection({
                     aria-required
                     value={personId}
                     onChange={(event) => setPersonId(event.currentTarget.value)}
-                    // An account set up for this member (an app registered for
-                    // it, for one) is for the member it was set up for.
-                    // Other workspaces know the member by its ID, so a
-                    // member keeps the one it has.
-                    disabled={
-                      formMode === "edit" ||
-                      joiningPersonId !== null ||
-                      personIdHolder !== undefined
-                    }
+                    // Other workspaces know this identity by its stable ID.
+                    disabled={formMode === "edit" || joiningPersonId !== null}
                     description={
                       formMode === "edit" || joiningPersonId !== null
                         ? t("setup.members.personIdFixed", { machine })
-                        : personIdHolder !== undefined
-                          ? t("setup.members.personIdFixedByAccount", {
-                              provider: personIdHolder.title,
-                            })
-                          : undefined
+                        : undefined
                     }
                     error={memberErrors.personId}
                   />
@@ -4148,6 +4125,11 @@ function MembersSection({
                     value={personName}
                     onChange={(event) => setPersonName(event.currentTarget.value)}
                     error={memberErrors.personName}
+                  />
+                  <TextInput
+                    label={t("setup.members.gitEmail")}
+                    value={gitEmail}
+                    onChange={(event) => setGitEmail(event.currentTarget.value)}
                   />
                   <Select
                     label={<RequiredLabel text={t("setup.members.type")} />}

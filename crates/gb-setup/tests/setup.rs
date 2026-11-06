@@ -48,12 +48,10 @@ fn refusal(code: &str) -> SetupError {
 impl MemberAccount for Account {
     fn prepare<'a>(&'a mut self, member: &'a SavedMember) -> Hook<'a> {
         Box::pin(async move {
-            let credentials: Vec<_> = member.credentials.keys().cloned().collect();
             self.log.lock().unwrap().push(format!(
-                "prepare:{}:{}:{}",
+                "prepare:{}:{}",
                 self.provider,
-                member.secret(&format!("{}_TOKEN", self.provider.to_uppercase())),
-                credentials.join(",")
+                member.secret(&format!("{}_TOKEN", self.provider.to_uppercase()))
             ));
             if self.refuse.contains(&format!("prepare:{}", self.provider)) {
                 return Err(refusal("provider_refused"));
@@ -151,12 +149,6 @@ impl ProviderModels for Models {
         json!({
             "user": account_info.get(&format!("{provider}_user")).cloned().unwrap_or_default(),
             "has_token": has_secret(&format!("{}_TOKEN", provider.to_uppercase())),
-        })
-    }
-    fn credential(&self, provider: &str, member: &SavedMember) -> Option<HostCredential> {
-        let token = member.secret(&format!("{}_TOKEN", provider.to_uppercase()));
-        (provider == "alpha" && !token.is_empty()).then(|| HostCredential {
-            token: token.into(),
         })
     }
     fn removed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a> {
@@ -401,7 +393,7 @@ fn bytes_under(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 fn provider_hooks_run_in_frozen_order() {
     let world = World::new();
     world.init(json!({"language": "en"}));
-    // A save: every account's stored items, the credentials handed over and
+    // A save: every account's stored items, their effective secrets and
     // each account's preparation outside the locks, then the write, and the
     // settling.
     world
@@ -415,8 +407,8 @@ fn provider_hooks_run_in_frozen_order() {
         [
             "stored:alpha:false",
             "stored:beta:false",
-            "prepare:alpha:alpha-1:alpha",
-            "prepare:beta::alpha",
+            "prepare:alpha:alpha-1",
+            "prepare:beta:",
             "stored:alpha:false",
             "stored:beta:false",
             "settled:alpha:true",
@@ -433,8 +425,8 @@ fn provider_hooks_run_in_frozen_order() {
     assert_eq!(
         refused.log()[2..],
         [
-            "prepare:alpha:alpha-1:alpha",
-            "prepare:beta::alpha",
+            "prepare:alpha:alpha-1",
+            "prepare:beta:",
             "settled:alpha:false",
             "settled:beta:false",
         ]
@@ -466,7 +458,7 @@ fn provider_hooks_run_in_frozen_order() {
         .unwrap_err();
     assert_eq!(code(&error), "person_env_prefix_conflict");
     let log = world.log();
-    assert!(log.contains(&"prepare:alpha::".to_owned()), "{log:?}");
+    assert!(log.contains(&"prepare:alpha:".to_owned()), "{log:?}");
     assert!(
         log.iter().all(|entry| !entry.starts_with("settled")),
         "{log:?}"

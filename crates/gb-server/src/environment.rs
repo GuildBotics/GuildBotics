@@ -1642,3 +1642,29 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod provider_image_tests {
+    use super::*;
+    #[tokio::test]
+    async fn ci_image_loading_is_only_offered_for_branvil() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join(".guildbotics/config/team");
+        std::fs::create_dir_all(&config).unwrap();
+        for provider in ["", "local", "slack", "github"] {
+            std::fs::write(
+                config.join("project.yml"),
+                json!({"services":{"code_hosting_service":{"name":provider}}}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                load_ci(root.path(), &root.path().join("absent.tar"), |_| panic!(
+                    "a different provider cannot begin a CI load"
+                ))
+                .await
+                .unwrap(),
+                None
+            );
+        }
+    }
+}

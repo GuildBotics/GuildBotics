@@ -312,8 +312,7 @@ async fn ticket_relations(t: &dyn TicketService) {
 async fn scenario() {
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("branvil");
-    ::branvil::api::initialize(&data, "owner").unwrap();
-    let owner_token = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
+    let owner_token = ::branvil::api::initialize(&data, "owner").unwrap();
     let alert_host = alerts::Host::configure(&data);
     let running = ::branvil::api::Running::start(&data).await.unwrap();
     let base = running.data.base_url().to_owned();

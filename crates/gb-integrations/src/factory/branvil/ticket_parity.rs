@@ -12,8 +12,7 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        initialize(temp.path(), "owner1").unwrap();
-        let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+        let token = initialize(temp.path(), "owner1").unwrap();
         let running = Running::start(temp.path()).await.unwrap();
         let owner = running.data.authenticate(token.clone()).await.unwrap();
         for workspace in ["test", "other"] {

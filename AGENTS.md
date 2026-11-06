@@ -52,8 +52,8 @@ lychee --no-progress --scheme file --include-fragments --extensions md './*.md' 
 ```
 
 黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
-Rustの入口へ向ける形で残す。CIへの復帰は #91・#92。
-desktop journey は #91 まで停止し、Desktop E2E gateは成功を返す。
+Rustの入口へ向ける形で残す。desktop の黒箱テストと CI への復帰は #128。
+desktop journey は #128 まで停止し、Desktop E2E gateは成功を返す。
 Branvilの画面E2Eは継続する。
 
 ## 品質とテスト

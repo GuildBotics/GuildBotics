@@ -2,3 +2,5 @@ ja:
   person_not_found: "メンバーの設定が見つかりませんでした。"
   person_not_executable: "人のメンバーは、コマンドを既定で実行するメンバーにできません。"
   avatar_too_large: "アバターのファイルが大きすぎます（最大 4 MB）。"
+  provider_configured: "%{target} は設定済みです。"
+  provider_unconfigured: "%{target} が設定されていません。"

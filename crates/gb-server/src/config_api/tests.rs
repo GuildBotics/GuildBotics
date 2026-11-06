@@ -519,7 +519,7 @@ async fn the_project_is_read_and_saved_without_touching_what_the_form_does_not_n
             "PUT",
             "/config/project",
             json!({"language": "ja", "description": "New", "llm_api_type": "gemini", "cli_agent": "codex",
-                "services": {"chat_service": {"name": "Local"}, "code_hosting_service": {"name": "branvil", "owner": "acme"}}, "expected_revisions": read["revisions"]}),
+                "services": {"chat_service": {"name": "Local"}, "code_hosting_service": {"name": "branvil", "workspace": "acme"}}, "expected_revisions": read["revisions"]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -531,7 +531,7 @@ async fn the_project_is_read_and_saved_without_touching_what_the_form_does_not_n
     assert_eq!(
         project["services"],
         json!({"chat_service": {"name": "local"},
-            "code_hosting_service": {"name": "branvil", "owner": "acme"}})
+            "code_hosting_service": {"name": "branvil", "workspace": "acme"}})
     );
     let again = f.get("/config/project").await;
     assert_eq!(again["services"], project["services"]);
@@ -947,7 +947,10 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
         read["chat_channel_participation"],
         json!({"C01234567": "social"})
     );
-    assert_eq!(read["accounts"], json!({}));
+    assert_eq!(
+        read["accounts"],
+        json!({"branvil":{"username":"","has_token":true},"slack":{"user_id":"","has_bot_token":false,"has_app_token":false}})
+    );
     let (status, _) = f
         .save(
             "PUT",
@@ -1048,7 +1051,10 @@ async fn a_roles_only_save_keeps_the_accounts_no_model_shows() {
         "person_id: alice\nname: Test\nperson_type: agent\naccount_info:\n  git_user: Test\n  branvil_username: alice-bot\n  slack_user_id: U0ALICE\n",
     );
     let read = f.get("/config/members/alice").await;
-    assert_eq!(read["accounts"], json!({}));
+    assert_eq!(
+        read["accounts"],
+        json!({"branvil":{"username":"alice-bot","has_token":false},"slack":{"user_id":"U0ALICE","has_bot_token":false,"has_app_token":false}})
+    );
     let mut form = agent("alice");
     form["roles"] = json!(["reviewer"]);
     form["expected_revisions"] = read["revisions"].clone();
@@ -1541,7 +1547,11 @@ async fn colliding_identities_are_removed_without_touching_shared_secrets() {
     let before = std::fs::read(&sealed).unwrap();
     f.keys(Keys::Untouchable);
     let read = f.get("/config/members/alice-bak").await;
-    assert!(!read.to_string().contains("\"has_"), "{read}");
+    assert!(
+        read["accounts"]["branvil"]["has_token"] == false
+            && read["accounts"]["slack"]["has_bot_token"] == false,
+        "{read}"
+    );
     let (status, body) = f.call("DELETE", "/identities/alice_bak", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(std::fs::read(&sealed).unwrap(), before);
@@ -2906,7 +2916,12 @@ async fn reads_answer_while_another_writer_holds_the_locks() {
         (status, &body["code"]),
         (StatusCode::SERVICE_UNAVAILABLE, &json!("config_busy"))
     );
-    for uri in ["/team", "/config/members/aiko", "/identities"] {
+    let (status, body) = f.call("GET", "/config/members/aiko", Value::Null).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::SERVICE_UNAVAILABLE, &json!("config_busy"))
+    );
+    for uri in ["/team", "/identities"] {
         let (status, body) = f.call("GET", uri, Value::Null).await;
         assert_eq!(status, StatusCode::OK, "{uri}: {body}");
     }
@@ -3093,3 +3108,9 @@ async fn the_exchange_directory_is_recognized_under_another_spelling() {
             .is_empty()
     );
 }
+
+mod providers;
+
+mod slack_review;
+
+mod branvil_diagnostics;

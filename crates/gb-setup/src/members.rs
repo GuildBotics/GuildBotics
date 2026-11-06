@@ -307,7 +307,7 @@ impl Setup<'_> {
     }
 
     /// The saved member `id`, as its accounts see it.
-    fn saved_member(&self, id: &str) -> anyhow::Result<SavedMember> {
+    pub fn saved_member(&self, id: &str) -> anyhow::Result<SavedMember> {
         let identity = mapping(
             &self.repository.identity_view(),
             &member_path(id, "identity"),
@@ -319,7 +319,6 @@ impl Setup<'_> {
             human: text(&identity, "person_type") == "human",
             account_info: strings(identity.get("account_info")),
             secrets: owned.values,
-            credentials: BTreeMap::new(),
             avatar: avatar_in(self.identity_root(), id),
         })
     }
@@ -535,21 +534,11 @@ impl Setup<'_> {
             } else {
                 self.owned(id, true)?.values
             },
-            credentials: BTreeMap::new(),
             avatar: avatar_in(self.identity_root(), id),
         };
         member
             .secrets
             .extend(form_secrets.into_iter().filter(|(_, v)| !v.is_empty()));
-        member.credentials = self
-            .providers
-            .member_providers()
-            .into_iter()
-            .filter_map(|provider| {
-                let credential = self.providers.credential(&provider, &member)?;
-                Some((provider, credential))
-            })
-            .collect();
         for account in accounts.iter_mut() {
             account.prepare(&member).await?;
         }

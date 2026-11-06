@@ -150,9 +150,6 @@ pub trait ProviderModels: Send + Sync {
         account_info: &BTreeMap<String, String>,
         has_secret: &dyn Fn(&str) -> bool,
     ) -> Value;
-    /// The member's credential on `provider`'s host, which its other
-    /// accounts are handed when it is saved.
-    fn credential(&self, provider: &str, member: &SavedMember) -> Option<HostCredential>;
     /// Undo with `provider` what saving `member` obtained, before it is
     /// deleted; a refusal keeps the member.
     fn removed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a>;
@@ -181,14 +178,8 @@ pub struct StoredAccount {
     pub secrets: BTreeMap<String, String>,
 }
 
-/// A member's credential on a host, as its provider hands it to the
-/// member's other accounts.
-#[derive(Clone, PartialEq)]
-pub struct HostCredential {
-    pub token: String,
-}
-
 /// A member as its accounts see it while it is saved or deleted.
+#[derive(Clone)]
 pub struct SavedMember {
     pub person_id: String,
     pub name: String,
@@ -197,8 +188,6 @@ pub struct SavedMember {
     pub account_info: BTreeMap<String, String>,
     /// Its secrets by member-relative name, as the save leaves them.
     pub secrets: BTreeMap<String, String>,
-    /// Its credentials on other hosts, by the provider handing each over.
-    pub credentials: BTreeMap<String, HostCredential>,
     /// Its picture as GuildBotics keeps it.
     pub avatar: Option<PathBuf>,
 }

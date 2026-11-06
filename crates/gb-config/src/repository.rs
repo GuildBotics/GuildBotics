@@ -86,6 +86,14 @@ impl ConfigRepository {
             config: self.writes.identity.join(".guildbotics/config"),
         }
     }
+    /// Configuration belonging to the identities, independent of any workspace.
+    pub fn for_identity(mut writes: SharedWrites) -> Self {
+        writes.workspace = None;
+        let view = ConfigView {
+            config: writes.identity.join(".guildbotics/config"),
+        };
+        Self { writes, view }
+    }
     pub fn new(writes: SharedWrites) -> anyhow::Result<Self> {
         let workspace = writes
             .workspace

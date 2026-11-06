@@ -33,8 +33,6 @@ export type MemberContext = {
   savedPersonId: string;
   /** The edit session: a change means the form now describes another member. */
   memberKey: string;
-  gitEmail: string;
-  setGitEmail(value: string): void;
   chatChannels: string[];
   /** The editor of the member's chat channels, for the chat's panel to place. */
   chatChannelsField: ReactNode;
@@ -56,9 +54,6 @@ export type MemberAccountUi<Form> = {
     context: MemberContext;
     errors: FieldErrors;
   }): ReactNode;
-  /** Whether the form was set up for the member its ID names, which a member
-   * being added then keeps. */
-  holdsPersonId?(form: Form): boolean;
   /** After the member was saved; ``failure`` when the save failed. */
   saved?(
     form: Form,

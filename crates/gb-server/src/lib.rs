@@ -28,7 +28,7 @@ mod server;
 pub mod service;
 pub mod service_runtime;
 pub mod service_settings;
-mod setup_providers;
+pub mod setup_providers;
 #[cfg(test)]
 mod test_chat;
 #[cfg(test)]
@@ -43,3 +43,5 @@ pub mod workflow_runtime;
 pub mod workspace;
 
 pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, RunningServer, Server, Shutdown, running};
+
+mod provider_api;

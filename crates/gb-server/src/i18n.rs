@@ -8,6 +8,36 @@ use gb_environment::Sentence;
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "integrations.branvil.setup",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/setup.en.yml"),
+    ),
+    (
+        "integrations.branvil.setup",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/setup.ja.yml"),
+    ),
+    (
+        "integrations.branvil.provider",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/provider.en.yml"),
+    ),
+    (
+        "integrations.branvil.provider",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/integrations/branvil/provider.ja.yml"),
+    ),
+    (
+        "integrations.slack.setup",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/integrations/slack/setup.en.yml"),
+    ),
+    (
+        "integrations.slack.setup",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/integrations/slack/setup.ja.yml"),
+    ),
+    (
         "setup",
         "en",
         include_str!("../../../guildbotics/templates/locales/setup.en.yml"),

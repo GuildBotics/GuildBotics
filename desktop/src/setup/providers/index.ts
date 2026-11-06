@@ -10,8 +10,6 @@ import {
 } from "../../api/client";
 import { branvilAccount } from "./branvil/BranvilAccount";
 import { branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
-import { githubAccount } from "./github/GitHubAccount";
-import { githubBoard, githubCodeHosting } from "./github/GitHubBoard";
 import { isSlackChannel, slackAccount } from "./slack/SlackAccount";
 import type { FieldErrors, ProviderUi } from "./types";
 
@@ -21,10 +19,6 @@ export const PROVIDER_UIS: Record<string, ProviderUi> = {
   branvil: {
     services: { code_hosting_service: branvilCodeHosting, ticket_service: branvilTickets },
     member: branvilAccount,
-  },
-  github: {
-    services: { code_hosting_service: githubCodeHosting, ticket_service: githubBoard },
-    member: githubAccount,
   },
   slack: {
     services: {},

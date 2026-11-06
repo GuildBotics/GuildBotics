@@ -1,6 +1,7 @@
 //! Authenticated in-process access to the same operations used by HTTP.
 use crate::app::Shared;
 use crate::auth::{self, Caller};
+pub use crate::domain::apps::{AppToken, TokenRequest};
 use crate::domain::tickets::{NewComment, NewReaction, ReactionAdded};
 pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
@@ -39,6 +40,16 @@ impl DataApi {
         }
         Ok(guard)
     }
+    /// Whether the embedded service accepts work.
+    pub fn health(&self) -> AppResult<()> {
+        let _open = self.guard()?;
+        Ok(())
+    }
+    /// Spend a PKCE-bound local application code, as the HTTP endpoint does.
+    pub async fn exchange(&self, input: TokenRequest) -> AppResult<AppToken> {
+        let _open = self.guard()?;
+        crate::domain::apps::exchange(&self.app, input).await
+    }
     pub fn base_url(&self) -> &str {
         &self.app.base_url
     }
@@ -59,6 +70,12 @@ pub struct MemberApi {
     token: String,
 }
 impl MemberApi {
+    /// Issue the same single-use browser entry link as the HTTP endpoint.
+    pub async fn entry_link(&self) -> AppResult<members::EntryLink> {
+        let _open = self.api.guard()?;
+        members::entry_link(&self.api.app, &self.caller().await?)
+    }
+
     pub async fn upstream_dependency_alerts(
         &self,
         repo: &str,
@@ -752,9 +769,13 @@ impl Drop for Running {
     }
 }
 
-/// Initialize an empty data directory. This is an administrative operation.
-pub fn initialize(data_dir: &std::path::Path, owner: &str) -> anyhow::Result<()> {
-    crate::cli::init(None, Some(data_dir), owner, None, "127.0.0.1:0", None)
+/// Initialize an empty data directory and return the owner's token. This is an
+/// administrative operation.
+pub fn initialize(data_dir: &std::path::Path, owner: &str) -> anyhow::Result<String> {
+    crate::cli::init(None, Some(data_dir), owner, None, "127.0.0.1:0", None)?;
+    Ok(std::fs::read_to_string(
+        crate::config::Layout::new(data_dir).owner_token(),
+    )?)
 }
 
 #[cfg(test)]
@@ -767,8 +788,7 @@ mod tests {
     #[tokio::test]
     async fn authenticated_data_operations_share_permissions_and_revocation() {
         let temp = tempfile::tempdir().unwrap();
-        initialize(temp.path(), "owner1").unwrap();
-        let token = std::fs::read_to_string(temp.path().join("secrets/owner.token")).unwrap();
+        let token = initialize(temp.path(), "owner1").unwrap();
         let running = Running::start(temp.path()).await.unwrap();
         let api = &running.data;
         assert!(api.authenticate("invalid".into()).await.is_err());
