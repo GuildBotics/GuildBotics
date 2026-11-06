@@ -47,16 +47,37 @@ pub fn binary_version() -> anyhow::Result<String> {
     if let Some(version) = VERSION.get() {
         return Ok(version.clone());
     }
+    #[cfg(test)]
+    crate::config_api::switch_timing::mark(format_args!("executable hash starting"));
     let mut file = std::fs::File::open(std::env::current_exe()?)?;
     let mut hasher = Sha256::new();
     let mut bytes = [0; 65536];
+    #[cfg(test)]
+    let (mut total, mut read_time, mut hash_time) = (0, Duration::ZERO, Duration::ZERO);
     loop {
+        #[cfg(test)]
+        let phase = Instant::now();
         let count = file.read(&mut bytes)?;
+        #[cfg(test)]
+        {
+            read_time += phase.elapsed();
+            total += count;
+        }
         if count == 0 {
             break;
         }
+        #[cfg(test)]
+        let phase = Instant::now();
         hasher.update(&bytes[..count]);
+        #[cfg(test)]
+        {
+            hash_time += phase.elapsed();
+        }
     }
+    #[cfg(test)]
+    crate::config_api::switch_timing::mark(format_args!(
+        "executable hashed: {total} bytes, read {read_time:?}, SHA-256 {hash_time:?}"
+    ));
     let hash = hasher
         .finalize()
         .iter()

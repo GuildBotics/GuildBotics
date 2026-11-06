@@ -306,6 +306,33 @@ pub(crate) async fn select_workspace(
         .unwrap_or_else(|error| failure(error.into(), &headers))
 }
 
+// Temporary instrumentation for the detached-switch CI measurement.
+#[cfg(test)]
+pub(crate) mod switch_timing {
+    use std::io::Write as _;
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    pub(super) static START: OnceLock<Instant> = OnceLock::new();
+    pub(crate) fn mark(stage: std::fmt::Arguments<'_>) {
+        if let Some(start) = START.get() {
+            let line = format!(
+                "workspace-switch {:8.1} ms {stage}",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            eprintln!("{line}");
+            if let Some(path) = std::env::var_os("GUILDBOTICS_SWITCH_TIMINGS") {
+                let mut out = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .unwrap();
+                writeln!(out, "{line}").unwrap();
+            }
+        }
+    }
+}
+
 /// The switch to `requested`, holding `_switching` throughout: the selected
 /// workspace's idle service is stopped, its system transcript finished, and
 /// the new one is persisted, opened and announced.
@@ -315,6 +342,8 @@ async fn switch(
     requested: PathBuf,
     _switching: tokio::sync::OwnedRwLockWriteGuard<()>,
 ) -> Response {
+    #[cfg(test)]
+    switch_timing::mark(format_args!("switch started"));
     let selected = api.selected();
     if let Some(context) = active(&selected, false).await {
         return blocked(&headers, context);
@@ -335,10 +364,14 @@ async fn switch(
         Ok(workspace) => workspace,
         Err(refused) => return refused_location(refused, &headers, "unsafe_host_path"),
     };
+    #[cfg(test)]
+    switch_timing::mark(format_args!("target validated"));
     selected.service.stop(true).await;
     if let Some(context) = active(&selected, false).await {
         return blocked(&headers, context);
     }
+    #[cfg(test)]
+    switch_timing::mark(format_args!("old service stopped"));
     let instance = api.instance_id.clone();
     let (data, previous, next) = (
         api.data.clone(),
@@ -346,31 +379,50 @@ async fn switch(
         workspace.clone(),
     );
     let switched = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        #[cfg(test)]
+        switch_timing::mark(format_args!("persistence worker entered"));
         if let Some(previous) = previous {
             gb_observability::Diagnostics::open(&previous).finish_system_session()?;
         }
+        #[cfg(test)]
+        switch_timing::mark(format_args!(
+            "old transcript finished, registry write starting"
+        ));
         gb_workspace::selection::write_active(&data, &next)?;
+        #[cfg(test)]
+        switch_timing::mark(format_args!("registry and selection persisted"));
         Ok(())
     })
     .await;
     if let Err(error) = switched.map_err(anyhow::Error::from).and_then(|r| r) {
         return failure(error, &headers);
     }
+    #[cfg(test)]
+    switch_timing::mark(format_args!("selection build starting"));
     api.select(Selected::open(
         Some(workspace.clone()),
         &api,
         api.branvil.get().cloned(),
     ));
+    #[cfg(test)]
+    switch_timing::mark(format_args!("selection installed"));
     let diagnostics = gb_observability::Diagnostics::open(&workspace);
     match tokio::task::spawn_blocking(move || diagnostics.start_system_session(&instance)).await {
         Ok(Ok(())) => (),
         result => tracing::warn!("cannot start system transcript: {result:?}"),
     }
+    #[cfg(test)]
+    switch_timing::mark(format_args!("new transcript started"));
     let mut payload = serde_json::Map::new();
     payload.insert("workspace".into(), json!(workspace));
     api.events
         .publish("workspace.changed", payload, Origin::default());
-    Json(crate::screens::status(&api).await).into_response()
+    #[cfg(test)]
+    switch_timing::mark(format_args!("workspace.changed published"));
+    let response = Json(crate::screens::status(&api).await).into_response();
+    #[cfg(test)]
+    switch_timing::mark(format_args!("response assembled"));
+    response
 }
 
 /// The absolute name `path` means, its `..` taken back as the Python

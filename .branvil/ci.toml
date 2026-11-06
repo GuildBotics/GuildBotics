@@ -133,9 +133,15 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace",
+  '''set -eu
+export GUILDBOTICS_SWITCH_TIMINGS=/work/workspace-switch-timings.txt
+: > "$GUILDBOTICS_SWITCH_TIMINGS"
+trap 'cat "$GUILDBOTICS_SWITCH_TIMINGS"' EXIT
+CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace
+''',
 ]
 timeout_secs = 1800
+artifacts = [{ name = "workspace-switch-timings", paths = ["workspace-switch-timings.txt"] }]
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
 # Drive the public command line and its HTTP server with the same Rust binary.
