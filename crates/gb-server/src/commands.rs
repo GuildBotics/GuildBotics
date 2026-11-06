@@ -81,16 +81,23 @@ pub(crate) async fn run(
     headers: HeaderMap,
     Body(request): Body<RunRequest>,
 ) -> Response {
+    // Admitted for the selected workspace, which cannot be switched until
+    // the run is the server's work.
+    let Some(admitted) = api.admit() else {
+        return ApiError::new(StatusCode::CONFLICT, "command_workspace_changing", &headers)
+            .into_response();
+    };
+    let selected = api.selected();
     let state = RunState {
-        service: &api.service,
-        member: api.member.clone(),
+        service: &selected.service,
+        member: selected.member.clone(),
         inputs: Some(&api.inputs),
         data: &api.data,
-        workspace: api.workspace.as_ref(),
+        workspace: selected.workspace.as_ref(),
         work: &api.work,
         cancelled: &api.cancelled,
     };
-    start(&state, &headers, request)
+    start(&state, &headers, request, Some(admitted))
         .await
         .unwrap_or_else(|refused| refused)
 }
@@ -128,7 +135,7 @@ pub(crate) async fn run_locally(
             }
         }
     });
-    let response = start(&state, &headers, request)
+    let response = start(&state, &headers, request, None)
         .await
         .unwrap_or_else(|error| error);
     work.close();
@@ -147,10 +154,13 @@ pub(crate) async fn run_locally(
     crate::client::command_output(answer, language)
 }
 
+/// Starts `request`; `admitted` holds the selection until the run is the
+/// server's work.
 async fn start(
     api: &RunState<'_>,
     headers: &HeaderMap,
     request: RunRequest,
+    admitted: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
 ) -> Result<Response, Response> {
     let error = |status, code| ApiError::new(status, code, headers);
     if request.command.is_empty() {
@@ -417,6 +427,7 @@ async fn start(
         .map_err(|_| error(StatusCode::CONFLICT, "work_rejected").into_response())?;
     // The server still owns a caller-disconnected request's manual work.
     let work = api.work.spawn(work);
+    drop(admitted);
 
     let ran = match work.await {
         Ok(Ok(Ok(Some(ran)))) => ran,
@@ -767,18 +778,17 @@ mod tests {
         });
         let count = Arc::new(AtomicUsize::new(0));
         let factory = crate::keep_awake::test_count(&workspace, count.clone());
-        let api = Arc::new(crate::api::Api {
-            service: crate::service_runtime::Controller::new(native.clone(), host),
-            member: None,
-            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            auth: crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            instance_id: "fixture".into(),
-            data: native.data,
-            workspace: Some(workspace),
-            work: Default::default(),
-            cancelled: Default::default(),
-            shutdown: Default::default(),
-        });
+        let api = Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(workspace),
+                service: crate::service_runtime::Controller::new(native.clone(), host),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            "fixture".into(),
+            native.data,
+        ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let response = crate::api::router(api.clone())
             .oneshot(

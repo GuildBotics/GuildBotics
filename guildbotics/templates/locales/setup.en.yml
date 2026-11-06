@@ -1,0 +1,4 @@
+en:
+  person_not_found: "Member config was not found."
+  person_not_executable: "A human member cannot be the default command executor."
+  avatar_too_large: "Avatar file is too large (max 4 MB)."

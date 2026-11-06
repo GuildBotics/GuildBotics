@@ -1164,18 +1164,17 @@ pub(crate) mod tests {
             identity_root: native.identity_root.clone(),
         });
         let controller = crate::service_runtime::Controller::new(native.clone(), host.clone());
-        let api = Arc::new(crate::api::Api {
-            service: controller,
-            member: None,
-            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            auth: crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            instance_id: "fixture".into(),
-            data: native.data.clone(),
-            workspace: Some(workspace.clone()),
-            work: Default::default(),
-            cancelled: Default::default(),
-            shutdown: Default::default(),
-        });
+        let api = Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(workspace.clone()),
+                service: controller,
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            "fixture".into(),
+            native.data.clone(),
+        ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let app = crate::api::router(api.clone());
         for (method, path, body, authorized, expected_running, status) in [
@@ -1259,7 +1258,7 @@ pub(crate) mod tests {
         .unwrap()
         .unwrap();
         for draining in [false, true] {
-            let generation = draining.then(|| api.service.execution.begin_drain(false));
+            let generation = draining.then(|| api.selected().service.execution.begin_drain(false));
             let response = app.clone().oneshot(axum::http::Request::builder().method("POST").uri("/api/commands/run")
                 .header("host", "127.0.0.1:8765").header("content-type", "application/json")
                 .header("authorization", format!("Bearer {}", token.trim()))
@@ -1271,7 +1270,7 @@ pub(crate) mod tests {
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(value["code"], "work_rejected");
             if let Some(generation) = generation {
-                api.service.execution.wait(generation).await;
+                api.selected().service.execution.wait(generation).await;
             }
         }
         drop(lease);
@@ -1294,32 +1293,41 @@ pub(crate) mod tests {
         let project_path = workspace.join(".guildbotics/config/team/project.yml");
         project["services"]["chat_service"] = json!({"name":"slack"});
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.service.start().await.unwrap().running);
-        let view = api.service.view().await;
+        assert!(api.selected().service.start().await.unwrap().running);
+        let view = api.selected().service.view().await;
         assert_eq!(view["events"]["events_auth_failed_count"], 1);
         assert_eq!(
             view["events"]["events_auth_failed_persons"],
             json!(["aiko"])
         );
         assert_eq!(view["events"]["events_chat_provider"], "slack");
-        assert!(!api.service.stop(true).await.running);
-        let stopped = api.service.view().await;
+        assert!(!api.selected().service.stop(true).await.running);
+        let stopped = api.selected().service.view().await;
         assert_eq!(stopped["events"]["events_auth_failed_count"], 0);
         assert_eq!(stopped["events"]["events_auth_failed_persons"], json!([]));
         project["services"]["chat_service"] = json!({"name":"local"});
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.service.start().await.unwrap().running);
-        assert_eq!(api.service.view().await["events"]["listener_count"], 1);
-        assert!(!api.service.stop(true).await.running);
-        assert_eq!(api.service.view().await["events"]["listener_count"], 0);
+        assert!(api.selected().service.start().await.unwrap().running);
+        assert_eq!(
+            api.selected().service.view().await["events"]["listener_count"],
+            1
+        );
+        assert!(!api.selected().service.stop(true).await.running);
+        assert_eq!(
+            api.selected().service.view().await["events"]["listener_count"],
+            0
+        );
         project["services"]
             .as_object_mut()
             .unwrap()
             .remove("chat_service");
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.service.start().await.unwrap().running);
-        assert_eq!(api.service.view().await["events"]["listener_count"], 0);
-        assert!(!api.service.stop(true).await.running);
+        assert!(api.selected().service.start().await.unwrap().running);
+        assert_eq!(
+            api.selected().service.view().await["events"]["listener_count"],
+            0
+        );
+        assert!(!api.selected().service.stop(true).await.running);
         crate::service_settings::Settings::write(
             &crate::service_settings::Settings::default(),
             &workspace,
@@ -4609,23 +4617,21 @@ pub(crate) mod tests {
     }
     async fn http(native: Native, request: MemberRequest, path: &str) -> Value {
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(crate::api::Api {
-            service: Default::default(),
-            member: Some(Arc::new(Backend {
-                version: "fixture".into(),
-                workspace_id: "workspace".into(),
-                executor: Arc::new(native),
-                timeout: Duration::from_secs(30),
-            })),
-            inputs: crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            auth: crate::auth::ServerAuth::open(root.path(), 8765).unwrap(),
-            instance_id: "fixture".into(),
-            data: root.path().into(),
-            workspace: None,
-            work: tokio_util::task::TaskTracker::new(),
-            cancelled: tokio_util::sync::CancellationToken::new(),
-            shutdown: crate::server::Shutdown::default(),
-        });
+        let api = Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                member: Some(Arc::new(Backend {
+                    version: "fixture".into(),
+                    workspace_id: "workspace".into(),
+                    executor: Arc::new(native),
+                    timeout: Duration::from_secs(30),
+                })),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(root.path(), 8765).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         // MemberRequest is input-only; construct the wire object explicitly.
         let value = json!({"version":request.version,"workspace_id":request.workspace_id,"arguments":request.arguments,"stdin":request.stdin,"interactive_host":request.interactive_host,"interactive_thread_key":request.interactive_thread_key});

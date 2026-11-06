@@ -708,6 +708,8 @@ export type MemberSetupRequest = MemberWriteRequestBase & {
 };
 
 export type MemberConfig = {
+  /** The workspace config the member was read in, which its save names. */
+  config_dir: string;
   revisions: ConfigRevisions;
   person_id: string;
   person_name: string;
@@ -1077,9 +1079,6 @@ export type IntelligenceConfigUpdateRequest = {
 export type ConfigWriteResponse = {
   /** Where the written files now stand, for the next save from this screen. */
   revisions: ConfigRevisions;
-  project: { files: Array<{ path: string; action: string }> } | null;
-  member: { files: Array<{ path: string; action: string }> } | null;
-  intelligence?: { files: Array<{ path: string; action: string }> } | null;
 };
 
 export type ApiErrorPayload = {

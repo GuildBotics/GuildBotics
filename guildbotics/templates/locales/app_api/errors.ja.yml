@@ -32,6 +32,9 @@ ja:
   workspace_not_found: "ワークスペースのディレクトリが見つかりませんでした。"
   workspace_not_directory: "ワークスペースのパスはディレクトリである必要があります。"
   workspace_switch_blocked_by_active_work: "サービスまたはコマンドの作業がまだ実行中です。停止してからワークスペースを切り替えてください。"
+  workspace_not_configured:
+    plain: "GuildBotics のワークスペースが選択されていません。--workspace を指定するか、`guildbotics workspace use <path>` を実行するか、GUILDBOTICS_WORKSPACE_ROOT を設定してください。"
+    transcripts: "ワークスペースが選択されていないため、実行記録の設定はありません。"
   person_not_found:
     plain: "メンバー '%{person}' が見つかりません。"
     with_available: "メンバー '%{person}' が見つかりません。指定できるのは: %{available}"

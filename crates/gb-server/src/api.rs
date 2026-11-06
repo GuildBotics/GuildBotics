@@ -11,7 +11,7 @@ use axum::extract::{FromRequest, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use loopback_auth::Refusal;
 use serde::Deserialize;
@@ -33,22 +33,108 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
-    pub service: crate::service_runtime::Controller,
-    pub member: Option<Arc<crate::member::Backend>>,
+    selection: std::sync::RwLock<Arc<Selected>>,
+    /// Read while work for the selected workspace is admitted, and written
+    /// while another workspace is selected, so that none is admitted for a
+    /// workspace on its way out.
+    pub(crate) switching: Arc<tokio::sync::RwLock<()>>,
+    /// The code host the server runs, which the selected workspace's member
+    /// backend and service reach in process.
+    pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
+    pub events: crate::events::EventBus,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
     pub instance_id: String,
     /// The machine's own records: `<machine root>/data`.
     pub data: PathBuf,
-    /// The workspace the server opened, if any.
-    pub workspace: Option<PathBuf>,
     /// The work the server started, which outlives the request that started
     /// it and which a stop waits for.
     pub work: tokio_util::task::TaskTracker,
     /// Cancelled when the server stops without waiting for its work.
     pub cancelled: tokio_util::sync::CancellationToken,
+    /// The owner's home, holding the exchange directory.
+    pub(crate) home: PathBuf,
+    /// The root of the members' identities, which every workspace shares.
+    pub(crate) identity_root: PathBuf,
+    /// The keychain holding the machine's key to its secret stores.
+    pub(crate) keychain: Arc<dyn gb_config::secrets::Keychain>,
+    /// How long a config change waits for a lock held elsewhere.
+    pub(crate) write_timeout: std::time::Duration,
     pub(crate) shutdown: crate::server::Shutdown,
+}
+
+/// The workspace the server opened, if any, and what it built from it,
+/// replaced whole when another workspace is selected.
+#[derive(Default)]
+pub struct Selected {
+    pub workspace: Option<PathBuf>,
+    pub member: Option<Arc<crate::member::Backend>>,
+    pub service: crate::service_runtime::Controller,
+}
+
+impl Api {
+    pub fn new(
+        selected: Selected,
+        inputs: crate::input_files::InputFileStore,
+        auth: ServerAuth,
+        instance_id: String,
+        data: PathBuf,
+    ) -> Api {
+        let events = crate::events::EventBus::default();
+        events.record_in(
+            selected
+                .workspace
+                .as_deref()
+                .map(gb_observability::Diagnostics::open),
+        );
+        Api {
+            selection: std::sync::RwLock::new(Arc::new(selected)),
+            switching: Arc::default(),
+            branvil: std::sync::OnceLock::new(),
+            events,
+            inputs,
+            auth,
+            instance_id,
+            work: tokio_util::task::TaskTracker::new(),
+            cancelled: tokio_util::sync::CancellationToken::new(),
+            home: std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            identity_root: gb_base::home::identity_root()
+                .unwrap_or_else(|_| data.parent().unwrap_or(&data).join("identity")),
+            keychain: Arc::new(gb_config::secrets::SystemKeychain),
+            write_timeout: gb_base::shared_writes::SharedWrites::new(PathBuf::new(), None).timeout,
+            shutdown: crate::server::Shutdown::default(),
+            data,
+        }
+    }
+
+    /// Admits work for the selected workspace: a command, a member run or the
+    /// service's start, none of which a switch may overtake while it holds
+    /// the guard. None while a switch is under way.
+    pub(crate) fn admit(&self) -> Option<tokio::sync::OwnedRwLockReadGuard<()>> {
+        self.switching.clone().try_read_owned().ok()
+    }
+
+    /// The selected workspace and what was built from it.
+    pub fn selected(&self) -> Arc<Selected> {
+        self.selection
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Selects `selected`, whose events are recorded in its workspace.
+    pub(crate) fn select(&self, selected: Selected) {
+        self.events.record_in(
+            selected
+                .workspace
+                .as_deref()
+                .map(gb_observability::Diagnostics::open),
+        );
+        *self.selection.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(selected);
+    }
 }
 
 pub(crate) type Shared = Arc<Api>;
@@ -57,7 +143,7 @@ pub(crate) type Shared = Arc<Api>;
 /// the request asked for, and what the screen reads beside it.
 pub(crate) struct ApiError {
     status: StatusCode,
-    code: &'static str,
+    code: String,
     pub(crate) language: &'static str,
     sentence: Sentence,
     context: Box<Value>,
@@ -66,21 +152,26 @@ pub(crate) struct ApiError {
 /// A sentence of `app_api.errors` (the code's own by default), or one a
 /// lower layer already wrote.
 enum Sentence {
-    Key(&'static str, Vec<(&'static str, String)>),
+    Key(String, Vec<(String, String)>),
     Reason(String),
 }
 
 impl ApiError {
-    pub(crate) fn new(status: StatusCode, code: &'static str, headers: &HeaderMap) -> ApiError {
+    pub(crate) fn new(
+        status: StatusCode,
+        code: impl Into<String>,
+        headers: &HeaderMap,
+    ) -> ApiError {
+        let code = code.into();
         let asked = headers
             .get(LANGUAGE_HEADER)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         ApiError {
             status,
+            sentence: Sentence::Key(format!("app_api.errors.{code}"), vec![]),
             code,
             language: i18n::language(asked),
-            sentence: Sentence::Key(code, vec![]),
             context: Box::new(json!({})),
         }
     }
@@ -91,7 +182,16 @@ impl ApiError {
         key: &'static str,
         params: Vec<(&'static str, String)>,
     ) -> ApiError {
-        self.sentence = Sentence::Key(key, params);
+        self.sentence = Sentence::Key(
+            format!("app_api.errors.{key}"),
+            params.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+        );
+        self
+    }
+
+    /// Says it with the sentence of the locale key `key`, given `params`.
+    pub(crate) fn locale(mut self, key: &str, params: Vec<(String, String)>) -> ApiError {
+        self.sentence = Sentence::Key(key.into(), params);
         self
     }
 
@@ -111,9 +211,11 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let message = match self.sentence {
             Sentence::Key(key, params) => {
-                let params: Vec<(&str, &str)> =
-                    params.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                i18n::t(self.language, &format!("app_api.errors.{key}"), &params)
+                let params: Vec<(&str, &str)> = params
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                i18n::t(self.language, &key, &params)
             }
             Sentence::Reason(reason) => reason,
         };
@@ -133,19 +235,21 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let headers = req.headers().clone();
-        let invalid = || {
+        // What was wrong, as the Python version's `errors` list names it.
+        let invalid = |reason: String| {
             ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "validation_error",
                 &headers,
             )
+            .context(json!({"errors": [{"msg": reason}]}))
         };
         let bytes = axum::body::Bytes::from_request(req, state)
             .await
-            .map_err(|_| invalid())?;
+            .map_err(|e| invalid(e.body_text()))?;
         serde_json::from_slice(if bytes.is_empty() { b"{}" } else { &bytes })
             .map(Body)
-            .map_err(|_| invalid())
+            .map_err(|e| invalid(e.to_string()))
     }
 }
 
@@ -208,6 +312,65 @@ routes!(
         crate::environment::usage
     ),
     (get, "/config/status", crate::screens::config_status),
+    (post, "/config/init", crate::config_api::init),
+    (post, "/workspace", crate::config_api::select_workspace),
+    (get, "/device/workspaces", crate::config_api::workspaces),
+    (
+        delete,
+        "/device/workspaces",
+        crate::config_api::forget_workspace
+    ),
+    (get, "/config/project", crate::config_api::read_project),
+    (put, "/config/project", crate::config_api::save_project),
+    (
+        put,
+        "/config/project/default-person",
+        crate::config_api::default_person
+    ),
+    (get, "/config/roles", crate::config_api::roles),
+    (post, "/config/members", crate::config_api::create_member),
+    (
+        get,
+        "/config/members/{name}",
+        crate::config_api::read_member
+    ),
+    (
+        put,
+        "/config/members/{name}",
+        crate::config_api::save_member
+    ),
+    (
+        delete,
+        "/config/members/{name}",
+        crate::config_api::remove_member
+    ),
+    (
+        get,
+        "/config/members/{name}/avatar",
+        crate::config_api::avatar
+    ),
+    (
+        post,
+        "/config/members/{name}/avatar",
+        crate::config_api::upload_avatar,
+        gb_setup::AVATAR_LIMIT + (64 << 10)
+    ),
+    (get, "/identities", crate::config_api::identities),
+    (
+        delete,
+        "/identities/{name}",
+        crate::config_api::delete_identity
+    ),
+    (
+        get,
+        "/transcripts/settings",
+        crate::config_api::transcript_settings
+    ),
+    (
+        put,
+        "/transcripts/settings",
+        crate::config_api::save_transcript_settings
+    ),
     (get, "/team", crate::screens::team),
     (get, "/commands/files", crate::screens::files),
     (get, "/commands/files/{id}", crate::screens::file),
@@ -273,11 +436,13 @@ fn auth_denial(denied: Denied, headers: &HeaderMap) -> Response {
 /// with the one it means, and this machine by its name. The identities are
 /// read, or created on first use, on every answer.
 async fn health(State(api): State<Shared>) -> Response {
+    let selected = api.selected();
     let identities = {
-        let api = api.clone();
+        // The identity of the very workspace this answer names.
+        let (data, workspace) = (api.data.clone(), selected.workspace.clone());
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let device = identity::ensure_device_identity(&api.data)?;
-            let workspace = match &api.workspace {
+            let device = identity::ensure_device_identity(&data)?;
+            let workspace = match &workspace {
                 Some(workspace) => Some(identity::ensure_workspace_identity(workspace)?),
                 None => None,
             };
@@ -298,10 +463,10 @@ async fn health(State(api): State<Shared>) -> Response {
     };
     Json(json!({
         "status": "ok",
-        "version": api.member.as_ref().map(|v|v.version.as_str()).unwrap_or(env!("CARGO_PKG_VERSION")),
-        "workspace_id": api.member.as_ref().map(|v|v.workspace_id.as_str()).or(workspace_id.as_deref()),
+        "version": selected.member.as_ref().map(|v|v.version.as_str()).unwrap_or(env!("CARGO_PKG_VERSION")),
+        "workspace_id": selected.member.as_ref().map(|v|v.workspace_id.as_str()).or(workspace_id.as_deref()),
         "service_instance_id": api.instance_id,
-        "workspace": api.workspace,
+        "workspace": selected.workspace,
         "machine_name": machine_name,
     }))
     .into_response()
@@ -464,10 +629,19 @@ mod tests {
     #[test]
     fn every_mutating_route_is_classified_by_what_it_writes() {
         use std::collections::BTreeSet;
-        // No shared-config mutation has been ported yet. As each arrives,
-        // name it here and exercise its CAS boundary beside this test.
-        let config: &[(&str, &str)] = &[];
+        // Every route writing the shared config goes through its compare
+        // and answers a held lock with 503: config_api::tests checks both
+        // for each of these.
+        let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
+            (
+                ("post", "/workspace"),
+                "selects a workspace: the device-local registry and selection",
+            ),
+            (
+                ("delete", "/device/workspaces"),
+                "the device-local workspace registry",
+            ),
             (("post", "/shutdown"), "server lifetime"),
             (("post", "/scheduler/start"), "service lifetime"),
             (("post", "/scheduler/stop"), "service lifetime"),

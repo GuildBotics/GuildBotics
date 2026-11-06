@@ -151,7 +151,7 @@ async fn route(
 ) -> axum::response::Response {
     use crate::api::ApiError;
     use axum::{Json, http::StatusCode, response::IntoResponse};
-    let Some(workspace) = api.workspace.clone() else {
+    let Some(workspace) = api.selected().workspace.clone() else {
         return ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", &headers)
             .into_response();
     };
@@ -177,12 +177,13 @@ async fn route(
                 .context(serde_json::json!({"path":path}))
                 .into_response();
             }
-            if error.downcast_ref::<InvalidValues>().is_some() {
+            if let Some(invalid) = error.downcast_ref::<InvalidValues>() {
                 return ApiError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "validation_error",
                     &headers,
                 )
+                .context(serde_json::json!({"errors": [{"msg": invalid.to_string()}]}))
                 .into_response();
             }
             tracing::error!("cannot save service settings: {error:#}");
@@ -222,18 +223,16 @@ mod tests {
         let workspace = root.path().join("workspace");
         let auth = crate::auth::ServerAuth::open(&data, 38761).unwrap();
         let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
-        let api = std::sync::Arc::new(crate::api::Api {
-            service: Default::default(),
-            member: None,
-            inputs: crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
+        let api = std::sync::Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(workspace.clone()),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::new(&data.join("inputs")).unwrap(),
             auth,
-            instance_id: "fixture".into(),
+            "fixture".into(),
             data,
-            workspace: Some(workspace.clone()),
-            work: tokio_util::task::TaskTracker::new(),
-            cancelled: tokio_util::sync::CancellationToken::new(),
-            shutdown: crate::server::Shutdown::default(),
-        });
+        ));
         let app = crate::api::router(api);
         for (method, body, authorized, expected) in [
             ("GET", json!({}), false, StatusCode::UNAUTHORIZED),
@@ -278,6 +277,18 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), expected, "{method}: {body}");
+            if expected == StatusCode::UNPROCESSABLE_ENTITY {
+                // The stable shape of a refused request.
+                let answer: serde_json::Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                        .unwrap();
+                assert_eq!(answer["code"], "validation_error", "{body}");
+                assert_eq!(answer["message"], "Request validation failed.", "{body}");
+                assert!(
+                    answer["context"]["errors"][0]["msg"].is_string(),
+                    "{body}: {answer}"
+                );
+            }
         }
         let settings = Settings::read(&workspace).unwrap();
         assert!(settings.keep_awake && settings.routine);

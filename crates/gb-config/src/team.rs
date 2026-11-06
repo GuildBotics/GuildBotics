@@ -62,6 +62,94 @@ pub fn valid_person_id(value: &str) -> bool {
         && !reserved
 }
 
+/// A stored member directory's name, which may not be a valid ID: a name the
+/// configuration editor addresses to repair or remove what is stored under
+/// it, without making it a member.
+pub fn valid_member_directory_name(value: &str) -> bool {
+    !["", ".", ".."].contains(&value)
+        && value.chars().all(printable)
+        && !value.chars().any(|c| matches!(c, '/' | '\\' | ':'))
+        && !value.ends_with(['.', ' '])
+}
+
+/// Whether `c` prints, as Python's `str.isprintable` says it: neither a
+/// control, a format or a private character, nor a separator but the
+/// ASCII space.
+fn printable(c: char) -> bool {
+    let format = matches!(c,
+        '\u{ad}' | '\u{600}'..='\u{605}' | '\u{61c}' | '\u{6dd}' | '\u{70f}' | '\u{180e}'
+        | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}'
+        | '\u{feff}' | '\u{fff9}'..='\u{fffb}');
+    let private = matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{10ffff}');
+    !(c.is_control() || format || private || (c.is_whitespace() && c != ' '))
+}
+
+/// Other stored identities share the secret keys of `person_id`.
+#[derive(Debug)]
+pub struct PrefixConflict {
+    pub person_id: String,
+    /// The other identities' directory names, sorted.
+    pub conflicting: Vec<String>,
+}
+impl std::fmt::Display for PrefixConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} shares its secret keys with {}",
+            self.person_id,
+            self.conflicting.join(", ")
+        )
+    }
+}
+impl std::error::Error for PrefixConflict {}
+
+fn secret_prefix_of(name: &str) -> String {
+    name.replace('-', "_").to_uppercase() + "_"
+}
+
+/// How the secret `name` of `person_id` is spelled (`ALICE_SLACK_BOT_TOKEN`),
+/// to name it to a person; reading it goes through [`person_secret_prefix`].
+pub fn person_secret_name(person_id: &str, name: &str) -> String {
+    secret_prefix_of(person_id) + name
+}
+
+/// The only way to a member's secret keys: the prefix of those `person_id`
+/// alone owns (`ALICE_BAK_`), which a member-relative name such as
+/// `SLACK_BOT_TOKEN` follows. Every identity stored under `identity_root`
+/// counts, including those awaiting repair, and the directory is read on
+/// every call, so a collision that appears later withholds the keys from
+/// then on (a [`PrefixConflict`]).
+pub fn person_secret_prefix(identity_root: &Path, person_id: &str) -> anyhow::Result<String> {
+    let prefix = secret_prefix_of(person_id);
+    let members = identity_root.join(".guildbotics/config/team/members");
+    let entries = match std::fs::read_dir(&members) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(prefix),
+        Err(e) => return Err(e.into()),
+    };
+    let mut conflicting = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != person_id
+            && valid_member_directory_name(&name)
+            && secret_prefix_of(&name) == prefix
+            && entry.path().join("identity.yml").is_file()
+        {
+            conflicting.push(name);
+        }
+    }
+    if conflicting.is_empty() {
+        return Ok(prefix);
+    }
+    conflicting.sort();
+    Err(PrefixConflict {
+        person_id: person_id.into(),
+        conflicting,
+    }
+    .into())
+}
+
 impl Team {
     /// The command executor picker, using the same participation and identity files.
     pub fn screen_summary(&self, config: &Path, identity_root: &Path) -> anyhow::Result<Value> {
@@ -132,11 +220,12 @@ impl Team {
                 tracing::warn!("Member {name} has no identity; it is left out of the team.");
                 continue;
             }
-            anyhow::ensure!(
-                valid_person_id(&name),
-                "{} is not a member's directory",
-                directory.display()
-            );
+            if !valid_person_id(&name) {
+                return Err(crate::ConfigFile::wrap(
+                    identity_file,
+                    anyhow::anyhow!("{name} is not a member ID"),
+                ));
+            }
             let identity = member_file(&identity_file, IDENTITY_FIELDS)?;
             let participation = member_file(&directory.join("member.yml"), PARTICIPATION_FIELDS)?;
             let string = |file: &Map<String, Value>, key: &str, path: &Path| match file.get(key) {
@@ -232,7 +321,7 @@ fn lax_bool(value: &Value) -> Option<bool> {
 }
 
 /// The language code of a tag (`ja-JP` is `ja`), English when it names none.
-fn language_code(tag: &str) -> String {
+pub fn language_code(tag: &str) -> String {
     let primary = tag.trim().split(['-', '_']).next().unwrap_or("");
     if (2..=3).contains(&primary.len()) && primary.bytes().all(|b| b.is_ascii_alphabetic()) {
         primary.to_ascii_lowercase()
@@ -398,6 +487,91 @@ mod tests {
         for invalid in ["", "Aiko", "a b", "../x", "con", "com1", "lpt9"] {
             assert!(!valid_person_id(invalid), "{invalid}");
         }
+        // The frozen version's values: none is an ID, and only the reserved
+        // names can still be addressed to repair what is stored under them.
+        let reserved = ["con", "nul", "aux", "prn", "com1", "lpt1"];
+        let escaping = [
+            "/private/keys",
+            "../../.ssh",
+            "a/b",
+            "a\\b",
+            "C:\\keys",
+            "a\n",
+            "",
+            ".",
+            "..",
+        ];
+        for value in reserved.iter().chain(&escaping) {
+            assert!(!valid_person_id(value), "{value:?}");
+        }
+        for value in reserved
+            .iter()
+            .chain(&["Alice", "alice.bak", "alice backup", "あいこ"])
+        {
+            assert!(valid_member_directory_name(value), "{value:?}");
+        }
+        for value in escaping
+            .iter()
+            .chain(&["a.", "a ", "a\u{a0}b", "a\u{200b}b", "a\u{e000}"])
+        {
+            assert!(!valid_member_directory_name(value), "{value:?}");
+        }
+    }
+
+    fn identity(root: &Path, name: &str) {
+        let directory = root.join(".guildbotics/config/team/members").join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("identity.yml"),
+            format!("person_id: {name}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn person_secret_prefix_format_is_shared() {
+        let root = tempfile::tempdir().unwrap();
+        for (id, prefix) in [
+            ("alice-bak", "ALICE_BAK_"),
+            ("alice_bak", "ALICE_BAK_"),
+            ("Alice", "ALICE_"),
+            ("alıce", "ALICE_"),
+            ("aiko_1-2", "AIKO_1_2_"),
+        ] {
+            assert_eq!(person_secret_prefix(root.path(), id).unwrap(), prefix);
+            assert_eq!(person_secret_name(id, "TOKEN"), format!("{prefix}TOKEN"));
+        }
+    }
+
+    #[test]
+    fn person_secret_prefix_refuses_a_shared_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        identity(root.path(), "alice-bak");
+        // A directory without an identity, or one under no valid name, owns
+        // no keys.
+        std::fs::create_dir_all(
+            root.path()
+                .join(".guildbotics/config/team/members/alice_bak"),
+        )
+        .unwrap();
+        assert_eq!(
+            person_secret_prefix(root.path(), "alice-bak").unwrap(),
+            "ALICE_BAK_"
+        );
+        let refused = person_secret_prefix(root.path(), "alice_bak").unwrap_err();
+        let conflict = refused.downcast_ref::<PrefixConflict>().unwrap();
+        assert_eq!(conflict.person_id, "alice_bak");
+        assert_eq!(conflict.conflicting, ["alice-bak"]);
+        // A repair name counts as well, so the collision appears for both.
+        identity(root.path(), "Alice");
+        let refused = person_secret_prefix(root.path(), "alice").unwrap_err();
+        assert_eq!(
+            refused
+                .downcast_ref::<PrefixConflict>()
+                .unwrap()
+                .conflicting,
+            ["Alice"]
+        );
     }
 
     #[test]

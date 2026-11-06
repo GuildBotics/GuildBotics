@@ -2,7 +2,7 @@ import { createTheme } from "@mantine/core";
 import { StrictMode } from "react";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1330,6 +1330,44 @@ describe("SetupPage", () => {
     });
   });
 
+  it("rebuilds the form when its snapshot is read in another workspace", async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderSetupPage("/setup");
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await fill(user, description, "Typed for this workspace");
+
+    // Another workspace, set up alike, is opened elsewhere, and its snapshot
+    // arrives before the status does.
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ description: "Demo project", config_dir: "/other/.guildbotics/config" }),
+    );
+    await queryClient.refetchQueries({ queryKey: ["project-config"] });
+
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    // Until the status agrees, the screen shows one workspace and holds the
+    // other's snapshot: nothing typed meanwhile can be saved.
+    expect(screen.queryByRole("button", { name: t("setup.save.action") })).not.toBeInTheDocument();
+    await fill(user, description, " typed while the status lags");
+
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({
+        project_file_exists: true,
+        workspace: "/other",
+        config_dir: "/other/.guildbotics/config",
+      }),
+    );
+    await queryClient.refetchQueries({ queryKey: ["config"] });
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
+      config_dir: "/other/.guildbotics/config",
+      description: "Demo project",
+    });
+  });
+
   it("saves twice in a row without colliding with its own first save", async () => {
     // The second save must not carry the revision the first one replaced: that
     // would report a conflict with another edit where there is none, and
@@ -1669,6 +1707,7 @@ const GITHUB_AND_SLACK: ProjectServices = {
 
 function memberConfig(): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -1690,12 +1729,7 @@ function memberConfig(): MemberConfig {
 }
 
 function configWriteResponse(revisions: Record<string, string> = {}) {
-  return {
-    revisions,
-    project: null,
-    member: null,
-    intelligence: null,
-  };
+  return { revisions };
 }
 
 type ProjectFormValues = Parameters<typeof toProjectSetupRequest>[0];
@@ -2340,6 +2374,7 @@ describe("patrol / schedule helpers", () => {
 
 function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -2523,6 +2558,133 @@ describe("MembersSection", () => {
       });
     },
   );
+
+  it.each([
+    ["a new member's", "/setup?section=members", []],
+    ["an edited member's", "/setup?section=members&person_id=alice", undefined],
+  ] as const)(
+    "puts %s form away when the server opens another workspace",
+    async (_, url, members) => {
+      vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
+      if (members) {
+        vi.mocked(getTeam).mockResolvedValue({
+          project: { name: "Demo", language_code: "en", language_name: "English" },
+          default_person_id: "",
+          members: [...members],
+        });
+      }
+      const { queryClient } = renderSetupPage(url);
+      const name = await screen.findByLabelText(t("setup.members.personName"));
+      if (!members) {
+        await waitFor(() => expect(name).toHaveValue("Alice"));
+      }
+      // The form is composed once this workspace is open.
+      await waitFor(() =>
+        expect(queryClient.getQueryData(["config"])).toMatchObject({ workspace: "/workspace" }),
+      );
+      fireEvent.change(name, { target: { value: "Typed for this workspace" } });
+
+      // The server opens another workspace, by way of none selected; the
+      // member the page names reads differently there.
+      vi.mocked(getMemberConfig).mockResolvedValue(
+        memberConfigDetail({
+          config_dir: "/other/.guildbotics/config",
+          person_name: "Alice in the other workspace",
+        }),
+      );
+      for (const workspace of [null, "/other"]) {
+        vi.mocked(getConfigStatus).mockResolvedValue(
+          configStatus({
+            project_file_exists: true,
+            workspace,
+            config_dir: workspace && `${workspace}/.guildbotics/config`,
+          }),
+        );
+        await queryClient.refetchQueries({ queryKey: ["config"] });
+      }
+
+      await waitFor(() =>
+        expect(screen.queryByDisplayValue("Typed for this workspace")).not.toBeInTheDocument(),
+      );
+      // The member the page names is read again, in the workspace open now.
+      const rebuilt = await screen.findByLabelText(t("setup.members.personName"));
+      await waitFor(() =>
+        expect(rebuilt).toHaveValue(members ? "" : "Alice in the other workspace"),
+      );
+    },
+  );
+
+  async function openWorkspace(queryClient: QueryClient, workspace: string) {
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({
+        project_file_exists: true,
+        workspace,
+        config_dir: `${workspace}/.guildbotics/config`,
+      }),
+    );
+    await queryClient.refetchQueries({ queryKey: ["config"] });
+  }
+
+  it("composes a member's form only from a read of the workspace it shows", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
+    // The server has opened another workspace, which answers the read, while
+    // this screen still shows the first one.
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        config_dir: "/other/.guildbotics/config",
+        person_name: "Alice there",
+        revisions: { "team/members/alice/member.yml": "read-there" },
+      }),
+    );
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    // The read is dropped, and the screen reads again which workspace is open.
+    await waitFor(() => expect(getMemberConfig).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    expect(screen.queryByDisplayValue("Alice there")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
+
+    // Once the screen shows that workspace, the read composes the form there.
+    await openWorkspace(queryClient, "/other");
+    const name = await screen.findByDisplayValue("Alice there");
+    fireEvent.change(name, { target: { value: "Alice B" } });
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateMemberConfig).mock.calls[0][1]).toMatchObject({
+      config_dir: "/other/.guildbotics/config",
+      expected_revisions: { "team/members/alice/member.yml": "read-there" },
+    });
+  });
+
+  it("never composes a rebuilt member form from a read begun in the previous workspace", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
+    let answerFirst: (member: MemberConfig) => void = () => {};
+    vi.mocked(getMemberConfig)
+      .mockImplementationOnce(() => new Promise((done) => (answerFirst = done)))
+      .mockResolvedValue(
+        memberConfigDetail({
+          config_dir: "/other/.guildbotics/config",
+          person_name: "Alice there",
+        }),
+      );
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    await waitFor(() => expect(getMemberConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(queryClient.getQueryData(["config"])).toMatchObject({ workspace: "/workspace" }),
+    );
+
+    await openWorkspace(queryClient, "/other");
+    expect(await screen.findByDisplayValue("Alice there")).toBeInTheDocument();
+    // The first workspace's read answers late; the form stays the new one's.
+    await act(async () => {
+      answerFirst(memberConfigDetail({ person_name: "Alice here" }));
+      await new Promise((settled) => setTimeout(settled, 0));
+    });
+    expect(screen.queryByDisplayValue("Alice here")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Alice there")).toBeInTheDocument();
+  });
 
   it("shows the add form when there are no members", async () => {
     vi.mocked(getTeam).mockResolvedValue({

@@ -301,7 +301,7 @@ function runtimeDebug(overrides: { enabled?: boolean } = {}) {
 }
 
 function configWriteResponse() {
-  return { project: null, member: null, intelligence: null };
+  return { revisions: {} };
 }
 
 // Wire up the routes the App/Setup pages need so we can drive the UI. Each test

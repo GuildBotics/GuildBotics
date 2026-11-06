@@ -57,6 +57,7 @@ _ALLOWED = {
     "gb-server": {
         "gb-base",
         "gb-config",
+        "gb-setup",
         "gb-environment",
         "gb-workspace",
         "gb-observability",

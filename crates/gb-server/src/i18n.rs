@@ -8,6 +8,36 @@ use gb_environment::Sentence;
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "setup",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/setup.en.yml"),
+    ),
+    (
+        "setup",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/setup.ja.yml"),
+    ),
+    (
+        "member_config",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/member_config.en.yml"),
+    ),
+    (
+        "member_config",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/member_config.ja.yml"),
+    ),
+    (
+        "safe_paths",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/safe_paths.en.yml"),
+    ),
+    (
+        "safe_paths",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/safe_paths.ja.yml"),
+    ),
+    (
         "commands.workflows.chat_conversation_workflow",
         "en",
         include_str!(

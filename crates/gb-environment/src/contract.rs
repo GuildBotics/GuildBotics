@@ -100,9 +100,19 @@ fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
 /// A workspace may be selected to repair an invalid grant file, but may not
 /// itself live inside a directory that file would grant to its commands.
 pub fn workspace_location(path: &Path, home: &Path) -> Result<PathBuf, Sentence> {
+    location(path, home, false)
+}
+
+/// As [`workspace_location`], for a workspace about to be created: its name
+/// may end in directories that do not exist yet.
+pub fn new_workspace_location(path: &Path, home: &Path) -> Result<PathBuf, Sentence> {
+    location(path, home, true)
+}
+
+fn location(path: &Path, home: &Path, missing: bool) -> Result<PathBuf, Sentence> {
     let home =
         gb_base::host_path::normalize(home).map_err(|error| Sentence::Text(error.to_string()))?;
-    let workspace = gb_base::host_path::directory(path, false).map_err(|error| match error {
+    let workspace = gb_base::host_path::directory(path, missing).map_err(|error| match error {
         gb_base::host_path::PathProblem::Unavailable(path, reason)
             if reason.kind() == std::io::ErrorKind::PermissionDenied =>
         {

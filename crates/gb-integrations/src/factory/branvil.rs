@@ -67,10 +67,7 @@ impl BranvilService {
                 key: "integrations.branvil.api.token_missing",
                 args: [(
                     "name".into(),
-                    format!(
-                        "{}_BRANVIL_TOKEN",
-                        self.person_id.replace('-', "_").to_uppercase()
-                    ),
+                    gb_config::team::person_secret_name(&self.person_id, "BRANVIL_TOKEN"),
                 )]
                 .into(),
             });

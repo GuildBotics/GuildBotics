@@ -140,3 +140,44 @@ fn paths_cannot_escape_config_and_io_errors_are_not_contention() {
     assert!(error.is::<std::io::Error>());
     assert!(!error.is::<SharedWriteBusyError>());
 }
+
+#[test]
+fn only_the_revisions_sent_are_compared_each_in_its_own_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repository(dir.path());
+    let write = |expected: &Revisions| {
+        repo.write_checked(
+            expected,
+            &["team/members/a/identity.yml"],
+            |view, w| w.write_text(&view.path("team/b.yml")?, "b\n"),
+            |view| view.revisions(&["team/b.yml"]),
+        )
+    };
+    // Nothing sent compares nothing, whatever exists.
+    write(&Revisions::new()).unwrap();
+    write(&Revisions::new()).unwrap();
+    let identity = dir
+        .path()
+        .join("identity/.guildbotics/config/team/members/a/identity.yml");
+    fs::create_dir_all(identity.parent().unwrap()).unwrap();
+    fs::write(&identity, "person_id: a\n").unwrap();
+    // An identity path is compared in the identity root, and a refusal
+    // names it under config/ as every other one, with the revisions sent.
+    let absent = Revisions::from([("team/members/a/identity.yml".to_owned(), String::new())]);
+    let stale = write(&absent).err().unwrap();
+    let stale = stale.downcast_ref::<StaleConfigWriteError>().unwrap();
+    assert_eq!(stale.relative_path, "config/team/members/a/identity.yml");
+    assert_eq!(
+        stale.revisions,
+        Revisions::from([(
+            "team/members/a/identity.yml".to_owned(),
+            blob_id(b"person_id: a\n")
+        )])
+    );
+    write(&stale.revisions).unwrap();
+    for outside in ["../state/workspace.json", "/etc/passwd", ""] {
+        let expected = Revisions::from([(outside.to_owned(), "abc".to_owned())]);
+        let error = write(&expected).err().unwrap();
+        assert!(error.is::<InvalidRevisionPath>(), "{outside}: {error:#}");
+    }
+}
