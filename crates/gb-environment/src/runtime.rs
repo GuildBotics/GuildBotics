@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use microsandbox::sandbox::MountBuilder;
 use microsandbox::{ExecEvent, LocalBackend, Sandbox};
 use tokio::sync::OnceCell;
 
@@ -46,6 +47,9 @@ pub struct Mount {
     pub guest: String,
     pub host: Option<PathBuf>,
     pub readonly: bool,
+    /// How much the guest may add to a bound directory, in MiB. Without it,
+    /// the runtime applies its own default of 4 GiB per mount.
+    pub quota_mib: Option<u32>,
 }
 
 /// What a microVM boots from and with.
@@ -2000,13 +2004,7 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
         });
     for mount in boot.mounts {
         let mount = mount.clone();
-        builder = builder.volume(mount.guest.clone(), move |m| {
-            let m = match &mount.host {
-                Some(host) => m.bind(host),
-                None => m.tmpfs().size(scratch_mib),
-            };
-            if mount.readonly { m.readonly() } else { m }
-        });
+        builder = builder.volume(mount.guest.clone(), move |m| volume(m, &mount, scratch_mib));
     }
     if let Some(copy) = boot.worktree {
         copy.validate()
@@ -2026,6 +2024,56 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
             ))
         })?;
     Ok(sandbox)
+}
+
+/// How `mount` is made in the microVM: a bound directory, with the write
+/// quota it names, or an empty directory of `scratch_mib`.
+fn volume(m: MountBuilder, mount: &Mount, scratch_mib: u32) -> MountBuilder {
+    let m = match (&mount.host, mount.quota_mib) {
+        (Some(host), Some(quota)) => m.bind(host).quota(quota),
+        (Some(host), None) => m.bind(host),
+        (None, _) => m.tmpfs().size(scratch_mib),
+    };
+    if mount.readonly { m.readonly() } else { m }
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+    use microsandbox::sandbox::VolumeMount;
+
+    fn built(mount: &Mount) -> VolumeMount {
+        volume(MountBuilder::new(mount.guest.clone()), mount, SCRATCH_MIB)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn only_a_mount_naming_a_quota_lets_the_guest_add_more_than_the_runtime_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let mount = |host: Option<PathBuf>, readonly, quota_mib| Mount {
+            guest: "/work".into(),
+            host,
+            readonly,
+            quota_mib,
+        };
+        let host = Some(dir.path().to_path_buf());
+        let quota = Some(crate::contract::CLONE_QUOTA_MIB);
+        for readonly in [false, true] {
+            match built(&mount(host.clone(), readonly, quota)) {
+                VolumeMount::Bind { quota_mib, .. } => assert_eq!(quota_mib, quota),
+                other => panic!("{other:?}"),
+            }
+            match built(&mount(host.clone(), readonly, None)) {
+                VolumeMount::Bind { quota_mib, .. } => assert_eq!(quota_mib, None),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(matches!(
+            built(&mount(None, false, None)),
+            VolumeMount::Tmpfs { .. }
+        ));
+    }
 }
 
 async fn stop_vm(sandbox: &Sandbox) {

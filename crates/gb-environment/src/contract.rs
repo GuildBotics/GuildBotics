@@ -367,6 +367,7 @@ fn resolve_with_probe(
             guest: crate::guest_path(&checked).map_err(|_| "Invalid guest path")?,
             host: Some(checked),
             readonly: read_only || matches!(access, Access::Read),
+            quota_mib: None,
         });
     }
     Ok(Resolved {
@@ -763,6 +764,11 @@ pub fn copy_plan(
     crate::worktree::Copy::new(source, guest, excluded, lock)
 }
 
+/// What a run may add to the member's clones: every repository the member
+/// works in shares one mount, and a full Rust workspace build writes more
+/// than the runtime's default.
+pub const CLONE_QUOTA_MIB: u32 = 16 * 1024;
+
 pub struct Plan {
     pub cwd: String,
     pub mounts: Vec<Mount>,
@@ -798,6 +804,7 @@ pub fn plan(
             guest: crate::guest_path(&checked).map_err(|_| "Invalid clone guest path")?,
             host: Some(checked),
             readonly: read_only,
+            quota_mib: Some(CLONE_QUOTA_MIB),
         };
         if !mounts.iter().any(|m| m.guest == mount.guest) {
             mounts.push(mount);
@@ -817,6 +824,7 @@ pub fn plan(
                 guest: guest.clone(),
                 host: None,
                 readonly: false,
+                quota_mib: None,
             });
         }
         None
@@ -986,6 +994,7 @@ mod frozen_tests {
             host,
             guest: "/work".into(),
             readonly: true,
+            quota_mib: None,
         };
         assert!(
             reject_windows_temp_mounts(&[mount(Some(source.clone()))], true, Some(&local)).is_err()

@@ -70,6 +70,24 @@ fn named(path: &Path) -> PathBuf {
     gb_base::host_path::normalize(path).unwrap()
 }
 
+fn scratch(guest: impl Into<String>) -> Mount {
+    Mount {
+        guest: guest.into(),
+        host: None,
+        readonly: false,
+        quota_mib: None,
+    }
+}
+
+fn read(guest: impl Into<String>, host: &Path) -> Mount {
+    Mount {
+        guest: guest.into(),
+        host: Some(host.to_path_buf()),
+        readonly: true,
+        quota_mib: None,
+    }
+}
+
 fn sorted(mut mounts: Vec<Mount>) -> Vec<Mount> {
     mounts.sort_by(|a, b| a.guest.cmp(&b.guest));
     mounts
@@ -143,31 +161,17 @@ fn a_read_only_command_reads_and_works_on_its_own() {
     assert_eq!(
         sorted(made.mounts.clone()),
         sorted(vec![
-            Mount {
-                guest: cwd.clone(),
-                host: None,
-                readonly: false
-            },
-            Mount {
-                guest: "/opt/guildbotics/code/guildbotics".into(),
-                host: Some(named(&machine.host.package)),
-                readonly: true
-            },
-            Mount {
-                guest: spelled(&config),
-                host: Some(config.clone()),
-                readonly: true
-            },
-            Mount {
-                guest: spelled(&members),
-                host: Some(members.clone()),
-                readonly: true
-            },
-            Mount {
-                guest: spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
-                host: Some(named(&machine.host.home.join("Documents/GuildBotics"))),
-                readonly: true
-            },
+            scratch(cwd.clone()),
+            read(
+                "/opt/guildbotics/code/guildbotics",
+                &named(&machine.host.package)
+            ),
+            read(spelled(&config), &config),
+            read(spelled(&members), &members),
+            read(
+                spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
+                &named(&machine.host.home.join("Documents/GuildBotics"))
+            ),
         ])
     );
     assert_eq!(made.cwd, cwd);
@@ -256,36 +260,18 @@ fn an_inspecting_command_is_told_where_to_look() {
     // A workspace command is where it is on the host.
     assert_eq!(made.request.path, spelled(&named(&path)));
     let expected = vec![
-        Mount {
-            guest: spelled(&named(&machine.workspace.join("somewhere"))),
-            host: None,
-            readonly: false,
-        },
-        Mount {
-            guest: "/opt/guildbotics/code/guildbotics".into(),
-            host: Some(named(&machine.host.package)),
-            readonly: true,
-        },
-        Mount {
-            guest: spelled(&config),
-            host: Some(config.clone()),
-            readonly: true,
-        },
-        Mount {
-            guest: spelled(&members),
-            host: Some(members.clone()),
-            readonly: true,
-        },
-        Mount {
-            guest: spelled(&run),
-            host: Some(run.clone()),
-            readonly: true,
-        },
-        Mount {
-            guest: spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
-            host: Some(named(&machine.host.home.join("Documents/GuildBotics"))),
-            readonly: true,
-        },
+        scratch(spelled(&named(&machine.workspace.join("somewhere")))),
+        read(
+            "/opt/guildbotics/code/guildbotics",
+            &named(&machine.host.package),
+        ),
+        read(spelled(&config), &config),
+        read(spelled(&members), &members),
+        read(spelled(&run), &run),
+        read(
+            spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
+            &named(&machine.host.home.join("Documents/GuildBotics")),
+        ),
     ];
     assert_eq!(sorted(made.mounts.clone()), sorted(expected));
     let facts: CommandFacts =
@@ -346,14 +332,7 @@ fn what_is_bound_over_the_working_directory_is_what_is_there() {
         .iter()
         .filter(|m| m.guest == spelled(&config))
         .collect();
-    assert_eq!(
-        at_cwd,
-        [&Mount {
-            guest: spelled(&config),
-            host: Some(config.clone()),
-            readonly: true
-        }]
-    );
+    assert_eq!(at_cwd, [&read(spelled(&config), &config)]);
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert!(!facts.mounts[&spelled(&config)]);
@@ -464,4 +443,67 @@ fn shape_keeps_guest_spelling_through_plan_copy_and_packaged_command_paths() {
             assert!(!made.cwd.contains(':'));
         }
     }
+}
+
+#[test]
+fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
+    let machine = machine();
+    let clones = machine.workspace.join(".guildbotics/local/clones/yuki");
+    let clone = clones.join("a".repeat(64));
+    std::fs::create_dir_all(&clone).unwrap();
+    for granted in ["Documents/read", "Documents/write"] {
+        std::fs::create_dir_all(machine.host.home.join(granted)).unwrap();
+    }
+    let grants = machine
+        .workspace
+        .join(".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml");
+    std::fs::create_dir_all(grants.parent().unwrap()).unwrap();
+    std::fs::write(
+        &grants,
+        "documents:\n  - path: Documents/read\n    access: read\n  - path: Documents/write\n    access: read_write\n",
+    )
+    .unwrap();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/get_os_ui_language.py");
+    let clone_guest = spelled(&named(&clones));
+    let home = |relative: &str| spelled(&named(&machine.host.home.join(relative)));
+    for read_only in [true, false] {
+        let mut request = command(
+            &machine,
+            path.clone(),
+            vec![InspectsItem::Config, InspectsItem::Diagnostics],
+        );
+        request.access.read_only = read_only;
+        request.cwd = clone.clone();
+        let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+        // Every kind of mount is there: the code, what the command inspects,
+        // the grants of either access, the built-in grant and the clone, and
+        // a read-only command's empty working directory.
+        let mut kinds = vec![
+            "/opt/guildbotics/code/guildbotics".to_string(),
+            spelled(&named(&machine.workspace.join(".guildbotics/config"))),
+            spelled(&named(&machine.workspace.join(".guildbotics/local/run"))),
+            home("Documents/GuildBotics"),
+            home("Documents/read"),
+            home("Documents/write"),
+            clone_guest.clone(),
+        ];
+        if read_only {
+            kinds.push(spelled(&named(&clone)));
+        }
+        for guest in &kinds {
+            assert!(
+                made.mounts.iter().any(|m| &m.guest == guest),
+                "{guest} is not mounted ({read_only})"
+            );
+        }
+        for mount in &made.mounts {
+            let expected =
+                (mount.guest == clone_guest).then_some(gb_environment::contract::CLONE_QUOTA_MIB);
+            assert_eq!(mount.quota_mib, expected, "{mount:?}");
+        }
+    }
+    assert_eq!(gb_environment::contract::CLONE_QUOTA_MIB, 16 * 1024);
 }

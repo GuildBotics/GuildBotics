@@ -233,6 +233,7 @@ impl InputFileStore {
                 .map_err(|_| anyhow::anyhow!("Input directory has no guest path"))?,
             host: Some(directory),
             readonly: true,
+            quota_mib: None,
         })
     }
 

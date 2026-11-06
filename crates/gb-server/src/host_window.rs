@@ -621,32 +621,38 @@ mod tests {
                 guest: "/code".into(),
                 host: Some("/host/code".into()),
                 readonly: true,
+                quota_mib: None,
             },
             gb_environment::Mount {
                 guest: "/work/config".into(),
                 host: Some("/host/config".into()),
                 readonly: true,
+                quota_mib: None,
             },
             gb_environment::Mount {
                 guest: "/exchange".into(),
                 host: Some("/host/exchange".into()),
                 readonly: false,
+                quota_mib: None,
             },
             gb_environment::Mount {
                 guest: "/member/clone".into(),
                 host: Some("/host/clone".into()),
                 readonly: false,
+                quota_mib: None,
             },
             gb_environment::Mount {
                 guest: "/readonly-grant".into(),
                 host: Some("/host/grant".into()),
                 readonly: true,
+                quota_mib: None,
             },
         ];
         let extra = vec![gb_environment::Mount {
             guest: "/home/stand-in".into(),
             host: Some("/host/stub".into()),
             readonly: false,
+            quota_mib: None,
         }];
         let directories = turn_directories(&mounts, &extra, Some("/copied-cwd"));
         assert!(directories["/code"]);
@@ -1774,6 +1780,7 @@ pub async fn prepare_command(
             guest: loan.guest_root.clone(),
             host: Some(loan.host_root.path().into()),
             readonly: false,
+            quota_mib: None,
         });
         tool_mounts.extend(loan.persisted_mounts(command.access.read_only)?);
         tool_ports.push(loan.gateway.port);

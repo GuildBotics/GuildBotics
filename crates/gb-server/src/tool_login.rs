@@ -722,6 +722,7 @@ impl ToolLogin {
                 guest: format!("{}/{name}", self.guest_root),
                 host: Some(path),
                 readonly: false,
+                quota_mib: None,
             });
         }
         Ok(mounts)
@@ -3044,11 +3045,13 @@ fn private_plan(
             guest: home.clone(),
             host: None,
             readonly: false,
+            quota_mib: None,
         },
         gb_environment::Mount {
             guest: gb_environment::CODE_ROOT.into(),
             host: Some(vm.package.clone()),
             readonly: true,
+            quota_mib: None,
         },
     ];
     let network = private_network(catalog, &vm.nameservers, interactive);
