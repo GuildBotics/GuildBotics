@@ -33,9 +33,9 @@ impl CliPeer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let data = root.join("home/data");
-        let lock = gb_base::files::FileLock::try_hold(&data.join("run/app-api.lock"))
-            .unwrap()
-            .unwrap();
+        let lock =
+            gb_base::files::FileLock::hold(&data.join("run/app-api.lock"), Duration::from_secs(1))
+                .unwrap();
         let mut record = lock.file();
         record.set_len(0).unwrap();
         writeln!(
