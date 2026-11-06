@@ -277,17 +277,20 @@ pub(crate) async fn start(
         )
         .into_response();
     };
-    // The start is the server's, not the request's: a client that goes away
-    // does not cancel it into a failure.
+    // The start is the server's work, not the request's: a client that goes
+    // away does not cancel it into a failure, and a server that stops waits
+    // for it.
     let selected = api.selected();
-    let started = tokio::spawn(async move {
-        let _admitted = admitted;
-        selected.service.start().await?;
-        Ok::<_, anyhow::Error>(selected.service.view().await)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|started| started);
+    let started = api
+        .work
+        .spawn(async move {
+            let _admitted = admitted;
+            selected.service.start().await?;
+            Ok::<_, anyhow::Error>(selected.service.view().await)
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|started| started);
     match started {
         Ok(view) => axum::Json(view).into_response(),
         Err(error) => {

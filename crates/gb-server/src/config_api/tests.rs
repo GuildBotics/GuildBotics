@@ -1112,7 +1112,6 @@ async fn a_member_read_reports_both_revisions_and_a_stale_save_is_refused() {
     f.init().await;
     f.add(agent("alice")).await;
     let read = f.get("/config/members/alice").await;
-    assert_eq!(read["config_dir"], json!(f.config()));
     assert_eq!(
         read["revisions"]
             .as_object()
@@ -2011,6 +2010,105 @@ async fn a_switch_whose_request_goes_away_still_ends_opened_and_announced() {
     );
 }
 
+/// Serves the fixture's API on a loopback port until the token is
+/// cancelled, as the server does.
+async fn serving(
+    f: &Fixture,
+) -> (
+    u16,
+    tokio_util::sync::CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
+    let (server, port) = crate::server::Server::for_test(f.api.clone()).await;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let served = tokio::spawn({
+        let stop = stop.clone();
+        async move {
+            let (_held, result) = server
+                .serve(
+                    async move { stop.cancelled().await },
+                    std::future::pending(),
+                )
+                .await;
+            result.unwrap();
+        }
+    });
+    (port, stop, served)
+}
+
+/// Sends `body` to `uri` of the server on `port` and goes away before it
+/// is answered.
+async fn leave(f: &Fixture, port: u16, uri: &str, body: Value) {
+    let sent = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/api{uri}"))
+        .header("host", "127.0.0.1:8765")
+        .bearer_auth(&f.token)
+        .json(&body)
+        .timeout(Duration::from_millis(300))
+        .send()
+        .await;
+    assert!(sent.unwrap_err().is_timeout(), "{uri} answered");
+}
+
+#[tokio::test]
+async fn a_stopping_server_waits_for_the_switch_its_client_left() {
+    let f = fixture();
+    let other = f.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let registry =
+        gb_base::files::FileLock::hold(&f.data().join("workspaces.lock"), Duration::from_secs(1))
+            .unwrap();
+    let (port, stop, served) = serving(&f).await;
+    leave(&f, port, "/workspace", json!({"workspace_dir": other})).await;
+    assert!(f.api.admit().is_none(), "the switch is under way");
+    stop.cancel();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!served.is_finished(), "the server waits for the switch");
+    drop(registry);
+    served.await.unwrap();
+    assert_eq!(f.api.selected().workspace, Some(other.clone()));
+    // The last selection's system transcript is the one finished.
+    let finished = bytes_under(&other.join(".guildbotics/local/run/sessions"))
+        .values()
+        .any(|bytes| String::from_utf8_lossy(bytes).contains("system.finished"));
+    assert!(finished);
+}
+
+#[tokio::test]
+async fn a_service_the_servers_work_starts_after_its_stop_is_stopped_too() {
+    let (f, selected) = running();
+    let begin = tokio_util::sync::CancellationToken::new();
+    let late = f.api.work.spawn({
+        let (begin, selected) = (begin.clone(), selected.clone());
+        async move {
+            begin.cancelled().await;
+            assert!(selected.service.start().await.unwrap().running);
+            // A turn of the late service, which ends only when cancelled.
+            let turn = selected.service.execution.generation();
+            selected
+                .service
+                .execution
+                .spawn(|generation| async move { generation.cancelled.cancelled().await })
+                .unwrap();
+            turn
+        }
+    });
+    let (_, stop, served) = serving(&f).await;
+    let stopped = selected.service.execution.generation();
+    stop.cancel();
+    // The start begins once the server's stop has begun.
+    while !stopped.draining.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    begin.cancel();
+    tokio::time::timeout(Duration::from_secs(30), served)
+        .await
+        .expect("the server cancels what the late start runs")
+        .unwrap();
+    assert!(late.await.unwrap().cancelled.is_cancelled());
+    assert_ne!(selected.service.service.status().await.state, "running");
+}
+
 /// An `Api` to build a selection with before the fixture's own exists.
 fn placeholder(root: &Path) -> crate::api::Api {
     crate::api::Api::new(
@@ -2353,6 +2451,7 @@ async fn a_service_start_whose_request_goes_away_still_starts_the_service() {
         f.api.switching.try_write().is_err(),
         "the start stays admitted"
     );
+    assert_eq!(f.api.work.len(), 1, "the start is the server's work");
     drop(held);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while f.api.switching.try_write().is_err() {

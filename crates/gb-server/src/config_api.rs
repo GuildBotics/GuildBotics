@@ -276,9 +276,9 @@ fn blocked(headers: &HeaderMap, context: Value) -> Response {
 }
 
 /// Selects another workspace, once nothing runs for the selected one. The
-/// switch is the server's, not the request's: it runs to its end holding
+/// switch is the server's work, not the request's: it runs to its end holding
 /// the switch even when the client goes away, so the selection it persisted
-/// is the one that is open.
+/// is the one that is open, and a server that stops waits for it.
 pub(crate) async fn select_workspace(
     State(api): State<Shared>,
     headers: HeaderMap,
@@ -288,7 +288,8 @@ pub(crate) async fn select_workspace(
         let selected = api.selected();
         return blocked(&headers, active(&selected, true).await.unwrap_or_default());
     };
-    let switch = tokio::spawn(switch(
+    let work = api.work.clone();
+    let switch = work.spawn(switch(
         api,
         headers.clone(),
         request.workspace_dir,
@@ -611,14 +612,8 @@ pub(crate) async fn read_member(
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };
-    let config = workspace.join(".guildbotics/config");
     match with_setup(&api, workspace, move |setup| setup.read_member(&name)).await {
-        Ok(snapshot) => {
-            // Where the form is composed, which its save names.
-            let mut answer = serde_json::to_value(snapshot).expect("a member snapshot");
-            answer["config_dir"] = json!(config);
-            Json(answer).into_response()
-        }
+        Ok(snapshot) => Json(snapshot).into_response(),
         Err(error) => failure(error, &headers),
     }
 }

@@ -80,6 +80,24 @@ pub struct Server {
 pub struct Held(#[allow(dead_code)] ServerLock);
 
 impl Server {
+    /// A server of `api` on a free loopback port, holding its data's lock.
+    #[cfg(test)]
+    pub(crate) async fn for_test(api: Arc<Api>) -> (Server, u16) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let lock = ServerLock::hold(&api.data, port).unwrap();
+        (
+            Server {
+                lock,
+                listener,
+                api,
+            },
+            port,
+        )
+    }
+
     /// Holds the machine's lock before binding or touching any records, binds
     /// the loopback port, keeps the owner token, and says that it listens.
     pub async fn start() -> anyhow::Result<Server> {
@@ -186,6 +204,10 @@ impl Server {
         let _ = upkeep.await;
         work.close();
         work.wait().await;
+        // A start the server's work finished after the stop above began after
+        // the stop was asked for, so what it runs is cancelled rather than
+        // waited for; only then is the last selection's transcript finished.
+        service_api.selected().service.stop(true).await;
         crate::tool_login::drain_private().await;
         gb_environment::worktree::drain_writebacks().await;
         gb_environment::snapshot::drain_builds().await;
