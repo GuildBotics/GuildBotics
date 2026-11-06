@@ -38,6 +38,10 @@ case "$name" in
                     printf '  last exit code = (never exited)\n'
                 elif [ -f "$FAKE_ROOT/start-failed" ]; then
                     printf '  last exit code = 1\n'
+                    if [ -f "$FAKE_ROOT/ready-after-exit" ]; then
+                        printf '42\n' >"$FAKE_ROOT/job-pid"
+                        printf '42\n' >"$FAKE_ROOT/holder"
+                    fi
                 fi
                 ;;
             enable) : ;;
@@ -68,6 +72,10 @@ case "$name" in
         printf '\n' >>"$FAKE_ROOT/actions"
         case "$1:${2:-}" in
             server:hub-probe)
+                if [ "${3:-}" = --exit-timeout ]; then
+                    if [ "$build" = new ]; then printf '92\n'; else printf '91\n'; fi
+                    exit 0
+                fi
                 if [ -f "$FAKE_ROOT/holder" ]; then cat "$FAKE_ROOT/holder"
                 elif [ "$#" -eq 3 ]; then exit 1
                 fi
@@ -76,7 +84,7 @@ case "$name" in
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
                 rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid"
                 ;;
-            install:) : ;;
+            install:) [ "$build" != new ] || [ ! -f "$FAKE_ROOT/fail-install" ] ;;
             branvil:backup) touch "$6/manifest.json" ;;
             branvil:restore)
                 [ -f "$4/manifest.json" ] || exit 1

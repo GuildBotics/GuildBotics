@@ -1240,9 +1240,10 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     consent reaches the port even after the server exited, carrying a one-time code.
 - **Runtime lifecycle**: `guildbotics server start` runs one foreground process.
   It owns `app-api.lock` until both services exit. `guildbotics server stop`
-  waits for GuildBotics' in-flight work; `--force` and SIGTERM cancel it.
-  The LaunchAgent runs the same command directly and allows 90 seconds on
-  SIGTERM. The workspace's service settings control whether patrol and chat
+  keeps Branvil available while GuildBotics drains its work, then lets
+  Branvil wait for its CI jobs. `--force` and SIGTERM skip the wait. The
+  LaunchAgent runs the server directly and uses the CLI's forced-stop
+  timeout for SIGTERM. The workspace's service settings control whether patrol and chat
   reception start with the server.
 - **Installing the CLI and the skill**: `guildbotics install` copies the
   running executable to `~/.guildbotics/bin/guildbotics` and adds a link under

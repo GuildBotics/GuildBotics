@@ -287,11 +287,13 @@ Leases and interruptions:
 Stopping the service:
 
 The integrated Hub's [manual update](../../../docs/hub-server.md#手動更新)
-uses `guildbotics server stop`. It waits for GuildBotics work, while Branvil
-starts shutdown as on SIGINT and interrupts the automatic runner's jobs. The
-restart recovers those jobs as described above.
+uses `guildbotics server stop`. Branvil keeps serving while GuildBotics
+finishes its work, then waits for its own CI jobs as described below. A
+forced stop or SIGTERM to the combined server skips the CI wait. On an
+orderly stop the combined server logs interrupted jobs and exits
+successfully so launchd leaves it stopped.
 
-- SIGTERM stops CI first: the service gives out no job to any runner and
+- For standalone Branvil, SIGTERM stops CI first: the service gives out no job to any runner and
   waits until no check runs, at most `ci.stop_wait_secs` (default 3600 s, the
   default job time limit), while it serves everything else, the runners'
   heartbeats, logs, and results among it. Jobs queued meanwhile wait and run

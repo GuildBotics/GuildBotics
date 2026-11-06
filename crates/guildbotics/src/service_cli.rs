@@ -1,9 +1,13 @@
+use std::time::Duration;
+
 use clap::Subcommand;
 use gb_server::{
     client::{self, OwnerClient},
     i18n,
 };
 use serde_json::json;
+
+pub const FORCED_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Subcommand)]
 pub enum ServiceCommand {
@@ -64,8 +68,6 @@ pub async fn hub_probe(ready: bool) -> anyhow::Result<u8> {
 }
 
 pub async fn stop(force: bool) -> anyhow::Result<()> {
-    use std::time::Duration;
-
     let language = client::language().await;
     let data = gb_base::home::data()?;
     let text = |key| i18n::t(language, key, &[]);
@@ -100,7 +102,7 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     };
     if force {
-        tokio::time::timeout(Duration::from_secs(90), wait)
+        tokio::time::timeout(FORCED_STOP_TIMEOUT, wait)
             .await
             .map_err(|_| anyhow::anyhow!(text("runtime.service_lock.teardown_timeout")))??;
         println!("{}", text("runtime.service_lock.stopped_after_cancel"));

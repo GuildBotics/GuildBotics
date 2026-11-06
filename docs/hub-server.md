@@ -17,7 +17,7 @@ scripts/hub-server.sh status
 新しくビルドしたサーバーの起動時、macOSがキーチェーンの鍵へのアクセスを2回確認します。オーナーが両方のダイアログに回答してください。スクリプトは最大20分間、起動を待ちます。
 
 ```sh
-scripts/hub-server.sh restart    # GuildBoticsの実行中の作業が終わってから再起動
+scripts/hub-server.sh restart    # GuildBoticsの作業とBranvilのCIを待ってから再起動
 scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 ```
 
@@ -35,19 +35,27 @@ scripts/hub-server.sh update
 
 1. `update` は更新するコミットから画面と実行ファイルを作ります。現在のサーバーは稼働を続けます。
 2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `branvil admin upgrade` と `branvil admin check` を実行します。
-3. 検査が通ると、現行のGuildBoticsの実行中の作業を待ってから、統合サーバーを停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
+3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドが起動する際、キーチェーンの確認が2回出ます。両方に回答してください。起動を確認できると、新ビルドからCLIとスキルを導入します。
 
 状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の実行ファイルとソース、`builds/current` はLaunchAgentが起動する実行ファイルへのリンクです。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
-更新が失敗すると、実行したターミナルに理由が出ます。失敗した段階はHubの `last-failure`、サーバーの起動エラーは `~/Library/Logs/guildbotics.log` にあります。写しでの検査までに失敗した場合は、現行ビルドで稼働を続けます。
+更新が失敗すると、実行したターミナルに理由が出ます。Hubの `last-failure` には直近の失敗の時刻、段階、リビジョンが残ります。サーバーの起動エラーは `~/Library/Logs/guildbotics.log` にあります。写しでの検査までに失敗した場合は、現行ビルドで稼働を続けます。
 
-切り替え中に失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残して停止します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[Branvilのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
+新ビルドが起動する前に切り替えが失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残して停止します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[Branvilのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
 
 ```sh
 scripts/hub-server.sh recover
 ```
 
-更新の途中でマシンを再起動した場合も、`builds/update-from` が残っていれば `recover` で前のビルドの検査と起動をやり直せます。強制終了でHubの `operation` ディレクトリが残った場合は、先に更新やビルドのプロセスが終わっていることを確かめてから、そのディレクトリを取り除きます。サーバーが停止していて `builds/update-from` がなければ、`restart` で現在のビルドを起動できます。
+更新の途中でマシンを再起動した場合も、`builds/update-from` が残っていれば `recover` を実行します。現在のビルドが応答していればそのまま使い、応答していなければ前のビルドの検査と起動をやり直します。強制終了でHubの `operation` ディレクトリが残った場合は、先に更新やビルドのプロセスが終わっていることを確かめてから、そのディレクトリを取り除きます。サーバーが停止していて `builds/update-from` がなければ、`restart` で現在のビルドを起動できます。
+
+起動確認後にCLIやスキルの配置が失敗した場合、起動済みのサーバーは稼働を続けます。チェックアウトの `HEAD` が現在のビルドと同じなら、`scripts/hub-server.sh update` で配置だけを再試行できます。ビルドを変えずに配置を再試行するには、登録時と同じ環境設定で次を実行します。
+
+```sh
+"$HOME/Library/Application Support/GuildBotics/Hub/builds/current" install
+```
+
+通常停止がBranvilのCIを待っている段階では、GuildBoticsのHTTPポートは閉じています。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。

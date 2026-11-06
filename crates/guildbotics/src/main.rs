@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 /// How Branvil's commands are started on this executable: the hook scripts
 /// and the automatic runner start them again.
@@ -139,6 +139,8 @@ enum ServerCommand {
     HubProbe {
         #[arg(long)]
         ready: bool,
+        #[arg(long, conflicts_with = "ready")]
+        exit_timeout: bool,
     },
 }
 
@@ -210,8 +212,19 @@ fn main() -> ExitCode {
             command: ServerCommand::Stop { force },
         } => outcome(block(service_cli::stop(force)).map(|()| 0)),
         Command::Server {
-            command: ServerCommand::HubProbe { ready },
-        } => outcome(block(service_cli::hub_probe(ready))),
+            command:
+                ServerCommand::HubProbe {
+                    ready,
+                    exit_timeout,
+                },
+        } => {
+            if exit_timeout {
+                println!("{}", service_cli::FORCED_STOP_TIMEOUT.as_secs());
+                ExitCode::SUCCESS
+            } else {
+                outcome(block(service_cli::hub_probe(ready)))
+            }
+        }
     }
 }
 
@@ -318,78 +331,86 @@ fn start(services: bool) -> anyhow::Result<u8> {
 /// either one ends, which stops the other. The machine's lock comes first and
 /// goes last: whoever stops the server waits for Branvil too.
 async fn serve(services: bool) -> anyhow::Result<u8> {
-    // Both told of every signal from here on: one that comes while the
-    // server starts stops Branvil too.
-    let (signal, cancel) = server_stops(gb_server::client::language().await)?;
-    let branvil_stops = branvil::stop_signals()?;
-    let branvil_stops = branvil::initialized()?.then_some(branvil_stops);
+    let signals = server_stops(gb_server::client::language().await)?;
+    let branvil_initialized = branvil::initialized()?;
     let mut server = gb_server::Server::start().await?;
     server.start_services(services);
-    let shutdown = server.shutdown_requests();
+    let stop = wait_for_stop(signals.clone(), Stop::Waiting);
+    let cancel = wait_for_stop(signals.clone(), Stop::Cancelling);
 
-    let Some((branvil_interrupt, branvil_terminate)) = branvil_stops else {
+    if !branvil_initialized {
         tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
-        let (_held, served) = server.serve(signal, cancel).await;
+        let (_held, served) = server.serve(stop, cancel).await;
         served?;
         return Ok(0);
-    };
-    let guildbotics_failed = Arc::new(Notify::new());
-    let branvil_ended = Arc::new(Notify::new());
+    }
+    let shutdown = server.shutdown_requests();
+    let abort_branvil = Arc::new(Notify::new());
+    let guildbotics_drained = Arc::new(Notify::new());
     let interrupt = {
-        let guildbotics_failed = guildbotics_failed.clone();
+        let abort_branvil = abort_branvil.clone();
         let shutdown = shutdown.clone();
         async move {
             tokio::select! {
-                () = branvil_interrupt => {},
-                () = guildbotics_failed.notified() => {},
-                () = shutdown.wait() => {},
+                () = wait_for_stop(signals, Stop::Cancelling) => {},
+                () = shutdown.wait_for_cancel() => {},
+                () = abort_branvil.notified() => {},
             }
         }
     };
-    let terminate = async move {
-        tokio::select! {
-            () = branvil_terminate => {},
-            () = shutdown.wait_for_cancel() => {},
-        }
+    let drain_ci = {
+        let guildbotics_drained = guildbotics_drained.clone();
+        async move { guildbotics_drained.notified().await }
     };
     let (ready, data_api) = tokio::sync::oneshot::channel();
-    let running = tokio::spawn(branvil::serve_with_data_api(
-        BRANVIL, interrupt, terminate, ready,
+    let mut branvil = tokio::spawn(branvil::serve_with_data_api(
+        BRANVIL, interrupt, drain_ci, ready,
     ));
-    let data_api = match data_api.await {
-        Ok(api) => api,
-        // Branvil can stop or fail before exposing its API. Preserve its
-        // exit result, and keep the machine lock until the task ends.
-        Err(_) => return running.await?,
+    let mut stop = Box::pin(stop);
+    let data_api = tokio::select! {
+        biased;
+        () = &mut stop => {
+            // No work was admitted yet. Stop even if Branvil is still starting.
+            abort_branvil.notify_one();
+            return branvil.await?;
+        }
+        result = data_api => match result {
+            Ok(api) => api,
+            Err(_) => return branvil.await?,
+        },
     };
     if let Err(error) = server.attach_branvil(data_api) {
-        guildbotics_failed.notify_one();
-        let _ = running.await;
+        abort_branvil.notify_one();
+        let _ = branvil.await;
         return Err(error);
     }
-    // Told however Branvil ends, a panic included.
-    let branvil = tokio::spawn({
-        let branvil_ended = branvil_ended.clone();
-        async move {
-            let ended = running.await;
-            branvil_ended.notify_one();
-            ended
+
+    let serving = server.serve(stop, cancel);
+    tokio::pin!(serving);
+    let (_held, served) = tokio::select! {
+        drained = &mut serving => {
+            // Work that can still use Branvil has finished. Keep the machine
+            // lock through Branvil's own shutdown, including any CI wait.
+            if drained.1.is_ok() {
+                guildbotics_drained.notify_one();
+            } else {
+                abort_branvil.notify_one();
+            }
+            branvil.await??;
+            drained
         }
-    });
-    let stop = async move {
-        tokio::select! {
-            () = signal => {},
-            () = branvil_ended.notified() => {},
+        ended = &mut branvil => {
+            // Work depending on a peer that exited cannot drain normally.
+            shutdown.request(true);
+            let drained = serving.await;
+            ended??;
+            drained
         }
     };
-    let (_held, served) = server.serve(stop, cancel).await;
-    // On a signal Branvil has had it too, and stops as that signal asks.
-    if served.is_err() {
-        guildbotics_failed.notify_one();
-    }
-    let code = branvil.await??;
     served?;
-    code
+    // Branvil logs CI jobs interrupted at its deadline. An orderly stop of
+    // the combined server must exit successfully so launchd leaves it stopped.
+    Ok(0)
 }
 
 /// How far a stop has gone: none yet, one that waits for the work running,
@@ -404,13 +425,8 @@ enum Stop {
 /// When GuildBotics' port stops, and when it cancels the work it runs: the
 /// first SIGINT stops it once that work ends, and SIGTERM, which a service
 /// manager sends, or a second SIGINT cancels the work.
-fn server_stops(
-    language: &'static str,
-) -> std::io::Result<(
-    impl Future<Output = ()> + Send + 'static,
-    impl Future<Output = ()> + Send + 'static,
-)> {
-    let (told, stops) = tokio::sync::watch::channel(Stop::None);
+fn server_stops(language: &'static str) -> std::io::Result<watch::Receiver<Stop>> {
+    let (told, stops) = watch::channel(Stop::None);
     #[cfg(unix)]
     let (mut interrupt, mut terminate) = {
         use tokio::signal::unix::{SignalKind, signal};
@@ -444,13 +460,11 @@ fn server_stops(
             }
         }
     });
-    let reached = |stop: Stop| {
-        let mut stops = stops.clone();
-        async move {
-            let _ = stops
-                .wait_for(|now| *now == stop || *now == Stop::Cancelling)
-                .await;
-        }
-    };
-    Ok((reached(Stop::Waiting), reached(Stop::Cancelling)))
+    Ok(stops)
+}
+
+async fn wait_for_stop(mut signals: watch::Receiver<Stop>, stop: Stop) {
+    let _ = signals
+        .wait_for(|now| *now == stop || *now == Stop::Cancelling)
+        .await;
 }

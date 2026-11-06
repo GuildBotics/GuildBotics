@@ -118,6 +118,13 @@ pub struct Shutdown {
 }
 
 impl Shutdown {
+    pub fn request(&self, force: bool) {
+        if force {
+            self.cancel.cancel();
+        }
+        self.stop.cancel();
+    }
+
     pub async fn wait(&self) {
         self.stop.cancelled().await;
     }
@@ -138,10 +145,7 @@ pub(crate) async fn shutdown(
     axum::extract::State(api): axum::extract::State<api::Shared>,
     api::Body(body): api::Body<ShutdownRequest>,
 ) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
-    if body.force {
-        api.shutdown.cancel.cancel();
-    }
-    api.shutdown.stop.cancel();
+    api.shutdown.request(body.force);
     (
         axum::http::StatusCode::ACCEPTED,
         axum::Json(serde_json::json!({})),

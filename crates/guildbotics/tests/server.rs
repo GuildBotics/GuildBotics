@@ -83,7 +83,18 @@ impl Server {
         loop {
             let line = stdout
                 .recv_timeout(Duration::from_secs(30))
-                .expect("the server says that it listens");
+                .unwrap_or_else(|error| {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let diagnostics = stderr
+                        .recv_timeout(Duration::from_millis(250))
+                        .ok()
+                        .into_iter()
+                        .chain(stderr.try_iter())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    panic!("the server did not announce its port: {error}\n{diagnostics}");
+                });
             if line == format!("GUILDBOTICS_APP_API_PORT={port}") {
                 break;
             }
@@ -123,6 +134,21 @@ impl Server {
             if let Some((_, rest)) = line.split_once("listening on ") {
                 return rest.split_whitespace().next().unwrap().to_string();
             }
+        }
+    }
+
+    async fn exit_within(&mut self, timeout: Duration) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            if std::time::Instant::now() >= deadline {
+                self.child.kill().unwrap();
+                self.child.wait().unwrap();
+                panic!("combined server did not exit");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -1631,6 +1657,218 @@ fn server_stop_uses_the_running_port_and_waits_for_both_servers() {
     let output = stop(false);
     assert_ok(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("No GuildBotics server is running."));
+}
+
+#[tokio::test]
+async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
+    for via_api in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        set_up_branvil(dir.path(), "127.0.0.1:0");
+        let mut server = Server::start(dir.path());
+        let branvil = format!("{}/api/v1/health", server.branvil_url());
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let registry = gb_base::files::FileLock::hold(
+            &server.home.join("data/workspaces.lock"),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let request = server
+            .http
+            .post(server.url("/api/workspace"))
+            .bearer_auth(server.owner_token())
+            .json(&json!({"workspace_dir": workspace}))
+            .timeout(Duration::from_millis(300))
+            .send()
+            .await;
+        assert!(request.unwrap_err().is_timeout());
+        // A conflict confirms that the detached switch still holds admission
+        // while waiting to persist its selection.
+        let reply = server
+            .http
+            .post(server.url("/api/scheduler/start"))
+            .bearer_auth(server.owner_token())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status(), StatusCode::CONFLICT);
+
+        if via_api {
+            let response = server
+                .http
+                .post(server.url("/api/shutdown"))
+                .bearer_auth(server.owner_token())
+                .json(&json!({"force": false}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        } else {
+            let result = Command::new("kill")
+                .args(["-INT", &server.child.id().to_string()])
+                .output()
+                .unwrap();
+            assert_ok(&result);
+        }
+        let mut availability = Ok(());
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            availability = server
+                .http
+                .get(&branvil)
+                .timeout(Duration::from_secs(1))
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map(|_| ());
+            if availability.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        drop(registry);
+        assert!(server.exit_within(Duration::from_secs(10)).await.success());
+        let active: Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("home/data/active-workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(active["workspace"], json!(host_name(&workspace)));
+        assert!(
+            availability.is_ok(),
+            "Branvil stopped while GuildBotics was still draining (API: {via_api}): {availability:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = set_up_branvil(dir.path(), "127.0.0.1:0");
+    let config = data.join("branvil.toml");
+    let configure = |seconds| {
+        std::fs::write(
+            &config,
+            format!("listen = '127.0.0.1:0'\n[ci]\nstop_wait_secs = {seconds}\n"),
+        )
+        .unwrap();
+    };
+    configure(2);
+    let mut server = Server::start(dir.path());
+    let mut url = server.branvil_url();
+    let owner = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
+    for args in [
+        &["workspace", "create", "acme"][..],
+        &["repo", "create", "acme/demo"],
+        &["member", "create", "fixture-runner", "--kind", "runner"],
+    ] {
+        let mut command = vec!["branvil"];
+        command.extend(args);
+        command.extend(["--url", &url]);
+        assert_ok(&guildbotics(&data, &command));
+    }
+    let token = guildbotics(
+        &data,
+        &[
+            "branvil",
+            "member",
+            "token",
+            "fixture-runner",
+            "--url",
+            &url,
+        ],
+    );
+    assert_ok(&token);
+    let runner = String::from_utf8(token.stdout).unwrap();
+    let work = dir.path().join("work");
+    let home = dir.path().join("git-home");
+    std::fs::create_dir_all(work.join(".branvil")).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(
+        work.join(".branvil/ci.toml"),
+        "[[jobs]]\nname = 'fixture'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo fixture']\n",
+    )
+    .unwrap();
+    let remote = format!("{url}/git/acme/demo.git");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["add", ".branvil/ci.toml"],
+        &["commit", "-qm", "seed CI"],
+        &["push", "-q", &remote, "main"],
+    ] {
+        assert_ok(&git(&work, &home, owner.trim(), args));
+    }
+
+    for interrupt in [false, true] {
+        let claim = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = server
+                    .http
+                    .post(format!("{url}/api/v1/runner/claim"))
+                    .bearer_auth(runner.trim())
+                    .json(&json!({"executor": "test", "executor_state": "ready"}))
+                    .send()
+                    .await
+                    .unwrap();
+                match response.status() {
+                    StatusCode::OK => break response.json::<Value>().await.unwrap(),
+                    StatusCode::NO_CONTENT => (),
+                    status => panic!("claim: {status}"),
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(claim["job"]["name"], "fixture");
+        let stop = server
+            .http
+            .post(server.url("/api/shutdown"))
+            .bearer_auth(server.owner_token())
+            .json(&json!({"force": false}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stop.status(), StatusCode::ACCEPTED);
+        let saw_wait = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = server
+                    .http
+                    .get(format!("{url}/api/v1/admin/diagnostics"))
+                    .bearer_auth(owner.trim())
+                    .send()
+                    .await?;
+                let diagnostics: Value = response.error_for_status()?.json().await?;
+                if diagnostics["runner"]["state"] == "stopping" {
+                    break Ok::<_, reqwest::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        if !matches!(saw_wait, Ok(Ok(()))) {
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+            panic!("Branvil never started waiting for the leased job: {saw_wait:?}");
+        }
+        assert!(
+            gb_server::running(&server.home.join("data"), "en")
+                .unwrap()
+                .is_some()
+        );
+        if interrupt {
+            let result = Command::new("kill")
+                .args(["-TERM", &server.child.id().to_string()])
+                .output()
+                .unwrap();
+            assert_ok(&result);
+        }
+        assert!(server.exit_within(Duration::from_secs(8)).await.success());
+        if !interrupt {
+            configure(30);
+            server = Server::start(dir.path());
+            url = server.branvil_url();
+        }
+    }
 }
 
 #[tokio::test]

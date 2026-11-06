@@ -158,7 +158,7 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
         "<key>GUILDBOTICS_SERVER_PORT</key><string>9876</string>".into(),
         "<key>RunAtLoad</key><true/>".into(),
         "<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>".into(),
-        "<key>ExitTimeOut</key><integer>90</integer>".into(),
+        "<key>ExitTimeOut</key><integer>91</integer>".into(),
         format!(
             "<key>StandardOutPath</key><string>{}</string>",
             log.display()
@@ -281,6 +281,9 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
         ],
     );
     assert!(text(&out).contains("two Keychain prompts"));
+    let plist = fs::read_to_string(hub.plist()).unwrap();
+    assert!(plist.contains("<key>ExitTimeOut</key><integer>92</integer>"));
+    assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
     assert_ne!(hub.installed_build(), old);
     assert!(old.exists());
     assert!(!hub.builds().join("update-from").exists());
@@ -314,11 +317,17 @@ fn failed_start_returns_to_the_previous_compatible_build() {
     hub.commit("new");
     hub.mark("fail-start");
     let out = hub.run("update", None, false);
+    let plist = fs::read_to_string(hub.plist()).unwrap();
+    assert!(plist.contains("<key>ExitTimeOut</key><integer>91</integer>"));
     assert_eq!(hub.installed_build(), old);
     assert_eq!(hub.lines("holder"), "42\n");
     assert!(text(&out).contains("The previous build is running again"));
     assert!(!hub.builds().join("update-from").exists());
-    assert!(hub.lines("actions").ends_with("old|install\n"));
+    assert!(
+        hub.lines("actions")
+            .ends_with("old|server|hub-probe|--ready\n")
+    );
+    assert!(!hub.lines("actions").contains("|install\n"));
 }
 
 #[test]
@@ -339,6 +348,73 @@ fn failed_start_with_an_incompatible_schema_stays_stopped_for_recovery() {
     hub.run("recover", None, true);
     assert_eq!(hub.lines("holder"), "42\n");
     assert!(!hub.builds().join("update-from").exists());
+}
+
+#[test]
+fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("change-schema");
+    hub.mark("fail-install");
+    let out = hub.run("update", None, false);
+    let new = hub.installed_build();
+    assert_ne!(new, old);
+    assert_eq!(hub.lines("holder"), "42\n");
+    assert!(hub.root().join("loaded").exists());
+    assert!(!hub.builds().join("update-from").exists());
+    assert!(text(&out).contains("installing the CLI and skill"));
+    let failure = fs::read_to_string(hub.builds().parent().unwrap().join("last-failure")).unwrap();
+    assert!(failure.contains("installing the CLI and skill"));
+    assert!(failure.contains(new.parent().unwrap().file_name().unwrap().to_str().unwrap()));
+    assert!(failure.contains("Z: Hub update failed"));
+    assert_eq!(hub.lines("actions").matches("old|server|stop").count(), 1);
+    assert!(!hub.lines("actions").contains("new|server|stop"));
+
+    fs::remove_file(hub.root().join("fail-install")).unwrap();
+    hub.run("update", None, true);
+    assert_eq!(hub.installed_build(), new);
+    assert!(hub.lines("actions").contains("new|install"));
+    assert!(!hub.lines("calls").contains("launchctl|bootstrap"));
+}
+
+#[test]
+fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("change-schema");
+    hub.run("update", None, true);
+    let new = hub.installed_build();
+    fs::write(
+        hub.builds().join("update-from"),
+        format!("{}\n", old.display()),
+    )
+    .unwrap();
+
+    hub.run("recover", None, true);
+    assert_eq!(hub.installed_build(), new);
+    assert!(!hub.builds().join("update-from").exists());
+    assert!(!hub.lines("actions").contains("server|stop"));
+    assert!(hub.lines("actions").contains("new|install"));
+}
+
+#[test]
+fn a_candidate_that_becomes_ready_as_launchd_reports_an_exit_stays_running() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("change-schema");
+    hub.mark("fail-start");
+    hub.mark("ready-after-exit");
+    hub.run("update", None, true);
+    assert_ne!(hub.installed_build(), old);
+    assert_eq!(hub.lines("holder"), "42\n");
+    assert!(!hub.builds().join("update-from").exists());
+    assert!(!hub.lines("actions").contains("new|server|stop"));
 }
 
 #[test]
