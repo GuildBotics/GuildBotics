@@ -134,6 +134,12 @@ enum ServerCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Report the lock holder to the Hub's LaunchAgent script.
+    #[command(hide = true)]
+    HubProbe {
+        #[arg(long)]
+        ready: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -203,6 +209,9 @@ fn main() -> ExitCode {
         Command::Server {
             command: ServerCommand::Stop { force },
         } => outcome(block(service_cli::stop(force)).map(|()| 0)),
+        Command::Server {
+            command: ServerCommand::HubProbe { ready },
+        } => outcome(block(service_cli::hub_probe(ready))),
     }
 }
 

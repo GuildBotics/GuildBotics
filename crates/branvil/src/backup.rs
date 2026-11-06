@@ -299,7 +299,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// Writes the manifest last and under its name only once it is complete: a
-/// backup with a manifest is a whole backup (scripts/update.sh counts those).
+/// backup with a manifest is a whole backup (the Hub updater counts those).
 fn write_manifest(target: &Path, text: &str) -> std::io::Result<()> {
     let partial = target.join(format!("{MANIFEST}.partial"));
     let mut file = std::fs::File::create(&partial)?;

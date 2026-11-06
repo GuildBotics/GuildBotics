@@ -43,6 +43,26 @@ pub async fn run(command: ServiceCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Print a PID only when this machine's server holds the lock. With `ready`,
+/// require its authenticated proof too: the port can be bound before serving.
+pub async fn hub_probe(ready: bool) -> anyhow::Result<u8> {
+    let language = client::language().await;
+    let data = gb_base::home::data()?;
+    let Some(holder) = gb_server::running(&data, language)? else {
+        return Ok(u8::from(ready));
+    };
+    if ready
+        && (OwnerClient::connect(&data, holder.port, language)
+            .await?
+            .is_none()
+            || gb_server::running(&data, language)?.as_ref() != Some(&holder))
+    {
+        return Ok(1);
+    }
+    println!("{}", holder.pid);
+    Ok(0)
+}
+
 pub async fn stop(force: bool) -> anyhow::Result<()> {
     use std::time::Duration;
 
