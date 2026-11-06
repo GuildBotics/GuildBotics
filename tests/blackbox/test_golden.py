@@ -62,7 +62,11 @@ def _read_all(stack, end: str) -> dict:
         reads[path] = get(path, limit=1000)
     for member in reads["team"]["members"]:
         person = member["person_id"]
-        reads[f"config/members/{person}"] = get(f"config/members/{person}")
+        # The workspace config the member was read in, which its save names,
+        # is answered since #133; the golden of the frozen server lacks it.
+        member_read = get(f"config/members/{person}")
+        member_read.pop("config_dir", None)
+        reads[f"config/members/{person}"] = member_read
         reads[f"config/intelligences?person_id={person}"] = get(
             "config/intelligences", person_id=person
         )

@@ -482,7 +482,13 @@ export function SetupPage() {
   const workspaceSwitchId = useRef(0);
   // A saved project whose content is loaded: only then is there something
   // to compare a save against, and something to save into.
-  const canSaveProject = hasExistingProject && projectConfig.isSuccess;
+  // The project is saved only while the workspace the screen shows is the one
+  // its snapshot was read in: until both reads agree, what is typed would be
+  // shown as one workspace's and written into the other.
+  const canSaveProject =
+    hasExistingProject &&
+    projectConfig.isSuccess &&
+    projectConfig.data.config_dir === config.data?.config_dir;
   // Keys already stored in the workspace secret store. Only a saved project has
   // them; during first setup the snapshot belongs to no workspace yet (and may
   // still be cached from a previously opened one), so it must not be consulted.
@@ -3206,9 +3212,12 @@ function MembersSection({
 
   // What the member form was composed against, sent back with the save so an
   // edit that arrived from elsewhere meanwhile is not replaced unseen.
-  const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions | null>(null);
+  const [memberRead, setMemberRead] = useState<MemberRead | null>(null);
   const currentMember = useQuery({
     queryKey: ["member-config", editingPersonId],
+    // A rebuilt section reads its member anew rather than composing its form
+    // from a read another workspace may have answered.
+    refetchOnMount: "always",
     queryFn: () => getMemberConfig(editingPersonId!),
     enabled: mode === "edit" && Boolean(editingPersonId),
     staleTime: Infinity,
@@ -3217,18 +3226,19 @@ function MembersSection({
   // compare revisions below and leave all unsaved fields in place.
   if (
     mode === "edit" &&
-    memberRevisions === null &&
+    memberRead === null &&
     currentMember.isSuccess &&
     !currentMember.isFetching
   ) {
-    setMemberRevisions(currentMember.data.revisions);
+    setMemberRead(readOf(currentMember.data));
     fillFormFromMember(currentMember.data);
   }
   const memberChanged = Boolean(
-    memberRevisions &&
+    memberRead &&
     currentMember.data &&
-    (Object.keys(memberRevisions).length !== Object.keys(currentMember.data.revisions).length ||
-      Object.entries(memberRevisions).some(
+    (Object.keys(memberRead.revisions).length !==
+      Object.keys(currentMember.data.revisions).length ||
+      Object.entries(memberRead.revisions).some(
         ([path, revision]) => currentMember.data.revisions[path] !== revision,
       )),
   );
@@ -3240,13 +3250,12 @@ function MembersSection({
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(["member-config", snapshot.person_id], snapshot);
-      setMemberRevisions(snapshot.revisions);
+      setMemberRead(readOf(snapshot));
       fillFormFromMember(snapshot);
       setMode("edit");
     },
   });
-  const memberLoading =
-    memberConfigMutation.isPending || (mode === "edit" && memberRevisions === null);
+  const memberLoading = memberConfigMutation.isPending || (mode === "edit" && memberRead === null);
   const defaultPersonMutation = useMutation({
     mutationFn: (personId: string) => updateDefaultPerson(personId),
     onSuccess: () => {
@@ -3282,7 +3291,7 @@ function MembersSection({
       // The screen stays open on the member that was just saved, so without
       // this its next save would be composed against the revision it replaced.
       await queryClient.cancelQueries({ queryKey: ["member-config", editingPersonId] });
-      setMemberRevisions(written.revisions);
+      setMemberRead((read) => read && { ...read, revisions: written.revisions });
       queryClient.setQueryData<MemberConfig>(["member-config", editingPersonId], (current) =>
         current ? { ...current, revisions: written.revisions } : current,
       );
@@ -3303,7 +3312,7 @@ function MembersSection({
     onSuccess: (snapshot) => {
       memberDiagnosticsMutation.reset();
       clearForm();
-      setMemberRevisions(snapshot.revisions);
+      setMemberRead(readOf(snapshot));
       fillFormFromMember(snapshot);
       setJoiningPersonId(snapshot.person_id);
       setEditingPersonId(null);
@@ -3677,10 +3686,10 @@ function MembersSection({
     let memberWritten = false;
     try {
       if (formMode === "edit" && editingPersonId) {
-        if (!memberRevisions) return;
+        if (!memberRead) return;
         await updateMemberMutation.mutateAsync({
           originalPersonId: editingPersonId,
-          body: { ...request, expected_revisions: memberRevisions },
+          body: composedRequest(request, memberRead),
         });
         memberWritten = true;
         setAccounts(settledAccounts());
@@ -3692,9 +3701,7 @@ function MembersSection({
       // An existing member is added as its identity was read, so an edit
       // made to it meanwhile, here or elsewhere, is not replaced.
       await addMemberMutation.mutateAsync(
-        joiningPersonId && memberRevisions
-          ? { ...request, expected_revisions: memberRevisions }
-          : request,
+        joiningPersonId && memberRead ? composedRequest(request, memberRead) : request,
       );
       memberWritten = true;
       // The added member's form is cleared by now; what its accounts do after
@@ -3737,7 +3744,7 @@ function MembersSection({
     setMode("add");
     setEditingPersonId(null);
     setJoiningPersonId(null);
-    setMemberRevisions(null);
+    setMemberRead(null);
     clearForm({ withDefaults: true });
   };
 
@@ -3745,7 +3752,7 @@ function MembersSection({
     memberDiagnosticsMutation.reset();
     setJoiningPersonId(null);
     setAccounts({});
-    setMemberRevisions(null);
+    setMemberRead(null);
     setEditingPersonId(memberId);
     setMode("edit");
     showTab(initialTab ?? "basic");
@@ -6134,6 +6141,19 @@ function newDraftId(): string {
 
 function resolveConfigDir(workspaceDir: string): string {
   return joinPath(workspaceDir, ".guildbotics/config");
+}
+
+/** What a member form was composed against: the revisions it read, in the
+ * workspace config the server read them in. */
+type MemberRead = { revisions: ConfigRevisions; configDir: string };
+
+function readOf(member: MemberConfig): MemberRead {
+  return { revisions: member.revisions, configDir: member.config_dir };
+}
+
+/** The member form's save, naming the read it was composed against. */
+function composedRequest(request: MemberSetupRequest, read: MemberRead): MemberSetupRequest {
+  return { ...request, config_dir: read.configDir, expected_revisions: read.revisions };
 }
 
 function ScenarioDiagnosticsSummary({

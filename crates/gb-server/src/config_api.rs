@@ -612,8 +612,15 @@ pub(crate) async fn read_member(
         Ok(workspace) => workspace,
         Err(refused) => return *refused,
     };
+    let config = workspace.join(".guildbotics/config");
     match with_setup(&api, workspace, move |setup| setup.read_member(&name)).await {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(snapshot) => {
+            // Where the form is composed, which its save names, as the
+            // project's read says it.
+            let mut answer = serde_json::to_value(snapshot).expect("a member snapshot");
+            answer["config_dir"] = json!(config);
+            Json(answer).into_response()
+        }
         Err(error) => failure(error, &headers),
     }
 }

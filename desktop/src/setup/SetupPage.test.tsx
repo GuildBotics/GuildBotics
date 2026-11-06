@@ -1346,6 +1346,26 @@ describe("SetupPage", () => {
     await queryClient.refetchQueries({ queryKey: ["project-config"] });
 
     await waitFor(() => expect(description).toHaveValue("Demo project"));
+    // Until the status agrees, the screen shows one workspace and holds the
+    // other's snapshot: nothing typed meanwhile can be saved.
+    expect(screen.queryByRole("button", { name: t("setup.save.action") })).not.toBeInTheDocument();
+    await fill(user, description, " typed while the status lags");
+
+    vi.mocked(getConfigStatus).mockResolvedValue(
+      configStatus({
+        project_file_exists: true,
+        workspace: "/other",
+        config_dir: "/other/.guildbotics/config",
+      }),
+    );
+    await queryClient.refetchQueries({ queryKey: ["config"] });
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
+      config_dir: "/other/.guildbotics/config",
+      description: "Demo project",
+    });
   });
 
   it("saves twice in a row without colliding with its own first save", async () => {
@@ -1687,6 +1707,7 @@ const GITHUB_AND_SLACK: ProjectServices = {
 
 function memberConfig(): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -2353,6 +2374,7 @@ describe("patrol / schedule helpers", () => {
 
 function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig {
   return {
+    config_dir: "/workspace/.guildbotics/config",
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
@@ -2562,7 +2584,11 @@ describe("MembersSection", () => {
       );
       fireEvent.change(name, { target: { value: "Typed for this workspace" } });
 
-      // The server opens another workspace, by way of none selected.
+      // The server opens another workspace, by way of none selected; the
+      // member the page names reads differently there.
+      vi.mocked(getMemberConfig).mockResolvedValue(
+        memberConfigDetail({ person_name: "Alice in the other workspace" }),
+      );
       for (const workspace of [null, "/other"]) {
         vi.mocked(getConfigStatus).mockResolvedValue(
           configStatus({
@@ -2578,11 +2604,33 @@ describe("MembersSection", () => {
         expect(screen.queryByDisplayValue("Typed for this workspace")).not.toBeInTheDocument(),
       );
       // The member the page names is read again, in the workspace open now.
-      expect(await screen.findByLabelText(t("setup.members.personName"))).toHaveValue(
-        members ? "" : "Alice",
+      const rebuilt = await screen.findByLabelText(t("setup.members.personName"));
+      await waitFor(() =>
+        expect(rebuilt).toHaveValue(members ? "" : "Alice in the other workspace"),
       );
     },
   );
+
+  it("saves a member to the workspace config the server read it in", async () => {
+    const user = userEvent.setup();
+    // The read was answered by another workspace than the one this screen shows.
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        config_dir: "/other/.guildbotics/config",
+        revisions: { "team/members/alice/member.yml": "read-there" },
+      }),
+    );
+    renderSetupPage("/setup?section=members&person_id=alice");
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    fireEvent.change(name, { target: { value: "Alice B" } });
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateMemberConfig).mock.calls[0][1]).toMatchObject({
+      config_dir: "/other/.guildbotics/config",
+      expected_revisions: { "team/members/alice/member.yml": "read-there" },
+    });
+  });
 
   it("shows the add form when there are no members", async () => {
     vi.mocked(getTeam).mockResolvedValue({

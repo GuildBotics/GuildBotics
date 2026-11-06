@@ -708,6 +708,8 @@ export type MemberSetupRequest = MemberWriteRequestBase & {
 };
 
 export type MemberConfig = {
+  /** The workspace config the member was read in, which its save names. */
+  config_dir: string;
   revisions: ConfigRevisions;
   person_id: string;
   person_name: string;

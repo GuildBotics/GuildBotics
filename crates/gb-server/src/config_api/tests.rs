@@ -1112,6 +1112,7 @@ async fn a_member_read_reports_both_revisions_and_a_stale_save_is_refused() {
     f.init().await;
     f.add(agent("alice")).await;
     let read = f.get("/config/members/alice").await;
+    assert_eq!(read["config_dir"], json!(f.config()));
     assert_eq!(
         read["revisions"]
             .as_object()
