@@ -404,7 +404,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .env(FIXTURE, root.path().canonicalize().unwrap())
-            .args(["--exact", "secrets_cli::tests::secrets_status_and_stdout_export_report_the_store_without_a_file", "--nocapture"])
+            .args(["--exact", "client::secrets::tests::secrets_status_and_stdout_export_report_the_store_without_a_file", "--nocapture"])
             .output().unwrap();
         assert!(output.status.success(), "{output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
