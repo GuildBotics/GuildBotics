@@ -9,6 +9,7 @@ repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
 [dependencies]
+base64 = "0.22"
 anyhow = "1.0.102"
 gb-base = { path = "../gb-base" }
 serde = { version = "1.0.228", features = ["derive"] }

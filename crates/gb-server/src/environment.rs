@@ -516,19 +516,31 @@ pub async fn status(
         package: gb_base::home::python_package(),
         identity_root: gb_base::home::identity_root()?,
     };
-    let device = gb_environment::device::read(&host, &workspace).await;
+    status_with(
+        &host,
+        &workspace,
+        language,
+        &gb_config::secrets::SystemKeychain,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn status_with(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    language: &str,
+    keychain: &dyn gb_config::secrets::Keychain,
+    agents_only: bool,
+) -> anyhow::Result<Value> {
+    let device = gb_environment::device::read(host, workspace).await;
     let mut view = device.rendered(|s| crate::commands::say(s, language));
-    attach_output(&workspace, &mut view);
+    attach_output(workspace, &mut view);
     let catalog: Value = serde_json::from_slice(&std::fs::read(
         host.package
             .join("templates/environment/cli_provision.json"),
     )?)?;
-    let mut tools = crate::host_window::tool_status(
-        &host.data,
-        &host.home,
-        &catalog,
-        &gb_config::secrets::SystemKeychain,
-    );
+    let mut tools = crate::host_window::tool_status(&host.data, &host.home, &catalog, keychain);
     if let Some(rows) = tools.as_array_mut() {
         for row in rows {
             let name = row["name"].as_str().unwrap_or_default().to_owned();
@@ -547,10 +559,14 @@ pub async fn status(
     };
     let mut members = vec![];
     if let Ok(team) = gb_config::team::Team::load(&config, &host.identity_root) {
-        for member in team.members.into_iter().filter(|m| m.is_active) {
+        for member in team
+            .members
+            .into_iter()
+            .filter(|m| m.is_active && (!agents_only || m.person_type != "human"))
+        {
             let slots = match gb_config::resolved_guest::resolve(
                 &roots,
-                &workspace,
+                workspace,
                 &host.identity_root,
                 &member.person_id,
             ) {

@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tower::ServiceExt as _;
 
+mod health;
 mod intelligences;
 
 /// Every route that writes the shared config: each compares what its screen

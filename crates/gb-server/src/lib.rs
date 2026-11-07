@@ -19,6 +19,7 @@ pub mod dispatcher;
 pub mod environment;
 pub mod events;
 pub mod execution;
+mod health;
 pub mod host_window;
 pub mod i18n;
 mod input_files;

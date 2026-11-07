@@ -33,6 +33,7 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
+    pub(crate) health_lock: tokio::sync::Mutex<()>,
     #[cfg(test)]
     pub(crate) diagnostics_runner: std::sync::Mutex<Option<crate::diagnostics::CheckRunner>>,
     selection: std::sync::RwLock<Arc<Selected>>,
@@ -99,6 +100,7 @@ impl Api {
                 .map(gb_observability::Diagnostics::open),
         );
         Api {
+            health_lock: Default::default(),
             #[cfg(test)]
             diagnostics_runner: Default::default(),
             selection: std::sync::RwLock::new(Arc::new(selected)),
@@ -514,6 +516,18 @@ routes!(
     ),
     (get, "/commands/files/{id}", crate::screens::file),
     (get, "/diagnostics/traces", crate::screens::traces),
+    (
+        get,
+        "/intelligences/cli-agents/last-turns",
+        crate::health::turns
+    ),
+    (
+        get,
+        "/intelligences/inference-failures",
+        crate::health::failures
+    ),
+    (get, "/system-alerts", crate::health::alerts),
+    (post, "/system-alerts/dismiss", crate::health::dismiss),
     (post, "/diagnostics/scenario", crate::diagnostics::scenario),
     (get, "/diagnostics/global", crate::diagnostics::global),
     (
@@ -791,6 +805,10 @@ mod tests {
         // for each of these.
         let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
+            (
+                ("post", "/system-alerts/dismiss"),
+                "writes device-local system-alerts.json only",
+            ),
             (
                 ("post", "/intelligences/decisions/credential"),
                 "writes the workspace secret store and shared key index, without screen revisions",
