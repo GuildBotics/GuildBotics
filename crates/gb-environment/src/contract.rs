@@ -1,6 +1,6 @@
 //! Resolve the shared/local filesystem contract before creating any directory.
 use crate::{Mount, Sentence};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 const FILE: &str = "cli_agent_filesystem_grants.yml";
@@ -21,31 +21,31 @@ const SENSITIVE: &[&str] = &[
     ".agents",
 ];
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grant {
     pub path: String,
     pub access: Access,
 }
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
     Read,
     ReadWrite,
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Shared {
+pub struct Shared {
     #[serde(default)]
-    documents: Vec<Grant>,
+    pub documents: Vec<Grant>,
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Local {
+pub struct Local {
     #[serde(default)]
-    paths: Vec<Grant>,
+    pub paths: Vec<Grant>,
     #[serde(default)]
-    deny: Vec<String>,
+    pub deny: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +53,70 @@ pub struct Resolved {
     pub grants: Vec<Mount>,
     pub denied: Vec<PathBuf>,
     pub view: serde_json::Value,
+}
+
+/// A proposed edit's refusal, with the runtime's text and the editor's locale
+/// sentence. It never includes credential contents.
+#[derive(Debug)]
+pub struct GrantProblem {
+    text: String,
+    pub sentence: Sentence,
+}
+impl std::fmt::Display for GrantProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+impl From<String> for GrantProblem {
+    fn from(text: String) -> Self {
+        Self {
+            sentence: Sentence::Text(text.clone()),
+            text,
+        }
+    }
+}
+impl From<&str> for GrantProblem {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+fn grant_problem(key: &'static str, name: &str, text: impl Into<String>) -> GrantProblem {
+    GrantProblem {
+        text: text.into(),
+        sentence: Sentence::Key(key, vec![("path", name.into())]),
+    }
+}
+fn proposed_target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, GrantProblem> {
+    if !absolute
+        && (Path::new(name).is_absolute()
+            || name.starts_with("\\\\")
+            || (name.as_bytes().get(1) == Some(&b':')
+                && matches!(name.as_bytes().get(2), Some(b'/' | b'\\'))))
+    {
+        return Err(grant_problem(
+            "intelligences.agent_environment.grants.path_not_relative",
+            name,
+            format!("'{name}' is not a directory name"),
+        ));
+    }
+    target(name, home, absolute).map_err(|text| {
+        grant_problem(
+            "intelligences.agent_environment.grants.path_not_a_directory_name",
+            name,
+            text,
+        )
+    })
+}
+
+/// Validate file spellings without requiring any of their directories to exist.
+pub fn validate_names(shared: &Shared, local: &Local, home: &Path) -> Result<(), GrantProblem> {
+    for grant in &shared.documents {
+        proposed_target(&grant.path, home, false)?;
+    }
+    for name in local.paths.iter().map(|g| &g.path).chain(local.deny.iter()) {
+        proposed_target(name, home, true)?;
+    }
+    Ok(())
 }
 
 fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, String> {
@@ -74,7 +138,11 @@ fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, Stri
 }
 fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
     let path = Path::new(name);
-    if name.is_empty()
+    if name
+        .replace('\\', "/")
+        .trim_matches('/')
+        .split('/')
+        .any(|s| s.is_empty() || s == "." || s == "..")
         || (!absolute && name.contains('\\'))
         || name.contains("//")
         || name.contains('\0')
@@ -284,21 +352,44 @@ fn resolve_with_probe(
     create: bool,
     probe: impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Resolved, String> {
-    let home = gb_base::host_path::directory(home, false).map_err(|e| e.to_string())?;
     let shared: Shared = load(
         &workspace
             .join(".guildbotics/config/intelligences")
             .join(FILE),
     )?;
     let local: Local = load(&workspace.join(".guildbotics/local").join(FILE))?;
+    resolve_values(
+        workspace, home, registered, shared, local, read_only, create, probe,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Resolve a proposed edit with the same validation as a command, without
+/// writing it to the workspace first.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_values(
+    workspace: &Path,
+    home: &Path,
+    registered: &[PathBuf],
+    shared: Shared,
+    local: Local,
+    read_only: bool,
+    create: bool,
+    probe: impl Fn(&Path) -> Result<(), String>,
+) -> Result<Resolved, GrantProblem> {
+    let home = gb_base::host_path::directory(home, false).map_err(|e| e.to_string())?;
     let mut denied: Vec<_> = SENSITIVE.iter().map(|s| home.join(s)).collect();
     denied.push(workspace.join(".guildbotics"));
     denied.extend(registered.iter().map(|p| p.join(".guildbotics")));
     let builtin_count = denied.len();
     for name in local.deny {
-        let p = target(&name, &home, true)?;
+        let p = proposed_target(&name, &home, true)?;
         if p == home || p.parent().is_none() {
-            return Err("Deny is too broad".into());
+            return Err(grant_problem(
+                "intelligences.agent_environment.grants.deny_too_broad",
+                &name,
+                "Deny is too broad",
+            ));
         }
         denied.push(p);
     }
@@ -310,15 +401,19 @@ fn resolve_with_probe(
         true,
     )];
     for grant in shared.documents {
-        let p = target(&grant.path, &home, false)?;
+        let p = proposed_target(&grant.path, &home, false)?;
         if p != home.join("Documents/GuildBotics") {
             planned.push((p, grant.access, true, grant.path, false));
         }
     }
     for grant in local.paths {
-        let p = target(&grant.path, &home, true)?;
+        let p = proposed_target(&grant.path, &home, true)?;
         if p == home || p.parent().is_none() {
-            return Err("Local path is too broad".into());
+            return Err(grant_problem(
+                "intelligences.agent_environment.grants.local_path_too_broad",
+                &grant.path,
+                "Local path is too broad",
+            ));
         }
         planned.push((p, grant.access, false, grant.path, false));
     }
@@ -334,7 +429,40 @@ fn resolve_with_probe(
     denied = expanded;
     // Validate the whole population before creating even the built-in exchange.
     for (path, _, document, _, _) in &planned {
-        validate_source(path, &denied, true, *document || !create)?;
+        let source =
+            gb_base::host_path::directory(path, *document || !create).map_err(|e| e.to_string())?;
+        for protected in &denied {
+            if protected.starts_with(&source) || source.starts_with(protected) {
+                let key = if protected.starts_with(workspace.join(".guildbotics"))
+                    || registered
+                        .iter()
+                        .any(|p| protected.starts_with(p.join(".guildbotics")))
+                {
+                    "safe_paths.protected_workspace"
+                } else if SENSITIVE
+                    .iter()
+                    .any(|s| protected.starts_with(home.join(s)))
+                {
+                    "safe_paths.protected_credentials"
+                } else {
+                    "safe_paths.protected_local"
+                };
+                return Err(GrantProblem {
+                    text: format!(
+                        "{} exposes protected directory {}",
+                        source.display(),
+                        protected.display()
+                    ),
+                    sentence: Sentence::Key(
+                        key,
+                        vec![
+                            ("path", source.display().to_string()),
+                            ("protected", protected.display().to_string()),
+                        ],
+                    ),
+                });
+            }
+        }
     }
     for (path, _, document, _, _) in &planned {
         let mut present = path.as_path();
@@ -851,6 +979,39 @@ mod frozen_tests {
     }
     const SHARED: &str = ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml";
     const LOCAL: &str = ".guildbotics/local/cli_agent_filesystem_grants.yml";
+    #[test]
+    fn local_view_keeps_written_spelling_and_document_drive_relative_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join("cache")).unwrap();
+        let workspace = dir.path().join("workspace");
+        for path in [
+            home.join("cache"),
+            home.join("missing"),
+            PathBuf::from("cache"),
+        ] {
+            put(
+                &workspace,
+                LOCAL,
+                &serde_json::json!({"paths":[{"path":path,"access":"read"}]}).to_string(),
+            );
+            let resolved = resolve(&workspace, &home, &[], false, false).unwrap();
+            assert_eq!(resolved.view["paths"][0]["grant"], serde_json::json!(path));
+            assert_eq!(
+                resolved.view["paths"][0]["present"],
+                path != home.join("missing")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            put(
+                &workspace,
+                SHARED,
+                "documents: [{path: 'a:b', access: read}]",
+            );
+            assert!(resolve(&workspace, &home, &[], false, false).is_ok());
+        }
+    }
     #[test]
     fn grant_documents_local_paths_optional_files_and_invalid_population() {
         let dir = tempfile::tempdir().unwrap();

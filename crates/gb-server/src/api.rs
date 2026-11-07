@@ -402,6 +402,28 @@ routes!(
         crate::config_api::forget_workspace
     ),
     (get, "/config/project", crate::config_api::read_project),
+    (get, "/config/intelligences", crate::intelligences::get),
+    (put, "/config/intelligences", crate::intelligences::put),
+    (
+        get,
+        "/intelligences/model-providers",
+        crate::intelligences::providers
+    ),
+    (
+        get,
+        "/intelligences/grant-evaluation",
+        crate::intelligences::preview
+    ),
+    (
+        get,
+        "/intelligences/decisions/options",
+        crate::intelligences::options
+    ),
+    (
+        post,
+        "/intelligences/decisions/credential",
+        crate::intelligences::credential
+    ),
     (put, "/config/project", crate::config_api::save_project),
     (
         put,
@@ -769,6 +791,10 @@ mod tests {
         // for each of these.
         let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
+            (
+                ("post", "/intelligences/decisions/credential"),
+                "writes the workspace secret store and shared key index, without screen revisions",
+            ),
             (
                 ("post", "/diagnostics/scenario"),
                 "runs read-only diagnostics and records their result",

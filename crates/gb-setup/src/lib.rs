@@ -21,6 +21,7 @@ use std::{
     pin::Pin,
 };
 
+pub mod intelligences;
 pub mod members;
 mod templates;
 pub use members::*;

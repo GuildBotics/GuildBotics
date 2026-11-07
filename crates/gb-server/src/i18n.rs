@@ -8,6 +8,16 @@ use gb_environment::Sentence;
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "intelligences.decisions",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/intelligences/decisions.en.yml"),
+    ),
+    (
+        "intelligences.decisions",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/intelligences/decisions.ja.yml"),
+    ),
+    (
         "app_api.diagnostics",
         "en",
         include_str!("../../../guildbotics/templates/locales/app_api/diagnostics.en.yml"),
