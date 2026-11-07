@@ -142,7 +142,12 @@ fn invalid_brains_and_unknown_tools_never_write_assignments() {
     };
     for model in ["", "gpt-5", "claude-sonnet", "jev-1.13.0", "jev-preview"] {
         let form: Update = serde_json::from_value(json!({"brain_mapping":[{"name":"chat_decision","brain_class":JEV,"engine":"jev","target":model}]})).unwrap();
-        assert!(service.update(&form, &Revisions::new()).is_err());
+        let error = service.update(&form, &Revisions::new()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<SetupError>().unwrap().code,
+            "invalid_decision"
+        );
+        assert!(error.to_string().contains("Unsupported Jev model"));
         assert!(
             repository
                 .read_config("intelligences/brain_mapping.yml")
@@ -152,12 +157,41 @@ fn invalid_brains_and_unknown_tools_never_write_assignments() {
     }
     for name in ["default", "agent", "translate"] {
         let form: Update = serde_json::from_value(json!({"brain_mapping":[{"name":name,"brain_class":JEV,"engine":"jev","target":"jev-latest"}]})).unwrap();
-        assert!(service.update(&form, &Revisions::new()).is_err());
+        let error = service.update(&form, &Revisions::new()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<SetupError>().unwrap().code,
+            "invalid_decision"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("only supported for chat_decision")
+        );
+        assert!(stored(&repository, "intelligences/brain_mapping.yml").is_null());
     }
     for tool in ["codex", "claude", "grok", "copilot", "antigravity"] {
-        let form: Update = serde_json::from_value(json!({"person_id":"alice","cli_agent_mapping":{"judge":format!("cli_agents/{tool}/default.yml")},"brain_mapping":[{"name":"chat_decision","brain_class":CLI,"engine":"cli","target":"judge"}]})).unwrap();
-        assert!(service.update(&form, &Revisions::new()).is_err());
+        let form: Update = serde_json::from_value(json!({"cli_agent_mapping":{"judge":format!("cli_agents/{tool}/default.yml")},"brain_mapping":[{"name":"chat_decision","brain_class":CLI,"engine":"cli","target":"judge"}]})).unwrap();
+        let error = service.update(&form, &Revisions::new()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<SetupError>().unwrap().code,
+            "invalid_decision"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("not supported for chat_decision")
+        );
+        assert!(stored(&repository, "intelligences/brain_mapping.yml").is_null());
+        assert!(stored(&repository, "intelligences/cli_agent_mapping.yml").is_null());
     }
+    save(
+        &service,
+        json!({"brain_mapping":[{"name":"chat_decision","brain_class":JEV,"engine":"jev","target":"jev-latest"}]}),
+    );
+    assert_eq!(
+        stored(&repository, "intelligences/brain_mapping.yml"),
+        json!({"chat_decision":{"kind":"jev","model":"jev-latest"}})
+    );
 }
 
 fn save(service: &IntelligenceConfig<'_>, form: Value) -> Vec<Value> {
@@ -214,6 +248,14 @@ fn complete_team_save_and_member_pruning_preserve_hidden_definition_fields() {
         stored(&repository, "intelligences/models/openai/gpt.yml")["parameters"],
         json!({"id":"team-model-id"})
     );
+    assert_eq!(
+        stored(&repository, "intelligences/cli_agent_mapping.yml"),
+        form["cli_agent_mapping"]
+    );
+    assert_eq!(
+        stored(&repository, "intelligences/brain_mapping.yml"),
+        json!({"default":{"kind":"model","model":"default"},"agent":{"kind":"ai_cli","cli_agent":"default"}})
+    );
     let team = service.read(None).unwrap();
     assert_eq!(team["inherited_cli_slots"], json!([]));
     assert_eq!(team["inherited_brain_features"], json!([]));
@@ -236,6 +278,45 @@ fn complete_team_save_and_member_pruning_preserve_hidden_definition_fields() {
     form["models"].as_array_mut().unwrap().push(json!({"path":"models/anthropic/claude.yml","provider":"anthropic","model_class":"member.ModelClass","parameters":{"id":"member-model-id"}}));
     let files = save(&service, form.clone());
     assert_eq!(files.len(), 2);
+    let member_prefix = repository
+        .view()
+        .path("team/members/alice/intelligences")
+        .unwrap();
+    assert_eq!(
+        files
+            .iter()
+            .map(|f| Path::new(f["path"].as_str().unwrap())
+                .strip_prefix(&member_prefix)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "model_mapping.yml".to_owned(),
+            "models/anthropic/claude.yml".to_owned()
+        ])
+    );
+    assert_eq!(
+        stored(
+            &repository,
+            "team/members/alice/intelligences/model_mapping.yml"
+        ),
+        json!({"default":"models/anthropic/claude.yml"})
+    );
+    let definition = stored(
+        &repository,
+        "team/members/alice/intelligences/models/anthropic/claude.yml",
+    );
+    assert_eq!(definition["model_class"], "member.ModelClass");
+    assert_eq!(definition["parameters"], json!({"id":"member-model-id"}));
+    assert_eq!(definition["effort"], json!({}));
+    for name in [
+        "models/openai",
+        "cli_agent_mapping.yml",
+        "brain_mapping.yml",
+    ] {
+        assert!(!member_prefix.join(name).exists(), "{name}");
+    }
     let read = service.read(Some("alice")).unwrap();
     assert_eq!(read["inherited"], false);
     assert_eq!(read["model_mapping"]["openai"], "models/openai/gpt.yml");
@@ -412,15 +493,12 @@ fn native_catalog_and_shadowed_provider_defaults_keep_typed_fields() {
             }
         );
         let rejected: Update = serde_json::from_value(json!({"models":[{"path":custom,"provider":provider,"effort":{"high":{"reasoning_efort":"high"}}}]})).unwrap();
+        let error = service.update(&rejected, &Revisions::new()).unwrap_err();
         assert_eq!(
-            service
-                .update(&rejected, &Revisions::new())
-                .unwrap_err()
-                .downcast_ref::<SetupError>()
-                .unwrap()
-                .code,
+            error.downcast_ref::<SetupError>().unwrap().code,
             "invalid_effort_settings"
         );
+        assert!(error.to_string().contains("reasoning_efort"));
     }
 }
 
@@ -593,4 +671,268 @@ fn brain_rows_classify_engines_and_skip_non_mapping_entries() {
         assert_eq!(row["brain_class"], class);
         assert_eq!(row["target"], target);
     }
+}
+
+#[test]
+fn member_preloads_team_before_writing_any_override() {
+    for name in [
+        "brain_mapping.yml",
+        "cli_agent_mapping.yml",
+        "models/openai/default.yml",
+    ] {
+        let (_tmp, repository, templates) = fixture();
+        let service = IntelligenceConfig {
+            repository: &repository,
+            templates: &templates,
+        };
+        let bad = repository
+            .view()
+            .path(&format!("intelligences/{name}"))
+            .unwrap();
+        std::fs::create_dir_all(bad.parent().unwrap()).unwrap();
+        std::fs::write(&bad, "broken: [yaml").unwrap();
+        let form: Update = serde_json::from_value(json!({"person_id":"alice", "model_mapping":{"default":"models/openai/custom.yml"}, "brain_mapping":[]})).unwrap();
+        assert!(service.update(&form, &Revisions::new()).is_err(), "{name}");
+        assert!(
+            !repository
+                .view()
+                .path("team/members/alice/intelligences")
+                .unwrap()
+                .exists(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn member_effort_is_saved_without_team_descriptor_validation() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    for (field, path, effort) in [
+        (
+            "models",
+            "models/openai/default.yml",
+            json!({"high":{"reasoning_efort":"high"}}),
+        ),
+        (
+            "cli_agents",
+            "cli_agents/codex/default.yml",
+            json!({"high":{"efort":"high"}}),
+        ),
+    ] {
+        save(
+            &service,
+            json!({"person_id":"alice", field:[{"path":path,"provider":"openai","name":"codex","effort":effort}]}),
+        );
+        assert_eq!(
+            stored(
+                &repository,
+                &format!("team/members/alice/intelligences/{path}")
+            )["effort"],
+            effort
+        );
+    }
+}
+
+#[test]
+fn cli_definitions_are_not_catalog_mapping_assignments() {
+    for person in [None, Some("alice")] {
+        let (_tmp, repository, templates) = fixture();
+        let service = IntelligenceConfig {
+            repository: &repository,
+            templates: &templates,
+        };
+        save(
+            &service,
+            json!({"person_id":person,"cli_agents":[{"path":"cli_agents/custom/default.yml","name":"custom","effort":{"high":{"unknown":true}}}]}),
+        );
+        assert_eq!(
+            stored(
+                &repository,
+                &format!("{}/cli_agents/custom/default.yml", scope(person))
+            ),
+            json!({"parameters":{},"effort":{"high":{"unknown":true}}})
+        );
+    }
+}
+
+#[test]
+fn effort_errors_report_every_problem_before_any_write() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    let form: Update = serde_json::from_value(json!({"model_mapping":{"default":"models/openai/custom.yml"},"models":[{"path":"models/openai/custom.yml","provider":"openai","effort":{"high":{"a":1,"b":2},"low":{"reasoning_efort":"low"}}}]})).unwrap();
+    let error = service.update(&form, &Revisions::new()).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<SetupError>().unwrap().code,
+        "invalid_effort_settings"
+    );
+    for problem in [
+        "provider 'openai'",
+        "high.a:",
+        "high.b:",
+        "low.reasoning_efort:",
+        "; ",
+    ] {
+        assert!(
+            error.to_string().contains(problem),
+            "{error}: missing {problem}"
+        );
+    }
+    assert!(!repository.view().path("intelligences").unwrap().exists());
+}
+
+#[test]
+fn provider_discovery_skips_invalid_yaml_and_coerces_scalar_metadata() {
+    let (tmp, _repository, templates) = fixture();
+    let own = tmp.path().join("models");
+    let file = own.join("openai/default.yml");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "label: [oops").unwrap();
+    let roots = [own, templates.join("intelligences/models")];
+    let rows = providers(&roots).unwrap();
+    let openai = rows.iter().find(|p| p["provider"] == "openai").unwrap();
+    assert_eq!(openai["api_key_env"], "OPENAI_API_KEY");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    assert_eq!(
+        providers(&roots)
+            .unwrap()
+            .iter()
+            .find(|p| p["provider"] == "openai")
+            .unwrap()["api_key_env"],
+        "OPENAI_API_KEY"
+    );
+    std::fs::remove_dir(&file).unwrap();
+    for (raw, expected) in [
+        ("'5'", 5),
+        ("true", 1),
+        ("5.9", 5),
+        ("null", 1000),
+        ("invalid", 1000),
+    ] {
+        std::fs::write(&file, format!("label: 123\norder: {raw}\napi_key_env: false\nmodel_class: null\nparameters: {{id: 42}}\n")).unwrap();
+        let rows = providers(&roots).unwrap();
+        let row = rows.iter().find(|p| p["provider"] == "openai").unwrap();
+        assert_eq!(row["order"], expected);
+        assert_eq!(row["label"], "123");
+        assert_eq!(row["api_key_env"], "False");
+        assert_eq!(row["model_class"], "None");
+        assert_eq!(row["model_id"], "42");
+    }
+}
+
+#[test]
+fn reads_coerce_mapping_definition_and_brain_metadata_like_python() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    for (name, value) in [
+        ("model_mapping.yml", json!({"default":42})),
+        ("models/openai/default.yml", json!({"model_class":123})),
+        (
+            "cli_agents/codex/default.yml",
+            json!({"effort_supported":0}),
+        ),
+        (
+            "brain_mapping.yml",
+            json!({"agent":{"kind":"ai_cli","cli_agent":false},"default":{"kind":"model","model":42}}),
+        ),
+    ] {
+        let path = repository
+            .view()
+            .path(&format!("intelligences/{name}"))
+            .unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value.to_string()).unwrap();
+    }
+    let read = service.read(None).unwrap();
+    assert_eq!(read["model_mapping"]["default"], "42");
+    let codex = read["cli_agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "codex")
+        .unwrap();
+    assert_eq!(codex["effort_supported"], false);
+    for (name, target) in [("agent", "False"), ("default", "42")] {
+        let brain = read["brain_mapping"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == name)
+            .unwrap();
+        assert_eq!(brain["target"], target);
+    }
+    std::fs::write(
+        repository
+            .view()
+            .path("intelligences/model_mapping.yml")
+            .unwrap(),
+        "default: models/openai/default.yml",
+    )
+    .unwrap();
+    assert_eq!(
+        service.read(None).unwrap()["models"][0]["model_class"],
+        "123"
+    );
+}
+
+#[test]
+fn inheritance_reset_ignores_broken_team_and_unused_cli_mapping() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    save(
+        &service,
+        json!({"person_id":"alice","model_mapping":{"custom":"models/openai/custom.yml"}}),
+    );
+    let bad = repository
+        .view()
+        .path("intelligences/brain_mapping.yml")
+        .unwrap();
+    std::fs::create_dir_all(bad.parent().unwrap()).unwrap();
+    std::fs::write(bad, "broken: [yaml").unwrap();
+    save(
+        &service,
+        json!({"person_id":"alice","inherit_team_defaults":true,"cli_agent_mapping":{"unused":"cli_agents/custom/default.yml"}}),
+    );
+    assert!(
+        !repository
+            .view()
+            .path("team/members/alice/intelligences")
+            .unwrap()
+            .exists()
+    );
+    assert!(serde_json::from_value::<Update>(json!({"brain_mapping":[{"name":"default","brain_class":AGNO,"engine":"unknown","target":"default"}]})).is_err());
+}
+
+#[test]
+fn member_cli_save_does_not_validate_unused_member_descriptors() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    let name = "team/members/alice/intelligences/cli_agents/codex/default.yml";
+    let path = repository.view().path(name).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "effort_fields: invalid\n").unwrap();
+    save(
+        &service,
+        json!({"person_id":"alice","cli_agents":[{"path":"cli_agents/codex/default.yml","name":"codex","parameters":{"model":"custom"}}]}),
+    );
+    assert_eq!(
+        stored(&repository, name),
+        json!({"parameters":{"model":"custom"},"effort":{}})
+    );
 }

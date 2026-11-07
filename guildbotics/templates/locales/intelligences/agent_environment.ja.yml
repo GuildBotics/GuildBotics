@@ -34,6 +34,10 @@ ja:
     launching_app: "（いまは %{app}）"
     permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:
+    invalid: "宣言が不正です: %{error}"
+    invalid_field: "宣言に未知の項目があります"
+    invalid_resources: "resources の memory_mib と cpus は正の整数で指定してください"
+    invalid_dns: "dns.nameservers は 'host' または IPv4 アドレスの一覧で指定してください"
     invalid_image: "%{path} の image 宣言を読み取れません。reference と digests のマッピングを確認してください。"
     not_an_image: "'%{reference}' は image の参照名ではありません"
     not_a_digest: "'%{digest}' は image の digest（sha256:<16進 64 桁>）ではありません"

@@ -52,6 +52,10 @@ async fn intelligence_http_reads_saves_and_resets_member_differences() {
     );
     let mut member = f.get("/config/intelligences?person_id=alice").await;
     assert_eq!(member["inherited"], true);
+    assert_eq!(
+        member["model_mapping"]["default"],
+        "models/openai/gpt-5-mini.yml"
+    );
     *member["brain_mapping"]
         .as_array_mut()
         .unwrap()
@@ -65,7 +69,21 @@ async fn intelligence_http_reads_saves_and_resets_member_differences() {
     let dir = f.config().join("team/members/alice/intelligences");
     let files = bytes_under(&dir);
     assert_eq!(files.len(), 1, "{files:?}");
-    assert!(dir.join("brain_mapping.yml").is_file());
+    assert_eq!(
+        f.read(&dir.join("brain_mapping.yml")),
+        json!({"default":{"kind":"model","model":"anthropic"}})
+    );
+    let reread = f.get("/config/intelligences?person_id=alice").await;
+    assert_eq!(reread["inherited"], false);
+    assert_eq!(
+        reread["brain_mapping"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "default")
+            .unwrap()["target"],
+        "anthropic"
+    );
     let result = f
         .save(
             "PUT",
@@ -75,6 +93,21 @@ async fn intelligence_http_reads_saves_and_resets_member_differences() {
         .await;
     assert_eq!(result.0, StatusCode::OK, "{}", result.1);
     assert!(!dir.exists());
+    let reset = f.get("/config/intelligences?person_id=alice").await;
+    assert_eq!(reset["inherited"], true);
+    assert_eq!(
+        reset["model_mapping"]["default"],
+        "models/openai/gpt-5-mini.yml"
+    );
+    assert_eq!(
+        reset["brain_mapping"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "default")
+            .unwrap()["target"],
+        "codex"
+    );
     assert_eq!(f.api.events.snapshot(), events);
 }
 
@@ -146,7 +179,14 @@ async fn decision_credentials_stay_in_workspace_store_and_never_echo() {
         f.get("/intelligences/decisions/options").await["credential_present"],
         false
     );
-    for value in [json!(["synthetic-private"]), json!("")] {
+    for (value, expected) in [
+        (
+            json!(["synthetic-private"]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (json!(""), StatusCode::BAD_REQUEST),
+        (json!("  "), StatusCode::BAD_REQUEST),
+    ] {
         let (status, body) = f
             .call(
                 "POST",
@@ -154,7 +194,7 @@ async fn decision_credentials_stay_in_workspace_store_and_never_echo() {
                 json!({"value":value}),
             )
             .await;
-        assert!(status.is_client_error());
+        assert_eq!(status, expected, "{body}");
         assert!(!body.to_string().contains("synthetic-private"));
     }
     f.keys(Keys::Locked);
@@ -174,12 +214,14 @@ async fn decision_credentials_stay_in_workspace_store_and_never_echo() {
 async fn provider_catalog_is_available_without_project_and_settings_require_project() {
     let f = fixture();
     let providers = f.get("/intelligences/model-providers").await;
-    assert!(
+    assert_eq!(
         providers["providers"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p["provider"] == "openai")
+            .find(|p| p["provider"] == "openai")
+            .unwrap()["api_key_env"],
+        "OPENAI_API_KEY"
     );
     let (status, body) = f.call("GET", "/config/intelligences", Value::Null).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -211,6 +253,7 @@ async fn grant_preview_validates_without_creating_directories_and_composes_exist
                 "/intelligences/grant-evaluation?scope={scope}&path={path}&access={access}"
             ))
             .await;
+        assert_eq!(v["scope"], scope);
         assert_eq!(v["valid"], valid, "{v}");
         assert_eq!(v["present"], present, "{v}");
         if valid {
@@ -241,14 +284,30 @@ async fn grant_preview_validates_without_creating_directories_and_composes_exist
         assert!(!f.root.join("home/Projects/new").exists());
     }
     let home = f.root.join("home");
-    assert_eq!(
-        f.get(&format!(
+    let denied = f
+        .get(&format!(
             "/intelligences/grant-evaluation?scope=deny&path={}",
             home.display()
         ))
-        .await["valid"],
-        false
+        .await;
+    assert_eq!(denied["valid"], false);
+    assert_eq!(denied["scope"], "deny");
+    assert_eq!(
+        denied["reason"],
+        crate::i18n::t(
+            "en",
+            "intelligences.agent_environment.grants.deny_too_broad",
+            &[("path", &home.display().to_string())]
+        )
     );
+    let (status, body) = f
+        .call(
+            "GET",
+            "/intelligences/grant-evaluation?scope=other&path=Docs",
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     f.write(
         &f.config()
             .join("intelligences/cli_agent_filesystem_grants.yml"),
@@ -269,12 +328,22 @@ async fn grant_preview_validates_without_creating_directories_and_composes_exist
                 "deny: [shared/private]"
             },
         );
-        assert_eq!(
-            f.get(&format!(
+        let result = f
+            .get(&format!(
                 "/intelligences/grant-evaluation?scope={scope}&path={path}"
             ))
-            .await["valid"],
-            false
+            .await;
+        assert_eq!(result["valid"], false);
+        assert_eq!(result["scope"], scope);
+        let source = home.join("shared").display().to_string();
+        let protected = home.join("shared/private").display().to_string();
+        assert_eq!(
+            result["reason"],
+            crate::i18n::t(
+                "en",
+                "safe_paths.protected_local",
+                &[("path", &source), ("protected", &protected)]
+            )
         );
     }
 }
@@ -370,9 +439,41 @@ async fn team_environment_save_preserves_omitted_settings_and_member_cannot_writ
     for (path, bytes) in before {
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
-    assert_eq!(body["intelligence"]["files"].as_array().unwrap().len(), 3);
+    let shared_path = f
+        .config()
+        .join("intelligences/cli_agent_filesystem_grants.yml");
+    let local_path = f
+        .workspace()
+        .join(".guildbotics/local/cli_agent_filesystem_grants.yml");
+    let declaration_path = f.config().join("intelligences/agent_environment.yml");
+    assert_eq!(
+        body["intelligence"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["path"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            shared_path.display().to_string(),
+            local_path.display().to_string(),
+            declaration_path.display().to_string()
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(f.read(&shared_path), form["filesystem_grants"]);
+    assert_eq!(f.read(&local_path), form["local_grants"]);
+    assert_eq!(
+        f.read(&declaration_path),
+        json!({"dns":{"nameservers":"host"},"resources":{"memory_mib":4096,"cpus":2},"network":{"mode":"deny","allowed_domains":[],"allow_local_network":false}})
+    );
+    assert!(!f.root.join("home/Projects/out").exists());
     let read = f.get("/config/intelligences").await;
     assert_eq!(read["agent_environment"]["dns"]["nameservers"], "host");
+    assert_eq!(
+        read["filesystem_grants"],
+        json!({"documents":[{"path":"Projects/out","access":"read_write"}]})
+    );
     assert_eq!(
         read["local_grants"],
         json!({"paths":[{"path":".cache/uv","access":"read_write"}],"deny":[f.root.join("private")]})
@@ -497,16 +598,20 @@ async fn scope_environment_reads_include_shared_device_files_and_declaration() {
 
 #[tokio::test]
 async fn setup_errors_keep_their_code_and_sentence() {
-    let (status, body) = answer(failure(
-        SetupError::text("intelligence_invalid", "Intelligence config invalid.").into(),
-        &HeaderMap::new(),
-    ))
-    .await;
+    let f = fixture();
+    f.init().await;
+    let before = bytes_under(&f.config());
+    let (status, body) = f.save("PUT", "/config/intelligences", json!({"brain_mapping":[{"name":"chat_decision","brain_class":"guildbotics.guest.cli_agent.CliAgentBrain","engine":"cli","target":"default"}]})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({"code":"intelligence_invalid","message":"Intelligence config invalid.","context":{}})
+    assert_eq!(body["code"], "invalid_decision");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("not supported for chat_decision"),
+        "{body}"
     );
+    assert_eq!(bytes_under(&f.config()), before);
 }
 
 #[tokio::test]
@@ -588,5 +693,323 @@ async fn native_definition_fields_and_empty_effort_are_not_refilled() {
     let (status, body) = f.save("PUT", "/config/intelligences", form).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "invalid_effort_settings");
+    assert!(
+        body["message"].as_str().unwrap().contains("efort"),
+        "{body}"
+    );
     assert_eq!(stored(), json!({"parameters":{},"effort":{}}));
+}
+
+#[tokio::test]
+async fn omitted_environment_values_do_not_create_files() {
+    let f = fixture();
+    f.init().await;
+    let shared = f
+        .config()
+        .join("intelligences/cli_agent_filesystem_grants.yml");
+    let local = f
+        .workspace()
+        .join(".guildbotics/local/cli_agent_filesystem_grants.yml");
+    let declaration = f.config().join("intelligences/agent_environment.yml");
+    for path in [&shared, &local, &declaration] {
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    let (status, body) = f.save("PUT", "/config/intelligences", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for path in [&shared, &local, &declaration] {
+        assert!(!path.exists(), "{}", path.display());
+    }
+}
+
+#[tokio::test]
+async fn grant_replacements_can_repair_each_broken_disk_file_and_both() {
+    for (replace_shared, replace_local) in [(true, false), (false, true), (true, true)] {
+        let f = fixture();
+        f.init().await;
+        let shared = f
+            .config()
+            .join("intelligences/cli_agent_filesystem_grants.yml");
+        let local = f
+            .workspace()
+            .join(".guildbotics/local/cli_agent_filesystem_grants.yml");
+        if replace_shared {
+            f.write(&shared, "documents: [{path: '..', access: read}]\n");
+        }
+        if replace_local {
+            f.write(&local, "paths: [{path: '..', access: read}]\n");
+        }
+        let mut form = json!({});
+        if replace_shared {
+            form["filesystem_grants"] = json!({"documents":[]});
+        }
+        if replace_local {
+            form["local_grants"] = json!({"paths":[],"deny":[]});
+        }
+        let (status, body) = f.save("PUT", "/config/intelligences", form).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "shared={replace_shared}, local={replace_local}: {body}"
+        );
+        if replace_shared {
+            assert_eq!(f.read(&shared), json!({"documents":[]}));
+        }
+        if replace_local {
+            assert_eq!(f.read(&local), json!({"paths":[],"deny":[]}));
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_grants_and_declarations_are_rejected_before_revision_comparison() {
+    let f = fixture();
+    f.init().await;
+    let read = f.get("/config/intelligences").await;
+    f.write(
+        &f.config().join("intelligences/model_mapping.yml"),
+        "default: models/openai/newer.yml\n",
+    );
+    let before = bytes_under(&f.workspace().join(".guildbotics"));
+    for (field, value) in [
+        ("filesystem_grants", json!([])),
+        ("filesystem_grants", json!({"documents":[["Docs","read"]]})),
+        ("local_grants", json!({"paths":[["Docs","read"]]})),
+        (
+            "agent_environment",
+            json!({"dns":{"nameservers":"host"}, "network":[]}),
+        ),
+        (
+            "agent_environment",
+            json!({"dns":{"nameservers":"host"}, "image":["image",{}]}),
+        ),
+        ("local_grants", json!([])),
+        (
+            "local_grants",
+            json!({"paths":[{"path":"/","access":"read"}]}),
+        ),
+        ("local_grants", json!({"deny":["/"]})),
+        (
+            "local_grants",
+            json!({"paths":[{"path":r"a\..\b","access":"read"}]}),
+        ),
+        ("local_grants", json!({"deny":[r"a\..\b"]})),
+        (
+            "filesystem_grants",
+            json!({"documents":[{"path":"Docs","access":"write"}]}),
+        ),
+        (
+            "local_grants",
+            json!({"paths":[{"path":"Docs","access":"write"}]}),
+        ),
+        ("filesystem_grants", json!({"unknown":true})),
+        ("local_grants", json!({"unknown":true})),
+        (
+            "filesystem_grants",
+            json!({"documents":[{"path":"/absolute","access":"read"}]}),
+        ),
+        (
+            "agent_environment",
+            json!({"dns":{"nameservers":["8.8.8.8x"]}}),
+        ),
+        ("agent_environment", json!({"dns":{"nameservers":[]}})),
+        (
+            "agent_environment",
+            json!({"dns":{"nameservers":"host"},"unknown":true}),
+        ),
+        ("agent_environment", json!([])),
+    ] {
+        let mut form = json!({"expected_revisions":read["revisions"]});
+        form[field] = value;
+        let (status, body) = f.save("PUT", "/config/intelligences", form).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}: {body}");
+        assert_eq!(body["code"], "validation_error");
+        assert_eq!(bytes_under(&f.workspace().join(".guildbotics")), before);
+    }
+}
+
+#[tokio::test]
+async fn grant_preview_requires_workspace_and_preserves_absolute_local_spelling() {
+    let empty = fixture_with(|_| Selected::default());
+    let (status, body) = empty
+        .call(
+            "GET",
+            "/intelligences/grant-evaluation?scope=document&path=Docs",
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "workspace_not_configured");
+    let (status, body) = empty
+        .call(
+            "GET",
+            "/intelligences/grant-evaluation?scope=document&path=/absolute",
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["valid"], false);
+    assert_eq!(
+        body["reason"],
+        crate::i18n::t(
+            "en",
+            "intelligences.agent_environment.grants.path_not_relative",
+            &[("path", "/absolute")]
+        )
+    );
+    let f = fixture();
+    f.init().await;
+    let absolute = f.root.join("home/.cache/uv");
+    std::fs::create_dir_all(&absolute).unwrap();
+    let read = f
+        .get(&format!(
+            "/intelligences/grant-evaluation?scope=local&path={}",
+            absolute.display()
+        ))
+        .await;
+    assert_eq!(read["valid"], true);
+    assert_eq!(read["present"], true);
+    assert_eq!(read["path"], absolute.display().to_string());
+}
+
+#[tokio::test]
+async fn member_save_reads_all_team_configuration_before_any_write() {
+    for (path, content) in [
+        ("brain_mapping.yml", "default: [oops"),
+        (
+            "agent_environment.yml",
+            "dns: {nameservers: ['8.8.8.8x']}\n",
+        ),
+    ] {
+        let f = fixture();
+        f.init().await;
+        f.write(&f.config().join("intelligences").join(path), content);
+        let before = bytes_under(&f.config());
+        let (status, body) = f.save("PUT", "/config/intelligences", json!({"person_id":"alice", "model_mapping":{"default":"models/openai/member.yml"}, "brain_mapping":[{"name":"default", "brain_class":"guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain", "engine":"llm", "target":"default"}]})).await;
+        assert!(
+            status.is_client_error() || status.is_server_error(),
+            "{path}: {body}"
+        );
+        if path == "agent_environment.yml" {
+            assert_eq!(body["code"], "invalid_agent_environment");
+        }
+        assert!(
+            bytes_under(&f.config()) == before,
+            "{path}: unexpected configuration write: {body}"
+        );
+        assert!(!f.config().join("team/members/alice/intelligences").exists());
+    }
+}
+
+#[tokio::test]
+async fn invalid_stored_declaration_and_grants_use_localized_editor_context() {
+    let f = fixture();
+    f.init().await;
+    let declaration = f.config().join("intelligences/agent_environment.yml");
+    let grants = f
+        .config()
+        .join("intelligences/cli_agent_filesystem_grants.yml");
+    f.write(&declaration, "dns: {nameservers: ['8.8.8.8x']}\n");
+    for language in ["en", "ja"] {
+        let (status, body) = f
+            .call_in(language, "GET", "/config/intelligences", Value::Null)
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_agent_environment");
+        assert_eq!(
+            body["message"],
+            format!(
+                "intelligences/agent_environment.yml: {}",
+                crate::i18n::t(
+                    language,
+                    "intelligences.agent_environment.declaration.not_ipv4",
+                    &[("nameserver", "8.8.8.8x")]
+                )
+            )
+        );
+    }
+    std::fs::remove_file(declaration).unwrap();
+    f.write(&grants, "unknown: true\n");
+    for language in ["en", "ja"] {
+        let (status, body) = f
+            .call_in(language, "GET", "/config/intelligences", Value::Null)
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_filesystem_grants");
+        let message = body["message"].as_str().unwrap();
+        let where_ = "intelligences/cli_agent_filesystem_grants.yml";
+        let prefix = crate::i18n::t(
+            language,
+            "intelligences.agent_environment.grants.invalid",
+            &[("where", where_), ("error", "")],
+        );
+        assert!(message.starts_with(&prefix), "{body}");
+        assert!(message.contains("unknown"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn omitted_invalid_local_grants_are_localized_on_put() {
+    let f = fixture();
+    f.init().await;
+    f.write(
+        &f.workspace()
+            .join(".guildbotics/local/cli_agent_filesystem_grants.yml"),
+        "unknown: true\n",
+    );
+    let before = bytes_under(&f.config());
+    let (status, body) = f
+        .save_in(
+            "ja",
+            "PUT",
+            "/config/intelligences",
+            json!({"filesystem_grants":{"documents":[]}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "invalid_filesystem_grants");
+    let prefix = crate::i18n::t(
+        "ja",
+        "intelligences.agent_environment.grants.invalid",
+        &[
+            ("where", "local/cli_agent_filesystem_grants.yml"),
+            ("error", ""),
+        ],
+    );
+    assert!(
+        body["message"].as_str().unwrap().starts_with(&prefix),
+        "{body}"
+    );
+    assert_eq!(bytes_under(&f.config()), before);
+}
+
+#[tokio::test]
+async fn invalid_preview_syntax_is_reported_before_reading_workspace_registry() {
+    let f = fixture();
+    f.write(&f.data().join("workspaces.json"), "{broken registry");
+    for language in ["en", "ja"] {
+        let (status, body) = f
+            .call_in(
+                language,
+                "GET",
+                "/intelligences/grant-evaluation?scope=document&path=/absolute",
+                Value::Null,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["valid"], false);
+        assert_eq!(
+            body["reason"],
+            crate::i18n::t(
+                language,
+                "intelligences.agent_environment.grants.path_not_relative",
+                &[("path", "/absolute")]
+            )
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(f.data().join("workspaces.json")).unwrap(),
+        "{broken registry"
+    );
 }

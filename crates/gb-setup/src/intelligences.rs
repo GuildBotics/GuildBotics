@@ -26,8 +26,11 @@ pub struct Update {
     #[serde(default, deserialize_with = "cli_definitions")]
     pub cli_agents: Option<Vec<Definition>>,
     pub brain_mapping: Option<Vec<Brain>>,
+    #[serde(skip)]
     pub filesystem_grants: Option<Value>,
+    #[serde(skip)]
     pub local_grants: Option<Value>,
+    #[serde(skip)]
     pub agent_environment: Option<Value>,
 }
 pub fn person_id<'de, D: serde::Deserializer<'de>>(
@@ -92,9 +95,18 @@ pub struct Definition {
 pub struct Brain {
     pub name: String,
     pub brain_class: String,
+    #[serde(deserialize_with = "brain_engine")]
     pub engine: String,
     pub target: String,
 }
+fn brain_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let engine = String::deserialize(deserializer)?;
+    if !["llm", "cli", "jev"].contains(&engine.as_str()) {
+        return Err(serde::de::Error::custom("invalid brain engine"));
+    }
+    Ok(engine)
+}
+
 fn object() -> Value {
     json!({})
 }
@@ -166,6 +178,11 @@ impl IntelligenceConfig<'_> {
                 team.as_object_mut().unwrap().extend(m.clone());
             }
         }
+        if name != "brain_mapping.yml" {
+            for value in team.as_object_mut().unwrap().values_mut() {
+                *value = json!(python_string(value));
+            }
+        }
         if name == "cli_agent_mapping.yml" {
             validate_cli(&team)?;
         }
@@ -233,14 +250,17 @@ impl IntelligenceConfig<'_> {
             let mut row = json!({"path":path,"parameters":data.get("parameters").filter(|v|v.is_object()).cloned().unwrap_or_else(object),"effort":normalize_overlay(data.get("effort").unwrap_or(&Value::Null),if cli {"AI CLI tool definition"} else {"model definition"})?,"inherited_effort":inherited,"effort_fields":self.descriptors(view,person,path,cli)?});
             if cli {
                 row["name"] = json!(provider);
-                row["effort_supported"] = data
-                    .get("effort_supported")
-                    .or_else(|| own_default.get("effort_supported"))
-                    .cloned()
-                    .unwrap_or(json!(true));
+                row["effort_supported"] = json!(python_truth(
+                    &data
+                        .get("effort_supported")
+                        .or_else(|| own_default.get("effort_supported"))
+                        .cloned()
+                        .unwrap_or(json!(true))
+                ));
             } else {
                 row["provider"] = json!(provider);
-                row["model_class"] = data.get("model_class").cloned().unwrap_or(json!(""));
+                row["model_class"] =
+                    json!(python_string(data.get("model_class").unwrap_or(&json!(""))));
             }
             result.push(row);
         }
@@ -250,7 +270,15 @@ impl IntelligenceConfig<'_> {
         member(person)?;
         let scope = scope(person);
         let revisions = self.repository.tree_revisions(&scope)?;
-        let view = self.repository.view();
+        self.read_view(self.repository.view(), person, revisions)
+    }
+    fn read_view(
+        &self,
+        view: &ConfigView,
+        person: Option<&str>,
+        revisions: Revisions,
+    ) -> anyhow::Result<Value> {
+        let scope = scope(person);
         let models = self.mapping(view, person, "model_mapping.yml")?;
         let cli = self.mapping(view, person, "cli_agent_mapping.yml")?;
         let brains = self.mapping(view, person, "brain_mapping.yml")?;
@@ -270,13 +298,14 @@ impl IntelligenceConfig<'_> {
                     "jev" => JEV,
                     _ => AGNO,
                 };
-                let target = data[if engine == "cli" {
-                    "cli_agent"
-                } else {
-                    "model"
-                }]
-                .as_str()
-                .unwrap_or("default");
+                let target = python_string(
+                    data.get(if engine == "cli" {
+                        "cli_agent"
+                    } else {
+                        "model"
+                    })
+                    .unwrap_or(&json!("default")),
+                );
                 json!({"name":name,"brain_class":class,"engine":engine,"target":target})
             })
             .collect();
@@ -341,7 +370,6 @@ impl IntelligenceConfig<'_> {
             mappings.push(("model_mapping.yml", json!(m)));
         }
         if let Some(m) = &r.cli_agent_mapping {
-            validate_cli(&json!(m))?;
             mappings.push(("cli_agent_mapping.yml", json!(m)));
         }
         if let Some(brains) = &r.brain_mapping {
@@ -380,6 +408,13 @@ impl IntelligenceConfig<'_> {
             }
             return Ok(vec![json!({"path":path,"action":"delete"})]);
         }
+        if person.is_some() {
+            // Load the complete team scope before a reconciliation can write anything.
+            self.read_view(view, None, view.tree_revisions("intelligences")?)?;
+        }
+        if let Some(mapping) = &r.cli_agent_mapping {
+            validate_cli(&json!(mapping))?;
+        }
         for (defs, cli) in [(&r.models, false), (&r.cli_agents, true)] {
             if let Some(defs) = defs {
                 for def in defs {
@@ -387,8 +422,8 @@ impl IntelligenceConfig<'_> {
                         continue;
                     }
                     view.path(&format!("{prefix}/{}", def.path))?;
-                    if cli {
-                        validate_cli(&json!({"slot":def.path}))?;
+                    if person.is_some() {
+                        continue;
                     }
                     let descriptors = self.descriptors(view, person, &def.path, cli)?;
                     normalize_overlay(
@@ -437,10 +472,11 @@ impl IntelligenceConfig<'_> {
                 if !cli && !def.path.starts_with("models/") {
                     continue;
                 }
-                if cli {
-                    validate_cli(&json!({"slot":def.path}))?;
-                }
-                let descriptors = self.descriptors(view, person, &def.path, cli)?;
+                let descriptors = if cli {
+                    json!([])
+                } else {
+                    self.descriptors(view, person, &def.path, false)?
+                };
                 let base = self.scoped(view, person, &def.path)?;
                 let data = if cli {
                     json!({"parameters":def.parameters,"effort":def.effort})
@@ -540,14 +576,34 @@ pub fn providers(roots: &[PathBuf]) -> anyhow::Result<Vec<Value>> {
     for name in names {
         let mut data = object();
         for root in roots {
-            data = read_yaml(&root.join(&name).join("default.yml"))?;
+            let path = root.join(&name).join("default.yml");
+            data = match std::fs::read_to_string(&path) {
+                Ok(text) => gb_config::yaml_value(&text)
+                    .ok()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(object),
+                Err(_) => object(),
+            };
             if nonempty(&data) {
                 break;
             }
         }
         let effort = data.get("effort").cloned().unwrap_or_else(object);
         let effort = normalize_overlay(&effort, &format!("provider '{name}'"))?;
-        result.push(json!({"provider":name,"label":data.get("label").filter(|v|nonempty(v)).cloned().unwrap_or(json!(name)),"order":data.get("order").and_then(Value::as_i64).unwrap_or(1000),"api_key_env":data.get("api_key_env").cloned().unwrap_or(json!("")),"model_class":data.get("model_class").cloned().unwrap_or(json!("")),"model_id":data["parameters"].get("id").cloned().unwrap_or(json!("")),"effort":effort,"effort_fields":fields(data.get("effort_fields").unwrap_or(&json!([])))?}));
+        let text = |key| python_string(data.get(key).unwrap_or(&json!("")));
+        let label = data
+            .get("label")
+            .filter(|v| python_truth(v))
+            .map(python_string)
+            .unwrap_or_else(|| name.clone());
+        let order = match data.get("order") {
+            Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
+            Some(Value::Bool(b)) => Some(i64::from(*b)),
+            Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|n| n as i64)),
+            _ => None,
+        }
+        .unwrap_or(1000);
+        result.push(json!({"provider":name,"label":label,"order":order,"api_key_env":text("api_key_env"),"model_class":text("model_class"),"model_id":python_string(data["parameters"].get("id").unwrap_or(&json!(""))),"effort":effort,"effort_fields":fields(data.get("effort_fields").unwrap_or(&json!([])))?}));
     }
     result.sort_by_key(|p| {
         (
@@ -557,6 +613,26 @@ pub fn providers(roots: &[PathBuf]) -> anyhow::Result<Vec<Value>> {
     });
     Ok(result)
 }
+fn python_truth(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(m) => !m.is_empty(),
+    }
+}
+fn python_string(value: &Value) -> String {
+    match value {
+        Value::Null => "None".into(),
+        Value::Bool(true) => "True".into(),
+        Value::Bool(false) => "False".into(),
+        Value::String(s) => s.clone(),
+        _ => value.to_string(),
+    }
+}
+
 fn write(
     view: &ConfigView,
     writer: &mut Writer<'_>,
@@ -729,6 +805,7 @@ fn check_settings(settings: &Value, fields: &Value, where_: &str) -> anyhow::Res
     if fields.is_empty() {
         return Ok(());
     }
+    let mut problems = Vec::new();
     for (level, settings) in settings.as_object().unwrap() {
         let mut pairs = Vec::new();
         flatten(settings, String::new(), &mut pairs);
@@ -781,13 +858,16 @@ fn check_settings(settings: &Value, fields: &Value, where_: &str) -> anyhow::Res
                 },
             };
             if !problem.is_empty() {
-                return Err(SetupError::text(
-                    "invalid_effort_settings",
-                    format!("{where_}: {level}.{key}: {problem}"),
-                )
-                .into());
+                problems.push(format!("{level}.{key}: {problem}"));
             }
         }
+    }
+    if !problems.is_empty() {
+        return Err(SetupError::text(
+            "invalid_effort_settings",
+            format!("{where_}: {}", problems.join("; ")),
+        )
+        .into());
     }
     Ok(())
 }

@@ -2678,6 +2678,15 @@ async fn an_obsolete_registration_is_removed_without_reaching_its_path() {
 async fn every_config_route_refuses_a_request_without_a_credential() {
     let f = fixture();
     for (method, path) in [
+        ("GET", "/config/intelligences"),
+        ("PUT", "/config/intelligences"),
+        ("GET", "/intelligences/model-providers"),
+        ("GET", "/intelligences/decisions/options"),
+        ("POST", "/intelligences/decisions/credential"),
+        (
+            "GET",
+            "/intelligences/grant-evaluation?scope=deny&path=Docs",
+        ),
         ("POST", "/config/init"),
         ("POST", "/workspace"),
         ("GET", "/device/workspaces"),

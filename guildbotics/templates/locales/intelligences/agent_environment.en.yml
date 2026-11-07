@@ -41,6 +41,10 @@ en:
     launching_app: " (currently %{app})"
     permission_denied: "This GuildBotics cannot list '%{path}'. Allow its launching app or user to access this directory."
   declaration:
+    invalid: "invalid declaration: %{error}"
+    invalid_field: "the declaration contains an unknown field"
+    invalid_resources: "resources must name positive integers: memory_mib and cpus"
+    invalid_dns: "dns.nameservers must be 'host' or a list of IPv4 addresses"
     invalid_image: "The image declaration in %{path} could not be read; check its reference and digests mapping."
     not_an_image: "'%{reference}' is not an image reference"
     not_a_digest: "'%{digest}' is not an image digest (sha256:<64 hex digits>)"

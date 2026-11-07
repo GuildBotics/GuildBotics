@@ -89,8 +89,9 @@ fn grant_problem(key: &'static str, name: &str, text: impl Into<String>) -> Gran
 fn proposed_target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, GrantProblem> {
     if !absolute
         && (Path::new(name).is_absolute()
-            || name.starts_with('\\')
-            || name.as_bytes().get(1) == Some(&b':'))
+            || name.starts_with("\\\\")
+            || (name.as_bytes().get(1) == Some(&b':')
+                && matches!(name.as_bytes().get(2), Some(b'/' | b'\\'))))
     {
         return Err(grant_problem(
             "intelligences.agent_environment.grants.path_not_relative",
@@ -137,7 +138,11 @@ fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, Stri
 }
 fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
     let path = Path::new(name);
-    if name.is_empty()
+    if name
+        .replace('\\', "/")
+        .trim_matches('/')
+        .split('/')
+        .any(|s| s.is_empty() || s == "." || s == "..")
         || (!absolute && name.contains('\\'))
         || name.contains("//")
         || name.contains('\0')
@@ -476,16 +481,6 @@ pub fn resolve_values(
             std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
         }
         let present = path.exists();
-        let grant = if !document {
-            path.strip_prefix(&home)
-                .ok()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(&path)
-                .display()
-                .to_string()
-        } else {
-            grant
-        };
         let row = serde_json::json!({"path":path,"grant":grant,"access":if matches!(access,Access::Read){"read"}else{"read_write"},"present":present,"builtin":builtin});
         if document {
             documents.push(row);
@@ -984,6 +979,39 @@ mod frozen_tests {
     }
     const SHARED: &str = ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml";
     const LOCAL: &str = ".guildbotics/local/cli_agent_filesystem_grants.yml";
+    #[test]
+    fn local_view_keeps_written_spelling_and_document_drive_relative_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join("cache")).unwrap();
+        let workspace = dir.path().join("workspace");
+        for path in [
+            home.join("cache"),
+            home.join("missing"),
+            PathBuf::from("cache"),
+        ] {
+            put(
+                &workspace,
+                LOCAL,
+                &serde_json::json!({"paths":[{"path":path,"access":"read"}]}).to_string(),
+            );
+            let resolved = resolve(&workspace, &home, &[], false, false).unwrap();
+            assert_eq!(resolved.view["paths"][0]["grant"], serde_json::json!(path));
+            assert_eq!(
+                resolved.view["paths"][0]["present"],
+                path != home.join("missing")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            put(
+                &workspace,
+                SHARED,
+                "documents: [{path: 'a:b', access: read}]",
+            );
+            assert!(resolve(&workspace, &home, &[], false, false).is_ok());
+        }
+    }
     #[test]
     fn grant_documents_local_paths_optional_files_and_invalid_population() {
         let dir = tempfile::tempdir().unwrap();
