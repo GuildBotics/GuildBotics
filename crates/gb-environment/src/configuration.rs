@@ -23,8 +23,9 @@ impl Configuration {
     /// workspace's shared write lock, so no save is half made in it, and is
     /// reached without following a link. Directories and files are copied,
     /// and links as links: one that names a place in the configuration by its
-    /// absolute path is made relative, so that it names the copy's. A
-    /// workspace without a configuration gives an empty copy.
+    /// absolute path is made relative, so that it names the copy's, and one
+    /// the OS cannot make fails the copy. A workspace without a configuration
+    /// gives an empty copy.
     /// It may wait for the lock as long as a save holds it: an async caller
     /// takes it with [`Configuration::copied`]. A held lock is refused as the
     /// `SharedWriteBusyError` it is.
@@ -130,11 +131,28 @@ impl Configuration {
                 target = Component::CurDir.as_os_str().into();
             }
         }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, to)?;
-        #[cfg(not(unix))]
-        let _ = (target, to);
-        Ok(())
+        // A link the copy cannot hold fails the copy rather than leave the
+        // command it names out of it.
+        link(
+            &target,
+            to,
+            std::fs::metadata(from).is_ok_and(|m| m.is_dir()),
+        )
+    }
+}
+
+/// Makes `to` a link to `target`, which names a directory when `directory`:
+/// Windows makes the two kinds of link apart.
+#[cfg(unix)]
+fn link(target: &Path, to: &Path, _directory: bool) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, to)
+}
+
+#[cfg(windows)]
+fn link(target: &Path, to: &Path, directory: bool) -> io::Result<()> {
+    match directory {
+        true => std::os::windows::fs::symlink_dir(target, to),
+        false => std::os::windows::fs::symlink_file(target, to),
     }
 }
 
