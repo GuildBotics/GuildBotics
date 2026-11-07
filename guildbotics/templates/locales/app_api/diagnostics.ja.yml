@@ -1,0 +1,40 @@
+{
+  "ja": {
+    "config_load": {
+      "ok": "設定を読み込みました。",
+      "error": "設定を読み込めませんでした。"
+    },
+    "member_not_found": {
+      "error": "メンバーが見つかりません。"
+    },
+    "active_members": {
+      "ok": "診断対象のメンバーがいます。",
+      "error": "有効なメンバーが設定されていません。"
+    },
+    "member_inactive": {
+      "warning": "このメンバーは無効のため、スケジューラーの実行対象になりません。"
+    },
+    "human_member_reference": {
+      "ok": "人のメンバーの設定を参照用として読み込みました。AI の実行対象には含めません。"
+    },
+    "human_member_roles": {
+      "ok": "人のメンバーのロールが設定されています。",
+      "error": "人のメンバーのロールが設定されていません。"
+    },
+    "llm_api_key": {
+      "error": "%{env_key} が未設定のため、LLM の疎通確認を省略します。"
+    },
+    "llm_live_call": {
+      "ok": "LLM provider が最小の要求を受け付けました。",
+      "error": "LLM の疎通確認に失敗しました"
+    },
+    "cli_agent_brain": {
+      "ok": "AI CLI ツールが読み取り専用の最小の要求を受け付けました。",
+      "error": "AI CLI ツールの診断に失敗しました"
+    },
+    "cli_agent_exit": "AI CLI ツールのコマンドに失敗しました（終了コード: %{returncode}）。",
+    "cli_agent_empty": "AI CLI ツールは終了しましたが応答を返しませんでした（終了コード: %{returncode}）。",
+    "cli_agent_no_stderr": "標準エラー出力がありません。CLI のログイン状態、非対話実行、標準出力への応答を確認してください。",
+    "cli_agent_no_tool": "診断に設定された brain は AI CLI ツールを実行しません。"
+  }
+}

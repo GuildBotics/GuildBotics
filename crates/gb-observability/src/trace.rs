@@ -246,7 +246,18 @@ impl Trace {
             person_id,
             payload: Some(payload),
         };
-        let ended = run.await;
+        use tracing::Instrument as _;
+        let fields = self
+            .clone()
+            .command(command)
+            .person(person_id)
+            .event_fields();
+        let ended = run
+            .instrument(tracing::info_span!(
+                "execution",
+                diagnostics = serde_json::to_string(&fields).unwrap().as_str()
+            ))
+            .await;
         let mut payload = unended.payload.take().expect("ends once");
         match &ended {
             Ok(_) => self.record("command.finished", person_id, command, payload),

@@ -9,6 +9,7 @@ pub mod command_files;
 pub mod command_writes;
 pub mod commands;
 pub mod credential_vault;
+pub mod debug;
 mod python_literal;
 pub mod repository;
 pub mod resolved_guest;

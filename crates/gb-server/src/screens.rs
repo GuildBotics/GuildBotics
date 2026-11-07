@@ -201,19 +201,29 @@ pub(crate) async fn traces(
     };
     answer(
         Diagnostics::open(workspace)
-            .traces(
-                filters.source.as_deref(),
-                filters.person_id.as_deref(),
-                filters.q.as_deref(),
-                filters.attr_key.as_deref(),
-                filters.attr_value.as_deref(),
-                filters.limit.unwrap_or(200),
+            .search_traces_formatted(
+                gb_observability::TraceSearch {
+                    source: filters.source.as_deref(),
+                    person: filters.person_id.as_deref(),
+                    query: filters.q.as_deref(),
+                    attr_key: filters.attr_key.as_deref(),
+                    attr_value: filters.attr_value.as_deref(),
+                    limit: filters.limit.unwrap_or(200),
+                    include_assistant: true,
+                    include_system: true,
+                    search_transcripts: false,
+                },
+                &|provider| chat_trigger(&headers, provider),
             )
             .map_err(Into::into),
     )
 }
 
-pub(crate) async fn trace(State(api): State<Shared>, Path(id): Path<String>) -> Response {
+pub(crate) async fn trace(
+    State(api): State<Shared>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     let Some(workspace) = &api.selected().workspace else {
         return Json(
             json!({"trace_id":id,"summary":null,"records":[],"transcript_available":false}),
@@ -222,7 +232,32 @@ pub(crate) async fn trace(State(api): State<Shared>, Path(id): Path<String>) -> 
     };
     answer(
         Diagnostics::open(workspace)
-            .trace_detail(&id)
+            .trace_detail_formatted(&id, &|provider| chat_trigger(&headers, provider))
             .map_err(Into::into),
+    )
+}
+
+fn chat_trigger(headers: &HeaderMap, provider: &str) -> String {
+    let language = crate::i18n::language(
+        headers
+            .get("x-guildbotics-language")
+            .and_then(|s| s.to_str().ok())
+            .unwrap_or(""),
+    );
+    let provider = provider
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == 0 {
+                c.to_uppercase().collect::<String>()
+            } else {
+                c.to_lowercase().collect()
+            }
+        })
+        .collect::<String>();
+    crate::i18n::t(
+        language,
+        "observability.trace_title.chat_trigger",
+        &[("provider", &provider)],
     )
 }

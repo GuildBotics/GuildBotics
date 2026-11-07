@@ -30,6 +30,16 @@
           "title": "Command",
           "type": "boolean"
         },
+        "inference_category": {
+          "default": "",
+          "title": "Inference Category",
+          "type": "string"
+        },
+        "inference_error_type": {
+          "default": "",
+          "title": "Inference Error Type",
+          "type": "string"
+        },
         "message": {
           "title": "Message",
           "type": "string"

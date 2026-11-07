@@ -33,6 +33,8 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// What every request of the server shares.
 pub struct Api {
+    #[cfg(test)]
+    pub(crate) diagnostics_runner: std::sync::Mutex<Option<crate::diagnostics::CheckRunner>>,
     selection: std::sync::RwLock<Arc<Selected>>,
     /// Read while work for the selected workspace is admitted, and written
     /// while another workspace is selected, so that none is admitted for a
@@ -86,6 +88,10 @@ impl Api {
         data: PathBuf,
     ) -> Api {
         let events = Arc::new(crate::events::EventBus::default());
+        crate::diagnostic_logging::attach(&events);
+        if let Some(workspace) = &selected.workspace {
+            crate::diagnostics::prune(workspace);
+        }
         events.record_in(
             selected
                 .workspace
@@ -93,6 +99,8 @@ impl Api {
                 .map(gb_observability::Diagnostics::open),
         );
         Api {
+            #[cfg(test)]
+            diagnostics_runner: Default::default(),
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
             branvil: std::sync::OnceLock::new(),
@@ -133,6 +141,11 @@ impl Api {
 
     /// Selects `selected`, whose events are recorded in its workspace.
     pub(crate) fn select(&self, selected: Selected) {
+        let debug = gb_config::debug::read(selected.workspace.as_deref());
+        crate::diagnostic_logging::level(debug.configured.then_some(debug.log_level.as_str()));
+        if let Some(workspace) = &selected.workspace {
+            crate::diagnostics::prune(workspace);
+        }
         self.events.record_in(
             selected
                 .workspace
@@ -479,6 +492,20 @@ routes!(
     ),
     (get, "/commands/files/{id}", crate::screens::file),
     (get, "/diagnostics/traces", crate::screens::traces),
+    (post, "/diagnostics/scenario", crate::diagnostics::scenario),
+    (get, "/diagnostics/global", crate::diagnostics::global),
+    (
+        post,
+        "/diagnostics/troubleshoot",
+        crate::diagnostics::troubleshoot
+    ),
+    (
+        get,
+        "/diagnostics/memory-events",
+        crate::diagnostics::memory_events
+    ),
+    (get, "/runtime/debug", crate::diagnostics::debug),
+    (put, "/runtime/debug", crate::diagnostics::update_debug),
     (get, "/diagnostics/traces/{id}", crate::screens::trace),
 );
 routes!(
@@ -742,6 +769,18 @@ mod tests {
         // for each of these.
         let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
+            (
+                ("post", "/diagnostics/scenario"),
+                "runs read-only diagnostics and records their result",
+            ),
+            (
+                ("post", "/diagnostics/troubleshoot"),
+                "runs a read-only diagnostics assistant",
+            ),
+            (
+                ("put", "/runtime/debug"),
+                "writes device-local debug settings",
+            ),
             (
                 ("post", "/config/providers/branvil/connect"),
                 "holds an in-memory PKCE consent",

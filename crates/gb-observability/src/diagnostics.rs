@@ -21,7 +21,7 @@ const MAX_SESSION_ID_LENGTH: usize = 180;
 
 /// The events the index holds besides the pointers: the boundaries of
 /// executions and what the execution list reads of them.
-const INDEX_EVENT_TYPES: &[&str] = &[
+pub(crate) const INDEX_EVENT_TYPES: &[&str] = &[
     "command.started",
     "command.finished",
     "command.failed",

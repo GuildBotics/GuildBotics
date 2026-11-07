@@ -13,6 +13,8 @@ mod command_catalog;
 mod command_files_api;
 mod commands;
 mod config_api;
+pub mod diagnostic_logging;
+mod diagnostics;
 pub mod dispatcher;
 pub mod environment;
 pub mod events;

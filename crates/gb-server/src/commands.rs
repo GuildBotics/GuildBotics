@@ -136,6 +136,8 @@ pub(crate) async fn served(
 /// and events call it, its trace's attributes, the work it is part of, where
 /// it runs, how a failed command is answered, and whether its result is read.
 pub(crate) struct Launch {
+    pub(crate) trace: Option<Trace>,
+    pub(crate) failure_capture: Option<std::sync::Arc<std::sync::Mutex<Option<CommandFailure>>>>,
     pub(crate) label: String,
     pub(crate) attributes: serde_json::Map<String, serde_json::Value>,
     pub(crate) work: Option<(String, String)>,
@@ -153,6 +155,8 @@ impl Launch {
     /// A command run as asked, for the person who asked.
     pub(crate) fn manual(command: &str) -> Launch {
         Launch {
+            trace: None,
+            failure_capture: None,
             label: command.into(),
             attributes: serde_json::Map::from_iter([("run.entry".into(), "command".into())]),
             work: None,
@@ -424,18 +428,26 @@ async fn start(
         let config = configuration.clone();
         return manual_ticket(api, headers, &person.person_id, config, place, opened).await;
     }
-    let mut trace = Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id);
+    let joined = launch.trace.is_some();
+    let mut trace = launch.trace.unwrap_or_else(|| {
+        Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id)
+    });
     for (key, value) in launch.attributes {
         trace = trace.attribute(&key, value);
     }
     let trace = opened(&place, trace);
     let trace_id = trace.id().to_owned();
+    let run_id = if joined {
+        uuid::Uuid::new_v4().simple().to_string()
+    } else {
+        trace_id.clone()
+    };
     let command = gb_environment::Command {
         config: configuration,
         wants_result: launch.result.is_some(),
         invocation: None,
         person_id: person.person_id.clone(),
-        run_id: trace_id.clone(),
+        run_id: run_id.clone(),
         trace_id: trace_id.clone(),
         work_kind: launch
             .work
@@ -458,6 +470,8 @@ async fn start(
     // goes with it.
     let (name, person_id) = (launch.label, person.person_id.clone());
     let (asked, wanted) = (request.command.clone(), launch.result);
+    let failure_capture = launch.failure_capture;
+    let worker_capture = failure_capture.clone();
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let inputs = match api.inputs {
         Some(inputs) => inputs.mount_if_available().await,
@@ -468,7 +482,7 @@ async fn start(
         generation: None,
         command: name.clone(), workspace: workspace.clone(),
         writes: std::sync::Arc::new(gb_base::shared_writes::SharedWrites::new(host.identity_root.clone(), Some(workspace.clone()))),
-        record: serde_json::from_value(json!({"run_id":trace_id,"work_kind":"manual","work_identity":{"run_id":trace_id},"execution_mode":"user_initiated","member_id":person_id,
+        record: serde_json::from_value(json!({"run_id":run_id,"work_kind":"manual","work_identity":{"run_id":trace_id},"execution_mode":"user_initiated","member_id":person_id,
             "device_id":gb_workspace::identity::ensure_device_identity(api.data).map_err(|e|internal(&e.to_string(),"RuntimeError"))?.device_id,
             "source":"manual","started_at":chrono::Utc::now().to_rfc3339()})).expect("manual record fields"),
         redactor: crate::host_window::command_redactor(&host, &workspace, &*api.keychain).map_err(|e|internal(&e,"RuntimeError"))?,
@@ -528,7 +542,13 @@ async fn start(
                             }),
                             _ => Ok((reply.text_output, reply.result)),
                         },
-                        Some(failure) => Err(failed_in_environment(failure)),
+                        Some(failure) => {
+                            if let Some(capture) = &worker_capture {
+                                *capture.lock().unwrap_or_else(|p| p.into_inner()) =
+                                    Some(failure.clone());
+                            }
+                            Err(failed_in_environment(failure))
+                        }
                     }
                 }),
             );
@@ -566,6 +586,26 @@ async fn start(
             return Err(internal(&panicked.to_string(), "RuntimeError"));
         }
     };
+    if let (Err(ended), Some(capture)) = (&ran, &failure_capture) {
+        let mut capture = capture.lock().unwrap_or_else(|p| p.into_inner());
+        if capture.is_none() {
+            *capture = Some(CommandFailure {
+                command: ended.answer.is_ok(),
+                type_: ended.error_type.clone(),
+                message: ended
+                    .answer
+                    .as_ref()
+                    .ok()
+                    .cloned()
+                    .unwrap_or_else(|| ended.error_type.clone()),
+                cli_agent: String::new(),
+                cli_agent_message: String::new(),
+                cli_agent_result: None,
+                inference_error_type: String::new(),
+                inference_category: String::new(),
+            });
+        }
+    }
     match ran {
         Ok((output, result)) => Ok(Ran {
             trace_id,
@@ -1062,6 +1102,8 @@ mod tests {
             command,
             message: "it failed".into(),
             type_: type_.into(),
+            inference_error_type: String::new(),
+            inference_category: String::new(),
         }
     }
 

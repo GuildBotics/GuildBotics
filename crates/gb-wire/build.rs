@@ -12,6 +12,7 @@ const ROOTS: &[&str] = &[
     "CommandRequest",
     "CommandReply",
     "CliAgentExecutionResult",
+    "TroubleshootingResult",
 ];
 
 fn main() {

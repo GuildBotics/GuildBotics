@@ -80,6 +80,14 @@ impl Diagnostics {
     }
 
     pub fn search_traces(&self, search: TraceSearch<'_>) -> std::io::Result<Value> {
+        self.search_traces_formatted(search, &english_trigger)
+    }
+
+    pub fn search_traces_formatted(
+        &self,
+        search: TraceSearch<'_>,
+        trigger: &dyn Fn(&str) -> String,
+    ) -> std::io::Result<Value> {
         let TraceSearch {
             source,
             person,
@@ -102,7 +110,7 @@ impl Diagnostics {
         let mut summaries = Vec::new();
         let completions = std::cell::OnceCell::new();
         for (id, records) in groups {
-            let summary = summary(&id, &records, |attrs, person| {
+            let summary = summary(&id, &records, trigger, |attrs, person| {
                 completed_title(
                     completions.get_or_init(|| self.completion_summaries()),
                     attrs,
@@ -200,6 +208,14 @@ impl Diagnostics {
     }
 
     pub fn trace_detail(&self, id: &str) -> std::io::Result<Value> {
+        self.trace_detail_formatted(id, &english_trigger)
+    }
+
+    pub fn trace_detail_formatted(
+        &self,
+        id: &str,
+        trigger: &dyn Fn(&str) -> String,
+    ) -> std::io::Result<Value> {
         let path = self.sessions.join(format!(
             "{}.jsonl",
             safe_id(id.strip_prefix("system:").unwrap_or(id))
@@ -218,7 +234,7 @@ impl Diagnostics {
             if indexed.is_empty() {
                 Value::Null
             } else {
-                summary(id, &indexed, |attrs, person| {
+                summary(id, &indexed, trigger, |attrs, person| {
                     completed_title(&self.completion_summaries(), attrs, person)
                 })
             }
@@ -268,6 +284,7 @@ fn display(v: &Value) -> String {
 fn summary(
     id: &str,
     records: &[Value],
+    trigger: &dyn Fn(&str) -> String,
     completion: impl FnOnce(&Map<String, Value>, &str) -> String,
 ) -> Value {
     let mut result = json!({"trace_id":id,"source":"","person_id":"","command":"","workflow":"","title":"",
@@ -342,20 +359,7 @@ fn summary(
                 text(&result, "person_id"),
             )
         },
-        |provider| {
-            format!(
-                "{} thread",
-                provider
-                    .chars()
-                    .enumerate()
-                    .map(|(i, c)| if i == 0 {
-                        c.to_uppercase().collect::<String>()
-                    } else {
-                        c.to_lowercase().collect()
-                    })
-                    .collect::<String>()
-            )
-        },
+        trigger,
     );
     result["title"] = title.into();
     result
@@ -409,7 +413,12 @@ fn system_summaries(indexed: &[Value], include_latest: bool) -> Vec<Value> {
             if Some(&id) == latest && !include_latest {
                 return None;
             }
-            let mut s = summary(&format!("system:{id}"), &records, |_, _| String::new());
+            let mut s = summary(
+                &format!("system:{id}"),
+                &records,
+                &english_trigger,
+                |_, _| String::new(),
+            );
             if Some(&id) != latest && !records.iter().any(|r| r["type"] == "system.finished") {
                 s["status"] = "interrupted".into();
             }
@@ -478,4 +487,19 @@ fn record(raw: &Value) -> Value {
         crate::presentations::presentation(raw),
     );
     result.into()
+}
+
+fn english_trigger(provider: &str) -> String {
+    let provider = provider
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == 0 {
+                c.to_uppercase().collect::<String>()
+            } else {
+                c.to_lowercase().collect()
+            }
+        })
+        .collect::<String>();
+    format!("{provider} thread")
 }

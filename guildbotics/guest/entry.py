@@ -129,11 +129,25 @@ def _failure(exc: Exception) -> CommandFailure:
     failure, and the AI CLI tool's failure it came from, whole, so the host
     still tells a rate limit or a refused login from any other failure."""
     found = find_cli_agent_execution_error(exc)
+    from guildbotics.intelligences.brains.inference import InferenceFailure
+
+    cause: BaseException | None = exc
+    visited: set[int] = set()
+    inference = None
+    while cause is not None and id(cause) not in visited:
+        visited.add(id(cause))
+        if isinstance(cause, InferenceFailure):
+            inference = cause
+            break
+        cause = cause.__cause__
     failure = CommandFailure(
         command=isinstance(exc, CommandError),
         type=type(exc).__name__,
-        message=str(exc),
+        message=str(inference if inference is not None else exc),
     )
+    if inference is not None:
+        failure.inference_error_type = inference.error_type
+        failure.inference_category = inference.category
     if isinstance(found, CliAgentExecutionError):
         failure.cli_agent = found.cli_agent
         failure.cli_agent_message = str(found)
@@ -178,7 +192,16 @@ def main() -> None:
     handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
     logger = logging.getLogger("guildbotics")
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    level = getattr(
+        logging, os.getenv("LOG_LEVEL", "INFO").strip().upper(), logging.INFO
+    )
+    logger.setLevel(level)
+    handler.setLevel(level)
+    from agno.utils import log as agno_log
+
+    agno_log.logger.setLevel(level)
+    for agno_handler in agno_log.logger.handlers:
+        agno_handler.setLevel(level)
     request = CommandRequest.model_validate_json(sys.stdin.buffer.read())
     client = command_window()
     assert client is not None

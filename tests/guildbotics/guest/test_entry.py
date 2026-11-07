@@ -54,6 +54,37 @@ def main(context, name):
 """
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("http", [False, True])
+def test_inference_failure_preserves_safe_cause_only(wrapped: bool, http: bool) -> None:
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.brains.inference import InferenceFailure
+
+    import httpx
+
+    cause = (
+        httpx.HTTPStatusError(
+            "private-provider-response",
+            request=httpx.Request("POST", "https://provider.test"),
+            response=httpx.Response(429),
+        )
+        if http
+        else RuntimeError("private-provider-response")
+    )
+    failure = InferenceFailure(cause)
+    failure.category = "credit"
+    error: Exception = failure
+    if wrapped:
+        error = CommandError("minimal inference failed")
+        error.__cause__ = failure
+    result = command_entry._failure(error).model_dump()
+    assert result["inference_error_type"] == (
+        "HTTPStatusError" if http else "RuntimeError"
+    )
+    assert result["inference_category"] == "credit"
+    assert "private-provider-response" not in json.dumps(result)
+
+
 @pytest.fixture
 def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A workspace of one member, aiko, as the environment mounts it."""

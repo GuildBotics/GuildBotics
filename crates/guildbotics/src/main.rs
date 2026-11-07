@@ -312,14 +312,38 @@ fn browse(url: &str) -> bool {
 }
 
 fn start(services: bool) -> anyhow::Result<u8> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_LOG").unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("branvil=info,gb_server=info,gb_workspace=info,gb_observability=info,guildbotics=info")
-            }),
+    use tracing_subscriber::prelude::*;
+    let filter=tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_LOG").unwrap_or_else(|_|tracing_subscriber::EnvFilter::new("branvil=info,gb_server=info,gb_environment=info,gb_workspace=info,gb_observability=info,guildbotics=info"));
+    let original_filter = filter.clone();
+    let (filter, reload) = tracing_subscriber::reload::Layer::new(
+        gb_server::diagnostic_logging::LogFilter::new(filter),
+    );
+    gb_server::diagnostic_logging::install_reload(Arc::new(move |level| {
+        let filter = match level {
+            None => original_filter.clone(),
+            Some(level) => {
+                let level = match level {
+                    "DEBUG" => "debug",
+                    "WARNING" | "WARN" => "warn",
+                    "ERROR" | "CRITICAL" => "error",
+                    "TRACE" => "trace",
+                    _ => "info",
+                };
+                tracing_subscriber::EnvFilter::new(format!(
+                    "branvil={level},gb_server={level},gb_environment={level},gb_workspace={level},gb_observability={level},guildbotics={level}"
+                ))
+            }
+        };
+        let _ = reload.reload(gb_server::diagnostic_logging::LogFilter::new(filter));
+    }));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(std::io::stderr().is_terminal()),
         )
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
+        .with(gb_server::diagnostic_logging::DiagnosticLayer::default())
         .init();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

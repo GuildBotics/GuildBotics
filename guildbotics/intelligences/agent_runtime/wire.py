@@ -168,6 +168,8 @@ class CommandFailure(BaseModel):
     cli_agent: str = ""
     cli_agent_message: str = ""
     cli_agent_result: dict[str, Any] | None = None
+    inference_error_type: str = ""
+    inference_category: str = ""
 
 
 class CommandReply(BaseModel):

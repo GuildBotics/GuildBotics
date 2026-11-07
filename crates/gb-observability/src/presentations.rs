@@ -446,3 +446,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod frozen_tests;
