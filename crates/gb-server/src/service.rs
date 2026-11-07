@@ -171,13 +171,22 @@ impl Service {
         if state.events_state.is_none() {
             return empty_events_status();
         }
+        let phase = state.events_state.unwrap_or("stopped");
         let mut payload = state
             .running
             .as_ref()
+            .filter(|_| state.status.event_queue_source_enabled == Some(true))
             .map(|r| r.worker.event_status(&state.status))
             .or_else(|| state.events_snapshot.clone())
             .unwrap_or_else(empty_events_status);
-        let phase = state.events_state.unwrap_or("stopped");
+        if phase == "stopped" {
+            payload["listener_count"] = 0.into();
+            if let Some(snapshot) = &state.events_snapshot
+                && snapshot["state"] == phase
+            {
+                payload["cycle_count"] = snapshot["cycle_count"].clone();
+            }
+        }
         payload["target"] = "events".into();
         payload["state"] = phase.into();
         payload["running"] = matches!(phase, "starting" | "running" | "stopping").into();
@@ -209,6 +218,17 @@ impl Service {
         state.events_snapshot = Some(payload.clone());
         self.publish(state, "events", payload);
     }
+    fn stop_reception(&self, state: &mut State, force: bool) {
+        let active = matches!(state.events_state, Some("running" | "starting"));
+        if active {
+            self.transition_events(state, "stopping");
+        }
+        state.running.as_ref().unwrap().worker.request_stop(force);
+        if active {
+            self.transition_events(state, "stopped");
+        }
+    }
+
     pub(crate) async fn reception_failed(&self, run_id: &str) {
         let mut state = self.0.lock().await;
         if state.service_run_id.as_deref() != Some(run_id) {
@@ -269,12 +289,7 @@ impl Service {
         let mut state = self.0.lock().await;
         state.startup_attempt += 1;
         if state.running.is_none() {
-            state.status = Status::default();
             state.service_run_id = Some(run_id);
-            state.events_state = None;
-            state.events_started_at = None;
-            state.events_stopped_at = None;
-            state.events_snapshot = None;
             state.status.state = "starting";
             state.status.running = true;
             state.status.error = None;
@@ -399,6 +414,12 @@ impl Service {
             error: None,
         };
         state.service_run_id = Some(run_id);
+        if settings.event_queue {
+            state.events_state = None;
+            state.events_started_at = None;
+            state.events_stopped_at = None;
+            state.events_snapshot = None;
+        }
         state.running = Some(Running {
             worker: worker.clone(),
             stop: stop.clone(),
@@ -461,7 +482,10 @@ impl Service {
             while let Some(result) = tasks.join_next().await {
                 panicked |= result.is_err();
             }
-            worker.request_stop(false);
+            {
+                let mut state = service.0.lock().await;
+                service.stop_reception(&mut state, false);
+            }
             worker.shutdown().await;
             let _ = tokio::task::spawn_blocking(move || drop(keep_awake)).await;
             drop(lock);
@@ -503,7 +527,7 @@ impl Service {
                 .is_err()
             {
                 let mut state = self.0.lock().await;
-                if state.running.is_some() {
+                if state.running.is_some() && !done.is_cancelled() {
                     state.status.state = "failed";
                     state.status.error = Some(crate::i18n::t(
                         "en",
@@ -520,8 +544,9 @@ impl Service {
 
     pub async fn request_stop(&self, force: bool) -> Option<CancellationToken> {
         let mut state = self.0.lock().await;
-        if let Some(running) = &state.running {
-            running.worker.request_stop(force);
+        if state.running.is_some() {
+            self.stop_reception(&mut state, force);
+            let running = state.running.as_ref().unwrap();
             running.stop.cancel();
             if force {
                 running.cancel.cancel();
@@ -784,6 +809,25 @@ mod tests {
             ids.push(id.to_owned());
         }
         assert_ne!(ids[0], ids[1]);
+        let previous = service.events_status().await;
+        let records = event_types(&bus, "events");
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings {
+                    event_queue: false,
+                    ..Settings::default()
+                },
+                Arc::new(Listening),
+            )
+            .await
+            .unwrap();
+        assert_eq!(service.events_status().await, previous);
+        service.stop(true).await;
+        assert_eq!(service.events_status().await, previous);
+        assert_eq!(event_types(&bus, "events"), records);
     }
 
     fn blocking_barrier() -> (
@@ -908,6 +952,38 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn expired_waiter_cannot_fail_a_replacement_run() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings::default(),
+                Arc::new(Listening),
+            )
+            .await
+            .unwrap();
+        let old_done = CancellationToken::new();
+        let task = tokio::spawn({
+            let service = service.clone();
+            let old_done = old_done.clone();
+            async move { service.wait_stop(old_done, true).await }
+        });
+        tokio::task::yield_now().await;
+        let state = service.0.lock().await;
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        // Old cleanup settles while its timeout handler is waiting for the state lock.
+        old_done.cancel();
+        drop(state);
+        task.await.unwrap();
+        assert_eq!(service.status().await.state, "running");
+        service.stop(true).await;
+    }
+
     #[test]
     fn never_started_status_has_no_configured_metadata() {
         let status = serde_json::to_value(Status::default()).unwrap();
@@ -933,10 +1009,17 @@ mod tests {
         entered: CancellationToken,
         release: CancellationToken,
         panic: bool,
+        hold_cycle: bool,
     }
     impl Worker for CleanupWorker {
+        fn listener_count(&self) -> usize {
+            1
+        }
         fn cycle<'a>(&'a self, _: &'a str, _: &'a Settings) -> Pending<'a, Outcome> {
             Box::pin(async move {
+                if self.hold_cycle {
+                    std::future::pending::<()>().await;
+                }
                 assert!(!self.panic, "worker panic");
                 Outcome::Failed
             })
@@ -952,46 +1035,78 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn force_timeout_retains_ownership_until_cleanup_finishes() {
-        let root = tempfile::tempdir().unwrap();
-        let service = Service::default();
-        let worker = Arc::new(CleanupWorker {
-            entered: CancellationToken::new(),
-            release: CancellationToken::new(),
-            panic: false,
-        });
-        service
-            .start(
-                root.path(),
-                root.path(),
-                vec!["alice".into()],
-                Settings {
-                    max_consecutive_errors: 1,
-                    ..Settings::default()
-                },
-                worker.clone(),
-            )
-            .await
-            .unwrap();
-        worker.entered.cancelled().await;
-        let status = service.stop(true).await;
-        assert_eq!(status.state, "failed");
-        assert!(status.running);
-        assert!(status.error.is_some());
-        assert!(
-            gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
-                .unwrap()
-                .is_none()
-        );
-        worker.release.cancel();
-        while service.status().await.running {
-            tokio::task::yield_now().await;
+        for natural in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let controller = crate::service_runtime::Controller::default();
+            let service = &controller.service;
+            let bus = Arc::new(crate::events::EventBus::default());
+            service.attach_events(bus.clone());
+            let worker = Arc::new(CleanupWorker {
+                entered: CancellationToken::new(),
+                release: CancellationToken::new(),
+                panic: false,
+                hold_cycle: !natural,
+            });
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings {
+                        max_consecutive_errors: 1,
+                        ..Settings::default()
+                    },
+                    worker.clone(),
+                )
+                .await
+                .unwrap();
+            if !natural {
+                service.request_stop(true).await;
+            }
+            worker.entered.cancelled().await;
+            let offset = bus
+                .snapshot()
+                .iter()
+                .position(|r| r["type"] == "events.stopping")
+                .unwrap();
+            let status = service.stop(true).await;
+            let records = bus.snapshot();
+            assert_eq!(
+                records[offset..]
+                    .iter()
+                    .map(|r| r["type"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "events.stopping",
+                    "events.stopped",
+                    "scheduler.stopping",
+                    "scheduler.failed"
+                ]
+            );
+            let events = controller.view().await["events"].clone();
+            assert_eq!(events["state"], "stopped");
+            assert_eq!(events["running"], false);
+            assert_eq!(events["listener_count"], 0);
+            assert_eq!(records[offset + 1]["payload"], events);
+            assert_eq!(status.state, "failed");
+            assert!(status.running);
+            assert!(status.error.is_some());
+            assert!(
+                gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                    .unwrap()
+                    .is_none()
+            );
+            worker.release.cancel();
+            while service.status().await.running {
+                tokio::task::yield_now().await;
+            }
+            assert!(service.status().await.error.is_none());
+            assert!(
+                gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                    .unwrap()
+                    .is_some()
+            );
         }
-        assert!(service.status().await.error.is_none());
-        assert!(
-            gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
-                .unwrap()
-                .is_some()
-        );
     }
 
     #[tokio::test]
@@ -1002,6 +1117,7 @@ mod tests {
             entered: CancellationToken::new(),
             release: CancellationToken::new(),
             panic: true,
+            hold_cycle: false,
         });
         worker.release.cancel();
         service
@@ -1152,6 +1268,28 @@ mod tests {
         assert_eq!(status.scheduled_source_enabled, Some(true));
         assert_eq!(status.routine_source_enabled, Some(true));
         assert_eq!(status.event_queue_source_enabled, Some(true));
+        let previous = serde_json::to_value(status).unwrap();
+        let attempt = service.starting().await;
+        service.startup_failed(attempt).await;
+        let failed = serde_json::to_value(service.status().await).unwrap();
+        for (key, value) in previous.as_object().unwrap() {
+            if !["state", "running", "error", "started_at", "stopped_at"].contains(&key.as_str()) {
+                assert_eq!(&failed[key], value, "{key}");
+            }
+        }
+    }
+
+    struct DrainingListener(Arc<HeldWorker>);
+    impl Worker for DrainingListener {
+        fn listener_count(&self) -> usize {
+            1
+        }
+        fn cycle<'a>(&'a self, person: &'a str, settings: &'a Settings) -> Pending<'a, Outcome> {
+            self.0.cycle(person, settings)
+        }
+        fn worker_failed(&self, person: &str, errors: u8) {
+            self.0.worker_failed(person, errors);
+        }
     }
 
     #[tokio::test]
@@ -1171,7 +1309,7 @@ mod tests {
                             max_consecutive_errors: 1,
                             ..Default::default()
                         },
-                        worker.clone()
+                        Arc::new(DrainingListener(worker.clone()))
                     )
                     .await
                     .unwrap()
@@ -1187,7 +1325,7 @@ mod tests {
                             max_consecutive_errors: 1,
                             ..Default::default()
                         },
-                        worker.clone()
+                        Arc::new(DrainingListener(worker.clone()))
                     )
                     .await
                     .unwrap()
@@ -1203,12 +1341,17 @@ mod tests {
                 tokio::task::yield_now().await;
             }
             assert!(!stopper.is_finished());
+            let stopped_events = service.events_status().await;
+            assert_eq!(stopped_events["state"], "stopped");
+            assert_eq!(stopped_events["listener_count"], 0);
             worker.release.cancel();
             let stopped = stopper.await.unwrap();
             assert_eq!(stopped.state, "stopped");
             assert_eq!(stopped.worker_count, Some(0));
             assert!(!stopped.running);
             assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(service.events_status().await, stopped_events);
+            assert_eq!(stopped.cycle_count, Some(1));
         }
     }
 

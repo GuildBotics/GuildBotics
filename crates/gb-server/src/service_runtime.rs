@@ -870,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn starting_hides_every_previous_worker_field_but_keeps_the_exit_guard() {
+    async fn starting_preserves_previous_events_but_hides_heartbeats_and_keeps_the_exit_guard() {
         let root = tempfile::tempdir().unwrap();
         let native = crate::member::native::tests::fixture(root.path());
         let host = Arc::new(gb_environment::Host {
@@ -911,27 +911,15 @@ mod tests {
             tokio::task::yield_now().await;
         }
         *controller.worker.write().await = Some(worker);
+        let previous_events = controller.view().await["events"].clone();
+        assert_eq!(previous_events["state"], "failed");
+        assert_eq!(previous_events["events_chat_provider"], "previous-provider");
         controller.service.starting().await;
         let view = controller.view().await;
         assert_eq!(view["has_active_work"], true);
         assert_eq!(view["scheduler"]["running"], true);
         assert_eq!(view["scheduler"]["member_routines"], serde_json::json!([]));
-        let events = &view["events"];
-        assert_eq!(events["state"], "stopped");
-        assert_eq!(events["running"], false);
-        assert!(events["error"].is_null());
-        assert!(events["listener_count"].is_null());
-        assert!(events["events_auth_failed_count"].is_null());
-        assert!(events["subscription_count"].is_null());
-        assert!(events["events_drained_count"].is_null());
-        assert!(events["cycle_failure_count"].is_null());
-        assert_eq!(events["events_auth_failed_persons"], serde_json::json!([]));
-        assert_eq!(
-            events["events_missing_channel_persons"],
-            serde_json::json!([])
-        );
-        assert_eq!(events["events_chat_provider"], "");
-        assert_eq!(events["events_error_count"], 0);
+        assert_eq!(view["events"], previous_events);
     }
 
     #[tokio::test]
@@ -1047,13 +1035,24 @@ mod tests {
             package: native.package.clone(),
             identity_root: native.identity_root.clone(),
         });
+        // Populate metadata with a real completed run before assembly fails.
+        std::fs::write(
+            native
+                .workspace
+                .join(".guildbotics/config/team/members/aiko/member.yml"),
+            r#"{"is_active":false}"#,
+        )
+        .unwrap();
+        let controller = Controller::new(native.clone(), host);
+        controller.start().await.unwrap();
+        controller.stop(true).await;
+        let previous = controller.view().await;
         std::fs::remove_file(
             native
                 .workspace
                 .join(".guildbotics/config/team/project.yml"),
         )
         .unwrap();
-        let controller = Controller::new(native.clone(), host);
         let bus = Arc::new(crate::events::EventBus::default());
         controller.service.attach_events(bus.clone());
         let initial_events = controller.view().await["events"].clone();
@@ -1076,7 +1075,20 @@ mod tests {
             let owner_bytes = std::fs::read(native.data.join("run/service.lock")).unwrap();
             let owner: serde_json::Value = serde_json::from_slice(&owner_bytes[1..]).unwrap();
             assert_eq!(owner["service_instance_id"], id);
-            assert_eq!(controller.view().await["events"], initial_events);
+            let view = controller.view().await;
+            assert_eq!(view["events"], initial_events);
+            for (key, value) in previous["scheduler"].as_object().unwrap() {
+                if ["state", "running", "error", "started_at", "stopped_at"].contains(&key.as_str())
+                {
+                    continue;
+                }
+                assert_eq!(&view["scheduler"][key], value, "GET {key}");
+                if records[0]["payload"].get(key).is_some() {
+                    for record in records {
+                        assert_eq!(&record["payload"][key], value, "payload {key}");
+                    }
+                }
+            }
             assert!(
                 gb_base::files::FileLock::try_hold(&native.data.join("run/service.lock"))
                     .unwrap()
