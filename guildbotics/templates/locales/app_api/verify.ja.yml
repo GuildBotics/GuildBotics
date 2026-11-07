@@ -22,3 +22,5 @@ ja:
     warning: "既定の AI CLI ツールを判別できませんでした。"
   cli_agent_environment:
     ok: "AI CLI ツール '%{tool}' を隔離環境で起動できます。"
+  member_credentials:
+    error: "%{person} の設定を読めなかったため、資格情報を確かめられませんでした。"

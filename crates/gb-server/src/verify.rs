@@ -237,7 +237,30 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
         .and_then(|text| gb_config::yaml_value(&text).ok())
         .unwrap_or(Value::Null);
     let registry = Registry(Some(api.clone()));
-    for provider in Registry::named(&project) {
+    let providers = Registry::named(&project);
+    // Each member once: one whose settings cannot be read is an error of its
+    // own, and the other checks are still worth answering.
+    let mut members = Vec::new();
+    for person in active.iter().filter(|_| !providers.is_empty()) {
+        let member = crate::config_api::with_setup(api, workspace.to_path_buf(), {
+            let person = person.clone();
+            move |setup| setup.saved_member(&person)
+        })
+        .await;
+        match member {
+            Ok(member) => members.push((person, member)),
+            Err(_) => {
+                let message = i18n::t(
+                    checks.language,
+                    "app_api.verify.member_credentials.error",
+                    &[("person", person.as_str())],
+                );
+                let context = json!({ "person_id": person });
+                checks.push("member_credentials", "error", message, "", context);
+            }
+        }
+    }
+    for provider in providers {
         for key in Registry::identity_secret_keys(provider) {
             let set = matches!(
                 crate::host_window::host_secret_in(&host, workspace, key, &*api.keychain),
@@ -245,18 +268,7 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
             );
             checks.key("provider_secret", key, set, json!({ "provider": provider }));
         }
-        for person in active {
-            let member = crate::config_api::with_setup(api, workspace.to_path_buf(), {
-                let person = person.clone();
-                move |setup| setup.saved_member(&person)
-            })
-            .await;
-            // A member whose secrets cannot be read has no checks of its own:
-            // the `secret_store` check already says the store fails, and the
-            // other checks are still worth answering.
-            let Ok(member) = member else {
-                continue;
-            };
+        for (person, member) in &members {
             let subscribed =
                 std::fs::read_to_string(config.join(format!("team/members/{person}/member.yml")))
                     .ok()
@@ -266,7 +278,7 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
                             .as_array()
                             .is_some_and(|c| !c.is_empty())
                     });
-            for check in registry.verify(provider, &member, subscribed, checks.language) {
+            for check in registry.verify(provider, member, subscribed, checks.language) {
                 checks.push(
                     &check.code,
                     &check.status,

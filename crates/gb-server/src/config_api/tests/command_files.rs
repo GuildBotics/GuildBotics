@@ -656,6 +656,49 @@ async fn authoring_apply_updates_the_current_command_and_creates_a_helper() {
     assert_eq!(std::fs::read_to_string(&translate).unwrap(), TRANSLATE);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn authoring_apply_refuses_two_changes_that_write_one_file_through_a_link() {
+    let f = workspace("en").await;
+    std::fs::create_dir_all(commands(&f).join("reports")).unwrap();
+    std::os::unix::fs::symlink("reports", commands(&f).join("alias")).unwrap();
+    // One file, or one command in two formats.
+    for (format, relative) in [
+        ("shell", "alias/weekly.sh"),
+        ("markdown", "alias/weekly.md"),
+    ] {
+        let content = if format == "shell" {
+            "echo b\n"
+        } else {
+            TRANSLATE
+        };
+        let (status, answer) = f
+            .call(
+                "POST",
+                "/commands/author/apply",
+                json!({"changes": [
+                    change("create", "reports/weekly", "shell", "reports/weekly.sh", "echo a\n"),
+                    change("create", "alias/weekly", format, relative, content),
+                ]}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{format}: {answer}");
+        assert_eq!(answer["code"], "command_file_exists");
+        assert_eq!(
+            answer["message"],
+            crate::i18n::t(
+                "en",
+                "app_api.errors.command_file_exists.duplicate",
+                &[("command", "alias/weekly")]
+            )
+        );
+        assert_eq!(
+            names_in(&commands(&f).join("reports")),
+            Vec::<String>::new()
+        );
+    }
+}
+
 #[tokio::test]
 async fn authoring_apply_checks_every_change_before_writing_any() {
     let f = workspace("en").await;

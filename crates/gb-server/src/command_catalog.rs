@@ -18,6 +18,7 @@ use gb_config::command_files::{logical_name, revision};
 use gb_config::commands::CommandRoots;
 use gb_config::team::Team;
 use gb_environment::Host;
+use gb_wire::CommandAccess;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -192,36 +193,45 @@ impl Facts {
     }
 }
 
-/// Why the selected file `path` is not what `command` runs for `person`
-/// as the revision `expected` the screen read, with its context, and what it
-/// needs: what a screen's run of it is refused for.
+/// Why the selected file `path` is not the file `runs` (what the command
+/// resolves to for `person`) as the revision `expected` the screen read, with
+/// its context, and what it needs: what a screen's run of it is refused for.
+/// What the bytes it checked declare of the run's access is given back, read
+/// once, for the run to take.
 pub(crate) async fn evaluate(
     workspace: &Workspace,
     path: &Path,
     expected: &str,
-    command: &str,
+    runs: Option<&Path>,
     person: Option<&str>,
     language: &str,
-) -> anyhow::Result<(Option<(&'static str, Value)>, Vec<Value>)> {
+) -> anyhow::Result<(
+    Option<(&'static str, Value)>,
+    Vec<Value>,
+    Option<CommandAccess>,
+)> {
     let bytes = std::fs::read(path)?;
     let current = revision(&bytes);
     if current != expected {
         return Ok((
             Some(("command_file_changed", json!({"current_revision": current}))),
             vec![],
+            None,
         ));
     }
     let roots = &workspace.roots;
-    let runs = roots
-        .resolve(command, &workspace.team.language, person)
-        .ok();
-    if runs.as_ref().and_then(|p| p.canonicalize().ok()) != path.canonicalize().ok() {
+    let same = runs
+        .and_then(|runs| runs.canonicalize().ok())
+        .zip(path.canonicalize().ok())
+        .is_some_and(|(runs, selected)| runs == selected);
+    if !same {
         return Ok((
             Some((
                 "command_file_shadowed",
-                json!({"shadow_source": roots.shadow_source(runs.as_deref())}),
+                json!({"shadow_source": roots.shadow_source(runs)}),
             )),
             vec![],
+            None,
         ));
     }
     let Ok(text) = String::from_utf8(bytes) else {
@@ -231,6 +241,7 @@ pub(crate) async fn evaluate(
                 json!({"message": "Command source must be valid UTF-8.", "reason": "invalid_utf8"}),
             )),
             vec![],
+            None,
         ));
     };
     let extension = path
@@ -240,7 +251,7 @@ pub(crate) async fn evaluate(
     if let Err(invalid) = validate_source(&extension, &text) {
         let mut context = invalid.context;
         context.insert("message".into(), invalid.message.into());
-        return Ok((Some((invalid.code, Value::Object(context))), vec![]));
+        return Ok((Some((invalid.code, Value::Object(context))), vec![], None));
     }
     let needs = roots.needs(path, &workspace.team.language, person);
     let facts = Facts::read(
@@ -255,6 +266,7 @@ pub(crate) async fn evaluate(
     Ok((
         missing.then(|| ("command_requirement_missing", json!({}))),
         requirements,
+        gb_config::commands::source_access(path, &text).ok(),
     ))
 }
 
@@ -421,17 +433,21 @@ pub(crate) async fn execution_status(
         .strip_prefix(workspace.roots.config.join("commands"))
         .unwrap_or(&path);
     let command = logical_name(relative, project).unwrap_or_default();
+    let runs = workspace
+        .roots
+        .resolve(&command, &workspace.team.language, person.as_deref())
+        .ok();
     match evaluate(
         &workspace,
         &path,
         &expected,
-        &command,
+        runs.as_deref(),
         person.as_deref(),
         language(&headers),
     )
     .await
     {
-        Ok((blocked, requirements)) => {
+        Ok((blocked, requirements, _)) => {
             let (code, context) = blocked.map_or((Value::Null, json!({})), |(code, context)| {
                 (json!(code), context)
             });

@@ -1465,6 +1465,8 @@ pub(crate) mod tests {
         tickets: Arc<dyn gb_ports::TicketService>,
         native: Native,
         calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
+        /// Each command run, by its file and what it declares of its access.
+        ran: Mutex<Vec<(PathBuf, Value)>>,
     }
     impl crate::dispatcher::Driver for MemberTurn {
         fn execute<'a>(
@@ -1477,6 +1479,10 @@ pub(crate) mod tests {
             Result<gb_wire::CommandReply, crate::dispatcher::DispatchFailure>,
         > {
             Box::pin(async move {
+                self.ran.lock().unwrap().push((
+                    command.path.clone(),
+                    serde_json::to_value(&command.access).unwrap(),
+                ));
                 if command.name == "functions/talk_as" && command.wants_result {
                     assert!(command.invocation.is_none());
                     assert!(command.pipe.is_empty());
@@ -1762,6 +1768,7 @@ pub(crate) mod tests {
             tickets: runtime.tickets.clone().unwrap(),
             native: native.clone(),
             calls: Default::default(),
+            ran: Default::default(),
         });
         runtime.dispatcher.driver = driver.clone();
         (runtime, driver)
@@ -2218,6 +2225,24 @@ pub(crate) mod tests {
             })
             .await
             .unwrap()
+    }
+    #[tokio::test]
+    async fn a_manual_ticket_run_executes_the_workflow_it_read_with_what_it_declared() {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        ready_ticket(&native, &runtime).await;
+        // What the run read before a later save, which it never reads again.
+        let chosen = root.path().join("chosen/ticket_driven_workflow.md");
+        let access: gb_wire::CommandAccess =
+            serde_json::from_value(json!({"read_only": false, "inspects": ["config"]})).unwrap();
+        runtime.chosen = Some((chosen.clone(), access.clone()));
+        runtime.manual_ticket(|trace| trace).await.unwrap();
+        let ran = driver.ran.lock().unwrap().clone();
+        assert_eq!(ran[0], (chosen, serde_json::to_value(&access).unwrap()));
+        cleanup.close();
+        cleanup.wait().await;
     }
     #[tokio::test]
     async fn a_manual_ticket_run_streams_its_events_and_answers_its_trace() {

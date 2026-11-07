@@ -22,3 +22,5 @@ en:
     warning: "Default AI CLI tool could not be inferred."
   cli_agent_environment:
     ok: "AI CLI tool '%{tool}' can start in the isolated agent environment."
+  member_credentials:
+    error: "The settings of %{person} could not be read, so its credentials were not checked."

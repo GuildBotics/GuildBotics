@@ -22,8 +22,14 @@ Rust のテストに確かめる条件を添える。同じ Rust テストへ集
   終わるまで持つ。メンバーで断られた実行は、trace を開かずに `command.failed` を診断の記録と画面に残す（凍結版と同じ）。
 - 実行の受け付け（run の記録の redactor）と、AI CLI の tool のログインの読み取り（要件と `/verify`）は、サーバーに
   渡されたキーチェーンを使う（以前は OS のキーチェーンを直に読み、テストから本物のキーチェーンに触れていた）。
-- `/verify` でメンバーの Secret が読めないとき、そのメンバーの provider の check は出さず、ほかの check を答える
-  （凍結版は 503 `secret_store_unavailable`）。Secret の store が使えないことは `secret_store` の check が error で言う。
+- `/verify` でメンバーの設定（Secret を含む）が読めないとき、そのメンバーごとに 1 件の `member_credentials` を error の
+  check にして、ほかの check も答える（凍結版は 503 `secret_store_unavailable`）。
+- 画面で選んだファイルを確かめてから走らせる実行（`expected_command_file_revision` つき）は、run の宣言（`read_only`・
+  `inspects`）を確かめたのと同じ 1 回の読み取りのバイト列から決める（凍結版は確かめたあとにファイルを読み直す）。
+  手動のチケット実行も、1 回だけ解決して読んだファイルと宣言で走る。guest はこれまでどおりマウントした設定の
+  ファイルを読む。
+- 提案の適用（`/commands/author/apply`）は、作るファイルの保存先をリンクを解決したコマンド（拡張子を除いた名前）で
+  比べ、2 つの変更が 1 つのコマンドに当たれば書く前に断る（凍結版はリンクを解決したファイルで比べる）。
 
 ### tests/guildbotics/app_api/test_api.py
 - tests/guildbotics/app_api/test_api.py::test_app_runtime_command_options_describe_workspace_commands -> crates/gb-server/src/config_api/tests/commands.rs::an_option_describes_its_label_category_arguments_and_inputs — conditions: `commands/workflows/demo.py`（ticket_service を使う、`main(context, title, *, dry_run='False')`、docstring "Run a demo workflow."）と project の ticket_service github で option `workflows/demo` の label "Demo"、description "Run a demo workflow."、category "workflow"、arguments 名 `["title","dry_run"]`、requirements `{environment: true, ticket_service: true}`（#81 では `requires: [ticket_service]` の宣言で）

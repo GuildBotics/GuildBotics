@@ -364,3 +364,45 @@ async fn only_the_providers_the_services_name_are_verified_with_each_members_che
         .collect();
     assert!(!slack.contains(&json!("owner")), "{slack:?}");
 }
+
+#[tokio::test]
+async fn a_member_whose_secrets_cannot_be_read_is_an_error_of_its_own() {
+    let f = fixture();
+    f.init().await;
+    f.add(agent("alice")).await;
+    set_project(
+        &f,
+        "services",
+        json!({"ticket_service": {"name": "branvil", "workspace": "acme"}}),
+    );
+    // The keychain answers, but the identity store's encrypted file is broken.
+    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", "admin");
+    f.write(
+        &f.root.join("identity/.guildbotics/local/secrets.enc.json"),
+        "{\"version\": 1}",
+    );
+    let answer = verified(&f).await;
+    assert_eq!(check(&answer, "secret_store").unwrap()["status"], "ok");
+    let unread = json!({"code": "member_credentials", "status": "error",
+        "message": "The settings of alice could not be read, so its credentials were not checked.",
+        "target": "", "context": {"person_id": "alice"}});
+    assert_eq!(check(&answer, "member_credentials").unwrap(), &unread);
+    assert!(answer["errors"].as_array().unwrap().contains(&unread));
+    // Once per member, however many providers the services name.
+    set_project(
+        &f,
+        "services",
+        json!({"ticket_service": {"name": "branvil", "workspace": "acme"},
+            "chat_service": {"name": "slack"}}),
+    );
+    let answer = verified(&f).await;
+    let codes = codes(&answer);
+    assert_eq!(
+        codes.iter().filter(|c| *c == "member_credentials").count(),
+        1
+    );
+    assert!(
+        !codes.iter().any(|c| c.ends_with("_credential")),
+        "{codes:?}"
+    );
+}

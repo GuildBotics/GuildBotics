@@ -310,11 +310,11 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         server.run(changed, "en").await.0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    // The selected command is accepted; lack of a snapshot refuses execution
-    // inside a trace, without needing a real microVM for this test.
-    let (status, reply) = server.run(request.clone(), "en").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
-    assert!(reply["context"]["trace_id"].is_string(), "{reply}");
+    // The selected file is the one that runs, but this device has no snapshot
+    // to run it in: the screens are told before anything starts.
+    let (status, refusal) = server.run(request.clone(), "en").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "command_requirement_missing");
     let member_command = workspace.join(".guildbotics/config/team/members/aiko/commands/look.md");
     std::fs::create_dir_all(member_command.parent().unwrap()).unwrap();
     std::fs::write(member_command, "Member command\n").unwrap();

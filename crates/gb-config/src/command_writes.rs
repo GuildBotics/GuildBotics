@@ -222,6 +222,7 @@ impl CommandRoots {
             }
         }
         let mut targets: Vec<(PathBuf, &Change, u32)> = Vec::new();
+        let mut destinations = std::collections::HashSet::new();
         for change in changes {
             let relative = valid_name(&change.command)?;
             let expected = format!("{relative}{}", change.format.extension());
@@ -270,7 +271,9 @@ impl CommandRoots {
                     new_mode(change.format),
                 ),
             };
-            if targets.iter().any(|(path, ..)| *path == target) {
+            // The command it writes, through any link on the way: two names
+            // may reach one command, in one file or in two formats of it.
+            if !destinations.insert(resolved(&target)?.with_extension("")) {
                 Err(
                     refused(409, "command_file_exists", "command_file_exists.duplicate")
                         .param("command", &change.command),

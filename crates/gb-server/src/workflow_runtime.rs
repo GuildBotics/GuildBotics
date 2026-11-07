@@ -42,6 +42,9 @@ pub struct Runtime {
     pub chat_provider: String,
     identity_services: Vec<(String, String, Arc<dyn ChatService>)>,
     pub reception: Option<crate::chat_receiver::Connection>,
+    /// The ticket workflow a manual run read once, with what it declares:
+    /// the run executes that file with that access, not another reading.
+    pub chosen: Option<(std::path::PathBuf, gb_wire::CommandAccess)>,
 }
 
 #[derive(Debug)]
@@ -255,6 +258,7 @@ impl Runtime {
         };
         Ok((
             Self {
+                chosen: None,
                 generation: None,
                 service_run_id: None,
                 dispatcher,
@@ -548,6 +552,9 @@ impl Runner for Runtime {
                 .map_err(|_| DispatchFailure::InvalidCommand)?
                 .unwrap_or_default();
             let mut command = self.dispatcher.prepare(&name, invocation, trace.id())?;
+            if let Some((path, access)) = &self.chosen {
+                (command.path, command.access) = (path.clone(), access.clone());
+            }
             command.args = arguments;
             self.dispatcher
                 .dispatch_prepared(command, trace, &self.cancelled)

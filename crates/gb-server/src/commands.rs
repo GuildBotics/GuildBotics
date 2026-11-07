@@ -312,7 +312,9 @@ async fn start(
         templates: host.package.join("templates"),
     };
     let resolved = roots.resolve(&request.command, &team.language, Some(&person.person_id));
-    if let (Some(id), Some(expected)) = (
+    // A run of the file the screen read takes its declaration from the very
+    // bytes checked, so a later save cannot change what it may do.
+    let checked = if let (Some(id), Some(expected)) = (
         &request.expected_command_file_id,
         &request.expected_command_file_revision,
     ) {
@@ -334,11 +336,11 @@ async fn start(
             directory: workspace.clone(),
             keychain: api.keychain.clone(),
         };
-        let (blocked, _) = crate::command_catalog::evaluate(
+        let (blocked, _, checked) = crate::command_catalog::evaluate(
             &workspace,
             &selected,
             expected,
-            &request.command,
+            resolved.as_deref().ok(),
             Some(&person.person_id),
             language,
         )
@@ -350,7 +352,10 @@ async fn start(
                 .context(context)
                 .into_response());
         }
-    }
+        checked
+    } else {
+        None
+    };
     // Where the run works, once its member and file are known; a directory
     // of its own is made without following a link on the way.
     let cwd = match (&launch.cwd, &request.cwd) {
@@ -374,7 +379,13 @@ async fn start(
         }
         (None, None) => host.home.join(EXCHANGE_DIRECTORY),
     };
-    let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
+    let resolved = resolved.and_then(|path| {
+        let access = match checked {
+            Some(access) => access,
+            None => command_access(&path)?,
+        };
+        Ok((access, path))
+    });
     let (access, path) = resolved.map_err(|problem| {
         error(launch.failure.0, launch.failure.1)
             .reason(problem.to_string())
@@ -409,7 +420,8 @@ async fn start(
         trace
     };
     if request.command == crate::ticket_selector::COMMAND && request.args.is_empty() {
-        return manual_ticket(api, headers, &person.person_id, place, opened).await;
+        let chosen = (path, access);
+        return manual_ticket(api, headers, &person.person_id, chosen, place, opened).await;
     }
     let mut trace = Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id);
     for (key, value) in launch.attributes {
@@ -591,6 +603,7 @@ async fn manual_ticket(
     api: &RunState<'_>,
     headers: &HeaderMap,
     person: &str,
+    chosen: (PathBuf, gb_wire::CommandAccess),
     place: Option<Place>,
     opened: impl FnOnce(&Option<Place>, Trace) -> Trace + Send + 'static,
 ) -> Result<Ran, Response> {
@@ -600,6 +613,7 @@ async fn manual_ticket(
         .service
         .workflow(person, api.work.clone())
         .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
+    runtime.chosen = Some(chosen);
     let work = api
         .service
         .execution
