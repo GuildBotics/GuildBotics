@@ -75,6 +75,9 @@ async fn slack_diagnosis_missing_bot_avoids_calls_and_errors_name_the_method() {
         let checks = registry
             .diagnose_slack(&[(&member, vec![json!({"channel_name":"general"})])], lang)
             .await;
+        assert_eq!(checks[0].code, "slack_app_token");
+        assert_eq!(checks[0].status, "error");
+        assert_eq!(checks[0].target, "AGENT1_SLACK_APP_TOKEN");
         assert_eq!(checks[1].code, "slack_access");
         assert_eq!(checks[1].context["error_type"], "ServiceError");
         assert_eq!(

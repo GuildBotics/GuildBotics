@@ -104,6 +104,29 @@ fn env<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 #[test]
+fn host_debug_levels_become_valid_python_logging_names() {
+    let machine = machine();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/get_os_ui_language.py");
+    let run = command(&machine, path, vec![]);
+    let debug = machine.workspace.join(".guildbotics/local/debug.env");
+    for (input, expected) in [
+        ("TRACE", "DEBUG"),
+        ("WARN", "WARNING"),
+        ("FATAL", "CRITICAL"),
+        ("mystery", "INFO"),
+        ("\"DEBUG\" # comment", "DEBUG"),
+    ] {
+        std::fs::write(&debug, format!("LOG_LEVEL={input}\nAGNO_DEBUG=true\n")).unwrap();
+        let made = shape(&machine.host, &machine.workspace, &run, None).unwrap();
+        assert_eq!(env(&made.env, "LOG_LEVEL"), Some(expected));
+        assert_eq!(env(&made.env, "AGNO_DEBUG"), Some("true"));
+    }
+}
+
+#[test]
 fn selected_workflow_crosses_the_vm_boundary_with_its_payload_and_work_identity() {
     let machine = machine();
     let path = machine

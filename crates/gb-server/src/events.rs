@@ -106,14 +106,20 @@ impl EventBus {
 
     /// Records a log line of `level` (`INFO`, `WARNING`, ...).
     pub fn publish_log(&self, level: &str, message: &str, trace: Option<&Trace>) {
+        self.record_log(level, message, trace.map(Trace::event_fields));
+    }
+
+    pub(crate) fn record_log(
+        &self,
+        level: &str,
+        message: &str,
+        fields: Option<Map<String, Value>>,
+    ) {
         let mut item = Map::new();
         item.insert("kind".into(), "log".into());
         item.insert("level".into(), level.into());
         item.insert("message".into(), message.into());
-        item.extend(correlation(Origin {
-            trace,
-            ..Origin::default()
-        }));
+        item.extend(fields.unwrap_or_else(|| correlation(Origin::default())));
         item.insert("timestamp".into(), timestamp());
         let store = self.state().store.clone();
         if let Some(store) = store {

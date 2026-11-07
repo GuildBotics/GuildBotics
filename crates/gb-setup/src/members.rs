@@ -308,17 +308,33 @@ impl Setup<'_> {
 
     /// The saved member `id`, as its accounts see it.
     pub fn saved_member(&self, id: &str) -> anyhow::Result<SavedMember> {
+        self.saved_member_reading(id, false)
+    }
+
+    /// Diagnostic checks continue without credentials when their store is unavailable.
+    pub fn diagnostic_member(&self, id: &str) -> anyhow::Result<SavedMember> {
+        self.saved_member_reading(id, true)
+    }
+
+    fn saved_member_reading(&self, id: &str, diagnostic: bool) -> anyhow::Result<SavedMember> {
         let identity = mapping(
             &self.repository.identity_view(),
             &member_path(id, "identity"),
         )?;
-        let owned = self.owned(id, !self.providers.member_providers().is_empty())?;
+        let values = match self.owned(id, !self.providers.member_providers().is_empty()) {
+            Ok(owned) => owned.values,
+            Err(e) if diagnostic && e.is::<crate::SecretsUnavailable>() => {
+                tracing::warn!("credentials could not be read for diagnostic member {id}");
+                BTreeMap::new()
+            }
+            Err(e) => return Err(e),
+        };
         Ok(SavedMember {
             person_id: id.into(),
             name: text(&identity, "name"),
             human: text(&identity, "person_type") == "human",
             account_info: strings(identity.get("account_info")),
-            secrets: owned.values,
+            secrets: values,
             avatar: avatar_in(self.identity_root(), id),
         })
     }

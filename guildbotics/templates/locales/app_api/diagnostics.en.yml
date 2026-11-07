@@ -1,0 +1,40 @@
+{
+  "en": {
+    "config_load": {
+      "ok": "Configuration was loaded.",
+      "error": "Configuration could not be loaded."
+    },
+    "member_not_found": {
+      "error": "Member was not found."
+    },
+    "active_members": {
+      "ok": "Members are available for diagnostics.",
+      "error": "No active members are configured."
+    },
+    "member_inactive": {
+      "warning": "Member is inactive; scheduler runtime will not use this member."
+    },
+    "human_member_reference": {
+      "ok": "Human member config was loaded as a reference member, not an AI runtime subject."
+    },
+    "human_member_roles": {
+      "ok": "Human member roles are configured.",
+      "error": "Human member roles are not configured."
+    },
+    "llm_api_key": {
+      "error": "%{env_key} is not configured; skipping live LLM call."
+    },
+    "llm_live_call": {
+      "ok": "LLM provider accepted a minimal request.",
+      "error": "LLM live check failed"
+    },
+    "cli_agent_brain": {
+      "ok": "AI CLI tool accepted a minimal read-only request.",
+      "error": "AI CLI tool brain check failed"
+    },
+    "cli_agent_exit": "AI CLI tool command failed (exit code: %{returncode}).",
+    "cli_agent_empty": "AI CLI tool command completed but returned no response (exit code: %{returncode}).",
+    "cli_agent_no_stderr": "No stderr was returned. Check that the CLI is logged in, can run in non-interactive mode, and prints its answer to stdout.",
+    "cli_agent_no_tool": "Configured CLI diagnostics brain runs no AI CLI tool."
+  }
+}

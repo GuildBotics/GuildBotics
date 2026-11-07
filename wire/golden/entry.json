@@ -42,7 +42,7 @@
         "cli_agent_result": null
       }
     },
-    "stdout": "{\"result\":null,\"text_output\":\"\",\"failure\":{\"command\":true,\"type\":\"CommandError\",\"message\":\"Golden failure\",\"cli_agent\":\"\",\"cli_agent_message\":\"\",\"cli_agent_result\":null}}\n",
+    "stdout": "{\"result\":null,\"text_output\":\"\",\"failure\":{\"command\":true,\"type\":\"CommandError\",\"message\":\"Golden failure\",\"cli_agent\":\"\",\"cli_agent_message\":\"\",\"cli_agent_result\":null,\"inference_error_type\":\"\",\"inference_category\":\"\"}}\n",
     "stderr_lines": [
       "command print",
       "child output"

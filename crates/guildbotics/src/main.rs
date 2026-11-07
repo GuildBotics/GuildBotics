@@ -312,14 +312,24 @@ fn browse(url: &str) -> bool {
 }
 
 fn start(services: bool) -> anyhow::Result<u8> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_LOG").unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("branvil=info,gb_server=info,gb_workspace=info,gb_observability=info,guildbotics=info")
-            }),
+    use tracing_subscriber::prelude::*;
+    let configured = std::env::var("GUILDBOTICS_LOG").unwrap_or_default();
+    let filter = gb_server::diagnostic_logging::log_filter(&configured, None);
+    let (filter, reload) = tracing_subscriber::reload::Layer::new(
+        gb_server::diagnostic_logging::LogFilter::new(filter),
+    );
+    gb_server::diagnostic_logging::install_reload(Arc::new(move |level| {
+        let filter = gb_server::diagnostic_logging::log_filter(&configured, level);
+        let _ = reload.reload(gb_server::diagnostic_logging::LogFilter::new(filter));
+    }));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(std::io::stderr().is_terminal()),
         )
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
+        .with(gb_server::diagnostic_logging::DiagnosticLayer::default())
         .init();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

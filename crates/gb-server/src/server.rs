@@ -292,6 +292,7 @@ impl Server {
             cancelled.cancel();
             cancelling_service.selected().service.stop(true).await;
         });
+        let maintenance = tokio::spawn(crate::diagnostics::maintenance(self.api.clone()));
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let service_api = self.api.clone();
         let served = axum::serve(self.listener, api::router(self.api))
@@ -306,6 +307,8 @@ impl Server {
             .await;
         autostart.abort();
         let _ = autostart.await;
+        maintenance.abort();
+        let _ = maintenance.await;
         upkeep.abort();
         let _ = upkeep.await;
         work.close();

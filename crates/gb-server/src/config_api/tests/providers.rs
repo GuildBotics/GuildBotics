@@ -1295,6 +1295,18 @@ async fn slack_diagnosis_distinguishes_humans_subscriptions_credentials_and_unjo
             "{mode}"
         );
         assert!(checks.iter().all(|c| c.person_id == "agent1"));
+        if mode.is_empty() {
+            assert_eq!(checks[1].context["bot_user_id"], "U01234567");
+            assert_eq!(
+                checks
+                    .iter()
+                    .filter(|c| c.credential)
+                    .map(|c| c.code.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["slack_app_token", "slack_bot_auth"]
+            );
+            assert!(checks.iter().all(|c| c.status == "ok"));
+        }
         if mode == "not_joined" {
             assert_eq!(
                 checks[2].context,

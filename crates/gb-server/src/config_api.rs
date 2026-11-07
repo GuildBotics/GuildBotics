@@ -836,14 +836,7 @@ fn transcripts(workspace: &Path) -> Value {
         Some(detail) if detail.trim().eq_ignore_ascii_case("full") => "full",
         _ => "standard",
     };
-    let retention = match &stored["retention_days"] {
-        Value::Number(n) => n.as_i64(),
-        Value::String(s) => s.trim().parse().ok(),
-        _ => None,
-    }
-    .filter(|days| *days != 0)
-    .unwrap_or(DEFAULT_RETENTION_DAYS)
-    .max(1);
+    let retention = transcript_retention_days(&stored);
     let run = workspace.join(".guildbotics/local/run");
     let (memory, journals) = sizes(
         &workspace.join(".guildbotics/state/documents/memory_events"),
@@ -859,6 +852,34 @@ fn transcripts(workspace: &Path) -> Value {
         "memory_size_bytes": memory,
         "memory_max_size_bytes": MEMORY_JOURNAL_LIMIT * journals.max(1),
     })
+}
+
+/// The shared transcript setting used by both the screen and pruning.
+pub(crate) fn transcript_retention_days(stored: &Value) -> i64 {
+    match &stored["retention_days"] {
+        Value::Number(n) => n.as_i64().filter(|days| *days != 0),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+    .unwrap_or(DEFAULT_RETENTION_DAYS)
+    .max(1)
+}
+
+#[test]
+fn transcript_retention_matches_frozen_integer_and_whitespace_rules() {
+    for (value, days) in [
+        (json!(" 7 "), 7),
+        (json!("0"), 1),
+        (json!(0), 30),
+        (json!(-2), 1),
+        (json!("invalid"), 30),
+        (Value::Null, 30),
+    ] {
+        assert_eq!(
+            transcript_retention_days(&json!({"retention_days": value})),
+            days
+        );
+    }
 }
 
 pub(crate) fn unconfigured(headers: &HeaderMap, sentence: &'static str) -> Response {

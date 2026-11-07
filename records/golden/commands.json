@@ -9,6 +9,8 @@
    "assistants/troubleshoot@en": "templates/commands/assistants/troubleshoot.py",
    "diagnostics/cli_agent@ja": "templates/commands/diagnostics/cli_agent.md",
    "diagnostics/cli_agent@en": "templates/commands/diagnostics/cli_agent.md",
+   "diagnostics/llm@ja": "templates/commands/diagnostics/llm.py",
+   "diagnostics/llm@en": "templates/commands/diagnostics/llm.py",
    "examples/reports/ai_news_digest@ja": "templates/commands/examples/reports/ai_news_digest.ja.md",
    "examples/reports/ai_news_digest@en": "templates/commands/examples/reports/ai_news_digest.en.md",
    "examples/reports/morning_summary@ja": "templates/commands/examples/reports/morning_summary.ja.md",
@@ -67,6 +69,10 @@
     ]
    },
    "templates/commands/diagnostics/cli_agent.md": {
+    "read_only": true,
+    "inspects": []
+   },
+   "templates/commands/diagnostics/llm.py": {
     "read_only": true,
     "inspects": []
    },
@@ -197,6 +203,13 @@
     "inputs": {
      "message": "required"
     }
+   },
+   "templates/commands/diagnostics/llm.py": {
+    "description": "Check the member's model through the inference gateway.",
+    "read_only": true,
+    "requires": [
+     "llm"
+    ]
    },
    "templates/commands/examples/reports/tools/fetch_ai_news.py": {},
    "templates/commands/functions/get_os_ui_language.py": {

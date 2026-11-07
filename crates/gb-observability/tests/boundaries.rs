@@ -80,6 +80,10 @@ fn every_root_declares_its_terminal_event_and_uses_the_cancellation_safe_boundar
     // opens with the one event that ends it.
     let declared = BTreeMap::from([
         (
+            ("crates/gb-server/src/diagnostics.rs", "scenario"),
+            ("DiagnosticRun", "diagnostics.completed"),
+        ),
+        (
             ("crates/gb-server/src/commands.rs", "start"),
             ("run_command", "command.finished"),
         ),

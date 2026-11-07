@@ -47,6 +47,7 @@ serde_json = "1.0.154"
 tokio = { version = "1.53.3", features = ["full"] }
 tokio-util = { version = "0.7.20", features = ["io", "rt"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5.8"
 
 [target.'cfg(unix)'.dependencies]

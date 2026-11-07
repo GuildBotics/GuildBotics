@@ -3172,3 +3172,5 @@ mod command_files;
 mod commands;
 
 mod verify;
+
+mod diagnostics;

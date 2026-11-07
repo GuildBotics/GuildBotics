@@ -348,6 +348,9 @@ pub fn shape(
     if let Some(language) = language {
         env.push(("LANGUAGE".into(), language));
     }
+    let debug = gb_config::debug::read(Some(workspace));
+    env.push(("LOG_LEVEL".into(), debug.guest_log_level().into()));
+    env.push(("AGNO_DEBUG".into(), debug.agno_debug.to_string()));
     env.extend([
         (
             "GUILDBOTICS_COMMAND".into(),
