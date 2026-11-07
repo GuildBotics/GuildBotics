@@ -25,7 +25,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 time = "0.3"
 anyhow = "1"
-axum = { version = "0.8.9", features = ["multipart"] }
+axum = { version = "0.8.9", features = ["multipart", "ws"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 gb-base = { path = "../gb-base" }
 gb-config = { path = "../gb-config" }
@@ -54,6 +54,7 @@ url = "2.5.8"
 libc = "0.2"
 
 [dev-dependencies]
+tokio-tungstenite = "0.29"
 tokio = { version = "1.53.3", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
 x509-parser = "0.18"

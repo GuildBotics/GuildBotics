@@ -1,0 +1,835 @@
+[
+  {
+    "test": "test_activity_links.py::test_target_link_kind_comes_from_provider_attributes_not_url_path (call)",
+    "function": "links_from_attributes",
+    "arguments": {
+      "attributes": {
+        "target.kind": "ticket",
+        "target.label": "#8",
+        "target.url": "https://github.com/owner/repo/pull/8"
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "ticket",
+        "label": "Ticket #8",
+        "url": "https://github.com/owner/repo/pull/8",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_link_label_is_the_label_the_service_shows (call)",
+    "function": "links_from_attributes",
+    "arguments": {
+      "attributes": {
+        "target.kind": "ticket",
+        "target.label": "T-1",
+        "target.url": "local://tickets/acme/team/demo/T-1"
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "ticket",
+        "label": "Ticket T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_unknown_target_link_kind_is_external_and_named_by_its_url (call)",
+    "function": "links_from_attributes",
+    "arguments": {
+      "attributes": {
+        "target.url": "https://github.com/owner/repo/pull/8"
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "https://github.com/owner/repo/pull/8",
+        "url": "https://github.com/owner/repo/pull/8",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_read_only_memory_actions_produce_no_doc_link[recall] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "recall",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": null
+  },
+  {
+    "test": "test_activity_links.py::test_read_only_memory_actions_produce_no_doc_link[get] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "get",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": null
+  },
+  {
+    "test": "test_activity_links.py::test_read_only_memory_actions_produce_no_doc_link[touch] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "touch",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": null
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[record] (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=doc-1&action=record"
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[record] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": {
+      "kind": "doc",
+      "label": "Issue #170 作業記録",
+      "url": "/diagnostics?tab=memory&doc_id=doc-1&action=record",
+      "timestamp": ""
+    }
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[update] (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "update",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=doc-1&action=update"
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[update] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "update",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": {
+      "kind": "doc",
+      "label": "Issue #170 作業記録",
+      "url": "/diagnostics?tab=memory&doc_id=doc-1&action=update",
+      "timestamp": ""
+    }
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[archive] (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "archive",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=doc-1&action=archive"
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[archive] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "archive",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": {
+      "kind": "doc",
+      "label": "Issue #170 作業記録",
+      "url": "/diagnostics?tab=memory&doc_id=doc-1&action=archive",
+      "timestamp": ""
+    }
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[promote] (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "promote",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=doc-1&action=promote"
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_actions_produce_doc_link[promote] (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "Issue #170 作業記録"
+      },
+      "attributes": {
+        "memory.action": "promote",
+        "memory.doc_id": "doc-1"
+      },
+      "record": null
+    },
+    "expected": {
+      "kind": "doc",
+      "label": "Issue #170 作業記録",
+      "url": "/diagnostics?tab=memory&doc_id=doc-1&action=promote",
+      "timestamp": ""
+    }
+  },
+  {
+    "test": "test_activity_links.py::test_read_only_memory_record_yields_no_links (call)",
+    "function": "links_from_record",
+    "arguments": {
+      "payload": {
+        "title": "PR #203 Chat workflow backfill",
+        "source": [
+          {
+            "type": "pr",
+            "url": "https://github.com/o/r/pull/203"
+          }
+        ]
+      },
+      "attributes": {
+        "memory.action": "get",
+        "memory.doc_id": "d1"
+      },
+      "record": null
+    },
+    "expected": []
+  },
+  {
+    "test": "test_activity_links.py::test_inspected_target_recorded_yields_no_links (call)",
+    "function": "links_from_record",
+    "arguments": {
+      "payload": {
+        "pull_request": {
+          "label": "#544",
+          "title": "Show the target"
+        }
+      },
+      "attributes": {
+        "target.action": "inspected",
+        "target.kind": "pull_request",
+        "target.label": "#544",
+        "target.url": "https://github.com/o/r/pull/544"
+      },
+      "record": null
+    },
+    "expected": []
+  },
+  {
+    "test": "test_activity_links.py::test_worked_github_target_yields_its_link (call)",
+    "function": "links_from_attributes",
+    "arguments": {
+      "attributes": {
+        "target.kind": "pull_request",
+        "target.label": "#544",
+        "target.url": "https://github.com/o/r/pull/544"
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "pull_request",
+        "label": "PR #544",
+        "url": "https://github.com/o/r/pull/544",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_worked_github_target_yields_its_link (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "pull_request": {
+          "label": "#544",
+          "title": "Show the target"
+        }
+      },
+      "timestamp": ""
+    },
+    "expected": []
+  },
+  {
+    "test": "test_activity_links.py::test_worked_github_target_yields_its_link (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "pull_request": {
+          "label": "#544",
+          "title": "Show the target"
+        }
+      },
+      "attributes": {
+        "target.kind": "pull_request",
+        "target.label": "#544",
+        "target.url": "https://github.com/o/r/pull/544"
+      },
+      "record": null
+    },
+    "expected": null
+  },
+  {
+    "test": "test_activity_links.py::test_worked_github_target_yields_its_link (call)",
+    "function": "dedupe_links",
+    "arguments": {
+      "links": [
+        {
+          "kind": "pull_request",
+          "label": "PR #544",
+          "url": "https://github.com/o/r/pull/544",
+          "timestamp": ""
+        }
+      ]
+    },
+    "expected": [
+      {
+        "kind": "pull_request",
+        "label": "PR #544",
+        "url": "https://github.com/o/r/pull/544",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_worked_github_target_yields_its_link (call)",
+    "function": "links_from_record",
+    "arguments": {
+      "payload": {
+        "pull_request": {
+          "label": "#544",
+          "title": "Show the target"
+        }
+      },
+      "attributes": {
+        "target.kind": "pull_request",
+        "target.label": "#544",
+        "target.url": "https://github.com/o/r/pull/544"
+      },
+      "record": null
+    },
+    "expected": [
+      {
+        "kind": "pull_request",
+        "label": "PR #544",
+        "url": "https://github.com/o/r/pull/544",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "links_from_attributes",
+    "arguments": {
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "d1"
+      },
+      "timestamp": ""
+    },
+    "expected": []
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "PR #246 の作業記録",
+        "source": [
+          {
+            "type": "pr",
+            "url": "https://github.com/o/r/pull/246"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "PR #246 の作業記録",
+        "url": "https://github.com/o/r/pull/246",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "d1"
+      },
+      "record": null
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=d1&action=record"
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "doc_link_from_memory",
+    "arguments": {
+      "payload": {
+        "title": "PR #246 の作業記録",
+        "source": [
+          {
+            "type": "pr",
+            "url": "https://github.com/o/r/pull/246"
+          }
+        ]
+      },
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "d1"
+      },
+      "record": null
+    },
+    "expected": {
+      "kind": "doc",
+      "label": "PR #246 の作業記録",
+      "url": "/diagnostics?tab=memory&doc_id=d1&action=record",
+      "timestamp": ""
+    }
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "dedupe_links",
+    "arguments": {
+      "links": [
+        {
+          "kind": "external",
+          "label": "PR #246 の作業記録",
+          "url": "https://github.com/o/r/pull/246",
+          "timestamp": ""
+        },
+        {
+          "kind": "doc",
+          "label": "PR #246 の作業記録",
+          "url": "/diagnostics?tab=memory&doc_id=d1&action=record",
+          "timestamp": ""
+        }
+      ]
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "PR #246 の作業記録",
+        "url": "https://github.com/o/r/pull/246",
+        "timestamp": ""
+      },
+      {
+        "kind": "doc",
+        "label": "PR #246 の作業記録",
+        "url": "/diagnostics?tab=memory&doc_id=d1&action=record",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_content_changing_memory_record_yields_links (call)",
+    "function": "links_from_record",
+    "arguments": {
+      "payload": {
+        "title": "PR #246 の作業記録",
+        "source": [
+          {
+            "type": "pr",
+            "url": "https://github.com/o/r/pull/246"
+          }
+        ]
+      },
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "d1"
+      },
+      "record": null
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "PR #246 の作業記録",
+        "url": "https://github.com/o/r/pull/246",
+        "timestamp": ""
+      },
+      {
+        "kind": "doc",
+        "label": "PR #246 の作業記録",
+        "url": "/diagnostics?tab=memory&doc_id=d1&action=record",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[-pull_request] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "",
+        "source": [
+          {
+            "type": "pull_request",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[-pr] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "",
+        "source": [
+          {
+            "type": "pr",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[-issue] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "",
+        "source": [
+          {
+            "type": "issue",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[-ticket] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "",
+        "source": [
+          {
+            "type": "ticket",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[-thread] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "",
+        "source": [
+          {
+            "type": "thread",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[Work record-pull_request] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "pull_request",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "Work record",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[Work record-pr] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "pr",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "Work record",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[Work record-issue] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "issue",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "Work record",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[Work record-ticket] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "ticket",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "Work record",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_source_label_uses_title_or_url[Work record-thread] (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "thread",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "Work record",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_multiple_memory_sources_are_labeled_by_each_url (call)",
+    "function": "source_links_from_payload",
+    "arguments": {
+      "payload": {
+        "title": "Work record",
+        "source": [
+          {
+            "type": "ticket",
+            "url": "local://tickets/acme/team/demo/T-1"
+          },
+          {
+            "type": "ticket",
+            "url": "local://code/acme/team/demo/pull/3"
+          }
+        ]
+      },
+      "timestamp": ""
+    },
+    "expected": [
+      {
+        "kind": "external",
+        "label": "local://tickets/acme/team/demo/T-1",
+        "url": "local://tickets/acme/team/demo/T-1",
+        "timestamp": ""
+      },
+      {
+        "kind": "external",
+        "label": "local://code/acme/team/demo/pull/3",
+        "url": "local://code/acme/team/demo/pull/3",
+        "timestamp": ""
+      }
+    ]
+  },
+  {
+    "test": "test_activity_links.py::test_memory_diagnostics_url_namespaces_the_trace_filter (call)",
+    "function": "memory_diagnostics_url",
+    "arguments": {
+      "attributes": {
+        "memory.action": "record",
+        "memory.doc_id": "d1"
+      },
+      "record": {
+        "trace_id": "trace-1",
+        "timestamp": "2026-07-01T10:00:00Z",
+        "person_id": "alice"
+      }
+    },
+    "expected": "/diagnostics?tab=memory&doc_id=d1&memory_trace_id=trace-1&timestamp=2026-07-01T10%3A00%3A00Z&action=record&person_id=alice"
+  },
+  {
+    "test": "test_activity_links.py::test_dedupe_collapses_same_pr_url_with_different_labels (call)",
+    "function": "dedupe_links",
+    "arguments": {
+      "links": [
+        {
+          "kind": "pull_request",
+          "label": "PR #246",
+          "url": "https://github.com/o/r/pull/246",
+          "timestamp": ""
+        },
+        {
+          "kind": "pull_request",
+          "label": "PR #246 長い note 名",
+          "url": "https://github.com/o/r/pull/246",
+          "timestamp": ""
+        }
+      ]
+    },
+    "expected": [
+      {
+        "kind": "pull_request",
+        "label": "PR #246",
+        "url": "https://github.com/o/r/pull/246",
+        "timestamp": ""
+      }
+    ]
+  }
+]

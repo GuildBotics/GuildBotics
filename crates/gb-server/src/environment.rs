@@ -245,6 +245,15 @@ pub(crate) struct ToolUsage {
     probe: tokio::sync::Mutex<()>,
 }
 type UsageSlot = std::sync::Arc<ToolUsage>;
+#[cfg(test)]
+pub(crate) type UsageRunner = std::sync::Arc<
+    dyn Fn(
+            tokio_util::sync::CancellationToken,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>>
+        + Send
+        + Sync,
+>;
 static PROBE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 static USAGE: LazyLock<Mutex<std::collections::BTreeMap<(PathBuf, String), UsageSlot>>> =
     LazyLock::new(Default::default);
@@ -387,10 +396,9 @@ pub(crate) async fn usage(
         .into_response();
     }
     let data = api.data.clone();
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    if !crate::host_window::tool_status(&data, &home, &catalog, &gb_config::secrets::SystemKeychain)
+    let home = api.home.clone();
+    let keychain = api.keychain.clone();
+    if !crate::host_window::tool_status(&data, &home, &catalog, keychain.as_ref())
         .as_array()
         .into_iter()
         .flatten()
@@ -415,11 +423,10 @@ pub(crate) async fn usage(
     };
     let requested = std::time::Instant::now();
     let cancelled = api.cancelled.clone();
+    #[cfg(test)]
+    let runner = api.usage_runner.lock().unwrap().clone();
     let task = api.work.spawn(async move {
         let slot = usage_slot(&data, &tool);
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
         let trace_id = gb_observability::Diagnostics::open(&workspace)
             .system_trace_id()
             .unwrap_or_default();
@@ -429,18 +436,17 @@ pub(crate) async fn usage(
             input.refresh,
             requested,
             || {
-                crate::host_window::tool_status(
-                    &data,
-                    &home,
-                    &catalog,
-                    &gb_config::secrets::SystemKeychain,
-                )
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|row| row["name"] == tool && row["saved"] == true)
+                crate::host_window::tool_status(&data, &home, &catalog, keychain.as_ref())
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|row| row["name"] == tool && row["saved"] == true)
             },
             || async {
+                #[cfg(test)]
+                if let Some(runner) = runner {
+                    return limited_probe(|| runner(cancelled)).await;
+                }
                 let host = gb_environment::Host {
                     data: data.clone(),
                     home: home.clone(),

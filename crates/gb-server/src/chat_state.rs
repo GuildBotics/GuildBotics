@@ -133,6 +133,55 @@ fn events(value: &Value, channel: &str) -> anyhow::Result<Vec<Pending>> {
         .collect()
 }
 impl Store {
+    /// Discard receive backlog and tracked threads; processed cursors survive.
+    pub fn reset_receive(
+        &self,
+        service: &str,
+        persons: &[String],
+        cutoff: &str,
+    ) -> anyhow::Result<usize> {
+        if persons.is_empty() {
+            return Ok(0);
+        }
+        self.writes.transaction(|writer| {
+            let mut count = 0;
+            for person in persons {
+                let root = self.root(service, person)?;
+                writer.write_json(&root.join("receive_cutoff.json"), &json!({"cutoff":cutoff}))?;
+                let mut channels = BTreeSet::new();
+                for kind in ["channels", "pending_events"] {
+                    for path in json_files(&root.join(kind))? {
+                        channels.insert(path.file_stem().unwrap().to_string_lossy().to_string());
+                    }
+                }
+                if root.join("threads").is_dir() {
+                    for entry in std::fs::read_dir(root.join("threads"))? {
+                        let entry = entry?;
+                        if entry.path().is_dir() {
+                            channels.insert(entry.file_name().to_string_lossy().to_string());
+                        }
+                    }
+                }
+                for channel in channels {
+                    let path = self.file(service, person, "pending_events", &channel)?;
+                    if writer.delete(&path).is_err() {
+                        writer.write_json(&path, &json!({"events":[]}))?;
+                    }
+                    for cache in [false, true] {
+                        let path = self.thread_file(service, person, &channel, "_", cache)?;
+                        if let Some(dir) = path.parent() {
+                            for path in json_files(dir).unwrap_or_default() {
+                                let _ = writer.delete(&path);
+                            }
+                            let _ = std::fs::remove_dir(dir);
+                        }
+                    }
+                    count += 1;
+                }
+            }
+            Ok(count)
+        })
+    }
     pub fn adopt_effort(
         &self,
         subject: &gb_wire::ChatSubject,

@@ -5,7 +5,7 @@
 //! streamed.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 use gb_observability::{Diagnostics, Trace};
 use serde_json::{Map, Value, json};
@@ -16,13 +16,14 @@ pub const HISTORY_LIMIT: usize = 200;
 
 pub struct EventBus {
     limit: usize,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
 }
 
 #[derive(Default)]
 struct State {
     history: VecDeque<Value>,
-    subscribers: Vec<mpsc::UnboundedSender<Value>>,
+    subscribers: std::collections::BTreeMap<u64, mpsc::UnboundedSender<Value>>,
+    next: u64,
     store: Option<Diagnostics>,
 }
 
@@ -37,11 +38,27 @@ pub struct Origin<'a> {
 
 /// The events published after it was opened, the latest ones first. Dropping
 /// it closes it: nothing is sent to it afterwards.
-pub struct Subscription(mpsc::UnboundedReceiver<Value>);
+pub struct Subscription {
+    receiver: mpsc::UnboundedReceiver<Value>,
+    state: Weak<Mutex<State>>,
+    id: u64,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.upgrade() {
+            state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .subscribers
+                .remove(&self.id);
+        }
+    }
+}
 
 impl Subscription {
     pub async fn next(&mut self) -> Option<Value> {
-        self.0.recv().await
+        self.receiver.recv().await
     }
 }
 
@@ -52,10 +69,14 @@ impl Default for EventBus {
 }
 
 impl EventBus {
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.state().subscribers.len()
+    }
     pub fn new(limit: usize) -> EventBus {
         EventBus {
             limit,
-            state: Mutex::default(),
+            state: Arc::default(),
         }
     }
 
@@ -96,7 +117,7 @@ impl EventBus {
             }
             state
                 .subscribers
-                .retain(|subscriber| subscriber.send(item.clone()).is_ok());
+                .retain(|_, subscriber| subscriber.send(item.clone()).is_ok());
             state.store.clone()
         };
         if let (true, Some(store), Value::Object(item)) = (record, store, item) {
@@ -135,8 +156,14 @@ impl EventBus {
         for item in &state.history {
             let _ = sender.send(item.clone());
         }
-        state.subscribers.push(sender);
-        Subscription(receiver)
+        let id = state.next;
+        state.next += 1;
+        state.subscribers.insert(id, sender);
+        Subscription {
+            receiver,
+            state: Arc::downgrade(&self.state),
+            id,
+        }
     }
 
     /// The kept events, oldest first.
@@ -172,6 +199,39 @@ fn timestamp() -> Value {
     chrono::Local::now()
         .to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
         .into()
+}
+
+/// Browser sessions are the only credential on the event connection.
+pub(crate) async fn stream(
+    axum::extract::State(api): axum::extract::State<crate::api::Shared>,
+    headers: axum::http::HeaderMap,
+    upgrade: axum::extract::ws::WebSocketUpgrade,
+) -> axum::response::Response {
+    let admitted = headers.contains_key(axum::http::header::ORIGIN)
+        && loopback_auth::check_request(api.auth.base_url(), &headers).is_ok()
+        && api.auth.session_csrf(&headers).is_some();
+    upgrade.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::{Message, CloseFrame};
+        if !admitted {
+            let _=socket.send(Message::Close(Some(CloseFrame{code:1008,reason:"".into()}))).await;
+            return;
+        }
+        let mut subscription=api.events.subscribe();
+        loop {
+            tokio::select! {
+                _=api.cancelled.cancelled()=>break,
+                _=api.shutdown.wait()=>break,
+                incoming=socket.recv()=>match incoming {
+                    None|Some(Err(_))|Some(Ok(Message::Close(_)))=>break,
+                    _=>(),
+                },
+                event=subscription.next()=>match event {
+                    Some(event)=>if socket.send(Message::Text(event.to_string().into())).await.is_err(){break;},
+                    None=>break,
+                },
+            }
+        }
+    })
 }
 
 #[cfg(test)]

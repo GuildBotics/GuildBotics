@@ -70,6 +70,22 @@ fn merge(records: &mut [Value], indexes: &[usize], name: &str, dropped: &mut BTr
 #[cfg(test)]
 mod tests {
     #[test]
+    fn every_frozen_stream_case_preserves_partial_caps_span_boundaries_and_reasoning_runs() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../records/golden/activity-streams.json"
+        ))
+        .unwrap();
+        assert_eq!(cases.len(), 13);
+        for case in cases {
+            assert_eq!(
+                super::collapse(case["arguments"]["records"].as_array().unwrap().clone()),
+                case["expected"].as_array().unwrap().clone(),
+                "{}",
+                case["test"]
+            );
+        }
+    }
+    #[test]
     fn completed_interrupted_and_thinking_streams_match_python() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../../records/golden/shared-records.json"))

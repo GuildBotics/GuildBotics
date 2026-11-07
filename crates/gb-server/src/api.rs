@@ -34,8 +34,14 @@ form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 /// What every request of the server shares.
 pub struct Api {
     pub(crate) health_lock: tokio::sync::Mutex<()>,
+    pub(crate) activity_sync:
+        std::sync::Mutex<std::collections::BTreeMap<(PathBuf, String, String), std::time::Instant>>,
     #[cfg(test)]
     pub(crate) diagnostics_runner: std::sync::Mutex<Option<crate::diagnostics::CheckRunner>>,
+    #[cfg(test)]
+    pub(crate) activity_runner: std::sync::Mutex<Option<crate::activity::RefreshRunner>>,
+    #[cfg(test)]
+    pub(crate) usage_runner: std::sync::Mutex<Option<crate::environment::UsageRunner>>,
     selection: std::sync::RwLock<Arc<Selected>>,
     /// Read while work for the selected workspace is admitted, and written
     /// while another workspace is selected, so that none is admitted for a
@@ -89,6 +95,7 @@ impl Api {
         data: PathBuf,
     ) -> Api {
         let events = Arc::new(crate::events::EventBus::default());
+        selected.service.service.attach_events(events.clone());
         crate::diagnostic_logging::attach(&events);
         if let Some(workspace) = &selected.workspace {
             crate::diagnostics::prune(workspace);
@@ -101,8 +108,13 @@ impl Api {
         );
         Api {
             health_lock: Default::default(),
+            activity_sync: Default::default(),
             #[cfg(test)]
             diagnostics_runner: Default::default(),
+            #[cfg(test)]
+            activity_runner: Default::default(),
+            #[cfg(test)]
+            usage_runner: Default::default(),
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
             branvil: std::sync::OnceLock::new(),
@@ -143,6 +155,7 @@ impl Api {
 
     /// Selects `selected`, whose events are recorded in its workspace.
     pub(crate) fn select(&self, selected: Selected) {
+        selected.service.service.attach_events(self.events.clone());
         let debug = gb_config::debug::read(selected.workspace.as_deref());
         crate::diagnostic_logging::level(debug.configured.then_some(debug.log_level.as_str()));
         if let Some(workspace) = &selected.workspace {
@@ -351,10 +364,12 @@ routes!(
         crate::provider_api::entry
     ),
     (get, "/health", health),
+    (get, "/activity/history", crate::activity::history),
     (post, "/shutdown", crate::server::shutdown),
     (get, "/scheduler/status", crate::service_runtime::status),
     (post, "/scheduler/start", crate::service_runtime::start),
     (post, "/scheduler/stop", crate::service_runtime::stop),
+    (post, "/chat/receive-state/reset", crate::activity::reset),
     (get, "/service/settings", crate::service_settings::get),
     (patch, "/service/settings", crate::service_settings::patch),
     (post, "/apps/authorizations", authorize_app),
@@ -552,6 +567,7 @@ routes!(
     // The entry code is the credential; a browser holds nothing else yet.
     (post, "/session", start_session),
     (post, "/apps/token", app_token),
+    (get, "/events", crate::events::stream),
     // This route admits an application token as well as the owner.
     (post, "/session/links", entry_link),
 );
@@ -574,7 +590,18 @@ pub fn router(api: Shared) -> Router {
 /// Refuses a request for another host or from another origin before
 /// anything runs for it, and gives every response the security headers.
 async fn guard(State(api): State<Shared>, req: Request, next: Next) -> Response {
-    let mut response = match loopback_auth::check_request(api.auth.base_url(), req.headers()) {
+    let websocket = req.uri().path() == "/api/events"
+        && req.method() == axum::http::Method::GET
+        && req
+            .headers()
+            .get(header::UPGRADE)
+            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
+    let checked = if websocket {
+        Ok(())
+    } else {
+        loopback_auth::check_request(api.auth.base_url(), req.headers())
+    };
+    let mut response = match checked {
         Ok(()) => next.run(req).await,
         Err(refusal) => {
             let code = match refusal {
@@ -795,6 +822,109 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn every_owner_route_refuses_missing_and_unknown_credentials_before_running() {
+        use super::*;
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "instance".into(),
+            root.path().into(),
+        ));
+        let app = router(api);
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        for (method, path) in OWNER_ROUTES {
+            for unknown in [false, true] {
+                let mut request = axum::http::Request::builder()
+                    .method(method.to_uppercase().as_str())
+                    .uri(format!("/api{}", variable.replace_all(path, "missing")))
+                    .header("host", "127.0.0.1:8765");
+                if unknown {
+                    request = request.header("authorization", "Bearer gbt_0123456789abcdef_wrong");
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(axum::body::Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {path}"
+                );
+                assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+                assert!(
+                    !response
+                        .headers()
+                        .keys()
+                        .any(|h| h.as_str().starts_with("access-control-"))
+                );
+                let body: Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 4096)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    body,
+                    json!({"code":"unauthorized","message":i18n::t("en","app_api.errors.unauthorized",&[]),"context":{}})
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn error_sentences_follow_request_language_and_explicit_reasons_pass_through() {
+        use super::*;
+        for language in ["en", "ja"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(LANGUAGE_HEADER, language.parse().unwrap());
+            for reason in [None, Some("Already translated")] {
+                let mut error = ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_activity_history_range",
+                    &headers,
+                );
+                if let Some(reason) = reason {
+                    error = error.reason(reason.into());
+                }
+                let response = error.into_response();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let body: Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 4096)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    body["message"],
+                    reason.map(String::from).unwrap_or_else(|| i18n::t(
+                        language,
+                        "app_api.errors.invalid_activity_history_range",
+                        &[]
+                    ))
+                );
+            }
+        }
+    }
+    #[test]
+    fn every_frozen_non_github_endpoint_is_registered() {
+        let frozen: Vec<(String, String)> =
+            serde_json::from_str(include_str!("../../../records/golden/api-routes.json")).unwrap();
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        for (method, path) in frozen {
+            assert!(
+                OWNER_ROUTES
+                    .iter()
+                    .chain(PUBLIC_ROUTES)
+                    .any(|(m, p)| *m == method
+                        && variable.replace_all(p, "{}") == variable.replace_all(&path, "{}")),
+                "missing {method} {path}"
+            );
+        }
+    }
     use super::*;
 
     #[test]
@@ -868,6 +998,10 @@ mod tests {
             (("post", "/shutdown"), "server lifetime"),
             (("post", "/scheduler/start"), "service lifetime"),
             (("post", "/scheduler/stop"), "service lifetime"),
+            (
+                ("post", "/chat/receive-state/reset"),
+                "shared chat receive state, without config writes",
+            ),
             (
                 ("patch", "/service/settings"),
                 "device-local service settings",

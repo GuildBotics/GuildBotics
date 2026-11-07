@@ -1,2 +1,11 @@
 en:
+  push: "Push"
+  push_one: "Push: 1 commit"
+  push_many: "Push: {count} commits"
+  pr: "PR"
+  ticket: "Ticket"
+  created: "Created"
+  merged: "Merged"
+  closed: "Closed"
+  resolved: "Resolved"
   review_limit: "Draft (review limit)"

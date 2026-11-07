@@ -742,6 +742,27 @@ fn parsed_stamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
                 .map(|t| t.and_utc())
         })
 }
+pub(crate) fn memory_records(workspace: &std::path::Path) -> Vec<Value> {
+    let root = workspace.join(".guildbotics/state/documents/memory_events");
+    let mut paths = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .flat_map(|s| {
+            s.lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(Value::is_object)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
 pub(crate) async fn memory_events(
     State(api): State<Shared>,
     headers: HeaderMap,
@@ -756,24 +777,7 @@ pub(crate) async fn memory_events(
         return Json(json!({"event_count":0,"events":[]})).into_response();
     };
     let root = workspace.join(".guildbotics/state/documents");
-    let mut paths = std::fs::read_dir(root.join("memory_events"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-        .collect::<Vec<_>>();
-    paths.sort();
-    let mut events = Vec::new();
-    for path in paths {
-        if let Ok(text) = std::fs::read_to_string(path) {
-            events.extend(
-                text.lines()
-                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                    .filter(Value::is_object),
-            );
-        }
-    }
+    let mut events = memory_records(workspace);
     events.reverse();
     let text = |v: &Value| v.as_str().unwrap_or("").to_owned();
     events.retain(|e| {

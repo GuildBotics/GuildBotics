@@ -1,0 +1,4254 @@
+[
+  {
+    "test": "test_activity_history.py::test_review_limit_is_activity_without_an_agent_run_or_session[en] (call)",
+    "language": "en",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "pull_request.review_limit",
+        "attributes": {},
+        "payload": {
+          "action": "draft",
+          "reason": "review_limit",
+          "pull_request": {
+            "url": "https://code.example/acme/team/demo/pulls/7",
+            "label": "!7",
+            "title": "Fix login"
+          },
+          "comment_url": "https://code.example/acme/team/demo/pulls/7#comment-1"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [
+        {
+          "id": "t-chat:2026-07-01T10:01:00+00:00:pr_draft:https://code.example/acme/team/demo/pulls/7",
+          "timestamp": "2026-07-01T10:01:00+00:00",
+          "person_id": "alice",
+          "type": "pr_draft",
+          "title": "PR !7 Draft (review limit)",
+          "detail": "Fix login",
+          "url": "https://code.example/acme/team/demo/pulls/7",
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR !7",
+              "url": "https://code.example/acme/team/demo/pulls/7",
+              "timestamp": "2026-07-01T10:01:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_review_limit_is_activity_without_an_agent_run_or_session[ja] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "pull_request.review_limit",
+        "attributes": {},
+        "payload": {
+          "action": "draft",
+          "reason": "review_limit",
+          "pull_request": {
+            "url": "https://code.example/acme/team/demo/pulls/7",
+            "label": "!7",
+            "title": "Fix login"
+          },
+          "comment_url": "https://code.example/acme/team/demo/pulls/7#comment-1"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [
+        {
+          "id": "t-chat:2026-07-01T10:01:00+00:00:pr_draft:https://code.example/acme/team/demo/pulls/7",
+          "timestamp": "2026-07-01T10:01:00+00:00",
+          "person_id": "alice",
+          "type": "pr_draft",
+          "title": "PR !7 Draft（再レビュー上限）",
+          "detail": "Fix login",
+          "url": "https://code.example/acme/team/demo/pulls/7",
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR !7",
+              "url": "https://code.example/acme/team/demo/pulls/7",
+              "timestamp": "2026-07-01T10:01:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_completed_chat_session_titled_by_summary_first_line (call)",
+    "language": "en",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "請求プランの質問に回答\n詳細は省略",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "請求プランの質問に回答",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_in_progress_chat_session_uses_neutral_trigger_label (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[running-running] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[succeeded-success] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[failed-failed] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[cancelled-failed] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "cancelled",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[interrupted-failed] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "interrupted",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_status_comes_from_the_lifecycle_record[result_unknown-info] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "result_unknown",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "info",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_interactive_session_shows_its_last_commands_result (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member git push",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member git push",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "interactive",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_interactive_session_shows_its_last_commands_result (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member git push",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member git push",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "interactive",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_session_times_come_from_the_lifecycle_record (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "2026-07-01T10:05:00+00:00",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:04:00+00:00",
+        "kind": "event",
+        "type": "workflow.completed",
+        "attributes": {},
+        "payload": {}
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:05:00+00:00",
+          "duration_seconds": 300.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_running_session_ends_at_its_latest_fact_record (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:03:00+00:00",
+        "kind": "event",
+        "type": "repository.push",
+        "attributes": {},
+        "payload": {
+          "commits": []
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:03:00+00:00",
+          "duration_seconds": 180.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [
+        {
+          "id": "t-chat:2026-07-01T10:03:00+00:00:push:0",
+          "timestamp": "2026-07-01T10:03:00+00:00",
+          "person_id": "alice",
+          "type": "push",
+          "title": "Push",
+          "detail": "repository.push",
+          "url": "",
+          "links": []
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_fact_records_without_a_lifecycle_make_events_but_no_session (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [],
+    "records": [
+      {
+        "trace_id": "t-elsewhere",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:01:00+00:00",
+        "kind": "event",
+        "type": "pull_request.item",
+        "attributes": {
+          "target.action": "opened",
+          "target.kind": "pull_request",
+          "target.label": "#51",
+          "target.url": "https://github.com/o/r/pull/51"
+        },
+        "payload": {
+          "action": "opened",
+          "pull_request": {
+            "label": "#51"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [
+        {
+          "id": "t-elsewhere:2026-07-01T12:01:00+00:00:pr_create:https://github.com/o/r/pull/51",
+          "timestamp": "2026-07-01T12:01:00+00:00",
+          "person_id": "alice",
+          "type": "pr_create",
+          "title": "PR #51 Created",
+          "detail": "pull_request.item",
+          "url": "https://github.com/o/r/pull/51",
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #51",
+              "url": "https://github.com/o/r/pull/51",
+              "timestamp": "2026-07-01T12:01:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[scheduled-succeeded] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "scheduled",
+        "command": "daily-report",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[scheduled-running] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "scheduled",
+        "command": "daily-report",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[routine-succeeded] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "daily-report",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[routine-running] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "daily-report",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[event_listener-succeeded] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "daily-report",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[event_listener-running] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "daily-report",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[-succeeded] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "",
+        "command": "daily-report",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_quiet_automated_run_without_evidence_is_hidden[-running] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-cron",
+        "person_id": "alice",
+        "source": "",
+        "command": "daily-report",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_automated_run_that_failed_or_recorded_work_is_shown[failed] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-failed",
+        "person_id": "alice",
+        "source": "scheduled",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-failed",
+          "person_id": "alice",
+          "source": "scheduled",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "failed",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_automated_run_that_failed_or_recorded_work_is_shown[recorded an outcome] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-result",
+        "person_id": "alice",
+        "source": "scheduled",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "ran",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-result",
+          "person_id": "alice",
+          "source": "scheduled",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "ran",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_automated_run_that_failed_or_recorded_work_is_shown[names a target] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-target",
+        "person_id": "alice",
+        "source": "scheduled",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-target",
+          "person_id": "alice",
+          "source": "scheduled",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Ticket #42",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_rate_limited_workflow_event_sets_session_rate_limit (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:00+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {
+          "rate_limit.retry_after_at": "2026-07-04T11:44:00+09:00",
+          "rate_limit.retry_after_text": "11:44 AM"
+        },
+        "payload": {
+          "retry_after_at": "fallback",
+          "retry_after_text": "fallback"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "rate_limited",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": {
+            "retry_after_at": "2026-07-04T11:44:00+09:00",
+            "retry_after_text": "11:44 AM"
+          },
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_rate_limited_ticket_workflow_event_sets_session_rate_limit (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket"
+        },
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T11:00:00+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {
+          "rate_limit.retry_after_at": "2026-07-05T12:00:00+09:00",
+          "rate_limit.retry_after_text": "12:00 PM"
+        },
+        "payload": {}
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "Ticket #42",
+          "mode": "workflow",
+          "status": "rate_limited",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": {
+            "retry_after_at": "2026-07-05T12:00:00+09:00",
+            "retry_after_text": "12:00 PM"
+          },
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_latest_rate_limit_record_wins (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:00+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {
+          "rate_limit.retry_after_text": "old"
+        },
+        "payload": {}
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:05:00+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {},
+        "payload": {
+          "retry_after_text": "new"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "rate_limited",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:05:00+00:00",
+          "duration_seconds": 300.0,
+          "links": [],
+          "rate_limit": {
+            "retry_after_at": "",
+            "retry_after_text": "new"
+          },
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_completed_ticket_session_titled_by_summary_keeps_issue_link (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket"
+        },
+        "summary": "Issue #42 のバグを修正",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "Issue #42 のバグを修正",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_ticket_session_without_summary_falls_back_to_issue_link (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "Ticket #42",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_ticket_title_recorded_in_the_lifecycle_names_the_session_everywhere (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket",
+          "target.title": "ログイン修正"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "ログイン修正",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_lifecycle_attributes_precede_fact_records_in_the_first_seen_merge (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket",
+          "target.title": "元の課題"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T11:30:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "元の課題",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:30:00+00:00",
+          "duration_seconds": 1800.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            },
+            {
+              "kind": "pull_request",
+              "label": "PR #528",
+              "url": "https://github.com/o/r/pull/528",
+              "timestamp": "2026-07-01T11:30:00+00:00"
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_workflow_memory_write_links_back_to_owning_session (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.update",
+        "attributes": {
+          "run_id": "task-run-1",
+          "memory.action": "update",
+          "memory.doc_id": "doc-xyz",
+          "memory.path": "documents/personal/alice/doc-xyz"
+        },
+        "payload": {
+          "title": "PR #244 の作業記録"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "PR #244 の作業記録",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [
+            {
+              "kind": "doc",
+              "label": "PR #244 の作業記録",
+              "url": "/diagnostics?tab=memory&doc_id=doc-xyz&memory_trace_id=t-chat&timestamp=2026-07-01T10%3A01%3A00%2B00%3A00&action=update&person_id=alice",
+              "timestamp": "2026-07-01T10:01:00+00:00"
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_read_only_memory_record_adds_no_link_and_no_title (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.get",
+        "attributes": {
+          "run_id": "task-run-1",
+          "memory.action": "get",
+          "memory.doc_id": "read-doc",
+          "memory.path": "documents/personal/alice/read-doc"
+        },
+        "payload": {
+          "title": "読んだだけのメモ"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_inspected_pull_request_titles_the_session_but_is_not_its_work (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "inspected",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_inspected_target_kept_by_the_session_record_is_not_a_link (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member pr read",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.action": "inspected",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member pr read",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_inspected_target_kept_by_the_session_record_is_not_a_link (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member pr read",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.action": "inspected",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "ticket",
+          "target.label": "#9",
+          "target.url": "https://github.com/o/r/issues/9",
+          "target.title": "A later, different item"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member pr read",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #9",
+              "url": "https://github.com/o/r/issues/9",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_worked_pull_request_titles_and_links_the_session (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #528",
+              "url": "https://github.com/o/r/pull/528",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_the_first_recorded_target_names_the_session_like_the_execution_list[chronological] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:02:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "ticket",
+          "target.label": "#9",
+          "target.url": "https://github.com/o/r/issues/9",
+          "target.title": "A later, different item"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:02:00+00:00",
+          "duration_seconds": 120.0,
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #528",
+              "url": "https://github.com/o/r/pull/528",
+              "timestamp": ""
+            },
+            {
+              "kind": "ticket",
+              "label": "Ticket #9",
+              "url": "https://github.com/o/r/issues/9",
+              "timestamp": "2026-07-01T10:02:00+00:00"
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_the_first_recorded_target_names_the_session_like_the_execution_list[reversed] (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:02:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "ticket",
+          "target.label": "#9",
+          "target.url": "https://github.com/o/r/issues/9",
+          "target.title": "A later, different item"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "workflow",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:02:00+00:00",
+          "duration_seconds": 120.0,
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #528",
+              "url": "https://github.com/o/r/pull/528",
+              "timestamp": ""
+            },
+            {
+              "kind": "ticket",
+              "label": "Ticket #9",
+              "url": "https://github.com/o/r/issues/9",
+              "timestamp": "2026-07-01T10:02:00+00:00"
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_target_title_precedes_the_completion_summary (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "PR #528 をレビュー",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "target.recorded",
+        "attributes": {
+          "target.action": "",
+          "target.kind": "pull_request",
+          "target.label": "#528",
+          "target.url": "https://github.com/o/r/pull/528",
+          "target.title": "Copilot の利用枠を表示する"
+        },
+        "payload": {
+          "pull_request": {
+            "label": "#528"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Copilot の利用枠を表示する",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:01:00+00:00",
+          "duration_seconds": 60.0,
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #528",
+              "url": "https://github.com/o/r/pull/528",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_read_only_memory_title_is_skipped_for_session_title (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member chat reply",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "memory",
+        "type": "memory.recall",
+        "attributes": {
+          "memory.action": "recall"
+        },
+        "payload": {
+          "title": "Memory recall"
+        }
+      },
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:02:00+00:00",
+        "kind": "memory",
+        "type": "memory.update",
+        "attributes": {
+          "memory.action": "update",
+          "memory.doc_id": "d1"
+        },
+        "payload": {
+          "title": "PR #247: レビュー対応"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member chat reply",
+          "workflow": "",
+          "title": "PR #247: レビュー対応",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:02:00+00:00",
+          "duration_seconds": 120.0,
+          "links": [
+            {
+              "kind": "doc",
+              "label": "PR #247: レビュー対応",
+              "url": "/diagnostics?tab=memory&doc_id=d1&memory_trace_id=t-int&timestamp=2026-07-01T10%3A02%3A00%2B00%3A00&action=update&person_id=alice",
+              "timestamp": "2026-07-01T10:02:00+00:00"
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_interactive_session_titles_from_its_recorded_target_or_command (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member chat reply",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member chat reply",
+          "workflow": "",
+          "title": "member chat reply",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_interactive_session_titles_from_its_recorded_target_or_command (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member pr read",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.title": "利用枠の表示",
+          "target.kind": "pull_request"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member pr read",
+          "workflow": "",
+          "title": "利用枠の表示",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_manual_command_session_is_hidden_but_its_events_remain (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-manual",
+        "person_id": "alice",
+        "source": "manual",
+        "command": "release-notes",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-manual",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:01:00+00:00",
+        "kind": "event",
+        "type": "pull_request.item",
+        "attributes": {
+          "target.action": "opened",
+          "target.kind": "pull_request",
+          "target.label": "#51",
+          "target.url": "https://github.com/o/r/pull/51"
+        },
+        "payload": {
+          "action": "opened",
+          "pull_request": {
+            "label": "#51",
+            "title": "Add release notes",
+            "url": "https://github.com/o/r/pull/51"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [
+        {
+          "id": "t-manual:2026-07-01T12:01:00+00:00:pr_create:https://github.com/o/r/pull/51",
+          "timestamp": "2026-07-01T12:01:00+00:00",
+          "person_id": "alice",
+          "type": "pr_create",
+          "title": "PR #51 Created",
+          "detail": "Add release notes",
+          "url": "https://github.com/o/r/pull/51",
+          "links": [
+            {
+              "kind": "pull_request",
+              "label": "PR #51",
+              "url": "https://github.com/o/r/pull/51",
+              "timestamp": "2026-07-01T12:01:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_issue_create_event_and_comments_share_one_session_issue_link (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-issue",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member ticket create",
+        "status": "running",
+        "started_at": "2026-07-01T12:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-issue",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:00:00+00:00",
+        "kind": "event",
+        "type": "ticket.item",
+        "attributes": {
+          "target.action": "opened",
+          "target.kind": "ticket",
+          "target.label": "#43",
+          "target.url": "https://github.com/o/r/issues/43"
+        },
+        "payload": {
+          "action": "opened",
+          "ticket": {
+            "label": "#43",
+            "title": "Track issue activity",
+            "url": "https://github.com/o/r/issues/43"
+          }
+        }
+      },
+      {
+        "trace_id": "t-issue",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:01:00+00:00",
+        "kind": "event",
+        "type": "ticket.comment",
+        "attributes": {
+          "target.action": "commented",
+          "target.kind": "ticket",
+          "target.label": "#43",
+          "target.url": "https://github.com/o/r/issues/43"
+        },
+        "payload": {
+          "action": "commented",
+          "ticket": {
+            "label": "#43",
+            "url": "https://github.com/o/r/issues/43"
+          },
+          "comment": {
+            "id": "issuecomment-1",
+            "url": "https://github.com/o/r/issues/43#issuecomment-1"
+          }
+        }
+      },
+      {
+        "trace_id": "t-issue",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:02:00+00:00",
+        "kind": "event",
+        "type": "ticket.comment",
+        "attributes": {
+          "target.action": "commented",
+          "target.kind": "ticket",
+          "target.label": "#43",
+          "target.url": "https://github.com/o/r/issues/43"
+        },
+        "payload": {
+          "action": "commented",
+          "ticket": {
+            "label": "#43",
+            "url": "https://github.com/o/r/issues/43"
+          },
+          "comment": {
+            "id": "issuecomment-2",
+            "url": "https://github.com/o/r/issues/43#issuecomment-2"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-issue",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member ticket create",
+          "workflow": "",
+          "title": "Ticket #43",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T12:00:00+00:00",
+          "ended_at": "2026-07-01T12:02:00+00:00",
+          "duration_seconds": 120.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #43",
+              "url": "https://github.com/o/r/issues/43",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [
+        {
+          "id": "t-issue:2026-07-01T12:00:00+00:00:issue_create:https://github.com/o/r/issues/43",
+          "timestamp": "2026-07-01T12:00:00+00:00",
+          "person_id": "alice",
+          "type": "issue_create",
+          "title": "Ticket #43 Created",
+          "detail": "Track issue activity",
+          "url": "https://github.com/o/r/issues/43",
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #43",
+              "url": "https://github.com/o/r/issues/43",
+              "timestamp": "2026-07-01T12:00:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_event_title_uses_the_label_the_ticket_service_shows (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [],
+    "records": [
+      {
+        "trace_id": "t-local",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T12:00:00+00:00",
+        "kind": "event",
+        "type": "ticket.item",
+        "attributes": {
+          "target.action": "closed",
+          "target.kind": "ticket",
+          "target.label": "T-1",
+          "target.url": "local://tickets/acme/team/demo/T-1"
+        },
+        "payload": {
+          "action": "closed",
+          "ticket": {
+            "label": "T-1",
+            "title": "Local",
+            "url": "local://tickets/acme/team/demo/T-1"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [
+        {
+          "id": "t-local:2026-07-01T12:00:00+00:00:issue_resolve:local://tickets/acme/team/demo/T-1",
+          "timestamp": "2026-07-01T12:00:00+00:00",
+          "person_id": "alice",
+          "type": "issue_resolve",
+          "title": "Ticket T-1 Resolved",
+          "detail": "Local",
+          "url": "local://tickets/acme/team/demo/T-1",
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket T-1",
+              "url": "local://tickets/acme/team/demo/T-1",
+              "timestamp": "2026-07-01T12:00:00+00:00"
+            }
+          ]
+        }
+      ],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_issue_comments_add_session_link_without_event_row (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-comment",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member ticket comment",
+        "status": "running",
+        "started_at": "2026-07-01T13:00:00+00:00",
+        "ended_at": "",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-comment",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T13:00:00+00:00",
+        "kind": "event",
+        "type": "ticket.comment",
+        "attributes": {
+          "target.action": "commented",
+          "target.kind": "ticket",
+          "target.label": "#44",
+          "target.url": "https://github.com/o/r/issues/44"
+        },
+        "payload": {
+          "action": "commented",
+          "ticket": {
+            "label": "#44",
+            "url": "https://github.com/o/r/issues/44"
+          },
+          "comment": {
+            "id": "issuecomment-1",
+            "url": "https://github.com/o/r/issues/44#issuecomment-1"
+          }
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-comment",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member ticket comment",
+          "workflow": "",
+          "title": "Ticket #44",
+          "mode": "interactive",
+          "status": "running",
+          "started_at": "2026-07-01T13:00:00+00:00",
+          "ended_at": "2026-07-01T13:00:00+00:00",
+          "duration_seconds": 0.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #44",
+              "url": "https://github.com/o/r/issues/44",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_ticket_exhaustion_without_dispatch_event_shows_incomplete (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "source": "routine",
+        "command": "workflows/ticket_driven_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T11:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "target.url": "https://github.com/o/r/issues/42",
+          "target.label": "#42",
+          "target.kind": "ticket"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-ticket",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T11:00:11+00:00",
+        "kind": "event",
+        "type": "workflow.completion_missing",
+        "attributes": {},
+        "payload": {
+          "run_id": "run-1",
+          "attempt": 3,
+          "max_attempts": 3
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-ticket",
+          "person_id": "alice",
+          "source": "routine",
+          "command": "workflows/ticket_driven_workflow",
+          "workflow": "",
+          "title": "Ticket #42",
+          "mode": "workflow",
+          "status": "incomplete",
+          "started_at": "2026-07-01T11:00:00+00:00",
+          "ended_at": "2026-07-01T11:00:11+00:00",
+          "duration_seconds": 11.0,
+          "links": [
+            {
+              "kind": "ticket",
+              "label": "Ticket #42",
+              "url": "https://github.com/o/r/issues/42",
+              "timestamp": ""
+            }
+          ],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_missing_completion_alone_shows_incomplete_not_retry_scheduled (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:11+00:00",
+        "kind": "event",
+        "type": "workflow.completion_missing",
+        "attributes": {},
+        "payload": {
+          "run_id": "run-1",
+          "attempt": 1,
+          "max_attempts": 2
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "incomplete",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:11+00:00",
+          "duration_seconds": 11.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_scheduled_retry_shows_retry_scheduled (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:11+00:00",
+        "kind": "event",
+        "type": "workflow.completion_missing",
+        "attributes": {},
+        "payload": {
+          "run_id": "run-1",
+          "attempt": 2,
+          "max_attempts": 2
+        }
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:12+00:00",
+        "kind": "event",
+        "type": "chat_dispatch.retry_scheduled",
+        "attributes": {},
+        "payload": {
+          "next_attempt_at": "2026-07-01T10:05:00+00:00"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "retry_scheduled",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:12+00:00",
+          "duration_seconds": 12.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_abandoned_dispatch_wins_over_lifecycle_success_and_rate_limit (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:11+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {},
+        "payload": {
+          "retry_after_at": "2026-07-01T12:00:00+00:00"
+        }
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:12+00:00",
+        "kind": "event",
+        "type": "chat_dispatch.abandoned",
+        "attributes": {},
+        "payload": {
+          "run_id": "run-1"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "abandoned",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:12+00:00",
+          "duration_seconds": 12.0,
+          "links": [],
+          "rate_limit": {
+            "retry_after_at": "2026-07-01T12:00:00+00:00",
+            "retry_after_text": ""
+          },
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_recorded_completion_shows_success_even_after_failed_attempt (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:11+00:00",
+        "kind": "event",
+        "type": "workflow.completion_missing",
+        "attributes": {},
+        "payload": {}
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:12+00:00",
+        "kind": "event",
+        "type": "workflow.completed",
+        "attributes": {},
+        "payload": {}
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:12+00:00",
+          "duration_seconds": 12.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_rate_limited_retry_keeps_rate_limit_status_and_details (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "source": "event_listener",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "failed",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:10+00:00",
+        "kind": "event",
+        "type": "workflow.rate_limited",
+        "attributes": {},
+        "payload": {
+          "retry_after_at": "2026-07-01T12:00:00+00:00"
+        }
+      },
+      {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:00:11+00:00",
+        "kind": "event",
+        "type": "chat_dispatch.retry_scheduled",
+        "attributes": {},
+        "payload": {
+          "error_category": "rate_limited"
+        }
+      }
+    ],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-chat",
+          "person_id": "alice",
+          "source": "event_listener",
+          "command": "workflows/chat_conversation_workflow",
+          "workflow": "",
+          "title": "Slack スレッドの対応",
+          "mode": "workflow",
+          "status": "rate_limited",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:00:11+00:00",
+          "duration_seconds": 11.0,
+          "links": [],
+          "rate_limit": {
+            "retry_after_at": "2026-07-01T12:00:00+00:00",
+            "retry_after_text": ""
+          },
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_lifecycle_from_run_hides_a_run_whose_trace_was_manual (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "run-1",
+        "person_id": "alice",
+        "source": "manual",
+        "command": "workflows/chat_conversation_workflow",
+        "status": "running",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "",
+        "attributes": {
+          "service_run_id": "scheduler-run",
+          "chat.provider": "slack",
+          "chat.channel": "C1",
+          "chat.thread": "100.1",
+          "event_id": "E1"
+        },
+        "summary": "",
+        "has_evidence": false
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_lifecycle_from_run_shows_a_members_own_completion (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "run-1",
+        "person_id": "alice",
+        "source": "",
+        "command": "ticket",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "2026-07-01T10:05:00+00:00",
+        "attributes": {},
+        "summary": "Issue #42 を対応",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "run-1",
+          "person_id": "alice",
+          "source": "",
+          "command": "ticket",
+          "workflow": "",
+          "title": "Issue #42 を対応",
+          "mode": "workflow",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:05:00+00:00",
+          "duration_seconds": 300.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "test_activity_history.py::test_lifecycle_from_session_describes_the_session_record (call)",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "t-int",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "member memory recall",
+        "status": "success",
+        "started_at": "2026-07-01T10:00:00+00:00",
+        "ended_at": "2026-07-01T10:20:00+00:00",
+        "attributes": {
+          "target.title": "利用枠"
+        },
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "t-int",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "member memory recall",
+          "workflow": "",
+          "title": "利用枠",
+          "mode": "interactive",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00+00:00",
+          "ended_at": "2026-07-01T10:20:00+00:00",
+          "duration_seconds": 1200.0,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  },
+  {
+    "test": "fractional_microseconds_and_offset",
+    "language": "ja",
+    "members": [
+      {
+        "person_id": "alice",
+        "name": "Alice",
+        "person_type": "agent",
+        "roles": []
+      }
+    ],
+    "lifecycles": [
+      {
+        "trace_id": "fractional",
+        "person_id": "alice",
+        "source": "interactive",
+        "command": "fractional",
+        "status": "succeeded",
+        "started_at": "2026-07-01T10:00:00.111111+09:00",
+        "ended_at": "2026-07-01T10:00:00.234567+09:00",
+        "attributes": {},
+        "summary": "",
+        "has_evidence": true
+      }
+    ],
+    "records": [],
+    "details": [],
+    "expected": {
+      "members": [
+        {
+          "person_id": "alice",
+          "name": "Alice",
+          "person_type": "agent",
+          "roles": []
+        }
+      ],
+      "sessions": [
+        {
+          "trace_id": "fractional",
+          "person_id": "alice",
+          "source": "interactive",
+          "command": "fractional",
+          "workflow": "",
+          "title": "fractional",
+          "mode": "interactive",
+          "status": "success",
+          "started_at": "2026-07-01T10:00:00.111111+09:00",
+          "ended_at": "2026-07-01T10:00:00.234567+09:00",
+          "duration_seconds": 0.123456,
+          "links": [],
+          "rate_limit": null,
+          "detail_available": false
+        }
+      ],
+      "events": [],
+      "unsupported_event_sources": []
+    }
+  }
+]

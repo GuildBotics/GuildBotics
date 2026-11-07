@@ -429,6 +429,44 @@ pub(crate) async fn upload(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn concurrent_deferred_uploads_share_one_live_session() {
+        let root = tempfile::tempdir().unwrap();
+        let store = InputFileStore::deferred(&root.path().join("inputs"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let (mut pending, path) = store.pending(Some("image.png")).unwrap();
+                    pending.write_all(b"image").unwrap();
+                    pending.persist(&path).unwrap();
+                    path
+                })
+            })
+            .collect();
+        let files: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        let parents: std::collections::BTreeSet<_> =
+            files.iter().map(|p| p.parent().unwrap()).collect();
+        assert_eq!(parents.len(), 1);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("inputs"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.path().is_dir()
+                    && e.file_name().to_string_lossy().starts_with("session-"))
+                .count(),
+            1
+        );
+        for path in &files {
+            assert_eq!(std::fs::read(path).unwrap(), b"image");
+        }
+        let session = files[0].parent().unwrap().to_owned();
+        drop(store);
+        assert!(!session.exists());
+    }
     use super::*;
     #[test]
     fn deferred_upload_destinations_use_the_held_normalized_directory() {
@@ -525,6 +563,17 @@ mod tests {
         let store = InputFileStore::new(root.path()).unwrap();
         assert!(store.directory().is_dir());
         assert_eq!(std::fs::read(sentinel).unwrap(), b"old session");
+        #[cfg(unix)]
+        {
+            let linked = root.path().join("session-linked");
+            std::fs::create_dir(&linked).unwrap();
+            let canary = root.path().join("canary");
+            std::fs::write(&canary, b"do not lock or change").unwrap();
+            std::os::unix::fs::symlink(&canary, linked.join(".session.lock")).unwrap();
+            let _another = InputFileStore::new(root.path()).unwrap();
+            assert!(linked.exists());
+            assert_eq!(std::fs::read(canary).unwrap(), b"do not lock or change");
+        }
     }
 
     #[cfg(unix)]

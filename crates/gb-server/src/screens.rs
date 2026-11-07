@@ -34,12 +34,21 @@ fn loaded(api: &Shared) -> anyhow::Result<Team> {
     )
 }
 
-fn answer(result: anyhow::Result<Value>) -> Response {
+fn error_is_missing(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+pub(crate) fn answer(result: anyhow::Result<Value>, headers: &HeaderMap) -> Response {
     match result {
         Ok(value) => Json(value).into_response(),
         Err(e) => {
             tracing::error!("cannot read screen data: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            if error_is_missing(&e) {
+                ApiError::new(StatusCode::BAD_REQUEST,"config_not_found",headers).context(json!({"path":e.downcast_ref::<gb_config::ConfigFile>().map(|f|f.path().display().to_string()).unwrap_or_default()})).into_response()
+            } else {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR,"internal_error",headers).context(json!({"error_type":if e.downcast_ref::<std::io::Error>().is_some(){"OSError"}else{"RuntimeError"}})).into_response()
+            }
         }
     }
 }
@@ -84,7 +93,7 @@ pub(crate) async fn team(State(api): State<Shared>, headers: HeaderMap) -> Respo
     let identity_root = api.identity_root.clone();
     let stored = match crate::config_api::members(&api, workspace).await {
         Ok(stored) => stored,
-        Err(e) => return answer(Err(e)),
+        Err(e) => return answer(Err(e), &headers),
     };
     let summary = |member: &gb_setup::PersonSummary| {
         let mut roles = member.roles.clone();
@@ -92,64 +101,71 @@ pub(crate) async fn team(State(api): State<Shared>, headers: HeaderMap) -> Respo
         json!({"person_id": member.person_id, "name": member.name, "person_type": member.person_type,
             "is_active": member.is_active, "roles": roles})
     };
-    answer((|| match Team::load(&config, &identity_root) {
-        Ok(team) => {
-            let mut answer = team.screen_summary(&config, &identity_root)?;
-            let waiting: Vec<_> = stored.iter().filter(|m| !m.identity).collect();
-            let members = answer["members"].as_array_mut().expect("members");
-            members.extend(waiting.iter().map(|m| summary(m)));
-            answer["problem"] = json!(
-                waiting
-                    .iter()
-                    .map(|m| {
-                        let path = identity_root
-                            .join(".guildbotics/config/team/members")
-                            .join(&m.person_id)
-                            .join("identity.yml");
-                        crate::i18n::t(
-                            language,
-                            "member_config.identity_missing",
-                            &[("path", &path.display().to_string())],
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-            Ok(answer)
-        }
-        Err(error)
-            if error
-                .downcast_ref::<gb_config::ConfigFile>()
-                .is_some_and(|file| {
-                    file.path().components().any(|c| c.as_os_str() == "members")
-                }) =>
-        {
-            let project = std::fs::read_to_string(config.join("team/project.yml"))
-                .ok()
-                .and_then(|text| gb_config::yaml_value(&text).ok())
-                .unwrap_or(json!({}));
-            let code = gb_config::team::language_code(project["language"].as_str().unwrap_or(""));
-            Ok(
-                json!({"project": {"name": project["name"].as_str().unwrap_or(""),
+    answer(
+        (|| match Team::load(&config, &identity_root) {
+            Ok(team) => {
+                let mut answer = team.screen_summary(&config, &identity_root)?;
+                let waiting: Vec<_> = stored.iter().filter(|m| !m.identity).collect();
+                let members = answer["members"].as_array_mut().expect("members");
+                members.extend(waiting.iter().map(|m| summary(m)));
+                answer["problem"] = json!(
+                    waiting
+                        .iter()
+                        .map(|m| {
+                            let path = identity_root
+                                .join(".guildbotics/config/team/members")
+                                .join(&m.person_id)
+                                .join("identity.yml");
+                            crate::i18n::t(
+                                language,
+                                "member_config.identity_missing",
+                                &[("path", &path.display().to_string())],
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                Ok(answer)
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<gb_config::ConfigFile>()
+                    .is_some_and(|file| {
+                        file.path().components().any(|c| c.as_os_str() == "members")
+                    }) =>
+            {
+                let project = std::fs::read_to_string(config.join("team/project.yml"))
+                    .ok()
+                    .and_then(|text| gb_config::yaml_value(&text).ok())
+                    .unwrap_or(json!({}));
+                let code =
+                    gb_config::team::language_code(project["language"].as_str().unwrap_or(""));
+                Ok(
+                    json!({"project": {"name": project["name"].as_str().unwrap_or(""),
                     "language_code": code,
                     "language_name": match code.as_str() {"ja" => "日本語", "en" => "English", other => other}},
                     "members": stored.iter().map(summary).collect::<Vec<_>>(),
                     "default_person_id": "", "problem": format!("{error}")}),
-            )
-        }
-        Err(error) => Err(error),
-    })())
+                )
+            }
+            Err(error) => Err(error),
+        })(),
+        &headers,
+    )
 }
 
 fn empty_team() -> Value {
     json!({"project":{"name":"","language_code":"en","language_name":"English"},"members":[],"default_person_id":"","problem":""})
 }
 
-pub(crate) async fn files(State(api): State<Shared>) -> Response {
-    answer((|| {
-        let team = loaded(&api)?;
-        roots(&api).unwrap().shared_files(&team.language)
-    })())
+pub(crate) async fn files(State(api): State<Shared>, headers: HeaderMap) -> Response {
+    answer(
+        (|| {
+            let team = loaded(&api)?;
+            roots(&api).unwrap().shared_files(&team.language)
+        })(),
+        &headers,
+    )
 }
 
 pub(crate) async fn file(
@@ -159,7 +175,7 @@ pub(crate) async fn file(
 ) -> Response {
     let team = match loaded(&api) {
         Ok(t) => t,
-        Err(e) => return answer(Err(e)),
+        Err(e) => return answer(Err(e), &headers),
     };
     let roots = roots(&api).unwrap();
     let Some(path) = roots.selected_file(&id, &team.language) else {
@@ -167,7 +183,7 @@ pub(crate) async fn file(
             .key("command_file_not_found.unknown", vec![("file_id", id)])
             .into_response();
     };
-    answer(roots.file_detail(&path, &team.language))
+    answer(roots.file_detail(&path, &team.language), &headers)
 }
 
 #[derive(Default, Deserialize)]
@@ -216,6 +232,7 @@ pub(crate) async fn traces(
                 &|provider| chat_trigger(&headers, provider),
             )
             .map_err(Into::into),
+        &headers,
     )
 }
 
@@ -234,6 +251,7 @@ pub(crate) async fn trace(
         Diagnostics::open(workspace)
             .trace_detail_formatted(&id, &|provider| chat_trigger(&headers, provider))
             .map_err(Into::into),
+        &headers,
     )
 }
 

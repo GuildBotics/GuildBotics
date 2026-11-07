@@ -43,6 +43,14 @@ pub struct Controller {
     worker: tokio::sync::RwLock<Option<Arc<NativeWorker>>>,
 }
 impl Controller {
+    pub(crate) async fn reset_chat_state(
+        &self,
+        apply: impl FnOnce() -> anyhow::Result<serde_json::Value> + Send + 'static,
+    ) -> anyhow::Result<serde_json::Value> {
+        let _gate = self.gate.lock().await;
+        anyhow::ensure!(!self.service.status().await.running, "runtime_running");
+        tokio::task::spawn_blocking(apply).await?
+    }
     #[cfg(test)]
     pub(crate) async fn hold_start_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.gate.lock().await
@@ -121,6 +129,7 @@ impl Controller {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("config_not_found"))?;
         let settings = Settings::read(&native.workspace)?;
+        self.service.events_starting(settings.event_queue).await;
         let (worker, members) = NativeWorker::assemble(
             native,
             self.host.as_ref().unwrap().clone(),
@@ -128,6 +137,9 @@ impl Controller {
             self.execution.clone(),
         )
         .await?;
+        if let Some(events) = self.service.event_bus() {
+            let _ = worker.events.set(events);
+        }
         // Publish the worker before starting its tasks: cancellation while waiting
         // for this lock must not leave an unobservable service running.
         *self.worker.write().await = Some(worker.clone());
@@ -370,6 +382,7 @@ pub(crate) async fn stop(
 }
 
 pub struct NativeWorker {
+    events: std::sync::OnceLock<Arc<crate::events::EventBus>>,
     service_instance_id: String,
     scheduler: crate::scheduler::Scheduler,
     groups: Vec<Arc<crate::chat_receiver::Group>>,
@@ -497,6 +510,7 @@ impl NativeWorker {
             .collect::<anyhow::Result<_>>()?;
         Ok((
             Arc::new(Self {
+                events: Default::default(),
                 service_instance_id,
                 scheduler,
                 groups,
@@ -553,6 +567,13 @@ fn commands(
 }
 
 impl Worker for NativeWorker {
+    fn listener_count(&self) -> usize {
+        self.groups.len()
+    }
+    fn reception_failed(&self) -> bool {
+        self.reception_failed
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
     fn service_instance_id(&self) -> Option<&str> {
         Some(&self.service_instance_id)
     }
@@ -563,9 +584,12 @@ impl Worker for NativeWorker {
                     for group in &self.groups {
                         let (group, stop) = (group.clone(), self.stop_reception.clone());
                         let failed = self.reception_failed.clone();
+                        let events=self.events.get().cloned();
+                        let service_run_id=self.service_instance_id.clone();
                         self.receivers.spawn(async move {
                             if group.run(stop).await.is_err() {
                                 failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                                if let Some(bus)=events {bus.publish("events.failed",serde_json::json!({"target":"events","state":"failed","running":false,"error":crate::i18n::t("en","app_api.errors.service_events_failed",&[])}).as_object().unwrap().clone(),crate::events::Origin{source:Some("events"),attributes:serde_json::json!({"service_run_id":service_run_id}).as_object().unwrap().clone(),..Default::default()});}
                                 tracing::error!("chat receiver stopped");
                             }
                         });
@@ -757,6 +781,7 @@ mod tests {
         let execution = crate::execution::Coordinator::default();
         let generation = execution.generation();
         let worker = Arc::new(NativeWorker {
+            events: Default::default(),
             service_instance_id: generation.id.clone(),
             scheduler: Default::default(),
             groups: vec![],

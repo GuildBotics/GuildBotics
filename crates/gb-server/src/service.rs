@@ -30,6 +30,12 @@ pub enum Outcome {
 /// The dispatcher owns command traces and run settlement; the service owns
 /// serialization, error limits and draining. Temporary deferral is not failure.
 pub trait Worker: Send + Sync {
+    fn listener_count(&self) -> usize {
+        0
+    }
+    fn reception_failed(&self) -> bool {
+        false
+    }
     fn service_instance_id(&self) -> Option<&str> {
         None
     }
@@ -92,12 +98,89 @@ struct State {
     status: Status,
     running: Option<Running>,
     startup_attempt: u64,
+    service_run_id: Option<String>,
 }
 
 #[derive(Clone, Default)]
-pub struct Service(Arc<Mutex<State>>);
+pub struct Service(
+    Arc<Mutex<State>>,
+    Arc<std::sync::OnceLock<Arc<crate::events::EventBus>>>,
+);
 
 impl Service {
+    pub(crate) fn event_bus(&self) -> Option<Arc<crate::events::EventBus>> {
+        self.1.get().cloned()
+    }
+    pub(crate) async fn events_starting(&self, enabled: bool) {
+        let mut state = self.0.lock().await;
+        state.status.event_queue_source_enabled = Some(enabled);
+        if enabled && let Some(bus) = self.1.get() {
+            bus.publish(
+                "events.starting",
+                serde_json::json!({"target":"events","state":"starting","running":true})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                crate::events::Origin {
+                    source: Some("events"),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    pub(crate) fn attach_events(&self, events: Arc<crate::events::EventBus>) {
+        let _ = self.1.set(events);
+    }
+    fn announce(&self, state: &State) {
+        let status = &state.status;
+        let Some(bus) = self.1.get() else {
+            return;
+        };
+        for target in ["scheduler", "events"] {
+            if target == "events"
+                && (status.event_queue_source_enabled != Some(true) || status.state == "starting")
+            {
+                continue;
+            }
+            let mut payload = serde_json::to_value(status).unwrap();
+            payload["target"] = target.into();
+            if target == "events" && status.state == "running" {
+                if state
+                    .running
+                    .as_ref()
+                    .is_some_and(|r| r.worker.reception_failed())
+                {
+                    payload["state"] = "failed".into();
+                    payload["running"] = false.into();
+                } else if state
+                    .running
+                    .as_ref()
+                    .is_none_or(|r| r.worker.listener_count() == 0)
+                {
+                    payload["state"] = "stopped".into();
+                    payload["running"] = false.into();
+                }
+            }
+            bus.publish(
+                &format!("{target}.{}", payload["state"].as_str().unwrap()),
+                payload.as_object().unwrap().clone(),
+                crate::events::Origin {
+                    source: Some(target),
+                    attributes: state
+                        .service_run_id
+                        .as_ref()
+                        .map(|id| {
+                            serde_json::json!({"service_run_id":id})
+                                .as_object()
+                                .unwrap()
+                                .clone()
+                        })
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
+            );
+        }
+    }
     pub async fn starting(&self) -> u64 {
         let mut state = self.0.lock().await;
         state.startup_attempt += 1;
@@ -105,6 +188,9 @@ impl Service {
             state.status.state = "starting";
             state.status.running = true;
             state.status.error = None;
+            state.status.started_at = Some(chrono::Utc::now().to_rfc3339());
+            state.status.stopped_at = None;
+            self.announce(&state);
         }
         state.startup_attempt
     }
@@ -114,11 +200,13 @@ impl Service {
         if state.running.is_none() && state.startup_attempt == attempt {
             state.status.state = "failed";
             state.status.running = false;
+            state.status.stopped_at = Some(chrono::Utc::now().to_rfc3339());
             state.status.error = Some(crate::i18n::t(
                 "en",
                 "app_api.errors.service_start_failed",
                 &[],
             ));
+            self.announce(&state);
         }
     }
 
@@ -126,6 +214,7 @@ impl Service {
         let mut state = self.0.lock().await;
         if state.running.is_none() && state.startup_attempt == attempt {
             state.status = previous;
+            self.announce(&state);
         }
     }
 
@@ -185,7 +274,7 @@ impl Service {
         state.status = Status {
             state: "running",
             running: true,
-            started_at: Some(now),
+            started_at: state.status.started_at.clone().or(Some(now)),
             stopped_at: None,
             worker_count: Some(members.len()),
             active_member_count: Some(members.len()),
@@ -198,12 +287,14 @@ impl Service {
             event_queue_source_enabled: Some(settings.event_queue),
             error: None,
         };
+        state.service_run_id = worker.service_instance_id().map(String::from);
         state.running = Some(Running {
             worker: worker.clone(),
             stop: stop.clone(),
             cancel: cancel.clone(),
             done: done.clone(),
         });
+        self.announce(&state);
         let service = self.clone();
         tokio::spawn(async move {
             let mut tasks = tokio::task::JoinSet::new();
@@ -278,6 +369,7 @@ impl Service {
             state.status.worker_count = Some(0);
             state.status.stopped_at = Some(chrono::Utc::now().to_rfc3339());
             state.running = None;
+            service.announce(&state);
             done.cancel();
         });
         Ok(true)
@@ -306,6 +398,7 @@ impl Service {
                         "app_api.errors.service_stop_timeout",
                         &[],
                     ));
+                    self.announce(&state);
                 }
             }
         } else {
@@ -322,7 +415,10 @@ impl Service {
                 running.cancel.cancel();
             }
             let done = running.done.clone();
-            state.status.state = "stopping";
+            if state.status.state != "stopping" {
+                state.status.state = "stopping";
+                self.announce(&state);
+            }
             Some(done)
         } else {
             None
@@ -361,6 +457,80 @@ fn read_owner(path: &Path) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Listening;
+    impl Worker for Listening {
+        fn listener_count(&self) -> usize {
+            1
+        }
+        fn service_instance_id(&self) -> Option<&str> {
+            Some("service-run")
+        }
+        fn cycle<'a>(&'a self, _: &'a str, _: &'a Settings) -> Pending<'a, Outcome> {
+            Box::pin(std::future::pending())
+        }
+        fn worker_failed(&self, _: &str, _: u8) {
+            panic!("no cycle failure")
+        }
+    }
+    #[tokio::test]
+    async fn scheduler_and_listener_transitions_are_ordered_once_with_run_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        service.starting().await;
+        service.events_starting(true).await;
+        assert!(
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening)
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            !service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening)
+                )
+                .await
+                .unwrap()
+        );
+        service.stop(true).await;
+        for target in ["scheduler", "events"] {
+            let records: Vec<_> = bus
+                .snapshot()
+                .into_iter()
+                .filter(|r| r["source"] == target)
+                .collect();
+            let types: Vec<_> = records
+                .iter()
+                .map(|r| r["type"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                types,
+                [
+                    format!("{target}.starting"),
+                    format!("{target}.running"),
+                    format!("{target}.stopping"),
+                    format!("{target}.stopped")
+                ]
+            );
+            assert_eq!(records[1]["payload"]["running"], true);
+            assert_eq!(records[1]["payload"]["target"], target);
+            assert_eq!(records[1]["attributes"]["service_run_id"], "service-run");
+            assert_eq!(records[3]["payload"]["running"], false);
+        }
+    }
 
     #[test]
     fn never_started_status_has_no_configured_metadata() {

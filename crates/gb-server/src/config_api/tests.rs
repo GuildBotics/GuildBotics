@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tower::ServiceExt as _;
 
+mod activity;
 mod health;
 mod intelligences;
 
