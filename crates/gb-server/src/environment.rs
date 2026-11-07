@@ -240,7 +240,7 @@ struct UsageReading {
     checked: Option<std::time::Instant>,
 }
 #[derive(Default)]
-struct ToolUsage {
+pub(crate) struct ToolUsage {
     reading: Mutex<UsageReading>,
     probe: tokio::sync::Mutex<()>,
 }
@@ -248,7 +248,7 @@ type UsageSlot = std::sync::Arc<ToolUsage>;
 static PROBE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 static USAGE: LazyLock<Mutex<std::collections::BTreeMap<(PathBuf, String), UsageSlot>>> =
     LazyLock::new(Default::default);
-fn usage_slot(data: &std::path::Path, tool: &str) -> UsageSlot {
+pub(crate) fn usage_slot(data: &std::path::Path, tool: &str) -> UsageSlot {
     USAGE
         .lock()
         .unwrap()
@@ -279,7 +279,7 @@ impl ToolUsage {
         };
     }
 
-    async fn read<F, Fut>(
+    pub(crate) async fn read<F, Fut>(
         &self,
         tool: &str,
         trace_id: &str,

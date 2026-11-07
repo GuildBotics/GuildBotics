@@ -1,5 +1,207 @@
 use super::*;
 #[tokio::test]
+async fn usage_result_is_shared_by_card_and_alerts() {
+    for agent in ["codex", "claude", "grok"] {
+        for language in ["en", "ja"] {
+            let f = fixture();
+            f.init().await;
+            let catalog: Value = serde_json::from_slice(
+                &std::fs::read(
+                    gb_base::home::python_package()
+                        .join("templates/environment/cli_provision.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let entry = catalog
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == agent)
+                .unwrap();
+            let login = match agent {
+                "codex" => {
+                    json!({"tokens":{"access_token":"e30.eyJleHAiOjQxMDI0NDQ4MDB9.c2ln","refresh_token":"synthetic"}})
+                }
+                "claude" => {
+                    json!({"claudeAiOauth":{"accessToken":"synthetic","refreshToken":"synthetic","expiresAt":4102444800000_u64}})
+                }
+                _ => {
+                    json!({"default":{"key":"synthetic","refresh_token":"synthetic","expires_at":"2100-01-01T00:00:00Z"}})
+                }
+            };
+            gb_config::credential_vault::seal(
+                &f.device(),
+                &f.data()
+                    .join(format!("agent_environment/{agent}/login.sealed")),
+                &format!(
+                    "{agent}:default:{}",
+                    entry["provision"]["credential_broker"]["format"]
+                        .as_str()
+                        .unwrap()
+                ),
+                &[(
+                    entry["provision"]["auth"].as_str().unwrap().into(),
+                    login.to_string().into_bytes(),
+                )]
+                .into(),
+            )
+            .unwrap();
+            let host = gb_environment::Host {
+                data: f.data(),
+                home: f.root.join("home"),
+                package: gb_base::home::python_package(),
+                identity_root: f.root.join("identity"),
+            };
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let slot = crate::environment::usage_slot(&f.data(), agent);
+            let view = crate::environment::status_with(
+                &host,
+                &f.workspace(),
+                language,
+                f.keys.as_ref(),
+                true,
+            )
+            .await
+            .unwrap();
+            let tool = view["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == agent)
+                .unwrap();
+            assert!(tool["usage_check"].is_null());
+            assert_eq!(tool["problem"], "");
+            let (_, a) = f
+                .call_in(language, "GET", "/system-alerts", Value::Null)
+                .await;
+            assert!(
+                !a["alerts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["setting"] == "tool")
+            );
+            for refresh in [false, false] {
+                let reading = slot
+                    .read(
+                        agent,
+                        "usage-test",
+                        refresh,
+                        std::time::Instant::now(),
+                        || true,
+                        || async {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Err("provider detail belongs only in diagnostics".into())
+                        },
+                    )
+                    .await;
+                assert_eq!(reading["check"]["status"], "failed");
+                assert_eq!(reading["check"]["trace_id"], "usage-test");
+                assert!(!reading["check"]["checked_at"].as_str().unwrap().is_empty());
+            }
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            let marker = f
+                .data()
+                .join(format!("agent_environment/{agent}/authentication-failed"));
+            for auth in [false, true] {
+                if auth {
+                    f.write(&marker, "");
+                }
+                let view = crate::environment::status_with(
+                    &host,
+                    &f.workspace(),
+                    language,
+                    f.keys.as_ref(),
+                    true,
+                )
+                .await
+                .unwrap();
+                let tool = view["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|t| t["name"] == agent)
+                    .unwrap();
+                let expected = crate::i18n::t(
+                    language,
+                    "app_api.errors.cli_agent_usage_failed",
+                    &[("label", tool["label"].as_str().unwrap())],
+                );
+                assert_eq!(tool["usage_supported"], true);
+                assert!(
+                    !tool["problem"]
+                        .as_str()
+                        .unwrap()
+                        .contains("provider detail")
+                );
+                if auth {
+                    assert_ne!(tool["problem"], expected);
+                    assert_eq!(tool["authentication_failed"], true);
+                } else {
+                    assert_eq!(tool["problem"], expected);
+                }
+                let (_, a) = f
+                    .call_in(language, "GET", "/system-alerts", Value::Null)
+                    .await;
+                let alerts: Vec<_> = a["alerts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|a| a["setting"] == "tool")
+                    .collect();
+                assert_eq!(alerts.len(), 1);
+                assert_eq!(alerts[0]["command"], agent);
+                assert_eq!(alerts[0]["reason"], tool["problem"]);
+            }
+            std::fs::remove_file(marker).unwrap();
+            let reading = slot
+                .read(
+                    agent,
+                    "usage-test",
+                    true,
+                    std::time::Instant::now(),
+                    || true,
+                    || async {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(json!({"agent":agent,"windows":[{"name":"primary","used_percent":12}]}))
+                    },
+                )
+                .await;
+            assert_eq!(reading["check"]["status"], "succeeded");
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            let view = crate::environment::status_with(
+                &host,
+                &f.workspace(),
+                language,
+                f.keys.as_ref(),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                view["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|t| t["name"] == agent)
+                    .unwrap()["problem"],
+                ""
+            );
+            let (_, a) = f
+                .call_in(language, "GET", "/system-alerts", Value::Null)
+                .await;
+            assert!(
+                !a["alerts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["setting"] == "tool")
+            );
+        }
+    }
+}
+#[tokio::test]
 async fn environment_tool_authentication_alert_recovers_without_losing_saved_login() {
     let f = fixture();
     f.init().await;

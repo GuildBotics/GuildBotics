@@ -103,7 +103,7 @@ impl SystemAlerts {
             .and_then(|s| serde_json::from_slice::<Value>(&s).ok());
         let mut this = Self::default();
         let mut cursor = None;
-        if let Some(state) = state {
+        if let Some(state) = &state {
             for alert in state["alerts"].as_array().into_iter().flatten() {
                 if alert.is_object() {
                     this.alerts.insert(text(alert, "id").into(), alert.clone());
@@ -237,10 +237,9 @@ impl SystemAlerts {
             }
         }
         let saved = json!({"version":3,"cursor":cursor,"alerts":this.alerts.into_values().collect::<Vec<_>>(),"dismissed":this.dismissed});
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        if state.as_ref() != Some(&saved) {
+            let _ = gb_base::files::atomic_write(&path, saved.to_string().as_bytes());
         }
-        let _ = std::fs::write(path, saved.to_string());
         let mut alerts: Vec<_> = visible.into_values().collect();
         alerts.sort_by_key(|a| {
             (

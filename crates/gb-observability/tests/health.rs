@@ -1,5 +1,50 @@
 use gb_observability::{Diagnostics, health::SystemAlerts};
 use serde_json::{Value, json};
+#[test]
+fn unchanged_alert_state_is_not_rewritten() {
+    let f = Fixture::new();
+    f.record(event("command.failed"));
+    f.list();
+    let path = f.path().with_file_name("system-alerts.json");
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(old))
+        .unwrap();
+    f.list();
+    assert_eq!(path.metadata().unwrap().modified().unwrap(), old);
+}
+#[cfg(unix)]
+#[test]
+fn interrupted_alert_save_preserves_dismissed_state() {
+    const CHILD: &str = "GB_ALERT_SAVE_CHILD";
+    if let Some(workspace) = std::env::var_os(CHILD) {
+        SystemAlerts::list(
+            &Diagnostics::open(std::path::Path::new(&workspace)),
+            &json!({}),
+            &[],
+            None,
+        );
+        return;
+    }
+    let f = Fixture::new();
+    f.record(event("command.failed"));
+    f.list();
+    f.dismiss("command_failed:alice:workflows/demo");
+    let path = f.path().with_file_name("system-alerts.json");
+    let before = std::fs::read(&path).unwrap();
+    let mut r = event("command.failed");
+    r["command"] = "x".repeat(20000).into();
+    f.record(r);
+    let result=std::process::Command::new("/bin/sh").args(["-c","ulimit -c 0; ulimit -f 1; exec \"$1\" --exact interrupted_alert_save_preserves_dismissed_state --nocapture","alert-save-test"]).arg(std::env::current_exe().unwrap()).env(CHILD,f.dir.path()).output().unwrap();
+    assert!(!result.status.success());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let alerts = f.list();
+    assert_eq!(alerts.len(), 1);
+    assert_ne!(alerts[0]["id"], "command_failed:alice:workflows/demo");
+}
 fn turn(
     person: &str,
     tool: &str,
