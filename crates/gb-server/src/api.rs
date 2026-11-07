@@ -43,7 +43,9 @@ pub struct Api {
     pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
     pub(crate) consents:
         tokio::sync::Mutex<std::collections::BTreeMap<String, crate::provider_api::Consent>>,
-    pub events: crate::events::EventBus,
+    pub events: Arc<crate::events::EventBus>,
+    /// The one manual run that writes, by its trace, while it runs.
+    pub(crate) manual: Arc<std::sync::Mutex<Option<String>>>,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: ServerAuth,
     /// This run of the server, so a screen sees a restart.
@@ -83,7 +85,7 @@ impl Api {
         instance_id: String,
         data: PathBuf,
     ) -> Api {
-        let events = crate::events::EventBus::default();
+        let events = Arc::new(crate::events::EventBus::default());
         events.record_in(
             selected
                 .workspace
@@ -96,6 +98,7 @@ impl Api {
             branvil: std::sync::OnceLock::new(),
             consents: Default::default(),
             events,
+            manual: Arc::default(),
             inputs,
             auth,
             instance_id,
@@ -204,6 +207,13 @@ impl ApiError {
         self
     }
 
+    /// What a screen is told of the refusal as an event: its code and context.
+    pub(crate) fn payload(&self) -> serde_json::Map<String, Value> {
+        let mut payload = self.context.as_object().cloned().unwrap_or_default();
+        payload.insert("code".into(), self.code.clone().into());
+        payload
+    }
+
     pub(crate) fn context(mut self, context: Value) -> ApiError {
         self.context = Box::new(context);
         self
@@ -238,22 +248,31 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let headers = req.headers().clone();
-        // What was wrong, as the Python version's `errors` list names it.
-        let invalid = |reason: String| {
-            ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "validation_error",
-                &headers,
-            )
-            .context(json!({"errors": [{"msg": reason}]}))
-        };
         let bytes = axum::body::Bytes::from_request(req, state)
             .await
-            .map_err(|e| invalid(e.body_text()))?;
-        serde_json::from_slice(if bytes.is_empty() { b"{}" } else { &bytes })
-            .map(Body)
-            .map_err(|e| invalid(e.to_string()))
+            .map_err(|e| invalid(&headers, &e.body_text()))?;
+        Body::parse(&bytes, &headers)
     }
+}
+
+impl<T: DeserializeOwned> Body<T> {
+    /// The request's `bytes` as JSON, an empty one as `{}`.
+    pub(crate) fn parse(bytes: &[u8], headers: &HeaderMap) -> Result<Self, ApiError> {
+        serde_json::from_slice(if bytes.is_empty() { b"{}" } else { bytes })
+            .map(Body)
+            .map_err(|e| invalid(headers, &e.to_string()))
+    }
+}
+
+/// What was wrong with a request, as the Python version's `errors` list
+/// names it.
+pub(crate) fn invalid(headers: &HeaderMap, reason: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_error",
+        headers,
+    )
+    .context(json!({"errors": [{"msg": reason}]}))
 }
 
 // Register routes and expose the very same routing table to boundary tests.
@@ -421,7 +440,43 @@ routes!(
         crate::config_api::save_transcript_settings
     ),
     (get, "/team", crate::screens::team),
+    (get, "/commands/options", crate::command_catalog::options),
+    (post, "/verify", crate::verify::verify),
+    (post, "/commands/author", crate::command_authoring::author),
+    (
+        get,
+        "/commands/routine-options",
+        crate::command_catalog::routine_options
+    ),
+    (
+        get,
+        "/commands/files/{id}/execution-status",
+        crate::command_catalog::execution_status
+    ),
     (get, "/commands/files", crate::screens::files),
+    (
+        post,
+        "/commands/files",
+        crate::command_files_api::create,
+        crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
+    (
+        put,
+        "/commands/files/{id}",
+        crate::command_files_api::update,
+        crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
+    (
+        delete,
+        "/commands/files/{id}",
+        crate::command_files_api::delete
+    ),
+    (
+        post,
+        "/commands/author/apply",
+        crate::command_files_api::apply,
+        10 * crate::command_files_api::FILE_REQUEST_LIMIT
+    ),
     (get, "/commands/files/{id}", crate::screens::file),
     (get, "/diagnostics/traces", crate::screens::traces),
     (get, "/diagnostics/traces/{id}", crate::screens::trace),
@@ -757,6 +812,14 @@ mod tests {
             (
                 ("post", "/commands/run"),
                 "starts a run, no edited config snapshot",
+            ),
+            (
+                ("post", "/commands/author"),
+                "runs the read-only authoring assistant; its changes are applied apart",
+            ),
+            (
+                ("post", "/verify"),
+                "reads the workspace and records its check as a trace",
             ),
             (
                 ("post", "/commands/input-files"),

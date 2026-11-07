@@ -170,6 +170,16 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/integrations/branvil/api.ja.yml"),
     ),
     (
+        "app_api.verify",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/app_api/verify.en.yml"),
+    ),
+    (
+        "app_api.verify",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/app_api/verify.ja.yml"),
+    ),
+    (
         "app_api.errors",
         "en",
         include_str!("../../../guildbotics/templates/locales/app_api/errors.en.yml"),

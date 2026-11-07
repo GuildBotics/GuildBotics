@@ -39,7 +39,7 @@ mod trace;
 
 pub use diagnostics::Diagnostics;
 pub use reader::TraceSearch;
-pub use trace::{Failure, JoinedTrace, SpanContext, Trace};
+pub use trace::{Announce, Failure, JoinedTrace, SpanContext, Trace};
 
 pub use status::{TRACE_COMPLETED_EVENT_TYPES, TraceStatus};
 pub use title::{

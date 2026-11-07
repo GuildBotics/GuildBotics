@@ -36,6 +36,7 @@ en:
   workspace_not_configured:
     plain: "No GuildBotics workspace is selected. Use --workspace, `guildbotics workspace use <path>`, or set GUILDBOTICS_WORKSPACE_ROOT."
     transcripts: "No workspace is selected, so there are no transcript settings."
+    commands: "No workspace is selected, so there are no shared commands."
   person_not_found:
     plain: "Person '%{person}' not found."
     with_available: "Person '%{person}' not found. Available: %{available}"

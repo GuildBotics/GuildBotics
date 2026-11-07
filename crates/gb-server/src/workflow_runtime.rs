@@ -42,6 +42,9 @@ pub struct Runtime {
     pub chat_provider: String,
     identity_services: Vec<(String, String, Arc<dyn ChatService>)>,
     pub reception: Option<crate::chat_receiver::Connection>,
+    /// The configuration a manual run read once, which its workflow runs in
+    /// rather than a copy of its own.
+    pub config: Option<Arc<gb_environment::Configuration>>,
 }
 
 #[derive(Debug)]
@@ -255,6 +258,7 @@ impl Runtime {
         };
         Ok((
             Self {
+                config: None,
                 generation: None,
                 service_run_id: None,
                 dispatcher,
@@ -344,6 +348,7 @@ impl Runtime {
         let command = self
             .dispatcher
             .prepare(line, invocation, trace.id())
+            .await
             .map(|mut command| {
                 if source != "manual" {
                     command.work_kind = line.into();
@@ -404,7 +409,11 @@ impl Runtime {
 
     /// The scheduler supplies the input slot separately from the conversation
     /// identity. A later feedback event on the same ticket is new work.
-    pub async fn manual_ticket(&self) -> Result<(String, CommandReply), Refused> {
+    /// `opened` takes the run's trace as it opens, once a ticket is chosen.
+    pub async fn manual_ticket(
+        &self,
+        opened: impl FnOnce(Trace) -> Trace,
+    ) -> Result<(String, CommandReply), Refused> {
         let diagnostics = self.diagnostics();
         let selector =
             Selector {
@@ -428,7 +437,7 @@ impl Runtime {
         let Some((task, invocation)) = selected else {
             return Ok((String::new(), CommandReply::default()));
         };
-        let trace = self.traced(Trace::open(&diagnostics, "manual"), Default::default());
+        let trace = opened(self.traced(Trace::open(&diagnostics, "manual"), Default::default()));
         let id = trace.id().to_owned();
         let reply = self
             .ticket_traced(
@@ -543,7 +552,17 @@ impl Runner for Runtime {
                 .transpose()
                 .map_err(|_| DispatchFailure::InvalidCommand)?
                 .unwrap_or_default();
-            let mut command = self.dispatcher.prepare(&name, invocation, trace.id())?;
+            let mut command = match &self.config {
+                Some(config) => {
+                    self.dispatcher
+                        .prepare_in(config.clone(), &name, invocation, trace.id())?
+                }
+                None => {
+                    self.dispatcher
+                        .prepare(&name, invocation, trace.id())
+                        .await?
+                }
+            };
             command.args = arguments;
             self.dispatcher
                 .dispatch_prepared(command, trace, &self.cancelled)
@@ -560,6 +579,7 @@ impl Runner for Runtime {
             let mut command = self
                 .dispatcher
                 .prepare("functions/talk_as", invocation.clone(), trace.id())
+                .await
                 .ok()?;
             command.args = vec![format!("topic={text}"), "context_location=Ticket".into()];
             command.wants_result = true;

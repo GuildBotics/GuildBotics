@@ -143,18 +143,44 @@ fn update_image(
 
 fn project_tool(row: &mut Value, catalog: &Value, language: &str) {
     let name = row["name"].as_str().unwrap_or_default().to_owned();
-    let label = catalog
+    let label = tool_label(catalog, &name).to_owned();
+    row["label"] = json!(label);
+    row["config_reference"] = json!(format!("cli_agents/{name}/default.yml"));
+    row["credentials_saved"] = row["saved"].clone();
+    row["usage_supported"] = json!(true);
+    row["problem"] = json!(tool_refusal(row, &label, language));
+    // A past failure is guidance only: it does not keep a turn from trying.
+    if row["problem"] == "" && row["authentication_failed"] == true {
+        row["problem"] = json!(tool_sentence(
+            row,
+            &label,
+            "authentication_failed",
+            language
+        ));
+    }
+    if row["problem"] == "" && row["usage_check"]["status"] == "failed" {
+        row["problem"] = json!(crate::i18n::t(
+            language,
+            "app_api.errors.cli_agent_usage_failed",
+            &[("label", row["label"].as_str().unwrap_or_default())]
+        ));
+    }
+}
+
+/// The tool `name` as the catalog shows it.
+fn tool_label<'a>(catalog: &'a Value, name: &'a str) -> &'a str {
+    catalog
         .as_array()
         .into_iter()
         .flatten()
         .find(|tool| tool["name"] == name)
         .and_then(|tool| tool["label"].as_str())
-        .unwrap_or(&name)
-        .to_owned();
-    row["label"] = json!(label);
-    row["config_reference"] = json!(format!("cli_agents/{name}/default.yml"));
-    row["credentials_saved"] = row["saved"].clone();
-    row["usage_supported"] = json!(true);
+        .unwrap_or(name)
+}
+
+/// Why the tool of `row` cannot start a turn on this device: not provisioned,
+/// or its login is missing or unreadable; "" when it can.
+fn tool_refusal(row: &Value, label: &str, language: &str) -> String {
     let reason = if row["provisioned"] != true {
         Some("not_provisioned")
     } else {
@@ -163,29 +189,47 @@ fn project_tool(row: &mut Value, catalog: &Value, language: &str) {
             "unavailable" => Some("credentials_unavailable"),
             "corrupt" => Some("credentials_corrupt"),
             _ if row["saved"] != true => Some("credentials_missing"),
-            _ if row["authentication_failed"] == true => Some("authentication_failed"),
             _ => None,
         }
     };
-    row["problem"] = json!(
-        reason
-            .map(|key| crate::i18n::t(
-                language,
-                &format!("intelligences.agent_environment.tool.{key}"),
-                &[
-                    ("tool", label.as_str()),
-                    ("command", row["login_command"].as_str().unwrap_or_default()),
-                ]
-            ))
-            .unwrap_or_default()
-    );
-    if row["problem"] == "" && row["usage_check"]["status"] == "failed" {
-        row["problem"] = json!(crate::i18n::t(
-            language,
-            "app_api.errors.cli_agent_usage_failed",
-            &[("label", row["label"].as_str().unwrap_or_default())]
-        ));
-    }
+    reason
+        .map(|key| tool_sentence(row, label, key, language))
+        .unwrap_or_default()
+}
+
+fn tool_sentence(row: &Value, label: &str, key: &str, language: &str) -> String {
+    crate::i18n::t(
+        language,
+        &format!("intelligences.agent_environment.tool.{key}"),
+        &[
+            ("tool", label),
+            ("command", row["login_command"].as_str().unwrap_or_default()),
+        ],
+    )
+}
+
+/// Why each AI CLI tool cannot start a turn on this device, by name: "" for
+/// one that can.
+pub(crate) fn tool_refusals(
+    host: &gb_environment::Host,
+    keychain: &dyn gb_config::secrets::Keychain,
+    language: &str,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let catalog: Value = serde_json::from_slice(&std::fs::read(
+        host.package
+            .join("templates/environment/cli_provision.json"),
+    )?)?;
+    let tools = crate::host_window::tool_status(&host.data, &host.home, &catalog, keychain);
+    Ok(tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            let name = row["name"].as_str().unwrap_or_default();
+            let label = tool_label(&catalog, name);
+            (name.to_owned(), tool_refusal(row, label, language))
+        })
+        .collect())
 }
 
 #[derive(Default)]
@@ -346,7 +390,7 @@ pub(crate) async fn usage(
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    if !crate::host_window::tool_status(&data, &home, &catalog)
+    if !crate::host_window::tool_status(&data, &home, &catalog, &gb_config::secrets::SystemKeychain)
         .as_array()
         .into_iter()
         .flatten()
@@ -385,11 +429,16 @@ pub(crate) async fn usage(
             input.refresh,
             requested,
             || {
-                crate::host_window::tool_status(&data, &home, &catalog)
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|row| row["name"] == tool && row["saved"] == true)
+                crate::host_window::tool_status(
+                    &data,
+                    &home,
+                    &catalog,
+                    &gb_config::secrets::SystemKeychain,
+                )
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|row| row["name"] == tool && row["saved"] == true)
             },
             || async {
                 let host = gb_environment::Host {
@@ -474,7 +523,12 @@ pub async fn status(
         host.package
             .join("templates/environment/cli_provision.json"),
     )?)?;
-    let mut tools = crate::host_window::tool_status(&host.data, &host.home, &catalog);
+    let mut tools = crate::host_window::tool_status(
+        &host.data,
+        &host.home,
+        &catalog,
+        &gb_config::secrets::SystemKeychain,
+    );
     if let Some(rows) = tools.as_array_mut() {
         for row in rows {
             let name = row["name"].as_str().unwrap_or_default().to_owned();
@@ -496,6 +550,7 @@ pub async fn status(
         for member in team.members.into_iter().filter(|m| m.is_active) {
             let slots = match gb_config::resolved_guest::resolve(
                 &roots,
+                &workspace,
                 &host.identity_root,
                 &member.person_id,
             ) {

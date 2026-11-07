@@ -15,6 +15,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [2.4. Configuring the manual-run inputs](#24-configuring-the-manual-run-inputs)
   - [3. Using the AI CLI tool](#3-using-the-ai-cli-tool)
     - [3.1. Declaring a command read-only](#31-declaring-a-command-read-only)
+    - [3.2. Declaring what a command uses (`requires`)](#32-declaring-what-a-command-uses-requires)
   - [4. Using built-in commands](#4-using-built-in-commands)
   - [5. Using subcommands](#5-using-subcommands)
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
@@ -276,6 +277,16 @@ Read the records of the most recent failed run and explain its cause in one para
 
 Only the declaration of the command you run counts; a subcommand's own declaration is not consulted. The command's own shell scripts and Python code run in the same environment, so the declaration confines them too.
 
+
+### 3.2. Declaring what a command uses (`requires`)
+
+A command that declares the services or AI it uses in `requires` lets the command list and the check before a run show whether each is available now. The value is a list of `llm`, `cli_agent`, `code_hosting_service`, `ticket_service` and `chat_service` (`"requires": ["chat_service"]` in a Python command's `COMMAND_METADATA`). Every command needs the isolated environment, which is included without a declaration. The LLM or AI CLI tool a Markdown command's `brain` runs, and what its subcommands use, are read without one. What an inline `python:` entry uses goes in the `requires` of the command that holds it.
+
+```python
+COMMAND_METADATA = {
+    "requires": ["code_hosting_service"],
+}
+```
 
 ## 4. Using built-in commands
 You can use [built-in commands](../guildbotics/templates/commands/) shipped with GuildBotics.

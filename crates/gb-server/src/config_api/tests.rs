@@ -22,7 +22,14 @@ pub(crate) const CONFIG_WRITERS: &[(&str, &str)] = &[
     ("post", "/config/members/{name}/avatar"),
     ("delete", "/identities/{name}"),
     ("put", "/transcripts/settings"),
+    ("post", "/commands/files"),
+    ("put", "/commands/files/{id}"),
+    ("delete", "/commands/files/{id}"),
+    ("post", "/commands/author/apply"),
 ];
+
+/// The file ID of the shared command `hello.md`.
+const HELLO: &str = "aGVsbG8ubWQ";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Keys {
@@ -103,6 +110,21 @@ impl Fixture {
     }
     fn data(&self) -> PathBuf {
         self.root.join("machine/data")
+    }
+    /// Claude's login saved on this device as `environment login` leaves it,
+    /// and a later turn's failed authentication, which only guides.
+    fn claude_logged_in(&self) {
+        let tool = self.data().join("agent_environment/claude");
+        let login = json!({"claudeAiOauth": {"accessToken": "synthetic",
+            "refreshToken": "synthetic", "expiresAt": 4_102_444_800_000_u64}});
+        gb_config::credential_vault::seal(
+            &self.device(),
+            &tool.join("login.sealed"),
+            "claude:default:claude-oauth",
+            &[(".credentials.json".into(), login.to_string().into_bytes())].into(),
+        )
+        .unwrap();
+        self.write(&tool.join("authentication-failed"), "");
     }
     fn keys(&self, keys: Keys) {
         *self.keys.0.lock().unwrap() = keys;
@@ -2700,6 +2722,9 @@ async fn writers(f: &Fixture) -> Vec<(&'static str, String, Value)> {
     f.add(agent("aiko")).await;
     let project = f.get("/config/project").await["revisions"].clone();
     let member = f.get("/config/members/aiko").await["revisions"].clone();
+    let hello = f.config().join("commands/hello.md");
+    f.write(&hello, "hello\n");
+    let hello = gb_config::command_files::revision(&std::fs::read(hello).unwrap());
     vec![
         (
             "POST",
@@ -2734,6 +2759,27 @@ async fn writers(f: &Fixture) -> Vec<(&'static str, String, Value)> {
             "/transcripts/settings".into(),
             json!({"detail": "full", "retention_days": 2}),
         ),
+        (
+            "POST",
+            "/commands/files".into(),
+            json!({"command": "made", "format": "shell"}),
+        ),
+        (
+            "PUT",
+            format!("/commands/files/{HELLO}"),
+            json!({"content": "changed\n", "expected_revision": hello}),
+        ),
+        (
+            "DELETE",
+            format!("/commands/files/{HELLO}?expected_revision={hello}"),
+            Value::Null,
+        ),
+        (
+            "POST",
+            "/commands/author/apply".into(),
+            json!({"changes": [{"operation": "create", "command": "proposed", "format": "shell",
+                "relative_path": "proposed.sh", "content": "echo hi\n"}]}),
+        ),
     ]
 }
 
@@ -2744,7 +2790,13 @@ async fn every_config_writer_answers_config_busy_while_the_locks_are_held() {
         let routes = writers(&f).await;
         let covered: Vec<_> = routes
             .iter()
-            .map(|(m, p, _)| (m.to_lowercase(), p.replace("aiko", "{name}")))
+            .map(|(m, p, _)| {
+                let route = p.split('?').next().unwrap_or(p);
+                (
+                    m.to_lowercase(),
+                    route.replace("aiko", "{name}").replace(HELLO, "{id}"),
+                )
+            })
             .collect();
         assert_eq!(
             covered,
@@ -3114,3 +3166,9 @@ mod providers;
 mod slack_review;
 
 mod branvil_diagnostics;
+
+mod command_files;
+
+mod commands;
+
+mod verify;

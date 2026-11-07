@@ -18,6 +18,7 @@ COMMAND_METADATA = {
         "ja": "依存ライブラリの脆弱性アラートを1ページまたは個別に確認します。実行環境の準備が必要です。",
     },
     "read_only": True,
+    "requires": ["code_hosting_service"],
 }
 
 

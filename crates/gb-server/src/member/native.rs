@@ -1465,6 +1465,8 @@ pub(crate) mod tests {
         tickets: Arc<dyn gb_ports::TicketService>,
         native: Native,
         calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
+        /// Each command run, by its file and what the file held as it ran.
+        ran: Mutex<Vec<(PathBuf, String)>>,
     }
     impl crate::dispatcher::Driver for MemberTurn {
         fn execute<'a>(
@@ -1477,6 +1479,10 @@ pub(crate) mod tests {
             Result<gb_wire::CommandReply, crate::dispatcher::DispatchFailure>,
         > {
             Box::pin(async move {
+                self.ran.lock().unwrap().push((
+                    command.path.clone(),
+                    std::fs::read_to_string(&command.path).unwrap_or_default(),
+                ));
                 if command.name == "functions/talk_as" && command.wants_result {
                     assert!(command.invocation.is_none());
                     assert!(command.pipe.is_empty());
@@ -1762,6 +1768,7 @@ pub(crate) mod tests {
             tickets: runtime.tickets.clone().unwrap(),
             native: native.clone(),
             calls: Default::default(),
+            ran: Default::default(),
         });
         runtime.dispatcher.driver = driver.clone();
         (runtime, driver)
@@ -2218,6 +2225,100 @@ pub(crate) mod tests {
             })
             .await
             .unwrap()
+    }
+    #[tokio::test]
+    async fn a_manual_ticket_run_executes_the_workflow_of_the_configuration_it_read() {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let cleanup = tokio_util::task::TaskTracker::new();
+        let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        ready_ticket(&native, &runtime).await;
+        let workflow = native
+            .workspace
+            .join(".guildbotics/config/commands/workflows/ticket_driven_workflow.md");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, "---\nbrain: none\n---\nAs read.\n").unwrap();
+        let config = Arc::new(
+            gb_environment::Configuration::copy(&runtime.dispatcher.host, &native.workspace)
+                .unwrap(),
+        );
+        runtime.config = Some(config.clone());
+        // A save after the run read the configuration does not reach it.
+        std::fs::write(&workflow, "---\nbrain: none\n---\nSaved later.\n").unwrap();
+        runtime.manual_ticket(|trace| trace).await.unwrap();
+        let (path, held) = driver.ran.lock().unwrap()[0].clone();
+        assert!(path.starts_with(config.path()), "{}", path.display());
+        assert_eq!(held, "---\nbrain: none\n---\nAs read.\n");
+        cleanup.close();
+        cleanup.wait().await;
+    }
+
+    #[tokio::test]
+    async fn a_manual_ticket_run_streams_its_events_and_answers_its_trace() {
+        let root = tempfile::tempdir().unwrap();
+        let native = fixture(root.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let controller = crate::service_runtime::Controller::new(native.clone(), host);
+        let api = Arc::new(crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(native.workspace.clone()),
+                service: controller,
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
+            "fixture".into(),
+            native.data.clone(),
+        ));
+        let work = tokio_util::task::TaskTracker::new();
+        let runtime = api
+            .selected()
+            .service
+            .workflow("aiko", work.clone())
+            .unwrap();
+        ready_ticket(&native, &runtime).await;
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let response = crate::api::router(api.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/commands/run")
+                    .header("host", "127.0.0.1:8765")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::from(
+                        json!({"command":"workflows/ticket_driven_workflow","person":"aiko"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let answer: Value = serde_json::from_slice(&bytes).unwrap();
+        // The fixture's device refuses the run once its ticket is chosen.
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{answer}");
+        assert_eq!(answer["code"], "command_error");
+        let trace = answer["context"]["trace_id"].as_str().unwrap();
+        assert!(!trace.is_empty());
+        let streamed: Vec<_> = api
+            .events
+            .snapshot()
+            .into_iter()
+            .filter(|e| e["trace_id"] == trace)
+            .map(|e| e["type"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(streamed, ["command.started", "command.failed"]);
+        work.close();
+        work.wait().await;
     }
     #[tokio::test]
     async fn native_patrol_selection_and_refresh_outages_keep_chat_alive_and_recover_without_failed_runs()

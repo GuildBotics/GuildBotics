@@ -94,6 +94,12 @@ impl FileLock {
 
 /// Replaces `path` with `data` so that a reader never sees part of it.
 pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    atomic_write_mode(path, data, None)
+}
+
+/// [`atomic_write`], the file having the Unix `mode`, when one is given, from
+/// the moment it replaces `path`.
+pub fn atomic_write_mode(path: &Path, data: &[u8], mode: Option<u32>) -> std::io::Result<()> {
     let parent = path.parent().expect("a file has a parent");
     std::fs::create_dir_all(parent)?;
     let name = path
@@ -105,6 +111,14 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
         .suffix(".tmp")
         .tempfile_in(parent)?;
     file.write_all(data)?;
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| e.error)?;
     Ok(())

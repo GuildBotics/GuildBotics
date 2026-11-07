@@ -57,6 +57,9 @@ fn effort_overlay(value: Option<&Value>) -> anyhow::Result<Value> {
     Ok(Value::Object(result))
 }
 
+/// The adapters an AI CLI definition may name.
+const CLI_ADAPTERS: &[&str] = &["codex", "claude", "copilot", "grok", "antigravity"];
+
 fn safe(relative: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !relative.is_empty()
@@ -187,9 +190,54 @@ pub fn member(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Re
     Ok(member)
 }
 
+/// The AI CLI tool the brain slot `slot` runs for `person`: its adapter, or
+/// "" when its CLI slot is not mapped; `None` for a slot that runs an
+/// inference model or that the mapping does not have. Either mapping holding
+/// a slot it cannot use is an error, as the Python version reads them whole.
+pub fn brain_tool(
+    roots: &CommandRoots,
+    person: &str,
+    slot: &str,
+) -> anyhow::Result<Option<String>> {
+    let brains = mapping(roots, person, "brain")?;
+    for config in brains.values() {
+        match config["kind"].as_str() {
+            Some("model") => config["model"]
+                .as_str()
+                .context("Brain requires model slot")?,
+            Some("ai_cli") => config["cli_agent"]
+                .as_str()
+                .context("Brain requires cli_agent slot")?,
+            _ => anyhow::bail!("Unsupported brain kind"),
+        };
+    }
+    let mut tools = BTreeMap::new();
+    for (name, relative) in mapping(roots, person, "cli_agent")? {
+        let relative = relative.as_str().context("Invalid CLI definition")?;
+        safe(relative)?;
+        let parts: Vec<_> = relative.split('/').collect();
+        anyhow::ensure!(
+            parts.len() >= 3 && parts[0] == "cli_agents" && CLI_ADAPTERS.contains(&parts[1]),
+            "Invalid CLI definition"
+        );
+        tools.insert(name, parts[1].to_owned());
+    }
+    let Some(config) = brains.get(slot).filter(|c| c["kind"] == "ai_cli") else {
+        return Ok(None);
+    };
+    let cli = config["cli_agent"].as_str().unwrap_or_default();
+    Ok(Some(tools.remove(cli).unwrap_or_default()))
+}
+
 /// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
-/// the environment maps package paths to its read-only code mount once.
-pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {
+/// the environment maps package paths to its read-only code mount once. The
+/// member's clones are `workspace`'s, wherever `roots` read its configuration.
+pub fn resolve(
+    roots: &CommandRoots,
+    workspace: &Path,
+    identity: &Path,
+    person: &str,
+) -> anyhow::Result<Value> {
     let team = crate::team::Team::load(&roots.config, identity)?;
     anyhow::ensure!(
         team.members.iter().any(|m| m.person_id == person),
@@ -218,11 +266,6 @@ pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::R
         }
     }
     let mut clone_paths = BTreeMap::new();
-    let workspace = roots
-        .config
-        .parent()
-        .and_then(Path::parent)
-        .context("Workspace config root is invalid")?;
     let member_clones = workspace.join(".guildbotics/local/clones").join(person);
     clone_paths.insert(
         person.to_owned(),
@@ -370,10 +413,7 @@ fn resolve_brain(roots: &CommandRoots, person: &str, config: &Value) -> anyhow::
                 .split('/')
                 .nth(1)
                 .context("Invalid CLI definition")?;
-            anyhow::ensure!(
-                ["codex", "claude", "copilot", "grok", "antigravity"].contains(&adapter),
-                "Unsupported CLI adapter"
-            );
+            anyhow::ensure!(CLI_ADAPTERS.contains(&adapter), "Unsupported CLI adapter");
             (
                 slot.to_owned(),
                 json!({"adapter":adapter,"parameters":definition.get("parameters").and_then(Value::as_object).cloned().unwrap_or_default(),"effort":effort_overlay(definition.get("effort"))?}),
@@ -449,6 +489,17 @@ fn inventory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The workspace whose configuration `roots` reads.
+    fn workspace_of(roots: &CommandRoots) -> std::path::PathBuf {
+        roots
+            .config
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
     fn put(root: &Path, name: &str, content: &str) {
         let path = root.join(name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -479,7 +530,7 @@ mod tests {
         let (_dir, roots, identity) = fixture();
         let relative = "intelligences/brain_mapping.yml";
         put(&roots.config, relative, "[");
-        let error = resolve(&roots, &identity, "aiko").unwrap_err();
+        let error = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
@@ -764,7 +815,7 @@ mod tests {
             "commands/hello.md",
             "---\nbrain: default\n---\noriginal prompt\n",
         );
-        let started = resolve(&roots, &identity, "aiko").unwrap();
+        let started = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         let readonly_payload = serde_json::to_vec(&started).unwrap();
         put(
             &roots.config,
@@ -780,7 +831,7 @@ mod tests {
                 "initial"
             );
         }
-        let next = resolve(&roots, &identity, "aiko").unwrap();
+        let next = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(next["language"], "ja");
         assert_eq!(
             next["brains"]["default"]["definition"]["parameters"]["model"],
@@ -819,7 +870,7 @@ mod tests {
                 "intelligences/cli_agents/claude/fast.yml",
                 content,
             );
-            let value = resolve(&roots, &identity, "aiko").unwrap();
+            let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
             assert_eq!(
                 value["brains"]["fast"]["definition"]["parameters"],
                 parameters
@@ -879,7 +930,7 @@ mod tests {
                         if explicit_empty { "effort: {}\n" } else { "" }
                     ),
                 );
-                let value = resolve(&roots, &identity, "aiko").unwrap();
+                let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
                 assert_eq!(
                     value["brains"]["default"]["definition"]["effort"],
                     if explicit_empty {
@@ -938,7 +989,7 @@ mod tests {
             "commands/hello.py",
             "def main(context): return 'ok'\n",
         );
-        let value = resolve(&roots, &identity, "aiko").unwrap();
+        let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert!(value["brains"].get("template_only").is_none());
         assert_eq!(value["brains"]["broken"]["kind"], "invalid");
         assert_eq!(
@@ -976,7 +1027,7 @@ mod tests {
             "roles/extra.fr.yml",
             "roles: {engineer: {summary: '', description: Workspace}}\n",
         );
-        let value = resolve(&roots, &identity, "aiko").unwrap();
+        let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(value["member"]["roles"]["engineer"]["summary"], "English");
         assert_eq!(
             value["member"]["roles"]["engineer"]["description"],
@@ -988,13 +1039,15 @@ mod tests {
             "roles: {engineer: {summary: French, description: Localized}}\n",
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["member"]["roles"]["engineer"]["summary"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["member"]["roles"]["engineer"]
+                ["summary"],
             "French"
         );
         std::fs::remove_file(roots.config.join("roles/default.fr.yml")).unwrap();
         std::fs::remove_file(roots.templates.join("roles/default.en.yml")).unwrap();
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["member"]["roles"]["engineer"]["summary"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["member"]["roles"]["engineer"]
+                ["summary"],
             "Unlocalized"
         );
     }
@@ -1037,7 +1090,7 @@ mod tests {
             config: config.clone(),
             templates: templates.clone(),
         };
-        let data = resolve(&roots, &identity, "aiko").unwrap();
+        let data = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(data["language"], "ja");
         assert_eq!(data["member"]["person_id"], "aiko");
         assert_eq!(
@@ -1057,8 +1110,8 @@ mod tests {
             &model.replace("fixture", "member"),
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["brains"]["default"]["definition"]["parameters"]
-                ["id"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["brains"]["default"]
+                ["definition"]["parameters"]["id"],
             "member"
         );
         put(
@@ -1067,7 +1120,8 @@ mod tests {
             &model.replace("agno.models.openai.OpenAIChat", "other.UnsafeModel"),
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["brains"]["default"]["definition"]["error"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["brains"]["default"]
+                ["definition"]["error"],
             "Unsupported inference model_class"
         );
     }

@@ -91,10 +91,27 @@ impl Driver for MicroVm {
 }
 
 impl Dispatcher {
+    /// [`Dispatcher::prepare_in`] a copy of the configuration taken now.
+    pub async fn prepare(
+        &self,
+        line: &str,
+        invocation: WorkflowInvocation,
+        trace_id: &str,
+    ) -> Result<Command, DispatchFailure> {
+        let config = gb_environment::Configuration::copied(&self.host, &self.workspace)
+            .await
+            .map_err(|error| {
+                DispatchFailure::Environment(Failure::Command(Sentence::Text(format!("{error:#}"))))
+            })?;
+        self.prepare_in(Arc::new(config), line, invocation, trace_id)
+    }
+
+    /// The command `line` names, as the run reading `config` runs it.
     /// Background commands start in the exchange directory, just like a
     /// manual command without a cwd. A workflow chooses its turn cwd later.
-    pub fn prepare(
+    pub fn prepare_in(
         &self,
+        config: Arc<gb_environment::Configuration>,
         line: &str,
         mut invocation: WorkflowInvocation,
         trace_id: &str,
@@ -107,7 +124,7 @@ impl Dispatcher {
             .into_iter();
         let name = words.next().ok_or(DispatchFailure::InvalidCommand)?;
         let roots = CommandRoots {
-            config: self.workspace.join(".guildbotics/config"),
+            config: config.path(),
             templates: self.host.package.join("templates"),
         };
         let team = gb_config::team::Team::load(&roots.config, &self.host.identity_root)
@@ -129,6 +146,7 @@ impl Dispatcher {
         })?;
         invocation.run_id = trace_id.into();
         Ok(Command {
+            config,
             wants_result: false,
             person_id: invocation.person_id.clone(),
             run_id: trace_id.into(),
@@ -152,7 +170,7 @@ impl Dispatcher {
         trace: &Trace,
         cancelled: &CancellationToken,
     ) -> Result<CommandReply, DispatchFailure> {
-        let command = self.prepare(line, invocation, trace.id())?;
+        let command = self.prepare(line, invocation, trace.id()).await?;
         self.dispatch_prepared(command, trace, cancelled).await
     }
 
@@ -188,15 +206,10 @@ impl Dispatcher {
         if let Some(refusal) = device.refusal.clone() {
             return Err(DispatchFailure::Environment(Failure::Command(refusal)));
         }
-        let roots = CommandRoots {
-            config: self.workspace.join(".guildbotics/config"),
-            templates: self.host.package.join("templates"),
-        };
         let services = crate::host_window::prepare_command(
             &self.host,
             &self.workspace,
             &command,
-            &roots,
             &device,
             self.member.as_deref(),
             #[cfg(test)]
@@ -283,6 +296,7 @@ mod tests {
                     invocation,
                     trace.id(),
                 )
+                .await
                 .unwrap();
             let task = tokio::spawn(async move {
                 dispatcher
@@ -319,8 +333,8 @@ mod tests {
         assert_eq!(DispatchFailure::Cancelled.code(), "cancelled");
     }
 
-    #[test]
-    fn dispatcher_resolves_member_override_once_and_carries_the_callers_work_and_run() {
+    #[tokio::test]
+    async fn dispatcher_resolves_member_override_once_and_carries_the_callers_work_and_run() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         let identity = root.path().join("identity");
@@ -374,8 +388,13 @@ mod tests {
                 invocation.clone(),
                 "trace",
             )
+            .await
             .unwrap();
-        assert_eq!(command.path, selected);
+        // The member's own file, in the run's copy of the configuration.
+        assert_eq!(
+            command.config.original(&command.path),
+            Some(gb_base::host_path::normalize(&selected).unwrap())
+        );
         assert_eq!(command.args, vec!["message=two words"]);
         assert_eq!(command.work_kind, "ticket_mention");
         assert_eq!(command.work_identity, "local://ticket/90");
@@ -389,18 +408,21 @@ mod tests {
             assert!(
                 dispatcher
                     .prepare(line, invocation.clone(), "trace")
+                    .await
                     .is_err()
             );
         }
         assert!(
             dispatcher
                 .prepare("functions/work", invocation, "")
+                .await
                 .is_err()
         );
         let chat:WorkflowInvocation=serde_json::from_value(json!({"command":"functions/work","person_id":"aiko","source":"event_queue","trigger_type":"chat",
             "work":{"kind":"chat","identity":"local:C1:T1","chat":{"service":"local","channel_id":"C1","thread_id":"T1","event_id":"E1","self_user_id":"local-aiko"}}})).unwrap();
         let command = dispatcher
             .prepare("functions/work", chat, "chat-trace")
+            .await
             .unwrap();
         let broker = crate::host_window::broker_invocation(&command);
         assert_eq!(broker.person_id, "aiko");
