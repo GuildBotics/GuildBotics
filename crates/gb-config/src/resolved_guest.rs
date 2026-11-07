@@ -57,6 +57,9 @@ fn effort_overlay(value: Option<&Value>) -> anyhow::Result<Value> {
     Ok(Value::Object(result))
 }
 
+/// The adapters an AI CLI definition may name.
+const CLI_ADAPTERS: &[&str] = &["codex", "claude", "copilot", "grok", "antigravity"];
+
 fn safe(relative: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !relative.is_empty()
@@ -189,31 +192,41 @@ pub fn member(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Re
 
 /// The AI CLI tool the brain slot `slot` runs for `person`: its adapter, or
 /// "" when its CLI slot is not mapped; `None` for a slot that runs an
-/// inference model or that the mapping does not have.
+/// inference model or that the mapping does not have. Either mapping holding
+/// a slot it cannot use is an error, as the Python version reads them whole.
 pub fn brain_tool(
     roots: &CommandRoots,
     person: &str,
     slot: &str,
 ) -> anyhow::Result<Option<String>> {
-    let Some(config) = mapping(roots, person, "brain")?.remove(slot) else {
-        return Ok(None);
-    };
-    if config["kind"] != "ai_cli" {
-        return Ok(None);
+    let brains = mapping(roots, person, "brain")?;
+    for config in brains.values() {
+        match config["kind"].as_str() {
+            Some("model") => config["model"]
+                .as_str()
+                .context("Brain requires model slot")?,
+            Some("ai_cli") => config["cli_agent"]
+                .as_str()
+                .context("Brain requires cli_agent slot")?,
+            _ => anyhow::bail!("Unsupported brain kind"),
+        };
     }
-    let cli = config["cli_agent"].as_str().unwrap_or("default");
-    let Some(relative) = mapping(roots, person, "cli_agent")?
-        .remove(cli)
-        .and_then(|v| v.as_str().map(str::to_owned))
-    else {
-        return Ok(Some(String::new()));
+    let mut tools = BTreeMap::new();
+    for (name, relative) in mapping(roots, person, "cli_agent")? {
+        let relative = relative.as_str().context("Invalid CLI definition")?;
+        safe(relative)?;
+        let parts: Vec<_> = relative.split('/').collect();
+        anyhow::ensure!(
+            parts.len() >= 3 && parts[0] == "cli_agents" && CLI_ADAPTERS.contains(&parts[1]),
+            "Invalid CLI definition"
+        );
+        tools.insert(name, parts[1].to_owned());
+    }
+    let Some(config) = brains.get(slot).filter(|c| c["kind"] == "ai_cli") else {
+        return Ok(None);
     };
-    safe(&relative)?;
-    let adapter = relative
-        .split('/')
-        .nth(1)
-        .context("Invalid CLI definition")?;
-    Ok(Some(adapter.to_owned()))
+    let cli = config["cli_agent"].as_str().unwrap_or_default();
+    Ok(Some(tools.remove(cli).unwrap_or_default()))
 }
 
 /// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
@@ -399,10 +412,7 @@ fn resolve_brain(roots: &CommandRoots, person: &str, config: &Value) -> anyhow::
                 .split('/')
                 .nth(1)
                 .context("Invalid CLI definition")?;
-            anyhow::ensure!(
-                ["codex", "claude", "copilot", "grok", "antigravity"].contains(&adapter),
-                "Unsupported CLI adapter"
-            );
+            anyhow::ensure!(CLI_ADAPTERS.contains(&adapter), "Unsupported CLI adapter");
             (
                 slot.to_owned(),
                 json!({"adapter":adapter,"parameters":definition.get("parameters").and_then(Value::as_object).cloned().unwrap_or_default(),"effort":effort_overlay(definition.get("effort"))?}),

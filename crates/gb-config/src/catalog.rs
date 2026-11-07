@@ -152,10 +152,9 @@ impl CommandRoots {
         if !seen.insert(real) {
             return;
         }
-        let Ok(declared) = command_metadata(path) else {
-            return;
-        };
-        let metadata = Value::Object(declared.metadata);
+        // A declaration that cannot be read declares nothing, and a Markdown
+        // command's brain is then its default.
+        let metadata = Value::Object(command_metadata(path).unwrap_or_default().metadata);
         if path.extension().is_some_and(|e| e == "md") {
             self.brain_needs(metadata.get("brain"), person, needs);
         }
@@ -179,15 +178,21 @@ impl CommandRoots {
                 {
                     None
                 }
-                Value::Object(o) => ["command", "path", "name"]
-                    .iter()
-                    .find_map(|k| o.get(*k))
+                Value::Object(o) => o
+                    .get("command")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| {
+                        ["path", "name"]
+                            .iter()
+                            .find_map(|k| o.get(*k).filter(|v| truthy(v)))
+                    })
                     .map(python_text),
                 _ => None,
             };
             let Some(name) = reference
                 .and_then(|text| command_words(&text))
                 .map(|mut words| words.remove(0))
+                .filter(|name| !name.is_empty())
             else {
                 continue;
             };
@@ -236,7 +241,7 @@ impl CommandRoots {
         candidates.push(beside);
         candidates
             .into_iter()
-            .find(|path| path.is_file())
+            .find(|path| path.exists())
             .or_else(|| self.resolve(name, language, person).ok())
     }
 }
@@ -278,8 +283,10 @@ fn requires(metadata: &Value) -> Result<Vec<String>, String> {
 /// Python command is read as tokens: a mistake inside a statement is reported
 /// when it runs.
 pub fn validate_source(extension: &str, content: &str) -> Result<(), InvalidSource> {
-    let extension = extension.to_lowercase();
-    match extension.as_str() {
+    // As Python splits lines: at `\r\n`, `\r` and `\n`.
+    let content = &content.replace("\r\n", "\n").replace('\r', "\n");
+    let lowered = extension.to_lowercase();
+    match lowered.as_str() {
         ".md" => {
             let Some(front) = frontmatter(content).filter(|f| !f.trim().is_empty()) else {
                 return Ok(());
@@ -304,7 +311,12 @@ pub fn validate_source(extension: &str, content: &str) -> Result<(), InvalidSour
                     "Python command must define a top-level 'main' function.",
                 ));
             }
-            let declared = python_literal::command_metadata(content).map_err(|_| syntax())?;
+            let declared = python_literal::command_metadata(content).map_err(|_| {
+                InvalidSource::new(
+                    "Python command must declare COMMAND_METADATA at most once, as a static \
+                     literal mapping with string keys.",
+                )
+            })?;
             declarations(&Value::Object(declared.metadata), false)
         }
         ".sh" => Ok(()),
@@ -313,7 +325,7 @@ pub fn validate_source(extension: &str, content: &str) -> Result<(), InvalidSour
             message: format!("Unsupported command extension: '{extension}'."),
             context: Map::new(),
         }
-        .with("extension", &extension)),
+        .with("extension", &lowered)),
     }
 }
 
@@ -559,6 +571,21 @@ mod tests {
         ] {
             assert_eq!(refused(extension, content), message, "{content}");
         }
+        assert_eq!(
+            refused(".md", "---\rinputs: x\r---\r"),
+            "Command 'inputs' must be a mapping."
+        );
+        assert_eq!(
+            refused(
+                ".py",
+                "COMMAND_METADATA = {}\nCOMMAND_METADATA = {}\ndef main(c):\n    pass\n"
+            ),
+            "Python command must declare COMMAND_METADATA at most once, as a static literal mapping with string keys."
+        );
+        assert_eq!(
+            refused(".TOML", ""),
+            "Unsupported command extension: '.TOML'."
+        );
         let unsupported = validate_source(".toml", "").unwrap_err();
         assert_eq!(unsupported.code, "command_file_unsupported_format");
         assert_eq!(unsupported.context["extension"], ".toml");

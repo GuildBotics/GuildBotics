@@ -61,6 +61,8 @@ class AgentContext:
         self.person = person or self.team.members[0]
         self.pipe = ""
         self.shared_state: dict[str, Any] = {}
+        # No host resolved the commands: they are found by name on disk.
+        self.resolved_commands: dict[str, str] | None = None
         self._invoker: Any = None
 
     def clone_for(self, person: Person) -> AgentContext:

@@ -343,6 +343,11 @@ async fn an_option_needs_what_its_brain_its_declaration_and_its_subcommands_run(
     );
     f.write(&commands(&f).join("unmapped.md"), "---\nbrain: cli\n---\n");
     f.write(&commands(&f).join("loop.yml"), "commands:\n  - loop\n");
+    f.write(&commands(&f).join("unreadable.md"), "---\nbrain: [\n---\n");
+    f.write(
+        &commands(&f).join("named.yml"),
+        "commands:\n  - command: null\n    name: cli-task\n  - path: ''\n    name: plain\n",
+    );
     let listed = options(&f, "/commands/options").await;
     for (command, expected) in [
         ("plain", vec!["environment", "llm"]),
@@ -354,8 +359,35 @@ async fn an_option_needs_what_its_brain_its_declaration_and_its_subcommands_run(
         ("inline-edit", vec!["cli_agent", "environment"]),
         ("unmapped", vec!["environment", "llm"]),
         ("loop", vec!["environment"]),
+        ("unreadable", vec!["environment", "llm"]),
+        ("named", vec!["cli_agent", "environment", "llm"]),
     ] {
         assert_eq!(kinds(option(&listed, command)), expected, "{command}");
+    }
+    // A mapping holding a slot it cannot use is read as no mapping at all.
+    for (file, text) in [
+        (
+            "brain_mapping.yml",
+            "default:\n  kind: model\n  model: default\nworkspace_actor:\n  kind: ai_cli\n",
+        ),
+        (
+            "brain_mapping.yml",
+            "default:\n  kind: bogus\nworkspace_actor:\n  kind: ai_cli\n  cli_agent: default\n",
+        ),
+        (
+            "cli_agent_mapping.yml",
+            "default: cli_agents/codex/default.yml\nother: cli_agents/nope/a.yml\n",
+        ),
+    ] {
+        let path = f.config().join("intelligences").join(file);
+        let kept = std::fs::read_to_string(&path).ok();
+        f.write(&path, text);
+        let listed = options(&f, "/commands/options").await;
+        assert_eq!(kinds(option(&listed, "edit")), ["environment"], "{text}");
+        match kept {
+            Some(kept) => f.write(&path, &kept),
+            None => std::fs::remove_file(&path).unwrap(),
+        }
     }
     // The workspace's mapping has no `agent` slot: it runs an inference model.
     std::fs::remove_file(f.config().join("intelligences/brain_mapping.yml")).unwrap();
