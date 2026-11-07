@@ -308,17 +308,44 @@ impl Setup<'_> {
 
     /// The saved member `id`, as its accounts see it.
     pub fn saved_member(&self, id: &str) -> anyhow::Result<SavedMember> {
+        self.saved_member_reading(id, false)
+    }
+
+    /// Diagnostic checks continue without credentials when their store is unavailable.
+    pub fn diagnostic_member(&self, id: &str) -> anyhow::Result<SavedMember> {
+        let mut member = self.saved_member_reading(id, true)?;
+        match person_secret_prefix(self.identity_root(), id) {
+            Ok(prefix) => diagnostic_environment(
+                &mut member.secrets,
+                &prefix,
+                self.providers.member_secret_names(),
+                |key| std::env::var(key).ok(),
+            ),
+            Err(e) if e.is::<PrefixConflict>() => {}
+            Err(e) => return Err(e),
+        }
+        Ok(member)
+    }
+
+    fn saved_member_reading(&self, id: &str, diagnostic: bool) -> anyhow::Result<SavedMember> {
         let identity = mapping(
             &self.repository.identity_view(),
             &member_path(id, "identity"),
         )?;
-        let owned = self.owned(id, !self.providers.member_providers().is_empty())?;
+        let values = match self.owned(id, !self.providers.member_providers().is_empty()) {
+            Ok(owned) => owned.values,
+            Err(e) if diagnostic && e.is::<crate::SecretsUnavailable>() => {
+                tracing::warn!("credentials could not be read for diagnostic member {id}");
+                BTreeMap::new()
+            }
+            Err(e) => return Err(e),
+        };
         Ok(SavedMember {
             person_id: id.into(),
             name: text(&identity, "name"),
             human: text(&identity, "person_type") == "human",
             account_info: strings(identity.get("account_info")),
-            secrets: owned.values,
+            secrets: values,
             avatar: avatar_in(self.identity_root(), id),
         })
     }
@@ -892,4 +919,39 @@ fn identity(input: &PersonSetupInput, account_info: Map<String, Value>) -> Value
         identity["profile"] = json!({"character": input.character});
     }
     identity
+}
+
+/// Stored identity credentials take precedence over the process environment.
+fn diagnostic_environment(
+    values: &mut BTreeMap<String, String>,
+    prefix: &str,
+    names: Vec<String>,
+    env: impl Fn(&str) -> Option<String>,
+) {
+    for name in names {
+        if let Some(value) = env(&format!("{prefix}{name}")) {
+            values.entry(name).or_insert(value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_environment_tests {
+    #[test]
+    fn uses_only_selected_member_keys_and_preserves_stored_values() {
+        let mut values =
+            std::collections::BTreeMap::from([("SLACK_APP_TOKEN".into(), "stored-fixture".into())]);
+        super::diagnostic_environment(
+            &mut values,
+            "ALICE_",
+            vec!["SLACK_APP_TOKEN".into(), "SLACK_BOT_TOKEN".into()],
+            |key| {
+                assert!(key.starts_with("ALICE_"));
+                Some("environment-fixture".into())
+            },
+        );
+        assert_eq!(values["SLACK_APP_TOKEN"], "stored-fixture");
+        assert_eq!(values["SLACK_BOT_TOKEN"], "environment-fixture");
+        assert_eq!(values.len(), 2);
+    }
 }

@@ -137,6 +137,7 @@ pub(crate) async fn served(
 /// it runs, how a failed command is answered, and whether its result is read.
 pub(crate) struct Launch {
     pub(crate) trace: Option<Trace>,
+    pub(crate) diagnostic_check: bool,
     pub(crate) failure_capture: Option<std::sync::Arc<std::sync::Mutex<Option<CommandFailure>>>>,
     pub(crate) label: String,
     pub(crate) attributes: serde_json::Map<String, serde_json::Value>,
@@ -156,6 +157,7 @@ impl Launch {
     pub(crate) fn manual(command: &str) -> Launch {
         Launch {
             trace: None,
+            diagnostic_check: false,
             failure_capture: None,
             label: command.into(),
             attributes: serde_json::Map::from_iter([("run.entry".into(), "command".into())]),
@@ -165,6 +167,21 @@ impl Launch {
             result: None,
         }
     }
+}
+
+/// Correlate the check's worker logs without publishing command lifecycle events.
+pub(crate) async fn run_diagnostic_check<T>(
+    trace: &Trace,
+    run: impl std::future::Future<Output = T>,
+) -> T {
+    use tracing::Instrument as _;
+    run.instrument(tracing::info_span!(
+        "diagnostics_check",
+        diagnostics = serde_json::to_string(&trace.event_fields())
+            .unwrap()
+            .as_str()
+    ))
+    .await
 }
 
 /// A run that ended as its command did.
@@ -428,6 +445,7 @@ async fn start(
         let config = configuration.clone();
         return manual_ticket(api, headers, &person.person_id, config, place, opened).await;
     }
+    let diagnostic_check = launch.diagnostic_check;
     let joined = launch.trace.is_some();
     let mut trace = launch.trace.unwrap_or_else(|| {
         Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id)
@@ -498,60 +516,65 @@ async fn start(
             admission.generation = Some(generation.clone());
             let execution =
                 crate::execution::Execution::enter(admission, generation.draining.clone()).await?;
-            let run = trace.run_command(
-                &name,
-                &person_id,
-                execute(&workspace, async {
-                    let device = gb_environment::device::read(&host, &workspace).await;
-                    if let Some(refusal) = device.refusal.clone() {
-                        return Err(failed(Failure::Command(refusal), language));
-                    }
-                    let mut services = crate::host_window::prepare_command(
-                        &host,
-                        &workspace,
-                        &command,
-                        &device,
-                        member.as_deref(),
-                        #[cfg(test)]
-                        None,
-                    )
-                    .await
-                    .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
-                    if let Some(inputs) = inputs {
-                        services.session.mounts.push(inputs);
-                    }
-                    let reply = gb_environment::run(
-                        &host,
-                        &workspace,
-                        command,
-                        |warning| {
-                            tracing::warn!("{}", say(warning, language));
-                        },
-                        &services.session,
-                    )
-                    .await;
-                    services.settle().await;
-                    let reply = reply.map_err(|failure| failed(failure, language))?;
+            let execute = Box::pin(execute(&workspace, async {
+                let device = gb_environment::device::read(&host, &workspace).await;
+                if let Some(refusal) = device.refusal.clone() {
+                    return Err(failed(Failure::Command(refusal), language));
+                }
+                let mut services = crate::host_window::prepare_command(
+                    &host,
+                    &workspace,
+                    &command,
+                    &device,
+                    member.as_deref(),
+                    #[cfg(test)]
+                    None,
+                )
+                .await
+                .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
+                if let Some(inputs) = inputs {
+                    services.session.mounts.push(inputs);
+                }
+                let reply = gb_environment::run(
+                    &host,
+                    &workspace,
+                    command,
+                    |warning| {
+                        tracing::warn!("{}", say(warning, language));
+                    },
+                    &services.session,
+                )
+                .await;
+                services.settle().await;
+                let reply = reply.map_err(|failure| failed(failure, language))?;
+                if !diagnostic_check {
                     trace.command_output(&name, &person_id, &reply.text_output);
-                    match reply.failure {
-                        None => match wanted {
-                            Some((kind, valid)) if !valid(&reply.result) => Err(Ended {
-                                error_type: "CommandError".into(),
-                                code: "",
-                                answer: Ok(format!("Command '{asked}' did not return a {kind}.")),
-                            }),
-                            _ => Ok((reply.text_output, reply.result)),
-                        },
-                        Some(failure) => {
-                            if let Some(capture) = &worker_capture {
-                                *capture.lock().unwrap_or_else(|p| p.into_inner()) =
-                                    Some(failure.clone());
-                            }
-                            Err(failed_in_environment(failure))
+                }
+                match reply.failure {
+                    None => match wanted {
+                        Some((kind, valid)) if !valid(&reply.result) => Err(Ended {
+                            error_type: "CommandError".into(),
+                            code: "",
+                            answer: Ok(format!("Command '{asked}' did not return a {kind}.")),
+                        }),
+                        _ => Ok((reply.text_output, reply.result)),
+                    },
+                    Some(failure) => {
+                        if let Some(capture) = &worker_capture {
+                            *capture.lock().unwrap_or_else(|p| p.into_inner()) =
+                                Some(failure.clone());
                         }
+                        Err(failed_in_environment(failure))
                     }
-                }),
-            );
+                }
+            }));
+            let run = async {
+                if diagnostic_check {
+                    run_diagnostic_check(&trace, execute).await
+                } else {
+                    trace.run_command(&name, &person_id, execute).await
+                }
+            };
             // The run first: once started, it is recorded however it ends.
             let result = tokio::select! {
                 biased;

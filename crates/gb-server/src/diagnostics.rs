@@ -104,7 +104,7 @@ pub(crate) async fn scenario(
     async move {
     let mut completion=DiagnosticRun{trace:trace.clone(),finished:false,language:lang};
     let loaded = match &selected.workspace {
-        Some(w) => load_context(&api,w).await,
+        Some(w) => load_context(&api,w,query.person_id.as_deref()).await,
         None => Err(anyhow::anyhow!(crate::i18n::t(
             lang,
             "app_api.errors.config_not_found",
@@ -281,14 +281,22 @@ pub(crate) async fn scenario(
 async fn load_context(
     api: &Shared,
     workspace: &std::path::Path,
+    target: Option<&str>,
 ) -> anyhow::Result<(gb_config::team::Team, Vec<gb_setup::SavedMember>)> {
     let team =
         gb_config::team::Team::load(&workspace.join(".guildbotics/config"), &api.identity_root)?;
     let mut saved = Vec::new();
-    for member in &team.members {
+    for member in team
+        .members
+        .iter()
+        .filter(|m| match target.filter(|s| !s.is_empty()) {
+            Some(p) => m.person_id == p,
+            None => m.is_active && m.person_type != "human",
+        })
+    {
         let person = member.person_id.clone();
         let member = crate::config_api::with_setup(api, workspace.to_owned(), move |setup| {
-            setup.saved_member(&person)
+            setup.diagnostic_member(&person)
         })
         .await?;
         saved.push(member);
@@ -312,6 +320,8 @@ async fn run_check(
     let capture = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut launch = Launch::manual(command);
     launch.trace = trace.cloned();
+    launch.diagnostic_check = true;
+    launch.attributes.clear();
     launch.cwd = Some(cwd.to_owned());
     launch.failure_capture = Some(capture.clone());
     let request = RunRequest {
@@ -454,7 +464,10 @@ fn failed_check(
     let mut result = check(lang, section, code, "error", person, facts);
     result["message"] = format!(
         "{}: {message}",
-        result["message"].as_str().unwrap().trim_end_matches('.')
+        result["message"]
+            .as_str()
+            .unwrap()
+            .trim_end_matches(['.', '。'])
     )
     .into();
     result
@@ -474,16 +487,40 @@ async fn cli(
     let language = gb_config::team::Team::load(&roots.config, &api.identity_root)
         .map(|t| t.language)
         .unwrap_or_else(|_| "en".into());
-    let brain = roots
+    let resolved = roots
         .resolve("diagnostics/cli_agent", &language, Some(person))
-        .ok()
-        .and_then(|p| gb_config::commands::command_metadata(&p).ok())
-        .and_then(|d| d.metadata["brain"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| "default".into());
+        .and_then(|p| gb_config::commands::command_metadata(&p));
+    let metadata = match resolved {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            return failed_check(
+                lang,
+                "cli_agent",
+                "cli_agent_brain",
+                person,
+                &e.to_string(),
+                json!({"error_type":"ValueError"}),
+            );
+        }
+    };
+    let brain = metadata.metadata["brain"]
+        .as_str()
+        .unwrap_or("default")
+        .to_owned();
     let tool = gb_config::resolved_guest::brain_tool(&roots, person, &brain);
     let tool = match tool {
         Ok(Some(tool)) => tool,
-        _ => {
+        Err(e) => {
+            return failed_check(
+                lang,
+                "cli_agent",
+                "cli_agent_brain",
+                person,
+                &e.to_string(),
+                json!({"error_type":"ValueError"}),
+            );
+        }
+        Ok(None) => {
             let mut result = check(
                 lang,
                 "cli_agent",
@@ -797,16 +834,7 @@ pub(crate) fn prune(workspace: &std::path::Path) {
         .ok()
         .and_then(|s| gb_config::yaml_value(&s).ok())
         .unwrap_or(Value::Null);
-    let retention = settings["retention_days"]
-        .as_i64()
-        .or_else(|| {
-            settings["retention_days"]
-                .as_str()
-                .and_then(|s| s.parse().ok())
-        })
-        .filter(|d| *d != 0)
-        .unwrap_or(30)
-        .max(1) as u64;
+    let retention = crate::config_api::transcript_retention_days(&settings) as u64;
     if let Err(e) = Diagnostics::open(workspace).prune_transcripts(
         std::time::SystemTime::now(),
         std::time::Duration::from_secs(retention.saturating_mul(86400)),
@@ -917,36 +945,23 @@ pub(crate) async fn troubleshoot(
                 })
         })
         .map(|p| p.person_id.as_str());
-    let directories = roots
+    let access = match roots
         .resolve("assistants/troubleshoot", language, person)
-        .ok()
-        .and_then(|p| gb_config::commands::command_access(&p).ok())
-        .map(|access| {
-            let mut directories = serde_json::Map::new();
-            for scope in access.inspects {
-                let paths = match scope {
-                    gb_wire::InspectsItem::Config => vec![
-                        ("config", roots.config.clone()),
-                        (
-                            "identities",
-                            api.identity_root.join(".guildbotics/config/team/members"),
-                        ),
-                    ],
-                    gb_wire::InspectsItem::Diagnostics => {
-                        vec![("diagnostics", workspace.join(".guildbotics/local/run"))]
-                    }
-                };
-                for (name, path) in paths {
-                    if path.is_dir()
-                        && let Ok(path) = gb_environment::guest_path(&path)
-                    {
-                        directories.insert(name.into(), path.into());
-                    }
-                }
-            }
-            directories
-        })
-        .unwrap_or_default();
+        .and_then(|p| gb_config::commands::command_access(&p))
+    {
+        Ok(access) => access,
+        Err(e) => {
+            return ApiError::new(StatusCode::BAD_GATEWAY, "troubleshooting_failed", &headers)
+                .reason(e.to_string())
+                .into_response();
+        }
+    };
+    let directories = troubleshooting_directories(
+        access.inspects,
+        &roots.config,
+        &api.identity_root,
+        workspace,
+    );
     let run = RunRequest {
         command: "assistants/troubleshoot".into(),
         args: vec![],
@@ -964,6 +979,43 @@ pub(crate) async fn troubleshoot(
             Json(troubleshooting_answer(&Diagnostics::open(workspace), &ran)).into_response()
         }
     }
+}
+
+pub(crate) fn troubleshooting_directories(
+    scopes: Vec<gb_wire::InspectsItem>,
+    config: &std::path::Path,
+    identity_root: &std::path::Path,
+    workspace: &std::path::Path,
+) -> serde_json::Map<String, Value> {
+    let mut directories = serde_json::Map::new();
+    for scope in scopes {
+        let paths = match scope {
+            gb_wire::InspectsItem::Config => {
+                directories.insert(
+                    "templates".into(),
+                    format!("{}/templates", gb_environment::CODE_ROOT).into(),
+                );
+                vec![
+                    ("config", config.to_owned()),
+                    (
+                        "identities",
+                        identity_root.join(".guildbotics/config/team/members"),
+                    ),
+                ]
+            }
+            gb_wire::InspectsItem::Diagnostics => {
+                vec![("diagnostics", workspace.join(".guildbotics/local/run"))]
+            }
+        };
+        for (name, path) in paths {
+            if path.is_dir()
+                && let Ok(path) = gb_environment::guest_path(&path)
+            {
+                directories.insert(name.into(), path.into());
+            }
+        }
+    }
+    directories
 }
 
 fn troubleshooting_result(value: &Value) -> bool {

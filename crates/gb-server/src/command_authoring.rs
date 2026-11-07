@@ -95,6 +95,7 @@ pub(crate) async fn author(
     };
     let launch = Launch {
         trace: None,
+        diagnostic_check: false,
         failure_capture: None,
         label: format!("author:{label}"),
         attributes: serde_json::Map::from_iter([(

@@ -349,7 +349,7 @@ pub fn shape(
         env.push(("LANGUAGE".into(), language));
     }
     let debug = gb_config::debug::read(Some(workspace));
-    env.push(("LOG_LEVEL".into(), debug.log_level));
+    env.push(("LOG_LEVEL".into(), debug.guest_log_level().into()));
     env.push(("AGNO_DEBUG".into(), debug.agno_debug.to_string()));
     env.extend([
         (

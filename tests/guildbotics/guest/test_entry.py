@@ -82,6 +82,7 @@ def test_inference_failure_preserves_safe_cause_only(wrapped: bool, http: bool) 
         "HTTPStatusError" if http else "RuntimeError"
     )
     assert result["inference_category"] == "credit"
+    assert result["message"] == str(error)
     assert "private-provider-response" not in json.dumps(result)
 
 

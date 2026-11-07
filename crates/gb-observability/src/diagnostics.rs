@@ -85,10 +85,12 @@ impl Diagnostics {
     /// be written is logged rather than failing what it records, as in the
     /// Python version.
     pub fn record(&self, record: Map<String, Value>) {
-        let _writing = WRITING
+        let writing = WRITING
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Err(e) = self.route(record) {
+        let written = self.route(record);
+        drop(writing);
+        if let Err(e) = written {
             tracing::warn!("cannot write a diagnostics record: {e}");
         }
     }

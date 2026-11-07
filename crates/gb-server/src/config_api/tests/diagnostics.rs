@@ -74,6 +74,20 @@ async fn targets_active_agents_explicit_inactive_and_human_members() {
     assert_eq!(result["active_members"], json!(["hana"]));
     assert_eq!(by_code(&result, "human_member_reference")["status"], "ok");
     assert_eq!(by_code(&result, "human_member_roles")["status"], "ok");
+    assert_eq!(result["checks"][1]["code"], "human_member_reference");
+    assert_eq!(result["checks"][2]["code"], "human_member_roles");
+    assert_eq!(
+        by_code(&result, "human_member_reference")["message"],
+        "Human member config was loaded as a reference member, not an AI runtime subject."
+    );
+    assert_eq!(
+        by_code(&result, "human_member_roles")["message"],
+        "Human member roles are configured."
+    );
+    assert_eq!(
+        result["ok"],
+        result["errors"].as_array().unwrap().is_empty()
+    );
     assert!(
         !result["checks"]
             .as_array()
@@ -92,6 +106,20 @@ async fn targets_active_agents_explicit_inactive_and_human_members() {
     let result = scenario(&f, "").await;
     assert_eq!(result["active_members"], json!([]));
     assert_eq!(by_code(&result, "active_members")["status"], "error");
+    assert_eq!(result["ok"], false);
+    assert_eq!(
+        result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["config_load", "active_members"]
+    );
+    assert_eq!(
+        by_code(&result, "active_members")["message"],
+        "No active members are configured."
+    );
 }
 #[tokio::test]
 async fn missing_llm_key_short_circuits_only_llm_and_checks_each_effective_cli() {
@@ -239,6 +267,40 @@ async fn cli_failures_empty_output_and_non_cli_brain_are_errors() {
         by_code(&result, "cli_agent_brain")["context"],
         json!({"brain":"agent"})
     );
+    f.write(
+        &f.config()
+            .join("team/members/bob/intelligences/brain_mapping.yml"),
+        "agent: {kind: foo}\n",
+    );
+    let result = scenario(&f, "?person_id=bob").await;
+    let check = by_code(&result, "cli_agent_brain");
+    assert_eq!(check["context"]["error_type"], "ValueError");
+    assert!(
+        check["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("AI CLI tool brain check failed: ")
+    );
+    assert!(
+        check["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unsupported brain kind")
+    );
+    f.write(
+        &f.config()
+            .join("team/members/bob/commands/diagnostics/cli_agent.py"),
+        "COMMAND_METADATA = dynamic()\n",
+    );
+    let result = scenario(&f, "?person_id=bob").await;
+    let check = by_code(&result, "cli_agent_brain");
+    assert_eq!(check["context"]["error_type"], "ValueError");
+    assert!(
+        check["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("AI CLI tool brain check failed: ")
+    );
 }
 
 #[tokio::test]
@@ -293,6 +355,12 @@ async fn unknown_provider_falls_through_and_generic_inference_failure_keeps_its_
             .unwrap()
             .contains("invalid api key")
     );
+    assert!(
+        live["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("LLM live check failed: ")
+    );
     assert_eq!(result["ok"], false);
     assert!(result["checks"].as_array().unwrap().iter().all(|c| {
         ["config", "members", "llm", "cli_agent"].contains(&c["section"].as_str().unwrap())
@@ -338,13 +406,17 @@ async fn diagnostics_commands_are_read_only_and_diagnosis_uses_the_environment_r
             traces["traces"][0]["trace_id"].as_str().unwrap()
         ))
         .await;
-    assert!(
-        detail["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| r["type"] == "command.failed")
-    );
+    assert_eq!(detail["summary"]["status"], "success");
+    assert_eq!(detail["summary"]["command"], "diagnostics");
+    assert_ne!(detail["summary"]["attributes"]["run.entry"], "command");
+    let event_types = detail["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "event")
+        .map(|r| r["type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(event_types, ["diagnostics.completed"]);
     assert!(
         detail["records"]
             .as_array()
@@ -402,6 +474,15 @@ async fn scenario_missing_config_and_unknown_person_are_checks() {
     assert_eq!(body["checks"][0]["context"], json!({}));
     assert_eq!(body["checks"][0]["credential"], false);
     assert_eq!(body["active_members"], json!([]));
+    let (_, japanese) = f
+        .call_in("ja", "POST", "/diagnostics/scenario", Value::Null)
+        .await;
+    assert!(
+        japanese["checks"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("設定を読み込めませんでした: ")
+    );
     f.init().await;
     let (status, body) = f
         .call("POST", "/diagnostics/scenario?person_id=ghost", Value::Null)
@@ -414,6 +495,16 @@ async fn scenario_missing_config_and_unknown_person_are_checks() {
         .unwrap();
     assert_eq!(missing["person_id"], "ghost");
     assert_eq!(missing["status"], "error");
+    assert_eq!(missing["message"], "Member was not found.");
+    assert_eq!(body["ok"], false);
+    assert_eq!(
+        checks
+            .iter()
+            .map(|c| c["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["config_load", "member_not_found"]
+    );
+    assert_eq!(checks[0]["message"], "Configuration was loaded.");
     let events = f.api.events.snapshot();
     assert_eq!(events.last().unwrap()["type"], "diagnostics.completed");
     assert_eq!(
@@ -427,24 +518,52 @@ async fn scenario_missing_config_and_unknown_person_are_checks() {
 }
 
 #[tokio::test]
-async fn unavailable_credentials_fail_context_loading_before_live_checks() {
+async fn unavailable_credentials_keep_individual_checks_and_provider_metadata() {
     let f = team().await;
+    let project_path = f.config().join("team/project.yml");
+    let mut project = f.read(&project_path);
+    project["services"] = json!({"chat_service":{"name":"slack"}});
+    f.write(&project_path, &project.to_string());
+    let member_path = f.config().join("team/members/alice/member.yml");
+    let mut member = f.read(&member_path);
+    member["message_channels"] = json!([{"id":"C000000001"}]);
+    f.write(&member_path, &member.to_string());
     f.seed_identity_secret("ALICE_BRANVIL_TOKEN", "synthetic-token");
     f.keys(Keys::Locked);
-    *f.api.diagnostics_runner.lock().unwrap() = Some(Arc::new(|_, _, _, _| {
-        panic!("context failure must not start a command")
+    *f.api.diagnostics_runner.lock().unwrap() = Some(Arc::new(|command, person, _, _| {
+        assert_eq!(command, "diagnostics/cli_agent");
+        assert_eq!(person, "alice");
+        Ok("OK".into())
     }));
     let body = scenario(&f, "?person_id=alice").await;
-    assert_eq!(body["checks"].as_array().unwrap().len(), 1);
     assert_eq!(body["checks"][0]["code"], "config_load");
-    assert_eq!(body["checks"][0]["status"], "error");
-    assert_eq!(body["active_members"], json!([]));
+    assert_eq!(body["checks"][0]["status"], "ok");
+    assert_eq!(body["active_members"], json!(["alice"]));
+    assert_eq!(by_code(&body, "llm_api_key")["credential"], true);
+    assert_eq!(by_code(&body, "cli_agent_brain")["status"], "ok");
+    assert_eq!(by_code(&body, "slack_app_token")["status"], "error");
+    assert_eq!(by_code(&body, "slack_app_token")["person_id"], "alice");
     assert_eq!(body["ok"], false);
 }
 
 #[tokio::test]
 async fn troubleshooting_validates_before_execution_and_uses_the_named_conversation() {
     let f = team().await;
+    let directories = crate::diagnostics::troubleshooting_directories(
+        vec![
+            gb_wire::InspectsItem::Config,
+            gb_wire::InspectsItem::Diagnostics,
+        ],
+        &f.config(),
+        &f.api.identity_root,
+        &f.workspace(),
+    );
+    assert_eq!(
+        directories["templates"],
+        format!("{}/templates", gb_environment::CODE_ROOT)
+    );
+    assert!(directories.contains_key("config"));
+    assert!(directories.contains_key("identities"));
     let initial = f.api.events.snapshot();
     for body in [
         json!({"conversation_id":"c","message":""}),

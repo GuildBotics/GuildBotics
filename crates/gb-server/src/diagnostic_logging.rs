@@ -4,6 +4,23 @@ use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock, RwLock, Weak};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
+/// Defaults apply to every GuildBotics crate; explicit user filters survive reloads.
+pub fn log_filter(configured: &str, level: Option<&str>) -> tracing_subscriber::EnvFilter {
+    if !configured.is_empty()
+        && let Ok(filter) = tracing_subscriber::EnvFilter::try_new(configured)
+    {
+        return filter;
+    }
+    let level = match level.unwrap_or("INFO") {
+        "DEBUG" => "debug",
+        "WARNING" | "WARN" => "warn",
+        "ERROR" | "CRITICAL" | "FATAL" => "error",
+        "TRACE" => "trace",
+        _ => "info",
+    };
+    tracing_subscriber::EnvFilter::new(format!("branvil={level},gb_={level},guildbotics={level}"))
+}
+
 /// Filtering log events must not discard the spans carrying correlation.
 pub struct LogFilter(tracing_subscriber::EnvFilter);
 impl LogFilter {
@@ -155,6 +172,183 @@ mod tests {
     use super::*;
     use gb_observability::{Diagnostics, Trace};
     use tracing_subscriber::prelude::*;
+
+    #[test]
+    fn failed_recording_returns_even_when_its_warning_is_recorded() {
+        const CHILD: &str = "GUILDBOTICS_TEST_FAILED_RECORDING";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "diagnostic_logging::tests::failed_recording_returns_even_when_its_warning_is_recorded", "--nocapture"])
+                .env(CHILD, "1")
+                .spawn().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success());
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("recording a write failure deadlocked");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join(".guildbotics/local/run/sessions");
+        std::fs::create_dir_all(sessions.parent().unwrap()).unwrap();
+        std::fs::write(sessions, "not a directory").unwrap();
+        let store = Diagnostics::open(root.path());
+        let bus = Arc::new(EventBus::default());
+        bus.record_in(Some(store.clone()));
+        let subscriber = tracing_subscriber::registry().with(DiagnosticLayer::for_bus(bus));
+        tracing::subscriber::with_default(subscriber, || {
+            Trace::open(&store, "diagnostics").event("diagnostics.completed", Map::new());
+        });
+    }
+
+    #[test]
+    fn filters_cover_all_crates_and_map_host_levels() {
+        for level in [
+            None,
+            Some("DEBUG"),
+            Some("TRACE"),
+            Some("WARNING"),
+            Some("ERROR"),
+            Some("CRITICAL"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Diagnostics::open(root.path());
+            store.start_system_session("filter").unwrap();
+            let bus = Arc::new(EventBus::default());
+            bus.record_in(Some(store.clone()));
+            let subscriber = tracing_subscriber::registry()
+                .with(LogFilter::new(log_filter("", level)))
+                .with(DiagnosticLayer::for_bus(bus));
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::warn!(target: "gb_config::team", "user override filters this");
+                tracing::error!(target: "gb_config::team", "config error");
+                tracing::warn!(target: "gb_integrations::slack", "integration warning");
+                tracing::warn!(target: "gb_setup::service", "setup warning");
+                tracing::debug!(target: "gb_future::component", "future debug");
+                tracing::trace!(target: "gb_future::component", "future trace");
+            });
+            let records = store.latest_system_records(200).unwrap();
+            let messages = records["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|r| r["message"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                messages.contains(&"user override filters this"),
+                !matches!(level, Some("ERROR" | "CRITICAL"))
+            );
+            assert!(messages.contains(&"config error"));
+            assert_eq!(
+                messages.contains(&"integration warning"),
+                !matches!(level, Some("ERROR" | "CRITICAL"))
+            );
+            assert_eq!(
+                messages.contains(&"setup warning"),
+                !matches!(level, Some("ERROR" | "CRITICAL"))
+            );
+            assert_eq!(
+                messages.contains(&"future debug"),
+                matches!(level, Some("DEBUG" | "TRACE"))
+            );
+            assert_eq!(messages.contains(&"future trace"), level == Some("TRACE"));
+            store.finish_system_session().unwrap();
+        }
+    }
+    #[test]
+    fn explicit_global_and_target_filters_survive_debug_reload() {
+        for configured in ["off", "gb_=trace,gb_config=error"] {
+            for level in [None, Some("DEBUG"), Some("INFO")] {
+                let root = tempfile::tempdir().unwrap();
+                let store = Diagnostics::open(root.path());
+                store.start_system_session("configured").unwrap();
+                let bus = Arc::new(EventBus::default());
+                bus.record_in(Some(store.clone()));
+                let subscriber = tracing_subscriber::registry()
+                    .with(LogFilter::new(log_filter(configured, level)))
+                    .with(DiagnosticLayer::for_bus(bus));
+                tracing::subscriber::with_default(subscriber, || {
+                    tracing::warn!(target: "gb_config", "config warning");
+                    tracing::error!(target: "gb_config", "config error");
+                    tracing::trace!(target: "gb_setup", "setup trace");
+                });
+                let records = store.latest_system_records(200).unwrap();
+                let messages = records["records"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|r| r["message"].as_str())
+                    .collect::<Vec<_>>();
+                assert!(!messages.contains(&"config warning"));
+                assert_eq!(messages.contains(&"config error"), configured != "off");
+                assert_eq!(messages.contains(&"setup trace"), configured != "off");
+                store.finish_system_session().unwrap();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn diagnostic_worker_logs_keep_the_scenario_correlation_without_command_events() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Diagnostics::open(root.path());
+        store.start_system_session("worker").unwrap();
+        let bus = Arc::new(EventBus::default());
+        bus.record_in(Some(store.clone()));
+        let subscriber = tracing_subscriber::registry()
+            .with(LogFilter::new(log_filter("", None)))
+            .with(DiagnosticLayer::for_bus(bus));
+        let trace = Trace::open(&store, "diagnostics")
+            .command("diagnostics")
+            .person("alice");
+        let worker_trace = trace.clone();
+        use tracing::instrument::WithSubscriber as _;
+        tokio::spawn(
+            async move {
+                crate::commands::run_diagnostic_check(&worker_trace, async {
+                    tracing::warn!(target: "gb_environment", "check refused");
+                })
+                .await;
+            }
+            .with_subscriber(subscriber),
+        )
+        .await
+        .unwrap();
+        trace.event("diagnostics.completed", Map::new());
+        let detail = store.trace_detail(trace.id()).unwrap();
+        let records = detail["records"].as_array().unwrap();
+        let logs = records
+            .iter()
+            .filter(|r| r["kind"] == "log")
+            .collect::<Vec<_>>();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["message"], "check refused");
+        assert_eq!(logs[0]["trace_id"], trace.id());
+        assert_eq!(logs[0]["command"], "diagnostics");
+        assert_eq!(logs[0]["person_id"], "alice");
+        assert!(logs[0]["attributes"].get("run.entry").is_none());
+        let events = records
+            .iter()
+            .filter(|r| r["kind"] == "event")
+            .map(|r| r["type"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(events, ["diagnostics.completed"]);
+        let global = store.latest_system_records(200).unwrap();
+        assert!(
+            global["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["kind"] != "log")
+        );
+        store.finish_system_session().unwrap();
+    }
+
     #[tokio::test]
     async fn logs_are_recorded_in_the_current_trace_or_system_and_never_streamed() {
         let root = tempfile::tempdir().unwrap();

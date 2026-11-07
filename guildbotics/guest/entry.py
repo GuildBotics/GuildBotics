@@ -143,7 +143,7 @@ def _failure(exc: Exception) -> CommandFailure:
     failure = CommandFailure(
         command=isinstance(exc, CommandError),
         type=type(exc).__name__,
-        message=str(inference if inference is not None else exc),
+        message=str(exc),
     )
     if inference is not None:
         failure.inference_error_type = inference.error_type

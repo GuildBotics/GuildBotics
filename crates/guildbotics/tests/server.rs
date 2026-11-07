@@ -1332,7 +1332,19 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
         transcripts[0],
         run.join(started["payload"]["path"].as_str().unwrap())
     );
-    assert_eq!(std::fs::read_to_string(&transcripts[0]).unwrap(), index);
+    let session = std::fs::read_to_string(&transcripts[0]).unwrap();
+    let session_events = session
+        .lines()
+        .filter(|line| serde_json::from_str::<Value>(line).unwrap()["kind"] != "log")
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_eq!(session_events, index);
+    assert!(
+        !index
+            .lines()
+            .any(|line| serde_json::from_str::<Value>(line).unwrap()["kind"] == "log")
+    );
     server.stop();
 }
 

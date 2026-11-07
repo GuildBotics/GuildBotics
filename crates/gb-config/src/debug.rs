@@ -11,6 +11,19 @@ pub struct Settings {
     pub configured: bool,
 }
 
+impl Settings {
+    /// Python logging has no TRACE level and spells WARN as WARNING.
+    pub fn guest_log_level(&self) -> &str {
+        match self.log_level.as_str() {
+            "TRACE" | "DEBUG" => "DEBUG",
+            "WARN" | "WARNING" => "WARNING",
+            "ERROR" => "ERROR",
+            "FATAL" | "CRITICAL" => "CRITICAL",
+            _ => "INFO",
+        }
+    }
+}
+
 pub fn read(workspace: Option<&Path>) -> Settings {
     read_with(workspace, |key| std::env::var(key).ok())
 }
@@ -25,7 +38,11 @@ fn read_with(workspace: Option<&Path>, inherited: impl Fn(&str) -> Option<String
         .map(|(key, value)| {
             let value = value.trim();
             let value = if value.starts_with(['\'', '"']) {
-                value.trim_matches(['\'', '"']).to_owned()
+                value[1..]
+                    .split(value.chars().next().unwrap())
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
             } else {
                 value.split(" #").next().unwrap_or("").trim().to_owned()
             };
@@ -53,7 +70,7 @@ fn read_with(workspace: Option<&Path>, inherited: impl Fn(&str) -> Option<String
     );
     Settings {
         configured,
-        enabled: log_level == "DEBUG" || agno_debug,
+        enabled: matches!(log_level.as_str(), "DEBUG" | "TRACE") || agno_debug,
         log_level,
         agno_debug,
     }
@@ -86,5 +103,26 @@ mod tests {
         assert_eq!(value.log_level, "INFO");
         assert!(!value.enabled);
         assert!(!value.configured);
+    }
+
+    #[test]
+    fn quoted_comments_and_host_levels_are_safe_for_guest_logging() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".guildbotics/local/debug.env");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for (input, host, guest) in [
+            ("\"DEBUG\" # comment", "DEBUG", "DEBUG"),
+            ("'WARNING' # comment", "WARNING", "WARNING"),
+            ("trace", "TRACE", "DEBUG"),
+            ("WARN", "WARN", "WARNING"),
+            ("FATAL", "FATAL", "CRITICAL"),
+            ("ERROR", "ERROR", "ERROR"),
+            ("unknown", "UNKNOWN", "INFO"),
+        ] {
+            std::fs::write(&path, format!("LOG_LEVEL={input}\n")).unwrap();
+            let settings = read_with(Some(root.path()), |_| None);
+            assert_eq!(settings.log_level, host);
+            assert_eq!(settings.guest_log_level(), guest);
+        }
     }
 }
