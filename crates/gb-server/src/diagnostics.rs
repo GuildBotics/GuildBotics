@@ -104,7 +104,7 @@ pub(crate) async fn scenario(
     async move {
     let mut completion=DiagnosticRun{trace:trace.clone(),finished:false,language:lang};
     let loaded = match &selected.workspace {
-        Some(w) => gb_config::team::Team::load(&w.join(".guildbotics/config"), &api.identity_root),
+        Some(w) => load_context(&api,w).await,
         None => Err(anyhow::anyhow!(crate::i18n::t(
             lang,
             "app_api.errors.config_not_found",
@@ -114,7 +114,7 @@ pub(crate) async fn scenario(
     let load_error = loaded.as_ref().err().map(|e| format!("{e}"));
     let (mut checks, mut active) = (Vec::new(), Vec::new());
     let mut providers = None;
-    if let (Ok(team), Some(workspace)) = (loaded, &selected.workspace) {
+    if let (Ok((team,saved)), Some(workspace)) = (loaded, &selected.workspace) {
         let project =
             std::fs::read_to_string(workspace.join(".guildbotics/config/team/project.yml"))
                 .ok()
@@ -204,17 +204,7 @@ pub(crate) async fn scenario(
                     .unwrap_or(Value::Null);
             let names = crate::setup_providers::Registry::named(&project);
             providers = Some(names.clone());
-            let mut saved = Vec::new();
-            for member in &members {
-                let person = member.person_id.clone();
-                if let Ok(m) = crate::config_api::with_setup(&api, workspace.clone(), move |s| {
-                    s.saved_member(&person)
-                })
-                .await
-                {
-                    saved.push(m);
-                }
-            }
+            let saved=saved.into_iter().filter(|m|members.iter().any(|member|member.person_id==m.person_id)).collect::<Vec<_>>();
             let registry = crate::setup_providers::Registry(Some(api.clone()));
             if names.contains(&"branvil") {
                 checks.extend(
@@ -286,6 +276,24 @@ pub(crate) async fn scenario(
     completion.finished=true;
     Json(result).into_response()
     }.instrument(span).await
+}
+
+async fn load_context(
+    api: &Shared,
+    workspace: &std::path::Path,
+) -> anyhow::Result<(gb_config::team::Team, Vec<gb_setup::SavedMember>)> {
+    let team =
+        gb_config::team::Team::load(&workspace.join(".guildbotics/config"), &api.identity_root)?;
+    let mut saved = Vec::new();
+    for member in &team.members {
+        let person = member.person_id.clone();
+        let member = crate::config_api::with_setup(api, workspace.to_owned(), move |setup| {
+            setup.saved_member(&person)
+        })
+        .await?;
+        saved.push(member);
+    }
+    Ok((team, saved))
 }
 
 async fn run_check(

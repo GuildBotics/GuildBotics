@@ -427,6 +427,22 @@ async fn scenario_missing_config_and_unknown_person_are_checks() {
 }
 
 #[tokio::test]
+async fn unavailable_credentials_fail_context_loading_before_live_checks() {
+    let f = team().await;
+    f.seed_identity_secret("ALICE_BRANVIL_TOKEN", "synthetic-token");
+    f.keys(Keys::Locked);
+    *f.api.diagnostics_runner.lock().unwrap() = Some(Arc::new(|_, _, _, _| {
+        panic!("context failure must not start a command")
+    }));
+    let body = scenario(&f, "?person_id=alice").await;
+    assert_eq!(body["checks"].as_array().unwrap().len(), 1);
+    assert_eq!(body["checks"][0]["code"], "config_load");
+    assert_eq!(body["checks"][0]["status"], "error");
+    assert_eq!(body["active_members"], json!([]));
+    assert_eq!(body["ok"], false);
+}
+
+#[tokio::test]
 async fn troubleshooting_validates_before_execution_and_uses_the_named_conversation() {
     let f = team().await;
     let initial = f.api.events.snapshot();
