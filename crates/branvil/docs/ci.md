@@ -108,11 +108,12 @@ What a job's commands find, as on common CI services:
 - **`/tmp` is on a disk, not in the VM's memory**: an ext4 disk of 4 GiB of
   the job's own (mode 1777), a named volume `bv-tmp-<runner>-<attempt id>`
   the runner removes after the job. (Without it, microsandbox puts `/tmp` in
-  a tmpfs of a quarter of the VM's memory, at most 512 MiB.) The job's disk
-  sizes are microsandbox's 4 GiB default, decided together: the VM's root
-  disk (Branvil passes no `--root-disk`), `/tmp`, and what the job may add to
-  `/work` beyond the checkout and the restored cache (the default quota of a
-  mounted directory). They are the runner's, not the pipeline's.
+  a tmpfs of a quarter of the VM's memory, at most 512 MiB.) The VM's root
+  disk (Branvil passes no `--root-disk`) and `/tmp` are microsandbox's 4 GiB
+  default. What the job may add to `/work` beyond the checkout and the
+  restored cache is the quota of that mount, `ci.executor.work_quota_mib`
+  (16 GiB by default; a workspace built from scratch outgrows microsandbox's
+  4 GiB default). They are the runner's, not the pipeline's.
 
 ## Trust: where the pipeline comes from
 
@@ -388,6 +389,7 @@ repository, commit, job, and links to failed and successful attempts.
 | one artifact | 64 MiB (`ci.artifact_max_mib`) | `413 too_large`; at most 16 artifacts per attempt, zip only, names `[A-Za-z0-9_.-]` declared by the job |
 | artifacts per attempt (before zipping) | 64 MiB (`ci.executor.artifacts_max_mib`) | runner side |
 | job cpus / memory | 4 / 4096 MiB (`ci.executor.max_cpus`, `max_memory_mib`) | every job runs with these |
+| work directory quota | 16384 MiB (`ci.executor.work_quota_mib`) | what a job may write to `/work` beyond the checkout and the restored cache; past it, writes fail with `No space left on device` |
 | jobs at once | 1 (`ci.executor.max_jobs`) | per runner; the runner claims a job only when it can start it, so the others wait in the service's queue. Jobs at once use that many times the CPUs and memory, and the disk of that many work directories (each with its restored cache, and a copy of it in the cache while it is saved) |
 | stop wait | 3600 s (`ci.stop_wait_secs`) | how long a stopping service waits for its running jobs ("Stopping the service" above) |
 | job time limit | 3600 s (`ci.executor.max_timeout_secs`) | the limit of a job that gives no `timeout_secs`; a larger `timeout_secs` is lowered to it, and the log says so |
@@ -553,7 +555,7 @@ Per job the runner:
    runner's directory is a symbolic link. Git never runs in the work
    directory once the VM has had it;
 3. restores the cache, then runs
-   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-dir <work>:/work:uid=1000,gid=1000 --mount-dir <log>:/.branvil-log:uid=1000,gid=1000 --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
+   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-dir <work>:/work:uid=1000,gid=1000,quota=<work_quota_mib>M --mount-dir <log>:/.branvil-log:uid=1000,gid=1000 --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
    (`N` and `M` the runner's CPUs and memory);
    the script first sends its stdout and stderr to `/.branvil-log/out` and
    sets `HOME` ("The job's environment");

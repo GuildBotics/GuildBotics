@@ -34,7 +34,7 @@ const CI = {
     runners: [{ name: "branvil-runner", last_seen_at: "2026-10-18T05:00:00.000Z", executor: "microsandbox", executor_state: "ready", executor_detail: null }],
   },
   executor: { msb: "/Users/u/.guildbotics/data/msb/bin/msb", problem: null, home: "/Users/u/.branvil/msb-home" },
-  limits: { max_cpus: 4, max_memory_mib: 4096, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1 },
+  limits: { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1 },
   images: { error: null, cached: [CACHED], missing: [] },
   operation: null,
   repositories: [
@@ -261,18 +261,22 @@ describe("CI settings", () => {
     const limits = screen.getByRole("form", { name: "Job resources" });
     expect(
       screen.getByText(
-        "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
+        "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. Work directory space is what a job may write to /work beyond the checkout and the restored cache. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
       ),
     ).toBeInTheDocument();
     const cpus = within(limits).getByRole("textbox", { name: "CPUs" });
     await user.clear(cpus);
     await user.type(cpus, "8");
+    const quota = within(limits).getByRole("textbox", { name: "Work directory space (MiB)" });
+    expect(quota).toHaveValue("16384");
+    await user.clear(quota);
+    await user.type(quota, "32768");
     const jobs = within(limits).getByRole("textbox", { name: "Parallel jobs" });
     await user.clear(jobs);
     await user.type(jobs, "2");
     await user.click(within(limits).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/ci/limits")).toHaveLength(1));
-    expect(fake.calls("PUT", "/api/v1/admin/ci/limits")[0]?.body).toEqual({ max_cpus: 8, max_memory_mib: 4096, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 2 });
+    expect(fake.calls("PUT", "/api/v1/admin/ci/limits")[0]?.body).toEqual({ max_cpus: 8, max_memory_mib: 4096, work_quota_mib: 32768, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 2 });
     expect(await within(limits).findByText("Saved.")).toBeInTheDocument();
   });
 

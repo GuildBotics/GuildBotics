@@ -928,6 +928,7 @@ impl Runner {
                         image_lock,
                         cpus,
                         memory_mib,
+                        work_quota_mib: limits.work_quota_mib,
                         timeout_secs,
                         work: &work,
                         log_dir: &log_dir,
@@ -1140,13 +1141,16 @@ mod tests {
     use executor::ImageLock;
     use std::sync::atomic::AtomicBool;
 
+    /// What a run got: (image, cpus, memory MiB, timeout s, work quota MiB).
+    type Ran = (String, u32, u64, u64, u64);
+
     struct Fake {
         ready: AtomicBool,
         /// The image cache is held (by a pull or a load): checks wait.
         hold_images: AtomicBool,
         changed_image: AtomicBool,
-        /// What every run got: (image, cpus, memory MiB, timeout s).
-        ran: std::sync::Mutex<Vec<(String, u32, u64, u64)>>,
+        /// What every run got.
+        ran: std::sync::Mutex<Vec<Ran>>,
         /// Jobs that reached `wait`, after source fetching and checkout.
         waiting: std::sync::atomic::AtomicUsize,
         /// `wait`s that saw the stop (an aborted run never does).
@@ -1211,6 +1215,7 @@ mod tests {
                 job.cpus,
                 job.memory_mib,
                 job.timeout_secs,
+                job.work_quota_mib,
             ));
             for c in &job.job.commands {
                 let words: Vec<&str> = c.split_whitespace().collect();
@@ -2150,6 +2155,7 @@ mod tests {
             ExecutorConfig {
                 max_cpus: 3,
                 max_memory_mib: 2048,
+                work_quota_mib: 8192,
                 max_timeout_secs: 100,
                 ..ExecutorConfig::default()
             },
@@ -2178,11 +2184,12 @@ mod tests {
         assert!(runner.once(&fake).await.unwrap());
         let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
         assert_eq!(ok.conclusion.as_deref(), Some("success"), "{ok:?}");
-        // The executor runs the tag with the runner's CPUs and memory, and
-        // the runner's time limit for a job that gives none.
+        // The executor runs the tag with the runner's CPUs, memory, and
+        // work directory quota, and the runner's time limit for a job that
+        // gives none.
         assert_eq!(
             fake.ran.lock().unwrap()[0],
-            ("alpine".to_string(), 3, 2048, 100)
+            ("alpine".to_string(), 3, 2048, 100, 8192)
         );
         assert_eq!(ok.artifact_names, vec!["report".to_string()]);
         let id = ok.attempt_id.clone().unwrap();

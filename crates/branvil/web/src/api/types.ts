@@ -527,6 +527,7 @@ export interface CiRunner {
 export interface CiLimits {
   max_cpus: number;
   max_memory_mib: number;
+  work_quota_mib: number;
   max_timeout_secs: number;
   cache_max_mib: number;
   max_jobs: number;

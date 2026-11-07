@@ -74,7 +74,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     assert_eq!(v["runner"]["mode"], "off");
     assert_eq!(
         v["limits"],
-        json!({"max_cpus": 4, "max_memory_mib": 4096, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1})
+        json!({"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1})
     );
     assert_eq!(
         v["repositories"],
@@ -100,7 +100,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         config_text(&w)
     );
 
-    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2});
+    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2});
     let (st, v) = w
         .server
         .put("/admin/ci/limits", &w.owner, limits.clone())
@@ -108,11 +108,13 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["limits"], limits);
     for bad in [
-        json!({"max_cpus": 0, "max_memory_mib": 8192, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
-        json!({"max_cpus": 8, "max_memory_mib": 64, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
-        json!({"max_cpus": 8, "max_memory_mib": 8192, "max_timeout_secs": 0, "cache_max_mib": 4096, "max_jobs": 2}),
-        json!({"max_cpus": 8, "max_memory_mib": 8192, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 0}),
-        json!({"max_cpus": 8, "max_memory_mib": 8192, "max_timeout_secs": 5400, "cache_max_mib": 4096}),
+        json!({"max_cpus": 0, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
+        json!({"max_cpus": 8, "max_memory_mib": 64, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
+        json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 512, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
+        json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 0, "cache_max_mib": 4096, "max_jobs": 2}),
+        json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 0}),
+        json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096}),
+        json!({"max_cpus": 8, "max_memory_mib": 8192, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2}),
         json!({"max_cpus": 8}),
     ] {
         let (st, v) = w
