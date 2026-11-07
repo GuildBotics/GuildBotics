@@ -390,6 +390,46 @@ fn bytes_under(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+fn diagnostic_credentials_match_runtime_store_even_with_environment_tokens() {
+    const CHILD: &str = "GUILDBOTICS_TEST_DIAGNOSTIC_STORE";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "diagnostic_credentials_match_runtime_store_even_with_environment_tokens",
+            ])
+            .env(CHILD, "1")
+            .env("A_ALPHA_TOKEN", "environment-fixture")
+            .env("A_BETA_TOKEN", "environment-fixture")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let world = World::new();
+    world.init(json!({"language": "en"}));
+    world.save(agent("a")).unwrap();
+    let setup = world.setup();
+    let runtime = setup.saved_member("a").unwrap();
+    let diagnostic = setup.diagnostic_member("a").unwrap();
+    assert_eq!(diagnostic.secrets, runtime.secrets);
+    assert_eq!(diagnostic.secret("ALPHA_TOKEN"), "alpha-1");
+    assert!(diagnostic.secret("BETA_TOKEN").is_empty());
+    let locked = world.setup_with(&Locked);
+    assert!(
+        locked
+            .saved_member("a")
+            .err()
+            .unwrap()
+            .is::<SecretsUnavailable>()
+    );
+    let diagnostic = locked.diagnostic_member("a").unwrap();
+    assert!(diagnostic.secrets.is_empty());
+    assert_eq!(diagnostic.person_id, runtime.person_id);
+    assert_eq!(diagnostic.account_info, runtime.account_info);
+}
+
+#[test]
 fn provider_hooks_run_in_frozen_order() {
     let world = World::new();
     world.init(json!({"language": "en"}));
