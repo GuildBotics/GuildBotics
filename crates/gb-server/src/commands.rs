@@ -268,33 +268,11 @@ async fn start(
             .context(json!({"path": ""}))
             .into_response());
     };
-    let home = api
-        .service
-        .host()
-        .map_or_else(|| api.home.clone(), |host| host.home.clone());
-    let cwd = match (&launch.cwd, &request.cwd) {
-        (Some(cwd), _) => {
-            std::fs::create_dir_all(cwd).map_err(|e| internal(&e.to_string(), "OSError"))?;
-            cwd.clone()
-        }
-        (None, Some(cwd)) => working_directory(cwd, &home).map_err(|refused| match refused {
-            None => error(StatusCode::BAD_REQUEST, "command_cwd_not_absolute")
-                .key(
-                    "command_cwd_not_absolute",
-                    vec![("cwd", cwd.display().to_string())],
-                )
-                .into_response(),
-            Some(problem) => error(StatusCode::BAD_REQUEST, "command_error")
-                .reason(problem)
-                .into_response(),
-        })?,
-        (None, None) => home.join(EXCHANGE_DIRECTORY),
-    };
     let host = match api.service.host() {
         Some(host) => host,
         None => std::sync::Arc::new(gb_environment::Host {
             data: api.data.to_path_buf(),
-            home,
+            home: api.home.clone(),
             package: gb_base::home::python_package(),
             identity_root: api.identity_root.clone(),
         }),
@@ -306,13 +284,8 @@ async fn start(
             .context(json!({"path": project}))
             .into_response());
     }
-    let team = {
-        let (config, identity_root) = (config.clone(), host.identity_root.clone());
-        tokio::task::spawn_blocking(move || Team::load(&config, &identity_root))
-            .await
-            .map_err(|e| internal(&e.to_string(), "RuntimeError"))?
-            .map_err(|e| internal(&format!("{e:#}"), "ValueError"))?
-    };
+    let team =
+        crate::command_catalog::team(config.clone(), host.identity_root.clone(), headers).await?;
     // A run refused for its member never started, but the screens are told.
     let person = person(&team, request.person.as_deref(), headers).map_err(|refused| {
         if let Some(events) = &api.events {
@@ -378,9 +351,32 @@ async fn start(
                 .into_response());
         }
     }
+    // Where the run works, once its member and file are known; a directory
+    // of its own is made without following a link on the way.
+    let cwd = match (&launch.cwd, &request.cwd) {
+        (Some(cwd), _) => {
+            gb_base::host_path::open_directory(cwd, true)
+                .map_err(|e| internal(&e.to_string(), "OSError"))?;
+            cwd.clone()
+        }
+        (None, Some(cwd)) => {
+            working_directory(cwd, &host.home).map_err(|refused| match refused {
+                None => error(StatusCode::BAD_REQUEST, "command_cwd_not_absolute")
+                    .key(
+                        "command_cwd_not_absolute",
+                        vec![("cwd", cwd.display().to_string())],
+                    )
+                    .into_response(),
+                Some(problem) => error(StatusCode::BAD_REQUEST, "command_error")
+                    .reason(problem)
+                    .into_response(),
+            })?
+        }
+        (None, None) => host.home.join(EXCHANGE_DIRECTORY),
+    };
     let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
     let (access, path) = resolved.map_err(|problem| {
-        error(StatusCode::BAD_REQUEST, "command_error")
+        error(launch.failure.0, launch.failure.1)
             .reason(problem.to_string())
             .into_response()
     })?;
@@ -397,22 +393,29 @@ async fn start(
         })?),
         _ => None,
     };
+    // The screens hear of the run's events, and its place names its trace.
+    let announce = api.events.clone().map(|events| {
+        std::sync::Arc::new(move |event: &serde_json::Map<String, serde_json::Value>| {
+            events.announce(event);
+        }) as gb_observability::Announce
+    });
+    let opened = move |place: &Option<Place>, mut trace: Trace| {
+        if let Some(announce) = announce {
+            trace = trace.announced(announce);
+        }
+        if let Some(place) = place {
+            place.hold(trace.id());
+        }
+        trace
+    };
     if request.command == crate::ticket_selector::COMMAND && request.args.is_empty() {
-        let ran = manual_ticket(api, headers, &person.person_id).await;
-        drop(place);
-        return ran;
+        return manual_ticket(api, headers, &person.person_id, place, opened).await;
     }
     let mut trace = Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id);
     for (key, value) in launch.attributes {
         trace = trace.attribute(&key, value);
     }
-    if let Some(events) = &api.events {
-        let events = events.clone();
-        trace = trace.announced(std::sync::Arc::new(move |event| events.announce(event)));
-    }
-    if let Some(place) = &place {
-        place.hold(trace.id());
-    }
+    let trace = opened(&place, trace);
     let trace_id = trace.id().to_owned();
     let command = gb_environment::Command {
         wants_result: launch.result.is_some(),
@@ -588,6 +591,8 @@ async fn manual_ticket(
     api: &RunState<'_>,
     headers: &HeaderMap,
     person: &str,
+    place: Option<Place>,
+    opened: impl FnOnce(&Option<Place>, Trace) -> Trace + Send + 'static,
 ) -> Result<Ran, Response> {
     use crate::{dispatcher::DispatchFailure, workflow_runtime::Refused};
     let error = |status, code| ApiError::new(status, code, headers);
@@ -602,15 +607,25 @@ async fn manual_ticket(
             runtime.draining = generation.draining.clone();
             runtime.cancelled = generation.cancelled.clone();
             runtime.generation = Some(generation);
-            runtime.manual_ticket().await
+            // The place is the run's, as `start`'s is.
+            let mut trace_id = None;
+            let result = runtime
+                .manual_ticket(|trace| {
+                    trace_id = Some(trace.id().to_owned());
+                    opened(&place, trace)
+                })
+                .await;
+            drop(place);
+            (trace_id, result)
         })
         .map_err(|_| error(StatusCode::CONFLICT, "work_rejected").into_response())?;
-    let result = api
+    let (trace_id, result) = api
         .work
         .spawn(work)
         .await
         .map_err(|e| internal(&e.to_string(), "RuntimeError"))?
         .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
+    let traced = json!({ "trace_id": trace_id });
     let language = i18n::language(
         headers
             .get("x-guildbotics-language")
@@ -629,7 +644,9 @@ async fn manual_ticket(
             return Err(error(StatusCode::CONFLICT, "work_rejected").into_response());
         }
         Err(Refused::Dispatch(DispatchFailure::Cancelled)) => {
-            return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled").into_response());
+            return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled")
+                .context(traced)
+                .into_response());
         }
         Err(Refused::Dispatch(DispatchFailure::Guest(failure))) => failed_in_environment(*failure),
         Err(Refused::Dispatch(DispatchFailure::Environment(failure))) => failed(failure, language),
@@ -656,6 +673,7 @@ async fn manual_ticket(
     match ended.answer {
         Ok(reason) => Err(error(StatusCode::BAD_REQUEST, "command_error")
             .reason(reason)
+            .context(traced)
             .into_response()),
         Err(defect) => Err(internal(&defect, &ended.error_type)),
     }
@@ -1090,6 +1108,18 @@ mod tests {
                 (error_type, code, told)
             );
         }
+    }
+
+    #[test]
+    fn only_an_answered_failure_carries_its_message() {
+        use gb_observability::Failure as _;
+        let ended = |answer| Ended {
+            error_type: "CommandError".into(),
+            code: "",
+            answer,
+        };
+        assert_eq!(ended(Ok("boom".into())).message(), Some("boom".into()));
+        assert_eq!(ended(Err("secret details".into())).message(), None);
     }
 
     #[tokio::test]

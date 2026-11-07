@@ -404,7 +404,11 @@ impl Runtime {
 
     /// The scheduler supplies the input slot separately from the conversation
     /// identity. A later feedback event on the same ticket is new work.
-    pub async fn manual_ticket(&self) -> Result<(String, CommandReply), Refused> {
+    /// `opened` takes the run's trace as it opens, once a ticket is chosen.
+    pub async fn manual_ticket(
+        &self,
+        opened: impl FnOnce(Trace) -> Trace,
+    ) -> Result<(String, CommandReply), Refused> {
         let diagnostics = self.diagnostics();
         let selector =
             Selector {
@@ -428,7 +432,7 @@ impl Runtime {
         let Some((task, invocation)) = selected else {
             return Ok((String::new(), CommandReply::default()));
         };
-        let trace = self.traced(Trace::open(&diagnostics, "manual"), Default::default());
+        let trace = opened(self.traced(Trace::open(&diagnostics, "manual"), Default::default()));
         let id = trace.id().to_owned();
         let reply = self
             .ticket_traced(

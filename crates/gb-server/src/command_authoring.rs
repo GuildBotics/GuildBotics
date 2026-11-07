@@ -84,14 +84,10 @@ pub(crate) async fn author(
         Ok(workspace) => workspace,
         Err(refused) => return refused,
     };
-    let available = match available_commands(&workspace) {
+    let available = match available_commands(&workspace.roots, &workspace.team.language) {
         Ok(available) => available,
         Err(e) => return crate::commands::internal(&format!("{e:#}"), "OSError"),
     };
-    let message = json!({"mode": if request.mode == Mode::Edit {"edit"} else {"create"},
-        "command": request.command, "format": request.format.map(Format::name),
-        "current_content": request.content, "instruction": request.message,
-        "available_commands": available});
     let label = if request.command.is_empty() {
         "new-command"
     } else {
@@ -116,7 +112,7 @@ pub(crate) async fn author(
         command: COMMAND.into(),
         args: vec![],
         person: request.person.clone(),
-        message: message.to_string(),
+        message: pipe(&request, available).to_string(),
         cwd: None,
         expected_workspace: None,
         expected_command_file_id: None,
@@ -154,11 +150,21 @@ fn answer(request: &AuthoringRequest, trace_id: &str, result: &Value) -> Value {
         "action": result["action"], "changes": changes})
 }
 
+/// What the assistant reads: the editor's state, the instruction and the
+/// shared commands it may use.
+fn pipe(request: &AuthoringRequest, available: Value) -> Value {
+    json!({"mode": if request.mode == Mode::Edit {"edit"} else {"create"},
+        "command": request.command, "format": request.format.map(Format::name),
+        "current_content": request.content, "instruction": request.message,
+        "available_commands": available})
+}
+
 /// The shared commands, as the assistant reads them: name, format, file and
 /// content.
-fn available_commands(workspace: &crate::command_catalog::Workspace) -> anyhow::Result<Value> {
-    let roots = &workspace.roots;
-    let language = &workspace.team.language;
+fn available_commands(
+    roots: &gb_config::commands::CommandRoots,
+    language: &str,
+) -> anyhow::Result<Value> {
     let listed = roots.shared_files(language)?;
     let mut available = Vec::new();
     for file in listed["files"].as_array().into_iter().flatten() {
@@ -228,6 +234,39 @@ mod tests {
             json!({"conversation_id": "c", "message": "m", "mode": "create"})
         })
         .unwrap()
+    }
+
+    #[test]
+    fn the_assistant_reads_the_editor_state_and_the_shared_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = gb_config::commands::CommandRoots {
+            config: dir.path().join("config"),
+            templates: gb_base::home::python_package().join("templates"),
+        };
+        let script = roots.config.join("commands/ocr/extract-text.py");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "def main(context):\n    return ''\n").unwrap();
+        let member = roots.config.join("team/members/bot/commands/own.md");
+        std::fs::create_dir_all(member.parent().unwrap()).unwrap();
+        std::fs::write(&member, "Own.\n").unwrap();
+        let available = available_commands(&roots, "en").unwrap();
+        assert_eq!(
+            available,
+            json!([{"command": "ocr/extract-text", "format": "python",
+                "relative_path": "ocr/extract-text.py",
+                "content": "def main(context):\n    return ''\n"}])
+        );
+        assert_eq!(
+            pipe(&request("edit"), available.clone()),
+            json!({"mode": "edit", "command": "reports/weekly", "format": "python",
+                "current_content": "old source", "instruction": "m",
+                "available_commands": available})
+        );
+        assert_eq!(
+            pipe(&request("create"), json!([])),
+            json!({"mode": "create", "command": "", "format": null,
+                "current_content": "", "instruction": "m", "available_commands": []})
+        );
     }
 
     #[test]

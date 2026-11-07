@@ -40,6 +40,12 @@ impl std::fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
+/// A file over [`MAX_BYTES`], refused before anything is written.
+pub fn too_large() -> Refused {
+    refused(413, "command_file_too_large", "command_file_too_large")
+        .context(json!({"max_bytes": MAX_BYTES.to_string()}))
+}
+
 fn refused(status: u16, code: &'static str, key: &'static str) -> Refused {
     Refused {
         status,
@@ -162,7 +168,7 @@ impl CommandRoots {
         let target = self.prospective(command, format, language)?;
         let content = content.unwrap_or(format.initial());
         check_content(content)?;
-        write(writer, &target, content.as_bytes(), new_mode(format))?;
+        writer.write_mode(&target, content.as_bytes(), new_mode(format))?;
         self.file_detail(&target, language)
     }
 
@@ -178,7 +184,7 @@ impl CommandRoots {
         let path = self.existing(id, language)?;
         check_content(content)?;
         current(&path, expected, "command_file_changed.reloaded")?;
-        write(writer, &path, content.as_bytes(), mode(&path))?;
+        writer.write_mode(&path, content.as_bytes(), mode(&path))?;
         self.file_detail(&path, language)
     }
 
@@ -276,10 +282,10 @@ impl CommandRoots {
         let mut written: Vec<(PathBuf, Option<Before>)> = Vec::new();
         for (target, change, mode) in &targets {
             let before = std::fs::read(target).ok().map(|b| (b, *mode));
-            if let Err(error) = write(writer, target, change.content.as_bytes(), *mode) {
+            if let Err(error) = writer.write_mode(target, change.content.as_bytes(), *mode) {
                 for (path, before) in written.into_iter().rev() {
                     let _ = match before {
-                        Some((bytes, mode)) => write(writer, &path, &bytes, mode),
+                        Some((bytes, mode)) => writer.write_mode(&path, &bytes, mode),
                         None => writer.delete(&path),
                     };
                 }
@@ -397,10 +403,7 @@ fn check_content(content: &str) -> anyhow::Result<()> {
         .context(json!({"reason": "nul_byte"})))?;
     }
     if content.len() > MAX_BYTES {
-        Err(
-            refused(413, "command_file_too_large", "command_file_too_large")
-                .context(json!({"max_bytes": MAX_BYTES.to_string()})),
-        )?;
+        Err(too_large())?;
     }
     Ok(())
 }
@@ -431,16 +434,4 @@ fn mode(path: &Path) -> u32 {
 #[cfg(not(unix))]
 fn mode(_: &Path) -> u32 {
     0o644
-}
-
-fn write(writer: &mut Writer<'_>, path: &Path, data: &[u8], mode: u32) -> anyhow::Result<()> {
-    writer.write_bytes(path, data)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    Ok(())
 }

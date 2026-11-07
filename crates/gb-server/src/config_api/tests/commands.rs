@@ -86,6 +86,23 @@ fn arg(name: &str, kind: &str, required: bool, default: &str) -> (String, String
 }
 
 #[tokio::test]
+async fn a_broken_member_file_is_the_persons_to_fix() {
+    let f = workspace("en").await;
+    let member = f.config().join("team/members/bot/member.yml");
+    f.write(&member, "[broken\n");
+    for (method, uri, body) in [
+        ("GET", "/commands/options", Value::Null),
+        ("GET", "/commands/routine-options", Value::Null),
+        ("POST", "/commands/run", json!({"command": "hello"})),
+    ] {
+        let (status, answer) = f.call(method, uri, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {answer}");
+        assert_eq!(answer["code"], "member_config_invalid", "{uri}");
+        assert_eq!(answer["context"], json!({"path": member}), "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn the_option_endpoints_answer_the_frozen_shape() {
     let f = workspace("en").await;
     f.write(
@@ -418,6 +435,11 @@ async fn a_requirement_is_met_as_the_device_and_the_project_provide_it() {
             true,
             true,
         ),
+        (
+            json!({"ticket_service": {"name": 1}, "chat_service": {"name": ""}}),
+            true,
+            false,
+        ),
     ] {
         serve(&f, services);
         let listed = options(&f, "/commands/options").await;
@@ -434,13 +456,34 @@ async fn a_requirement_is_met_as_the_device_and_the_project_provide_it() {
     assert_ne!(environment["message"], "");
     let tool = requirement(option(&listed, "agent"), "cli_agent");
     assert_eq!(tool["satisfied"], false);
-    let host = crate::command_catalog::host(&f.api).unwrap();
+    let cli = f.root.join("home/.guildbotics/bin/guildbotics");
     assert_eq!(
         tool["message"],
-        crate::environment::tool_refusals(&host, "en").unwrap()["codex"]
+        crate::i18n::t(
+            "en",
+            "intelligences.agent_environment.tool.credentials_missing",
+            &[
+                ("tool", "Codex"),
+                (
+                    "command",
+                    &format!("'{}' environment login codex", cli.display())
+                ),
+            ],
+        )
     );
     assert_eq!(
         requirement(option(&listed, "scripted"), "cli_agent"),
+        &json!({"kind": "cli_agent", "satisfied": true, "message": ""})
+    );
+    // A saved login is met, though a past turn failed to authenticate.
+    f.write(
+        &f.config().join("intelligences/cli_agent_mapping.yml"),
+        "default: cli_agents/claude/default.yml\n",
+    );
+    f.claude_logged_in();
+    let listed = options(&f, "/commands/options").await;
+    assert_eq!(
+        requirement(option(&listed, "agent"), "cli_agent"),
         &json!({"kind": "cli_agent", "satisfied": true, "message": ""})
     );
 }
@@ -453,9 +496,8 @@ async fn a_llm_requirement_is_met_by_a_providers_key() {
     assert_eq!(met(&options(&f, "/commands/options").await), false);
     let keys = gb_setup::provider_env_keys(
         &gb_base::home::python_package().join("templates"),
-        &f.config().join("intelligences"),
-    )
-    .unwrap();
+        &f.config().join("intelligences/models"),
+    );
     let key = keys.values().next().unwrap();
     f.repository()
         .workspace_secrets(f.device())
@@ -741,6 +783,14 @@ async fn a_run_refused_for_its_member_publishes_a_failed_event_without_a_trace()
     assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
     assert_eq!(answer["code"], "person_selection_required");
     assert_eq!(
+        answer["message"],
+        crate::i18n::t(
+            "en",
+            "app_api.errors.person_selection_required",
+            &[("available", "alice, bot (Test)")]
+        )
+    );
+    assert_eq!(
         answer["context"],
         json!({"available": ["alice", "bot (Test)"]})
     );
@@ -769,6 +819,7 @@ async fn a_writing_run_while_another_holds_the_manual_slot_is_a_conflict() {
     );
     assert_eq!(answer["context"], json!({"trace_id": "inflight-id"}));
     assert!(f.events("command.started").is_empty());
+    assert!(f.events("command.failed").is_empty());
     // A read-only command does not take the place: it runs, as far as the
     // device lets it.
     let (status, answer) = run(&f, json!({"command": "look", "person": "bot"})).await;
@@ -802,8 +853,26 @@ async fn a_run_records_and_publishes_its_start_and_failure_and_releases_its_plac
             json!({"command": "demo", "person": "bot"})
         );
         assert_eq!(failed["trace_id"], trace);
-        assert_eq!(failed["payload"]["error_type"], "CommandError");
-        assert_eq!(failed["payload"]["message"], answer["message"]);
+        assert_eq!(
+            failed["payload"],
+            json!({"command": "demo", "person": "bot", "error_type": "CommandError",
+                "code": "", "message": answer["message"]})
+        );
+        let listed = f.get("/diagnostics/traces").await;
+        let summary = listed["traces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["trace_id"] == trace)
+            .unwrap();
+        assert_eq!(
+            (
+                &summary["source"],
+                &summary["person_id"],
+                &summary["command"]
+            ),
+            (&json!("manual"), &json!("bot"), &json!("demo"))
+        );
         let detail = f.get(&format!("/diagnostics/traces/{trace}")).await;
         let recorded: Vec<_> = detail["records"]
             .as_array()
@@ -878,6 +947,8 @@ async fn a_guarded_run_of_an_invalid_source_or_with_an_unmet_requirement_is_refu
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(answer["code"], "command_file_invalid_source");
+    let not_target = crate::i18n::t("en", "app_api.errors.command_not_runtime_target", &[]);
+    assert_eq!(answer["message"], not_target);
     assert_eq!(
         answer["context"]["message"],
         "Command 'args' must be a mapping."
@@ -896,6 +967,7 @@ async fn a_guarded_run_of_an_invalid_source_or_with_an_unmet_requirement_is_refu
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(answer["code"], "command_requirement_missing");
+    assert_eq!(answer["message"], not_target);
     assert_eq!(answer["context"], json!({}));
 }
 
@@ -944,14 +1016,39 @@ async fn an_authoring_request_that_breaks_its_mode_is_a_validation_error() {
 }
 
 #[tokio::test]
+async fn where_a_run_works_is_read_after_its_member() {
+    let f = workspace("en").await;
+    let mut ghost = authoring("create");
+    ghost["person"] = json!("ghost");
+    let (_, answer) = f.call("POST", "/commands/author", ghost).await;
+    assert_eq!(answer["code"], "person_not_found");
+    assert!(!f.workspace().join(".guildbotics/local/work").exists());
+    let (_, answer) = f
+        .call(
+            "POST",
+            "/commands/run",
+            json!({"command": "hello", "person": "ghost", "cwd": "relative"}),
+        )
+        .await;
+    assert_eq!(answer["code"], "person_not_found");
+}
+
+#[tokio::test]
 async fn an_authoring_turn_is_a_read_only_run_of_its_conversation_answered_as_a_bad_gateway() {
     let f = workspace("en").await;
     f.write(
         &commands(&f).join("shared.md"),
         "---\nbrain: none\n---\nShared.\n",
     );
-    // The manual place is taken: a read-only assistant runs anyway.
+    // The manual place is taken and a routine holds the member's lease: a
+    // read-only assistant runs anyway.
     *f.api.manual.lock().unwrap() = Some("inflight".into());
+    let _routine = gb_base::files::FileLock::try_hold(
+        &f.workspace()
+            .join(".guildbotics/local/run/person-leases/bot.lock"),
+    )
+    .unwrap()
+    .unwrap();
     let (status, answer) = f.call("POST", "/commands/author", authoring("edit")).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{answer}");
     assert_eq!(answer["code"], "command_authoring_failed");
@@ -967,6 +1064,11 @@ async fn an_authoring_turn_is_a_read_only_run_of_its_conversation_answered_as_a_
         "c-1"
     );
     assert!(started["attributes"].get("run.entry").is_none());
+    let failed = f.events("command.failed").pop().unwrap();
+    assert_eq!(failed["trace_id"], trace);
+    assert_eq!(failed["payload"]["command"], "author:reports/weekly");
+    let detail = f.get(&format!("/diagnostics/traces/{trace}")).await;
+    assert_eq!(detail["summary"]["status"], "failed", "{detail}");
     assert!(
         f.workspace()
             .join(".guildbotics/local/work/command-authoring")
@@ -986,4 +1088,18 @@ async fn an_authoring_turn_is_a_read_only_run_of_its_conversation_answered_as_a_
     let (status, answer) = f.call("POST", "/commands/author", ghost).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(answer["code"], "person_not_found");
+    let refused = f.events("command.failed").pop().unwrap();
+    assert_eq!(refused["trace_id"], Value::Null);
+    assert_eq!(refused["payload"]["command"], "author:new-command");
+    // An assistant that cannot be read is the assistant's failure.
+    f.write(
+        &f.config()
+            .join("team/members/bot/commands/assistants/author_command.md"),
+        "---\n[broken\n---\n",
+    );
+    let (status, answer) = f
+        .call("POST", "/commands/author", authoring("create"))
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{answer}");
+    assert_eq!(answer["code"], "command_authoring_failed");
 }

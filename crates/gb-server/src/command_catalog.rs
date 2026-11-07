@@ -50,6 +50,25 @@ pub(crate) fn host(api: &crate::api::Api) -> anyhow::Result<Arc<Host>> {
     }))
 }
 
+/// The team of `config`, or why it cannot be read: a member's broken file is
+/// the person's to fix, as the Python version's `MemberConfigError` is.
+pub(crate) async fn team(
+    config: PathBuf,
+    identity_root: PathBuf,
+    headers: &HeaderMap,
+) -> Result<Team, Response> {
+    tokio::task::spawn_blocking(move || Team::load(&config, &identity_root))
+        .await
+        .map_err(|e| crate::commands::internal(&e.to_string(), "RuntimeError"))?
+        .map_err(|e| match e.downcast_ref::<gb_config::ConfigFile>() {
+            Some(file) => ApiError::new(StatusCode::BAD_REQUEST, "member_config_invalid", headers)
+                .reason(file.to_string())
+                .context(json!({ "path": file.path() }))
+                .into_response(),
+            None => crate::commands::internal(&format!("{e:#}"), "ValueError"),
+        })
+}
+
 /// The selected workspace, or why there is none to read: none is selected
 /// or it has no project.
 pub(crate) async fn workspace(api: &Shared, headers: &HeaderMap) -> Result<Workspace, Response> {
@@ -68,13 +87,7 @@ pub(crate) async fn workspace(api: &Shared, headers: &HeaderMap) -> Result<Works
     }
     let host =
         host(api).map_err(|e| crate::commands::internal(&format!("{e:#}"), "RuntimeError"))?;
-    let team = {
-        let (config, identity) = (config.clone(), host.identity_root.clone());
-        tokio::task::spawn_blocking(move || Team::load(&config, &identity))
-            .await
-            .map_err(|e| crate::commands::internal(&e.to_string(), "RuntimeError"))?
-            .map_err(|e| crate::commands::internal(&format!("{e:#}"), "ValueError"))?
-    };
+    let team = team(config.clone(), host.identity_root.clone(), headers).await?;
     let roots = CommandRoots {
         config,
         templates: host.package.join("templates"),
@@ -114,9 +127,8 @@ impl Facts {
             .unwrap_or(Value::Null);
         let llm = gb_setup::provider_env_keys(
             &host.package.join("templates"),
-            &config.join("intelligences"),
+            &config.join("intelligences/models"),
         )
-        .unwrap_or_default()
         .values()
         .any(|key| {
             matches!(
@@ -129,7 +141,7 @@ impl Facts {
                 .refusal
                 .map(|s| crate::commands::say(s, language))
                 .unwrap_or_default(),
-            tools: crate::environment::tool_refusals(host, language).unwrap_or_default(),
+            tools: crate::environment::tool_refusals(host, keychain, language).unwrap_or_default(),
             project,
             llm,
         }
@@ -140,15 +152,17 @@ impl Facts {
         let unless = |met: bool, reason: &str| (!met).then(|| reason.to_owned());
         match kind {
             "environment" => unless(self.environment.is_empty(), &self.environment),
-            "cli_agent" => {
-                let reason = self.tools.get(tool).map_or("", String::as_str);
-                unless(tool.is_empty() || reason.is_empty(), reason)
-            }
+            // A tool the catalog does not know cannot start a turn either.
+            "cli_agent" if tool.is_empty() => None,
+            "cli_agent" => match self.tools.get(tool) {
+                Some(reason) => unless(reason.is_empty(), reason),
+                None => Some(String::new()),
+            },
+            // A name that is there is a service, as `str(name)` reads it.
             "code_hosting_service" | "ticket_service" | "chat_service" => unless(
                 self.project
                     .pointer(&format!("/services/{kind}/name"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|name| !name.is_empty()),
+                    .is_some_and(|name| name != ""),
                 "",
             ),
             "llm" => unless(self.llm, ""),

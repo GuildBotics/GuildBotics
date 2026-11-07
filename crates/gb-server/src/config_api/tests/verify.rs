@@ -177,9 +177,8 @@ async fn the_default_models_provider_key_is_checked_in_the_workspace_store() {
     let mapping = f.config().join("intelligences/model_mapping.yml");
     let keys = gb_setup::provider_env_keys(
         &gb_base::home::python_package().join("templates"),
-        &f.config().join("intelligences"),
-    )
-    .unwrap();
+        &f.config().join("intelligences/models"),
+    );
     let (provider, key) = keys.iter().next().unwrap();
     f.write(&mapping, &format!("default: models/{provider}/model.yml\n"));
     let answer = verified(&f).await;
@@ -196,6 +195,20 @@ async fn the_default_models_provider_key_is_checked_in_the_workspace_store() {
         .unwrap();
     let answer = verified(&f).await;
     assert_eq!(check(&answer, "llm_api_key").unwrap()["status"], "ok");
+    // A key in the server's own environment is enough. Every process has
+    // PATH, so the test sets nothing in its environment.
+    f.write(
+        &f.config().join("intelligences/models/fixture/default.yml"),
+        "api_key_env: PATH\n",
+    );
+    f.write(&mapping, "default: models/fixture/model.yml\n");
+    let answer = verified(&f).await;
+    assert_eq!(
+        check(&answer, "llm_api_key").unwrap(),
+        &json!({"code": "llm_api_key", "status": "ok",
+            "message": verify_sentence("key.ok", &[("key", "PATH")]), "target": "PATH",
+            "context": {"provider": "fixture"}})
+    );
     f.write(&mapping, "default: models/unknown/whatever.yml\n");
     let answer = verified(&f).await;
     assert!(check(&answer, "llm_api_key").is_none());
@@ -226,9 +239,34 @@ async fn the_device_and_the_default_tool_are_checked_by_their_own_refusals() {
     let tool = check(&answer, "cli_agent_environment").unwrap();
     assert_eq!(tool["status"], "error");
     assert_eq!(tool["target"], "codex");
+    let cli = f.root.join("home/.guildbotics/bin/guildbotics");
     assert_eq!(
         tool["message"],
-        crate::environment::tool_refusals(&host, "en").unwrap()["codex"]
+        crate::i18n::t(
+            "en",
+            "intelligences.agent_environment.tool.credentials_missing",
+            &[
+                ("tool", "Codex"),
+                (
+                    "command",
+                    &format!("'{}' environment login codex", cli.display())
+                ),
+            ],
+        )
+    );
+    // The tool is checked apart from the device, which still refuses, and a
+    // past failed authentication does not make it an error.
+    f.write(&mapping, "default: cli_agents/claude/default.yml\n");
+    f.claude_logged_in();
+    let answer = verified(&f).await;
+    let tool = check(&answer, "cli_agent_environment").unwrap();
+    assert_eq!(
+        (&tool["status"], &tool["target"]),
+        (&json!("ok"), &json!("claude"))
+    );
+    assert_eq!(
+        check(&answer, "agent_environment").unwrap()["status"],
+        "error"
     );
     f.write(&mapping, "default: ghost-cli.yml\n");
     let answer = verified(&f).await;
@@ -313,4 +351,16 @@ async fn only_the_providers_the_services_name_are_verified_with_each_members_che
         .cloned()
         .collect();
     assert_eq!(fields, ["code", "status", "message", "target", "context"]);
+    // Slack asks a subscribed agent for its tokens, never a subscribed human.
+    owner["message_channels"] = json!([{"name": "general", "chat": {"channel_id": "C1"}}]);
+    f.write(&participation, &owner.to_string());
+    set_project(&f, "services", json!({"chat_service": {"name": "slack"}}));
+    let slack: Vec<_> = verified(&f).await["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["code"] == "slack_credential")
+        .map(|c| c["context"]["person_id"].clone())
+        .collect();
+    assert!(!slack.contains(&json!("owner")), "{slack:?}");
 }

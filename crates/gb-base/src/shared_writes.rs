@@ -184,6 +184,11 @@ impl Writer<'_> {
         self.check(path)?;
         Ok(files::atomic_write(path, data)?)
     }
+    /// [`Writer::write_bytes`], the file having the Unix `mode`.
+    pub fn write_mode(&mut self, path: &Path, data: &[u8], mode: u32) -> anyhow::Result<()> {
+        self.check(path)?;
+        Ok(files::atomic_write_mode(path, data, Some(mode))?)
+    }
     pub fn write_text(&mut self, path: &Path, text: &str) -> anyhow::Result<()> {
         self.write_bytes(path, text.as_bytes())
     }

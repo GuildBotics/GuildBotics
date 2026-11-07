@@ -1587,11 +1587,15 @@ fn conversation(context: &Context, name: &str, args: &Value) -> Result<Value, Ho
 
 /// Read the same sealed login a turn would use. The UI never receives the
 /// login contents, upstream token, or OS keychain's error text.
-pub fn tool_status(data: &std::path::Path, home: &std::path::Path, catalog: &Value) -> Value {
-    let keychain = gb_config::secrets::SystemKeychain;
+pub fn tool_status(
+    data: &std::path::Path,
+    home: &std::path::Path,
+    catalog: &Value,
+    keychain: &dyn gb_config::secrets::Keychain,
+) -> Value {
     let device = gb_config::secrets::DeviceKey {
         machine_root: data.parent().unwrap_or(data).into(),
-        keychain: &keychain,
+        keychain,
     };
     let tools=catalog.as_array().into_iter().flatten().filter_map(|tool|{
   let name=tool["name"].as_str()?;let provision=&tool["provision"];let broker=&provision["credential_broker"];

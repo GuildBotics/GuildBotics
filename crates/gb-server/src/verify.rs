@@ -60,15 +60,6 @@ pub(crate) async fn verify(State(api): State<Shared>, headers: HeaderMap) -> Res
     );
     let config = crate::screens::status(&api).await;
     let workspace = api.selected().workspace.clone();
-    let trace = workspace.as_deref().map(|workspace| {
-        let events = api.events.clone();
-        gb_observability::Trace::open(
-            &gb_observability::Diagnostics::open(workspace),
-            "diagnostics",
-        )
-        .command("verify")
-        .announced(std::sync::Arc::new(move |event| events.announce(event)))
-    });
     let mut checks = Checks {
         checks: Vec::new(),
         language,
@@ -144,8 +135,19 @@ pub(crate) async fn verify(State(api): State<Shared>, headers: HeaderMap) -> Res
     let mut completed = Map::new();
     completed.insert("ok".into(), ok.into());
     completed.insert("checks".into(), checks.checks.clone().into());
-    match &trace {
-        Some(trace) => trace.event("verify.completed", completed),
+    // The trace opens with the event that ends it: a request dropped while
+    // checking leaves no trace that never ends.
+    match &workspace {
+        Some(workspace) => {
+            let events = api.events.clone();
+            gb_observability::Trace::open(
+                &gb_observability::Diagnostics::open(workspace),
+                "diagnostics",
+            )
+            .command("verify")
+            .announced(std::sync::Arc::new(move |event| events.announce(event)))
+            .event("verify.completed", completed);
+        }
         None => api.events.publish(
             "verify.completed",
             completed,
@@ -181,8 +183,7 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
             .unwrap_or_default()
     };
     let provider = default_of("intelligences/model_mapping.yml", "models");
-    let keys =
-        gb_setup::provider_env_keys(&templates, &config.join("intelligences")).unwrap_or_default();
+    let keys = gb_setup::provider_env_keys(&templates, &config.join("intelligences/models"));
     match keys.get(&provider) {
         None => checks.said(
             "llm_provider",
@@ -209,7 +210,8 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
         }
     }
     let tool = default_of("intelligences/cli_agent_mapping.yml", "cli_agents");
-    let refusals = crate::environment::tool_refusals(&host, checks.language).unwrap_or_default();
+    let refusals = crate::environment::tool_refusals(&host, &*api.keychain, checks.language)
+        .unwrap_or_default();
     match refusals.get(&tool) {
         None => checks.said("cli_agent_mapping", "warning", "", json!({})),
         Some(refusal) if refusal.is_empty() => {
@@ -249,6 +251,9 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
                 move |setup| setup.saved_member(&person)
             })
             .await;
+            // A member whose secrets cannot be read has no checks of its own:
+            // the `secret_store` check already says the store fails, and the
+            // other checks are still worth answering.
             let Ok(member) = member else {
                 continue;
             };

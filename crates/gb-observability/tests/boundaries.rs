@@ -76,7 +76,8 @@ fn every_root_declares_its_terminal_event_and_uses_the_cancellation_safe_boundar
         .unwrap();
     assert!(files.status.success());
     // A root either runs a command, delegates to the ticket command boundary,
-    // or holds the review-limit settlement guard (whose Drop records failure).
+    // holds the review-limit settlement guard (whose Drop records failure), or
+    // opens with the one event that ends it.
     let declared = BTreeMap::from([
         (
             ("crates/gb-server/src/commands.rs", "start"),
@@ -104,6 +105,10 @@ fn every_root_declares_its_terminal_event_and_uses_the_cancellation_safe_boundar
         (
             ("crates/gb-server/src/ticket_selector.rs", "hand_over"),
             ("ReviewSettlement", "review_limit.finished"),
+        ),
+        (
+            ("crates/gb-server/src/verify.rs", "verify"),
+            ("event", "verify.completed"),
         ),
     ]);
     let mut discovered = BTreeSet::new();

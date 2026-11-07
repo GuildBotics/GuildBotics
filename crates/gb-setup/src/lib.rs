@@ -356,7 +356,12 @@ impl Setup<'_> {
         self.repository
             .write(
                 &Revisions::new(),
-                |view, _| provider_env_keys(self.templates, &view.path("intelligences")?),
+                |view, _| {
+                    Ok(provider_env_keys(
+                        self.templates,
+                        &view.path("intelligences/models")?,
+                    ))
+                },
                 |_| Ok(Revisions::new()),
             )
             .map(|r| r.result)
@@ -384,7 +389,9 @@ impl Setup<'_> {
         let store = secrets(self.repository.workspace_secrets(self.device.clone()))?;
         let held = secrets(store.values())?;
         let mut provider_api_keys = BTreeMap::new();
-        for (provider, env) in provider_env_keys(self.templates, &view.path("intelligences")?)? {
+        for (provider, env) in
+            provider_env_keys(self.templates, &view.path("intelligences/models")?)
+        {
             let present = held.get(&env).is_some_and(|v| !v.is_empty());
             provider_api_keys.insert(provider, present);
         }
@@ -494,7 +501,7 @@ impl Setup<'_> {
             input.llm_api_type.trim(),
             input.cli_agent.trim(),
         );
-        let env_keys = provider_env_keys(self.templates, &view.path("intelligences")?)?;
+        let env_keys = provider_env_keys(self.templates, &view.path("intelligences/models")?);
         let api_keys = input
             .provider_api_keys
             .iter()
@@ -658,17 +665,11 @@ impl ProjectFiles {
 }
 
 /// The environment variable holding each LLM provider's API key: the
-/// `api_key_env` of its `models/<provider>/default.yml` in `intelligences`,
+/// `api_key_env` of its `<provider>/default.yml` in the workspace's `models`,
 /// over the template's. Read without a lock: a reader, not a writer.
-pub fn provider_env_keys(
-    templates: &Path,
-    intelligences: &Path,
-) -> anyhow::Result<BTreeMap<String, String>> {
+pub fn provider_env_keys(templates: &Path, models: &Path) -> BTreeMap<String, String> {
     let mut keys = BTreeMap::new();
-    for root in [
-        templates.join("intelligences/models"),
-        intelligences.join("models"),
-    ] {
+    for root in [templates.join("intelligences/models"), models.to_owned()] {
         let Ok(entries) = fs::read_dir(&root) else {
             continue;
         };
@@ -691,5 +692,5 @@ pub fn provider_env_keys(
             }
         }
     }
-    Ok(keys)
+    keys
 }

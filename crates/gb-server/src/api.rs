@@ -248,22 +248,31 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let headers = req.headers().clone();
-        // What was wrong, as the Python version's `errors` list names it.
-        let invalid = |reason: String| {
-            ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "validation_error",
-                &headers,
-            )
-            .context(json!({"errors": [{"msg": reason}]}))
-        };
         let bytes = axum::body::Bytes::from_request(req, state)
             .await
-            .map_err(|e| invalid(e.body_text()))?;
-        serde_json::from_slice(if bytes.is_empty() { b"{}" } else { &bytes })
-            .map(Body)
-            .map_err(|e| invalid(e.to_string()))
+            .map_err(|e| invalid(&headers, &e.body_text()))?;
+        Body::parse(&bytes, &headers)
     }
+}
+
+impl<T: DeserializeOwned> Body<T> {
+    /// The request's `bytes` as JSON, an empty one as `{}`.
+    pub(crate) fn parse(bytes: &[u8], headers: &HeaderMap) -> Result<Self, ApiError> {
+        serde_json::from_slice(if bytes.is_empty() { b"{}" } else { bytes })
+            .map(Body)
+            .map_err(|e| invalid(headers, &e.to_string()))
+    }
+}
+
+/// What was wrong with a request, as the Python version's `errors` list
+/// names it.
+pub(crate) fn invalid(headers: &HeaderMap, reason: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_error",
+        headers,
+    )
+    .context(json!({"errors": [{"msg": reason}]}))
 }
 
 // Register routes and expose the very same routing table to boundary tests.

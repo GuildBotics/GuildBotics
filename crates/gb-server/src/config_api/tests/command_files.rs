@@ -548,6 +548,13 @@ async fn content_with_nul_or_over_one_mebibyte_is_refused_before_writing() {
             "command_file_too_large",
             json!({"max_bytes": "1048576"}),
         ),
+        // Over the request's own limit, before its JSON is read.
+        (
+            "x".repeat(crate::command_files_api::FILE_REQUEST_LIMIT),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "command_file_too_large",
+            json!({"max_bytes": "1048576"}),
+        ),
         (
             "a\0b".into(),
             StatusCode::BAD_REQUEST,

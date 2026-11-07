@@ -6,7 +6,7 @@
 //! revision of the very file it read instead.
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use gb_base::shared_writes::Writer;
@@ -14,15 +14,40 @@ use gb_config::command_writes::{Change, Format, Operation};
 use gb_config::commands::CommandRoots;
 use gb_config::repository::Revisions;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
-use crate::api::{ApiError, Body, Shared};
+use crate::api::{Body, Shared};
 use crate::config_api::{failure, unconfigured, with_setup};
 
 /// The most a request carrying one file may hold: its content escaped as
-/// JSON, up to six bytes per character, so that a file too large is refused
-/// as one.
+/// JSON, up to six bytes per byte, and the rest. A request over it holds a
+/// file too large, and is refused as one.
 pub(crate) const FILE_REQUEST_LIMIT: usize = 6 * gb_config::command_writes::MAX_BYTES + (64 << 10);
+
+/// The JSON body of a request carrying files, within its route's limit.
+pub(crate) struct FileBody<T>(T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for FileBody<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Response> {
+        let headers = req.headers().clone();
+        let bytes = match axum::body::Bytes::from_request(req, state).await {
+            Ok(bytes) => bytes,
+            Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                return Err(failure(
+                    gb_config::command_writes::too_large().into(),
+                    &headers,
+                ));
+            }
+            Err(e) => return Err(crate::api::invalid(&headers, &e.body_text()).into_response()),
+        };
+        Body::parse(&bytes, &headers)
+            .map(|Body(request)| FileBody(request))
+            .map_err(IntoResponse::into_response)
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,7 +78,7 @@ pub(crate) struct ApplyRequest {
 pub(crate) async fn create(
     State(api): State<Shared>,
     headers: HeaderMap,
-    Body(request): Body<CreateRequest>,
+    FileBody(request): FileBody<CreateRequest>,
 ) -> Response {
     write(&api, &headers, move |roots, writer, language| {
         roots.create_file(
@@ -71,7 +96,7 @@ pub(crate) async fn update(
     State(api): State<Shared>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Body(request): Body<UpdateRequest>,
+    FileBody(request): FileBody<UpdateRequest>,
 ) -> Response {
     write(&api, &headers, move |roots, writer, language| {
         roots.update_file(
@@ -103,7 +128,7 @@ pub(crate) async fn delete(
 pub(crate) async fn apply(
     State(api): State<Shared>,
     headers: HeaderMap,
-    Body(request): Body<ApplyRequest>,
+    FileBody(request): FileBody<ApplyRequest>,
 ) -> Response {
     if !(1..=10).contains(&request.changes.len()) {
         return invalid(&headers, "changes must hold 1 to 10 changes");
@@ -158,11 +183,5 @@ async fn write(
 }
 
 fn invalid(headers: &HeaderMap, reason: &str) -> Response {
-    ApiError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "validation_error",
-        headers,
-    )
-    .context(json!({"errors": [{"msg": reason}]}))
-    .into_response()
+    crate::api::invalid(headers, reason).into_response()
 }

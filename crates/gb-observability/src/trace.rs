@@ -10,10 +10,10 @@ use serde_json::{Map, Value, json};
 
 use crate::diagnostics::Diagnostics;
 
-/// One bounded unit of work, and where its records go.
 /// Who is told of each event a trace records, as it is recorded.
 pub type Announce = std::sync::Arc<dyn Fn(&Map<String, Value>) + Send + Sync>;
 
+/// One bounded unit of work, and where its records go.
 #[derive(Clone)]
 pub struct Trace {
     diagnostics: Diagnostics,

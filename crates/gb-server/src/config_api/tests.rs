@@ -111,6 +111,21 @@ impl Fixture {
     fn data(&self) -> PathBuf {
         self.root.join("machine/data")
     }
+    /// Claude's login saved on this device as `environment login` leaves it,
+    /// and a later turn's failed authentication, which only guides.
+    fn claude_logged_in(&self) {
+        let tool = self.data().join("agent_environment/claude");
+        let login = json!({"claudeAiOauth": {"accessToken": "synthetic",
+            "refreshToken": "synthetic", "expiresAt": 4_102_444_800_000_u64}});
+        gb_config::credential_vault::seal(
+            &self.device(),
+            &tool.join("login.sealed"),
+            "claude:default:claude-oauth",
+            &[(".credentials.json".into(), login.to_string().into_bytes())].into(),
+        )
+        .unwrap();
+        self.write(&tool.join("authentication-failed"), "");
+    }
     fn keys(&self, keys: Keys) {
         *self.keys.0.lock().unwrap() = keys;
     }
