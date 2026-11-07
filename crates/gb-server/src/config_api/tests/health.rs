@@ -164,6 +164,6 @@ async fn test_system_alerts_endpoint_dismisses_alert() {
         )
         .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(f.api.events.snapshot(),events);
-    assert_eq!(bytes_under(&f.config()),config);
+    assert_eq!(f.api.events.snapshot(), events);
+    assert_eq!(bytes_under(&f.config()), config);
 }
