@@ -26,7 +26,9 @@
 //! device-local, including process-wide system sessions and retention.
 
 pub mod activity;
+mod cursor;
 mod diagnostics;
+pub mod health;
 pub mod interactive;
 mod presentations;
 mod reader;
