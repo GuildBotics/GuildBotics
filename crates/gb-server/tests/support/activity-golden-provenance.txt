@@ -1,0 +1,58 @@
+Frozen source: origin/python-host, fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0.
+
+The four activity fixtures were generated in an independent archive of that
+branch, under Python 3.15.1. The frozen host's normalizers and models ran
+unchanged. Instrumentation wrapped the functions before importing their tests,
+saved each invocation's arguments and full returned model (model_dump), and
+returned the original result to the test. The original assertions therefore
+ran as well as the capture. pytest used --noconftest -c /dev/null on the named
+pure-test module; no live workspace, provider or credential was needed.
+
+activity-history.json: build_activity_history, from test_activity_history.py.
+57 original parametrized tests passed; 58 calls were captured, plus one independently evaluated fractional-microsecond/offset case (59 total). Only the start
+and end echo fields are excluded. Those fields, including preserved offsets and Python microsecond formatting, are covered by the HTTP window
+tests. Lifecycle dataclasses are serialized with dataclasses.asdict; local
+transcript availability is captured per trace in details. Language is captured
+per call, including both review-limit locales and Japanese chat titles.
+
+activity-links.json: links_from_attributes, links_from_record,
+doc_link_from_memory, memory_diagnostics_url, source_links_from_payload and
+dedupe_links, from test_activity_links.py. 27 original parametrized tests passed;
+40 calls (including nested calls) were captured. The Rust harness selects the
+same projection when testing a helper through the whole-record link builder:
+attribute links exclude documents/commits, document helpers select the doc,
+source helpers select external links. Expected results are unchanged.
+
+activity-lifecycles.json: lifecycle_from_run and lifecycle_from_session, from
+test_activity_history.py. Five direct lifecycle assertions were captured,
+including the boundary summary without a result, manual source, and a member's
+own completion. The same 57 original tests passed during this capture.
+
+activity-streams.json: collapse_assistant_streams, from test_agent_streams.py.
+All 13 original tests passed and their calls were captured, including the text
+cap, independent spans, sequential replies and reasoning separated by tools.
+
+api-routes.json: the literal router/unauthenticated decorators of frozen
+guildbotics/app_api/api.py, plus PROOF_PATH and the events websocket. It contains
+74 method/path pairs. Provider operation registration is dynamic and is covered
+by the preceding provider migration; GitHub is excluded by #73 and #132.
+
+Test-fixture corrections during this port:
+- Browser entry codes are read from the actual URL fragment (#code). No entry
+  query parameter exists in either host. Cookie/Origin refusal assertions stay.
+- S256 challenges are produced from SHA-256 bytes with base64url encoding;
+  repeating a character is not necessarily a canonical encoded challenge.
+- The local ticket fixture creates the tracker's real percent-encoded store
+  directory before creating work. Provider scope and duplicate-import checks stay.
+- The added cwd test initially assumed that an absolute directory must exist.
+  Frozen command_cwd accepts a not-yet-created absolute path. The corrected test
+  keeps that acceptance and still rejects relative paths and checks home expansion.
+- The receive-reset lock test configures an active subscribed member, so there
+  is a real shared write to contend with. A separate no-subscriber case pins
+  the frozen no-op: 200 with zero counts, without acquiring a writing lock.
+
+Rust lifecycle ownership remains the design already migrated in #90: one
+service owns scheduling and reception. A configured event source with no actual
+listener reports stopped, while a listener reports running. The HTTP tests cover
+all enabled-source combinations; the listener worker test pins the complete
+starting/running/stopping/stopped sequence and service-run correlation.

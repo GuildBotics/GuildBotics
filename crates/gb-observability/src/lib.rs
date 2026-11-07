@@ -36,6 +36,7 @@ pub mod redaction;
 pub mod runs;
 mod status;
 mod streams;
+pub mod timeline;
 mod title;
 mod trace;
 

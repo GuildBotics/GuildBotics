@@ -1,6 +1,6 @@
 //! Device-local interactive identity and its one shared lifecycle record.
 use crate::{
-    activity::{children, timestamp},
+    activity::{readable_children, timestamp},
     redaction::Redactor,
     runs::{checked_id, first_seen},
 };
@@ -147,7 +147,7 @@ impl InteractiveSessions {
         end: DateTime<Utc>,
     ) -> anyhow::Result<Vec<Value>> {
         let mut records = Vec::new();
-        for path in children(&self.root.join(".guildbotics/state/sessions"))? {
+        for path in readable_children(&self.root.join(".guildbotics/state/sessions")) {
             if path.extension().is_none_or(|e| e != "json") {
                 continue;
             }

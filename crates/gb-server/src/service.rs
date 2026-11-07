@@ -30,8 +30,22 @@ pub enum Outcome {
 /// The dispatcher owns command traces and run settlement; the service owns
 /// serialization, error limits and draining. Temporary deferral is not failure.
 pub trait Worker: Send + Sync {
-    fn service_instance_id(&self) -> Option<&str> {
-        None
+    fn listener_count(&self) -> usize {
+        0
+    }
+    fn reception_failed(&self) -> bool {
+        false
+    }
+    fn event_status(&self, status: &Status) -> serde_json::Value {
+        let mut value = empty_events_status();
+        value["listener_count"] = if status.running {
+            self.listener_count()
+        } else {
+            0
+        }
+        .into();
+        value["cycle_count"] = serde_json::json!(status.cycle_count);
+        value
     }
     fn cycle<'a>(&'a self, person: &'a str, settings: &'a Settings) -> Pending<'a, Outcome>;
     fn worker_failed(&self, person: &str, errors: u8);
@@ -92,19 +106,196 @@ struct State {
     status: Status,
     running: Option<Running>,
     startup_attempt: u64,
+    service_run_id: Option<String>,
+    events_state: Option<&'static str>,
+    events_started_at: Option<String>,
+    events_stopped_at: Option<String>,
+    events_snapshot: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Default)]
-pub struct Service(Arc<Mutex<State>>);
+pub struct Service(
+    Arc<Mutex<State>>,
+    Arc<std::sync::OnceLock<Arc<crate::events::EventBus>>>,
+    Arc<Mutex<()>>,
+);
+
+/// Settles every admitted start, including cancellation while preparing workers.
+pub(crate) struct Starting {
+    service: Service,
+    attempt: u64,
+    settled: bool,
+}
+impl Starting {
+    pub(crate) async fn finish<T>(mut self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        if result.is_err() {
+            self.service.startup_failed(self.attempt).await;
+        }
+        self.settled = true;
+        result
+    }
+}
+impl Drop for Starting {
+    fn drop(&mut self) {
+        if !self.settled {
+            let service = self.service.clone();
+            let attempt = self.attempt;
+            tokio::spawn(async move {
+                service.startup_failed(attempt).await;
+            });
+        }
+    }
+}
 
 impl Service {
+    pub(crate) fn attach_events(&self, events: Arc<crate::events::EventBus>) {
+        let _ = self.1.set(events);
+    }
+    fn publish(&self, state: &State, target: &'static str, payload: serde_json::Value) {
+        if let Some(bus) = self.1.get() {
+            bus.publish(
+                &format!("{target}.{}", payload["state"].as_str().unwrap()),
+                payload.as_object().unwrap().clone(),
+                crate::events::Origin {
+                    source: Some(target),
+                    attributes: serde_json::json!({"service_run_id":state.service_run_id})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    fn events_view(state: &State) -> serde_json::Value {
+        if state.events_state.is_none() {
+            return empty_events_status();
+        }
+        let phase = state.events_state.unwrap_or("stopped");
+        let mut payload = state
+            .running
+            .as_ref()
+            .filter(|_| state.status.event_queue_source_enabled == Some(true))
+            .map(|r| r.worker.event_status(&state.status))
+            .or_else(|| state.events_snapshot.clone())
+            .unwrap_or_else(empty_events_status);
+        if phase == "stopped" {
+            payload["listener_count"] = 0.into();
+            if let Some(snapshot) = &state.events_snapshot
+                && snapshot["state"] == phase
+            {
+                payload["cycle_count"] = snapshot["cycle_count"].clone();
+            }
+        }
+        payload["target"] = "events".into();
+        payload["state"] = phase.into();
+        payload["running"] = matches!(phase, "starting" | "running" | "stopping").into();
+        payload["started_at"] = serde_json::json!(state.events_started_at);
+        payload["stopped_at"] = serde_json::json!(state.events_stopped_at);
+        payload["error"] = if phase == "failed" {
+            crate::i18n::t("en", "app_api.errors.service_events_failed", &[]).into()
+        } else {
+            serde_json::Value::Null
+        };
+        payload
+    }
+    pub(crate) async fn events_status(&self) -> serde_json::Value {
+        let state = self.0.lock().await;
+        Self::events_view(&state)
+    }
+    fn transition_events(&self, state: &mut State, phase: &'static str) {
+        if state.events_state == Some(phase) {
+            return;
+        }
+        state.events_state = Some(phase);
+        if phase == "starting" {
+            state.events_started_at = Some(chrono::Utc::now().to_rfc3339());
+            state.events_stopped_at = None;
+        } else if matches!(phase, "stopped" | "failed") {
+            state.events_stopped_at = Some(chrono::Utc::now().to_rfc3339());
+        }
+        let payload = Self::events_view(state);
+        state.events_snapshot = Some(payload.clone());
+        self.publish(state, "events", payload);
+    }
+    fn stop_reception(&self, state: &mut State, force: bool) {
+        let active = matches!(state.events_state, Some("running" | "starting"));
+        if active {
+            self.transition_events(state, "stopping");
+        }
+        state.running.as_ref().unwrap().worker.request_stop(force);
+        if active {
+            self.transition_events(state, "stopped");
+        }
+    }
+
+    pub(crate) async fn reception_failed(&self, run_id: &str) {
+        let mut state = self.0.lock().await;
+        if state.service_run_id.as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(state.events_state, Some("running" | "starting")) {
+            self.transition_events(&mut state, "failed");
+        }
+    }
+    fn announce(&self, state: &mut State) {
+        let mut payload = serde_json::to_value(&state.status).unwrap();
+        payload["target"] = "scheduler".into();
+        self.publish(state, "scheduler", payload);
+        match state.status.state {
+            "running"
+                if state.events_state.is_none()
+                    && state.status.event_queue_source_enabled == Some(true) =>
+            {
+                self.transition_events(state, "starting");
+                let worker = &state.running.as_ref().unwrap().worker;
+                let phase = if worker.reception_failed() {
+                    "failed"
+                } else if worker.listener_count() > 0 {
+                    "running"
+                } else {
+                    "stopped"
+                };
+                self.transition_events(state, phase);
+            }
+            "stopping" if matches!(state.events_state, Some("running" | "starting")) => {
+                self.transition_events(state, "stopping");
+            }
+            "stopped" | "failed"
+                if !state.status.running
+                    && matches!(
+                        state.events_state,
+                        Some("running" | "starting" | "stopping")
+                    ) =>
+            {
+                self.transition_events(state, "stopped");
+            }
+            _ => (),
+        }
+    }
+    pub(crate) async fn begin_start(&self, run_id: String) -> Starting {
+        let attempt = self.starting_run(run_id).await;
+        Starting {
+            service: self.clone(),
+            attempt,
+            settled: false,
+        }
+    }
     pub async fn starting(&self) -> u64 {
+        self.starting_run(uuid::Uuid::new_v4().simple().to_string())
+            .await
+    }
+    pub(crate) async fn starting_run(&self, run_id: String) -> u64 {
         let mut state = self.0.lock().await;
         state.startup_attempt += 1;
         if state.running.is_none() {
+            state.service_run_id = Some(run_id);
             state.status.state = "starting";
             state.status.running = true;
             state.status.error = None;
+            state.status.started_at = Some(chrono::Utc::now().to_rfc3339());
+            state.status.stopped_at = None;
+            self.announce(&mut state);
         }
         state.startup_attempt
     }
@@ -114,18 +305,13 @@ impl Service {
         if state.running.is_none() && state.startup_attempt == attempt {
             state.status.state = "failed";
             state.status.running = false;
+            state.status.stopped_at = Some(chrono::Utc::now().to_rfc3339());
             state.status.error = Some(crate::i18n::t(
                 "en",
                 "app_api.errors.service_start_failed",
                 &[],
             ));
-        }
-    }
-
-    pub async fn startup_rejected(&self, attempt: u64, previous: Status) {
-        let mut state = self.0.lock().await;
-        if state.running.is_none() && state.startup_attempt == attempt {
-            state.status = previous;
+            self.announce(&mut state);
         }
     }
 
@@ -143,20 +329,60 @@ impl Service {
         settings: Settings,
         worker: Arc<dyn Worker>,
     ) -> anyhow::Result<bool> {
-        settings.validate()?;
-        let mut state = self.0.lock().await;
-        if state.running.is_some() {
+        let _gate = self.2.lock().await;
+        if self.status().await.running {
             return Ok(false);
         }
+        let admitted = Self::admit(data, workspace, &settings).await?;
+        let starting = self.begin_start(admitted.run_id.clone()).await;
+        let result = self
+            .start_admitted(admitted, workspace, members, settings, worker)
+            .await;
+        starting.finish(result).await
+    }
+
+    pub(crate) async fn admit(
+        data: &Path,
+        workspace: &Path,
+        settings: &Settings,
+    ) -> anyhow::Result<Admission> {
+        settings.validate()?;
         let path = data.join("run/service.lock");
         let owner_path = path.clone();
         let lock = tokio::task::spawn_blocking(move || {
             retry_lock(|| gb_base::files::FileLock::try_hold(&path))
         })
-        .await??;
-        let lock = lock.ok_or_else(|| AlreadyRunning {
+        .await??
+        .ok_or_else(|| AlreadyRunning {
             owner: read_owner(&owner_path),
         })?;
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        let record = serde_json::json!({"pid":std::process::id(),
+            "service_instance_id":run_id,"workspace":std::fs::canonicalize(workspace)?,
+            "started_at":chrono::Utc::now().to_rfc3339()});
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = lock.file();
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(format!(" {record}\n").as_bytes())?;
+            file.sync_all()?;
+        }
+        Ok(Admission { lock, run_id })
+    }
+    pub(crate) async fn start_admitted(
+        &self,
+        admitted: Admission,
+        workspace: &Path,
+        members: Vec<String>,
+        settings: Settings,
+        worker: Arc<dyn Worker>,
+    ) -> anyhow::Result<bool> {
+        let mut state = self.0.lock().await;
+        if state.running.is_some() {
+            return Ok(false);
+        }
+        let Admission { lock, run_id } = admitted;
         let keep_awake = {
             let workspace = workspace.to_owned();
             let enabled = settings.keep_awake;
@@ -166,17 +392,6 @@ impl Service {
             .await??
         };
         let now = chrono::Utc::now().to_rfc3339();
-        let record = serde_json::json!({"pid":std::process::id(),
-            "service_instance_id":worker.service_instance_id().map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().simple().to_string()),
-            "workspace":std::fs::canonicalize(workspace)?,"started_at":now});
-        {
-            use std::io::{Seek, SeekFrom, Write};
-            let mut file = lock.file();
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(format!(" {record}\n").as_bytes())?;
-            file.sync_all()?;
-        }
         let (stop, cancel, done) = (
             CancellationToken::new(),
             CancellationToken::new(),
@@ -185,7 +400,7 @@ impl Service {
         state.status = Status {
             state: "running",
             running: true,
-            started_at: Some(now),
+            started_at: state.status.started_at.clone().or(Some(now)),
             stopped_at: None,
             worker_count: Some(members.len()),
             active_member_count: Some(members.len()),
@@ -198,12 +413,20 @@ impl Service {
             event_queue_source_enabled: Some(settings.event_queue),
             error: None,
         };
+        state.service_run_id = Some(run_id);
+        if settings.event_queue {
+            state.events_state = None;
+            state.events_started_at = None;
+            state.events_stopped_at = None;
+            state.events_snapshot = None;
+        }
         state.running = Some(Running {
             worker: worker.clone(),
             stop: stop.clone(),
             cancel: cancel.clone(),
             done: done.clone(),
         });
+        self.announce(&mut state);
         let service = self.clone();
         tokio::spawn(async move {
             let mut tasks = tokio::task::JoinSet::new();
@@ -259,7 +482,10 @@ impl Service {
             while let Some(result) = tasks.join_next().await {
                 panicked |= result.is_err();
             }
-            worker.request_stop(false);
+            {
+                let mut state = service.0.lock().await;
+                service.stop_reception(&mut state, false);
+            }
             worker.shutdown().await;
             let _ = tokio::task::spawn_blocking(move || drop(keep_awake)).await;
             drop(lock);
@@ -277,6 +503,8 @@ impl Service {
             state.status.running = false;
             state.status.worker_count = Some(0);
             state.status.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+            service.announce(&mut state);
+            state.events_snapshot = Some(Self::events_view(&state));
             state.running = None;
             done.cancel();
         });
@@ -299,13 +527,14 @@ impl Service {
                 .is_err()
             {
                 let mut state = self.0.lock().await;
-                if state.running.is_some() {
+                if state.running.is_some() && !done.is_cancelled() {
                     state.status.state = "failed";
                     state.status.error = Some(crate::i18n::t(
                         "en",
                         "app_api.errors.service_stop_timeout",
                         &[],
                     ));
+                    self.announce(&mut state);
                 }
             }
         } else {
@@ -315,19 +544,45 @@ impl Service {
 
     pub async fn request_stop(&self, force: bool) -> Option<CancellationToken> {
         let mut state = self.0.lock().await;
-        if let Some(running) = &state.running {
-            running.worker.request_stop(force);
+        if state.running.is_some() {
+            self.stop_reception(&mut state, force);
+            let running = state.running.as_ref().unwrap();
             running.stop.cancel();
             if force {
                 running.cancel.cancel();
             }
             let done = running.done.clone();
-            state.status.state = "stopping";
+            if state.status.state != "stopping" {
+                state.status.state = "stopping";
+                self.announce(&mut state);
+            }
             Some(done)
         } else {
             None
         }
     }
+}
+
+pub(crate) struct Admission {
+    lock: gb_base::files::FileLock,
+    pub(crate) run_id: String,
+}
+
+fn empty_events_status() -> serde_json::Value {
+    let mut status = serde_json::to_value(Status::default()).unwrap();
+    status.as_object_mut().unwrap().extend(
+        serde_json::json!({
+            "target":"events", "subscription_count":null,"listener_count":null,
+            "events_drained_count":null,"events_auth_failed_count":null,
+            "events_auth_failed_persons":[],"events_chat_provider":"",
+            "events_missing_channel_count":0,"events_missing_channel_persons":[],
+            "events_error_count":0
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    status
 }
 
 fn retry_lock(
@@ -362,6 +617,373 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    struct Listening;
+    impl Worker for Listening {
+        fn listener_count(&self) -> usize {
+            1
+        }
+        fn cycle<'a>(&'a self, _: &'a str, _: &'a Settings) -> Pending<'a, Outcome> {
+            Box::pin(std::future::pending())
+        }
+        fn worker_failed(&self, _: &str, _: u8) {
+            panic!("no cycle failure")
+        }
+    }
+    #[tokio::test]
+    async fn scheduler_and_listener_transitions_are_ordered_once_with_run_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        assert!(
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening)
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            !service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening)
+                )
+                .await
+                .unwrap()
+        );
+        service.stop(true).await;
+        for target in ["scheduler", "events"] {
+            let records: Vec<_> = bus
+                .snapshot()
+                .into_iter()
+                .filter(|r| r["source"] == target)
+                .collect();
+            let types: Vec<_> = records
+                .iter()
+                .map(|r| r["type"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                types,
+                [
+                    format!("{target}.starting"),
+                    format!("{target}.running"),
+                    format!("{target}.stopping"),
+                    format!("{target}.stopped")
+                ]
+            );
+            assert_eq!(records[1]["payload"]["running"], true);
+            assert_eq!(records[1]["payload"]["target"], target);
+            let run_id = records[0]["attributes"]["service_run_id"].as_str().unwrap();
+            assert_eq!(run_id.len(), 32);
+            for record in &records {
+                assert_eq!(record["attributes"]["service_run_id"], run_id);
+            }
+            assert_eq!(records[3]["payload"]["running"], false);
+        }
+    }
+
+    fn event_types(bus: &crate::events::EventBus, target: &str) -> Vec<String> {
+        bus.snapshot()
+            .iter()
+            .filter(|r| r["source"] == target)
+            .map(|r| r["type"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn no_listeners_stop_once_and_payloads_match_the_events_status() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings::default(),
+                HeldWorker::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            event_types(&bus, "events"),
+            ["events.starting", "events.stopped"]
+        );
+        let records = bus.snapshot();
+        let payload = &records.last().unwrap()["payload"];
+        assert_eq!(payload, &service.events_status().await);
+        assert_eq!(payload["listener_count"], 0);
+        assert!(payload["worker_count"].is_null());
+        service.stop(true).await;
+        assert_eq!(
+            event_types(&bus, "events"),
+            ["events.starting", "events.stopped"]
+        );
+        assert_eq!(payload, &service.events_status().await);
+    }
+
+    #[tokio::test]
+    async fn receiver_failures_transition_once_and_ignore_other_service_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings::default(),
+                Arc::new(Listening),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bus.snapshot().last().unwrap()["payload"],
+            service.events_status().await
+        );
+        let records = bus.snapshot();
+        let id = records[0]["attributes"]["service_run_id"].as_str().unwrap();
+        service.reception_failed("previous-service-run").await;
+        assert_eq!(
+            event_types(&bus, "events"),
+            ["events.starting", "events.running"]
+        );
+        tokio::join!(service.reception_failed(id), service.reception_failed(id));
+        assert_eq!(
+            event_types(&bus, "events"),
+            ["events.starting", "events.running", "events.failed"]
+        );
+        assert_eq!(
+            bus.snapshot().last().unwrap()["payload"],
+            service.events_status().await
+        );
+        service.stop(true).await;
+        assert_eq!(
+            event_types(&bus, "events"),
+            ["events.starting", "events.running", "events.failed"]
+        );
+    }
+
+    #[tokio::test]
+    async fn restarts_allocate_one_fresh_identity_before_every_first_transition() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        let mut ids = vec![];
+        for _ in 0..2 {
+            let offset = bus.snapshot().len();
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening),
+                )
+                .await
+                .unwrap();
+            let owner = read_owner(&root.path().join("run/service.lock")).unwrap();
+            service.stop(true).await;
+            let records = bus.snapshot();
+            let records = &records[offset..];
+            assert_eq!(records[0]["type"], "scheduler.starting");
+            let id = records[0]["attributes"]["service_run_id"].as_str().unwrap();
+            assert_eq!(id.len(), 32);
+            assert_eq!(owner["service_instance_id"], id);
+            assert!(
+                records
+                    .iter()
+                    .all(|r| r["attributes"]["service_run_id"] == id)
+            );
+            ids.push(id.to_owned());
+        }
+        assert_ne!(ids[0], ids[1]);
+        let previous = service.events_status().await;
+        let records = event_types(&bus, "events");
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings {
+                    event_queue: false,
+                    ..Settings::default()
+                },
+                Arc::new(Listening),
+            )
+            .await
+            .unwrap();
+        assert_eq!(service.events_status().await, previous);
+        service.stop(true).await;
+        assert_eq!(service.events_status().await, previous);
+        assert_eq!(event_types(&bus, "events"), records);
+    }
+
+    fn blocking_barrier() -> (
+        CancellationToken,
+        std::sync::mpsc::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let entered = CancellationToken::new();
+        let (release, wait) = std::sync::mpsc::channel();
+        let task = tokio::task::spawn_blocking({
+            let entered = entered.clone();
+            move || {
+                entered.cancel();
+                wait.recv_timeout(Duration::from_secs(30)).unwrap();
+            }
+        });
+        (entered, release, task)
+    }
+
+    #[test]
+    fn cancelling_direct_start_during_keep_awake_preparation_settles_and_allows_restart() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let root = tempfile::tempdir().unwrap();
+                let service = Service::default();
+                let bus = Arc::new(crate::events::EventBus::default());
+                service.attach_events(bus.clone());
+                let (entered, release, first) = blocking_barrier();
+                entered.cancelled().await;
+                let mut start = Box::pin(service.start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Listening),
+                ));
+                // Queue admission behind the first barrier, then a second barrier
+                // behind admission. Keep-awake preparation cannot pass the second.
+                std::future::poll_fn(|cx| {
+                    assert!(start.as_mut().poll(cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                let (entered, release_second, second) = blocking_barrier();
+                release.send(()).unwrap();
+                tokio::time::timeout(Duration::from_secs(5), entered.cancelled())
+                    .await
+                    .unwrap();
+                std::future::poll_fn(|cx| {
+                    assert!(start.as_mut().poll(cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                assert_eq!(event_types(&bus, "scheduler"), ["scheduler.starting"]);
+                drop(start);
+                release_second.send(()).unwrap();
+                first.await.unwrap();
+                second.await.unwrap();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while service.status().await.state != "failed" {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(!service.status().await.running);
+                assert_eq!(
+                    event_types(&bus, "scheduler"),
+                    ["scheduler.starting", "scheduler.failed"]
+                );
+                assert!(event_types(&bus, "events").is_empty());
+                assert!(
+                    gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(
+                    service
+                        .start(
+                            root.path(),
+                            root.path(),
+                            vec!["alice".into()],
+                            Settings::default(),
+                            Arc::new(Listening)
+                        )
+                        .await
+                        .unwrap()
+                );
+                assert_eq!(service.stop(true).await.state, "stopped");
+            });
+    }
+
+    #[tokio::test]
+    async fn direct_start_admission_io_error_publishes_nothing_and_releases_ownership() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        service.attach_events(bus.clone());
+        assert!(
+            service
+                .start(
+                    root.path(),
+                    &root.path().join("missing-workspace"),
+                    vec![],
+                    Settings::default(),
+                    Arc::new(Listening)
+                )
+                .await
+                .is_err()
+        );
+        assert!(bus.snapshot().is_empty());
+        assert_eq!(service.status().await.state, "stopped");
+        assert!(!service.status().await.running);
+        assert!(
+            gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_waiter_cannot_fail_a_replacement_run() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Service::default();
+        service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Settings::default(),
+                Arc::new(Listening),
+            )
+            .await
+            .unwrap();
+        let old_done = CancellationToken::new();
+        let task = tokio::spawn({
+            let service = service.clone();
+            let old_done = old_done.clone();
+            async move { service.wait_stop(old_done, true).await }
+        });
+        tokio::task::yield_now().await;
+        let state = service.0.lock().await;
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        // Old cleanup settles while its timeout handler is waiting for the state lock.
+        old_done.cancel();
+        drop(state);
+        task.await.unwrap();
+        assert_eq!(service.status().await.state, "running");
+        service.stop(true).await;
+    }
+
     #[test]
     fn never_started_status_has_no_configured_metadata() {
         let status = serde_json::to_value(Status::default()).unwrap();
@@ -387,10 +1009,17 @@ mod tests {
         entered: CancellationToken,
         release: CancellationToken,
         panic: bool,
+        hold_cycle: bool,
     }
     impl Worker for CleanupWorker {
+        fn listener_count(&self) -> usize {
+            1
+        }
         fn cycle<'a>(&'a self, _: &'a str, _: &'a Settings) -> Pending<'a, Outcome> {
             Box::pin(async move {
+                if self.hold_cycle {
+                    std::future::pending::<()>().await;
+                }
                 assert!(!self.panic, "worker panic");
                 Outcome::Failed
             })
@@ -406,46 +1035,78 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn force_timeout_retains_ownership_until_cleanup_finishes() {
-        let root = tempfile::tempdir().unwrap();
-        let service = Service::default();
-        let worker = Arc::new(CleanupWorker {
-            entered: CancellationToken::new(),
-            release: CancellationToken::new(),
-            panic: false,
-        });
-        service
-            .start(
-                root.path(),
-                root.path(),
-                vec!["alice".into()],
-                Settings {
-                    max_consecutive_errors: 1,
-                    ..Settings::default()
-                },
-                worker.clone(),
-            )
-            .await
-            .unwrap();
-        worker.entered.cancelled().await;
-        let status = service.stop(true).await;
-        assert_eq!(status.state, "failed");
-        assert!(status.running);
-        assert!(status.error.is_some());
-        assert!(
-            gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
-                .unwrap()
-                .is_none()
-        );
-        worker.release.cancel();
-        while service.status().await.running {
-            tokio::task::yield_now().await;
+        for natural in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let controller = crate::service_runtime::Controller::default();
+            let service = &controller.service;
+            let bus = Arc::new(crate::events::EventBus::default());
+            service.attach_events(bus.clone());
+            let worker = Arc::new(CleanupWorker {
+                entered: CancellationToken::new(),
+                release: CancellationToken::new(),
+                panic: false,
+                hold_cycle: !natural,
+            });
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings {
+                        max_consecutive_errors: 1,
+                        ..Settings::default()
+                    },
+                    worker.clone(),
+                )
+                .await
+                .unwrap();
+            if !natural {
+                service.request_stop(true).await;
+            }
+            worker.entered.cancelled().await;
+            let offset = bus
+                .snapshot()
+                .iter()
+                .position(|r| r["type"] == "events.stopping")
+                .unwrap();
+            let status = service.stop(true).await;
+            let records = bus.snapshot();
+            assert_eq!(
+                records[offset..]
+                    .iter()
+                    .map(|r| r["type"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "events.stopping",
+                    "events.stopped",
+                    "scheduler.stopping",
+                    "scheduler.failed"
+                ]
+            );
+            let events = controller.view().await["events"].clone();
+            assert_eq!(events["state"], "stopped");
+            assert_eq!(events["running"], false);
+            assert_eq!(events["listener_count"], 0);
+            assert_eq!(records[offset + 1]["payload"], events);
+            assert_eq!(status.state, "failed");
+            assert!(status.running);
+            assert!(status.error.is_some());
+            assert!(
+                gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                    .unwrap()
+                    .is_none()
+            );
+            worker.release.cancel();
+            while service.status().await.running {
+                tokio::task::yield_now().await;
+            }
+            assert!(service.status().await.error.is_none());
+            assert!(
+                gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
+                    .unwrap()
+                    .is_some()
+            );
         }
-        assert!(service.status().await.error.is_none());
-        assert!(
-            gb_base::files::FileLock::try_hold(&root.path().join("run/service.lock"))
-                .unwrap()
-                .is_some()
-        );
     }
 
     #[tokio::test]
@@ -456,6 +1117,7 @@ mod tests {
             entered: CancellationToken::new(),
             release: CancellationToken::new(),
             panic: true,
+            hold_cycle: false,
         });
         worker.release.cancel();
         service
@@ -606,6 +1268,28 @@ mod tests {
         assert_eq!(status.scheduled_source_enabled, Some(true));
         assert_eq!(status.routine_source_enabled, Some(true));
         assert_eq!(status.event_queue_source_enabled, Some(true));
+        let previous = serde_json::to_value(status).unwrap();
+        let attempt = service.starting().await;
+        service.startup_failed(attempt).await;
+        let failed = serde_json::to_value(service.status().await).unwrap();
+        for (key, value) in previous.as_object().unwrap() {
+            if !["state", "running", "error", "started_at", "stopped_at"].contains(&key.as_str()) {
+                assert_eq!(&failed[key], value, "{key}");
+            }
+        }
+    }
+
+    struct DrainingListener(Arc<HeldWorker>);
+    impl Worker for DrainingListener {
+        fn listener_count(&self) -> usize {
+            1
+        }
+        fn cycle<'a>(&'a self, person: &'a str, settings: &'a Settings) -> Pending<'a, Outcome> {
+            self.0.cycle(person, settings)
+        }
+        fn worker_failed(&self, person: &str, errors: u8) {
+            self.0.worker_failed(person, errors);
+        }
     }
 
     #[tokio::test]
@@ -625,7 +1309,7 @@ mod tests {
                             max_consecutive_errors: 1,
                             ..Default::default()
                         },
-                        worker.clone()
+                        Arc::new(DrainingListener(worker.clone()))
                     )
                     .await
                     .unwrap()
@@ -641,7 +1325,7 @@ mod tests {
                             max_consecutive_errors: 1,
                             ..Default::default()
                         },
-                        worker.clone()
+                        Arc::new(DrainingListener(worker.clone()))
                     )
                     .await
                     .unwrap()
@@ -657,12 +1341,17 @@ mod tests {
                 tokio::task::yield_now().await;
             }
             assert!(!stopper.is_finished());
+            let stopped_events = service.events_status().await;
+            assert_eq!(stopped_events["state"], "stopped");
+            assert_eq!(stopped_events["listener_count"], 0);
             worker.release.cancel();
             let stopped = stopper.await.unwrap();
             assert_eq!(stopped.state, "stopped");
             assert_eq!(stopped.worker_count, Some(0));
             assert!(!stopped.running);
             assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(service.events_status().await, stopped_events);
+            assert_eq!(stopped.cycle_count, Some(1));
         }
     }
 

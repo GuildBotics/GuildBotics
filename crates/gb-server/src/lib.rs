@@ -2,6 +2,7 @@
 //! screens and the command line use, carried over from the Python version
 //! (`guildbotics/app_api`) piece by piece.
 
+mod activity;
 mod api;
 mod auth;
 pub mod chat_dispatch;

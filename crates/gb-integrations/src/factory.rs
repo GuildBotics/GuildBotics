@@ -36,6 +36,21 @@ pub struct IntegrationConfig {
     pub checks: String,
     pub slack_base_url: String,
 }
+/// Chat capabilities shared by receive-state selection and service construction.
+#[derive(Clone, Copy)]
+pub enum ChatProvider {
+    Local,
+    Slack,
+}
+impl ChatProvider {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "local" => Some(Self::Local),
+            "slack" => Some(Self::Slack),
+            _ => None,
+        }
+    }
+}
 /// A factory is bound to one roster member and the identity secret store.
 pub struct ServiceIntegrationFactory<'a> {
     config: IntegrationConfig,
@@ -153,13 +168,13 @@ impl<'a> ServiceIntegrationFactory<'a> {
         }
     }
     pub fn create_chat_service(&self) -> Result<Arc<dyn ChatService>, ServiceError> {
-        match self.config.chat_provider.as_str() {
-            "local" => Ok(Arc::new(local::LocalChat::new(
+        match ChatProvider::parse(&self.config.chat_provider) {
+            Some(ChatProvider::Local) => Ok(Arc::new(local::LocalChat::new(
                 self.config.local_root.clone(),
                 &self.actor("local").0,
                 &self.config.display_name,
             ))),
-            "slack" => Ok(Arc::new(
+            Some(ChatProvider::Slack) => Ok(Arc::new(
                 slack::SlackChatService::new(
                     self.secret("SLACK_BOT_TOKEN")?,
                     self.secret("SLACK_APP_TOKEN")?,
@@ -173,7 +188,7 @@ impl<'a> ServiceIntegrationFactory<'a> {
                     "SLACK_BOT_TOKEN",
                 )),
             )),
-            _ => Err(Self::unsupported_provider(
+            None => Err(Self::unsupported_provider(
                 "chat_service",
                 &self.config.chat_provider,
             )),

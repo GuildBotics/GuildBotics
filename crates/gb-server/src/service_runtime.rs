@@ -16,23 +16,6 @@ impl std::fmt::Display for StartupSecrets {
 impl std::error::Error for StartupSecrets {}
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-struct Starting {
-    service: crate::service::Service,
-    attempt: u64,
-    settled: bool,
-}
-impl Drop for Starting {
-    fn drop(&mut self) {
-        if !self.settled {
-            let service = self.service.clone();
-            let attempt = self.attempt;
-            tokio::spawn(async move {
-                service.startup_failed(attempt).await;
-            });
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct Controller {
     pub execution: crate::execution::Coordinator,
@@ -43,6 +26,14 @@ pub struct Controller {
     worker: tokio::sync::RwLock<Option<Arc<NativeWorker>>>,
 }
 impl Controller {
+    pub(crate) async fn reset_chat_state(
+        &self,
+        apply: impl FnOnce() -> anyhow::Result<serde_json::Value> + Send + 'static,
+    ) -> anyhow::Result<serde_json::Value> {
+        let _gate = self.gate.lock().await;
+        anyhow::ensure!(!self.service.status().await.running, "runtime_running");
+        tokio::task::spawn_blocking(apply).await?
+    }
     #[cfg(test)]
     pub(crate) async fn hold_start_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.gate.lock().await
@@ -91,49 +82,46 @@ impl Controller {
         if self.execution.generation().draining.is_cancelled() {
             self.execution.wait(self.execution.begin_drain(false)).await;
         }
-        let previous = self.service.status().await;
-        let attempt = self.service.starting().await;
-        let mut starting = Starting {
-            service: self.service.clone(),
-            attempt,
-            settled: false,
-        };
-        let result = self.start_worker().await;
-        if let Err(error) = &result {
-            if error
-                .downcast_ref::<crate::service::AlreadyRunning>()
-                .is_some()
-                || error
-                    .downcast_ref::<crate::service_settings::InvalidSettings>()
-                    .is_some()
-            {
-                self.service.startup_rejected(attempt, previous).await;
-            } else {
-                self.service.startup_failed(attempt).await;
+        let native = match self.native.as_ref() {
+            Some(native) => native,
+            None => {
+                let starting = self
+                    .service
+                    .begin_start(uuid::Uuid::new_v4().simple().to_string())
+                    .await;
+                return starting
+                    .finish(Err(anyhow::anyhow!("config_not_found")))
+                    .await;
             }
-        }
-        starting.settled = true;
-        result
-    }
-    async fn start_worker(&self) -> anyhow::Result<crate::service::Status> {
-        let native = self
-            .native
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("config_not_found"))?;
+        };
         let settings = Settings::read(&native.workspace)?;
+        let admitted =
+            crate::service::Service::admit(&native.data, &native.workspace, &settings).await?;
+        let starting = self.service.begin_start(admitted.run_id.clone()).await;
+        let result = self.start_worker(native, settings, admitted).await;
+        starting.finish(result).await
+    }
+    async fn start_worker(
+        &self,
+        native: &crate::member::native::Native,
+        settings: Settings,
+        admitted: crate::service::Admission,
+    ) -> anyhow::Result<crate::service::Status> {
         let (worker, members) = NativeWorker::assemble(
             native,
             self.host.as_ref().unwrap().clone(),
             &settings,
             self.execution.clone(),
+            admitted.run_id.clone(),
         )
         .await?;
+        let _ = worker.service.set(self.service.clone());
         // Publish the worker before starting its tasks: cancellation while waiting
         // for this lock must not leave an unobservable service running.
         *self.worker.write().await = Some(worker.clone());
         self.service
-            .start(
-                &native.data,
+            .start_admitted(
+                admitted,
                 &native.workspace,
                 members,
                 settings,
@@ -193,67 +181,7 @@ impl Controller {
                 .map(|worker| worker.scheduler.heartbeats())
                 .unwrap_or_default()
         );
-        let listeners = if status.running {
-            worker.as_ref().map_or(0, |w| w.groups.len())
-        } else {
-            0
-        };
-        let failed = status.running
-            && worker
-                .as_ref()
-                .is_some_and(|w| w.reception_failed.load(std::sync::atomic::Ordering::SeqCst));
-        let events_running = status.running && listeners > 0 && !failed;
-        let mut auth_people = vec![];
-        let mut auth_count = 0;
-        if let Some(worker) = worker.as_ref().filter(|_| status.running) {
-            for group in &worker.groups {
-                if group.auth_failed() {
-                    auth_count += 1;
-                    auth_people.extend(group.people());
-                }
-            }
-            auth_people.extend(worker.auth_skipped.clone());
-            auth_count += worker.auth_skipped.len();
-        }
-        let mut missing_people = worker
-            .as_ref()
-            .filter(|_| status.running)
-            .map(|w| {
-                w.groups
-                    .iter()
-                    .flat_map(|g| g.missing_channel_people())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        missing_people.sort();
-        missing_people.dedup();
-        let event_errors: u64 = worker
-            .as_ref()
-            .map(|w| w.groups.iter().map(|g| g.error_count()).sum())
-            .unwrap_or(0);
-        auth_people.sort();
-        auth_people.dedup();
-        let mut events =
-            serde_json::to_value(crate::service::Status::default()).expect("service status");
-        events["started_at"] = serde_json::json!(status.started_at);
-        events["stopped_at"] = serde_json::json!(status.stopped_at);
-        let subscriptions: Option<usize> = worker
-            .as_ref()
-            .map(|w| w.groups.iter().map(|g| g.subscription_count()).sum());
-        let drained: Option<u64> = worker
-            .as_ref()
-            .map(|w| w.groups.iter().map(|g| g.drained_count()).sum());
-        let summary = serde_json::json!({"target":"events",
-            "subscription_count":subscriptions,"events_drained_count":drained,
-            "cycle_count":status.cycle_count,"cycle_failure_count":worker.as_ref().map(|_|event_errors),
-            "error":if failed {Some(crate::i18n::t("en", "app_api.errors.service_events_failed", &[]))} else {None},
-            "events_missing_channel_count":missing_people.len(),"events_missing_channel_persons":missing_people,"events_error_count":event_errors,
-            "state":if failed {"failed"} else if events_running || matches!(status.state,"starting"|"failed") {status.state} else {"stopped"},
-            "running":events_running,"listener_count":status.started_at.as_ref().map(|_|listeners),"events_auth_failed_count":status.started_at.as_ref().map(|_|auth_count),"events_auth_failed_persons":auth_people,"events_chat_provider":worker.as_ref().map(|w|&w.chat_provider).cloned().unwrap_or_default()});
-        events
-            .as_object_mut()
-            .unwrap()
-            .extend(summary.as_object().unwrap().clone());
+        let events = self.service.events_status().await;
         serde_json::json!({"scheduler":scheduler,"events":events,
             "active_works":self.execution.generation().snapshot(),"has_active_work":status.running || status.state == "stopping" || !self.execution.generation().work.is_empty()})
     }
@@ -370,6 +298,7 @@ pub(crate) async fn stop(
 }
 
 pub struct NativeWorker {
+    service: std::sync::OnceLock<crate::service::Service>,
     service_instance_id: String,
     scheduler: crate::scheduler::Scheduler,
     groups: Vec<Arc<crate::chat_receiver::Group>>,
@@ -390,9 +319,9 @@ impl NativeWorker {
         host: Arc<gb_environment::Host>,
         settings: &Settings,
         execution: crate::execution::Coordinator,
+        service_instance_id: String,
     ) -> anyhow::Result<(Arc<Self>, Vec<String>)> {
         let generation = execution.generation();
-        let service_instance_id = uuid::Uuid::new_v4().simple().to_string();
         let team = gb_config::team::Team::load(
             &native.workspace.join(".guildbotics/config"),
             &native.identity_root,
@@ -497,6 +426,7 @@ impl NativeWorker {
             .collect::<anyhow::Result<_>>()?;
         Ok((
             Arc::new(Self {
+                service: Default::default(),
                 service_instance_id,
                 scheduler,
                 groups,
@@ -553,8 +483,52 @@ fn commands(
 }
 
 impl Worker for NativeWorker {
-    fn service_instance_id(&self) -> Option<&str> {
-        Some(&self.service_instance_id)
+    fn listener_count(&self) -> usize {
+        self.groups.len()
+    }
+    fn reception_failed(&self) -> bool {
+        self.reception_failed
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn event_status(&self, status: &crate::service::Status) -> serde_json::Value {
+        let mut auth_people = vec![];
+        let mut auth_count = 0;
+        let mut missing_people = vec![];
+        if status.running {
+            for group in &self.groups {
+                if group.auth_failed() {
+                    auth_count += 1;
+                    auth_people.extend(group.people());
+                }
+                missing_people.extend(group.missing_channel_people());
+            }
+            auth_people.extend(self.auth_skipped.clone());
+            auth_count += self.auth_skipped.len();
+        }
+        auth_people.sort();
+        auth_people.dedup();
+        missing_people.sort();
+        missing_people.dedup();
+        let event_errors: u64 = self.groups.iter().map(|g| g.error_count()).sum();
+        let subscriptions: usize = self.groups.iter().map(|g| g.subscription_count()).sum();
+        let drained: u64 = self.groups.iter().map(|g| g.drained_count()).sum();
+        let mut events = serde_json::to_value(crate::service::Status::default()).unwrap();
+        events.as_object_mut().unwrap().extend(
+            serde_json::json!({
+                "target":"events", "subscription_count":subscriptions,
+                "events_drained_count":drained,"cycle_count":status.cycle_count,
+                "cycle_failure_count":event_errors,"events_error_count":event_errors,
+                "events_missing_channel_count":missing_people.len(),
+                "events_missing_channel_persons":missing_people,
+                "listener_count":if status.running {self.groups.len()} else {0},
+                "events_auth_failed_count":auth_count,"events_auth_failed_persons":auth_people,
+                "events_chat_provider":self.chat_provider
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        events
     }
     fn cycle<'a>(&'a self, person: &'a str, settings: &'a Settings) -> Pending<'a, Outcome> {
         Box::pin(async move {
@@ -563,9 +537,14 @@ impl Worker for NativeWorker {
                     for group in &self.groups {
                         let (group, stop) = (group.clone(), self.stop_reception.clone());
                         let failed = self.reception_failed.clone();
+                        let service = self.service.get().cloned();
+                        let run_id = self.service_instance_id.clone();
                         self.receivers.spawn(async move {
                             if group.run(stop).await.is_err() {
                                 failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                                if let Some(service) = service {
+                                    service.reception_failed(&run_id).await;
+                                }
                                 tracing::error!("chat receiver stopped");
                             }
                         });
@@ -602,6 +581,8 @@ mod tests {
     #[tokio::test]
     async fn startup_failure_is_recorded_and_never_started_events_are_empty() {
         let controller = Controller::default();
+        let bus = Arc::new(crate::events::EventBus::default());
+        controller.service.attach_events(bus.clone());
         let view = controller.view().await;
         assert_eq!(view["events"]["events_error_count"], 0);
         assert!(view["events"]["error"].is_null());
@@ -610,6 +591,19 @@ mod tests {
         assert_eq!(status.state, "failed");
         assert!(!status.running);
         assert!(status.error.is_some());
+        let records = bus.snapshot();
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["scheduler.starting", "scheduler.failed"]
+        );
+        assert_eq!(
+            records[0]["attributes"]["service_run_id"],
+            records[1]["attributes"]["service_run_id"]
+        );
+        assert_eq!(controller.view().await["events"], view["events"]);
     }
 
     #[tokio::test]
@@ -757,6 +751,7 @@ mod tests {
         let execution = crate::execution::Coordinator::default();
         let generation = execution.generation();
         let worker = Arc::new(NativeWorker {
+            service: Default::default(),
             service_instance_id: generation.id.clone(),
             scheduler: Default::default(),
             groups: vec![],
@@ -830,13 +825,19 @@ mod tests {
             host.clone(),
             &Settings::default(),
             execution.clone(),
+            "first-service-run".into(),
         )
         .await
         .unwrap();
-        let (second, _) =
-            NativeWorker::assemble(&native, host, &Settings::default(), execution.clone())
-                .await
-                .unwrap();
+        let (second, _) = NativeWorker::assemble(
+            &native,
+            host,
+            &Settings::default(),
+            execution.clone(),
+            "second-service-run".into(),
+        )
+        .await
+        .unwrap();
         assert_ne!(first.service_instance_id, second.service_instance_id);
         assert_eq!(execution.generation().id, generation.id);
     }
@@ -869,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn starting_hides_every_previous_worker_field_but_keeps_the_exit_guard() {
+    async fn starting_preserves_previous_events_but_hides_heartbeats_and_keeps_the_exit_guard() {
         let root = tempfile::tempdir().unwrap();
         let native = crate::member::native::tests::fixture(root.path());
         let host = Arc::new(gb_environment::Host {
@@ -884,6 +885,7 @@ mod tests {
             host,
             &Settings::default(),
             controller.execution.clone(),
+            "previous-service-run".into(),
         )
         .await
         .unwrap();
@@ -909,32 +911,22 @@ mod tests {
             tokio::task::yield_now().await;
         }
         *controller.worker.write().await = Some(worker);
+        let previous_events = controller.view().await["events"].clone();
+        assert_eq!(previous_events["state"], "failed");
+        assert_eq!(previous_events["events_chat_provider"], "previous-provider");
         controller.service.starting().await;
         let view = controller.view().await;
         assert_eq!(view["has_active_work"], true);
         assert_eq!(view["scheduler"]["running"], true);
         assert_eq!(view["scheduler"]["member_routines"], serde_json::json!([]));
-        let events = &view["events"];
-        assert_eq!(events["state"], "starting");
-        assert_eq!(events["running"], false);
-        assert!(events["error"].is_null());
-        assert_eq!(events["listener_count"], 0);
-        assert_eq!(events["events_auth_failed_count"], 0);
-        assert!(events["subscription_count"].is_null());
-        assert!(events["events_drained_count"].is_null());
-        assert!(events["cycle_failure_count"].is_null());
-        assert_eq!(events["events_auth_failed_persons"], serde_json::json!([]));
-        assert_eq!(
-            events["events_missing_channel_persons"],
-            serde_json::json!([])
-        );
-        assert_eq!(events["events_chat_provider"], "");
-        assert_eq!(events["events_error_count"], 0);
+        assert_eq!(view["events"], previous_events);
     }
 
     #[tokio::test]
     async fn preflight_refusals_leave_stopped_without_an_error() {
-        for invalid_settings in [false, true] {
+        for (invalid_settings, previous_failed) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let root = tempfile::tempdir().unwrap();
             let native = crate::member::native::tests::fixture(root.path());
             let host = Arc::new(gb_environment::Host {
@@ -952,6 +944,14 @@ mod tests {
                 gb_base::files::FileLock::try_hold(&native.data.join("run/service.lock")).unwrap()
             };
             let controller = Controller::new(native, host);
+            let bus = Arc::new(crate::events::EventBus::default());
+            controller.service.attach_events(bus.clone());
+            if previous_failed {
+                let attempt = controller.service.starting().await;
+                controller.service.startup_failed(attempt).await;
+            }
+            let previous = controller.view().await;
+            let records = bus.snapshot();
             let error = controller.start().await.unwrap_err();
             assert_eq!(
                 error
@@ -965,12 +965,138 @@ mod tests {
                     .is_some(),
                 !invalid_settings
             );
-            let status = controller.service.status().await;
-            assert_eq!(status.state, "stopped");
-            assert!(!status.running);
-            assert!(status.error.is_none());
+            assert_eq!(controller.view().await, previous);
+            assert_eq!(bus.snapshot(), records);
             drop(lock);
         }
+    }
+
+    #[tokio::test]
+    async fn native_events_payload_matches_get_metadata_and_admitted_worker_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        std::fs::write(
+            native
+                .workspace
+                .join(".guildbotics/config/team/members/aiko/member.yml"),
+            r#"{"is_active":false}"#,
+        )
+        .unwrap();
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let controller = Controller::new(native, host);
+        let bus = Arc::new(crate::events::EventBus::default());
+        controller.service.attach_events(bus.clone());
+        controller.start().await.unwrap();
+        controller.stop(true).await;
+        let records = bus.snapshot();
+        let events: Vec<_> = records.iter().filter(|r| r["source"] == "events").collect();
+        assert_eq!(
+            events
+                .iter()
+                .map(|r| r["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["events.starting", "events.stopped"]
+        );
+        let payload = &events[1]["payload"];
+        assert_eq!(payload, &controller.view().await["events"]);
+        for key in [
+            "listener_count",
+            "subscription_count",
+            "events_drained_count",
+            "events_auth_failed_count",
+            "events_missing_channel_count",
+            "events_error_count",
+        ] {
+            assert_eq!(payload[key], 0, "{key}");
+        }
+        assert!(payload["worker_count"].is_null());
+        let worker = controller.worker.read().await;
+        assert_eq!(
+            records[0]["attributes"]["service_run_id"],
+            worker.as_ref().unwrap().service_instance_id
+        );
+        assert!(records.iter().all(
+            |r| r["attributes"]["service_run_id"] == records[0]["attributes"]["service_run_id"]
+        ));
+    }
+
+    #[tokio::test]
+    async fn assembly_failure_has_only_scheduler_transitions_with_a_fresh_admitted_id() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        // Populate metadata with a real completed run before assembly fails.
+        std::fs::write(
+            native
+                .workspace
+                .join(".guildbotics/config/team/members/aiko/member.yml"),
+            r#"{"is_active":false}"#,
+        )
+        .unwrap();
+        let controller = Controller::new(native.clone(), host);
+        controller.start().await.unwrap();
+        controller.stop(true).await;
+        let previous = controller.view().await;
+        std::fs::remove_file(
+            native
+                .workspace
+                .join(".guildbotics/config/team/project.yml"),
+        )
+        .unwrap();
+        let bus = Arc::new(crate::events::EventBus::default());
+        controller.service.attach_events(bus.clone());
+        let initial_events = controller.view().await["events"].clone();
+        let mut ids = vec![];
+        for _ in 0..2 {
+            let offset = bus.snapshot().len();
+            assert!(controller.start().await.is_err());
+            let records = bus.snapshot();
+            let records = &records[offset..];
+            assert_eq!(
+                records
+                    .iter()
+                    .map(|r| r["type"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["scheduler.starting", "scheduler.failed"]
+            );
+            let id = records[0]["attributes"]["service_run_id"].as_str().unwrap();
+            assert_eq!(id.len(), 32);
+            assert_eq!(records[1]["attributes"]["service_run_id"], id);
+            let owner_bytes = std::fs::read(native.data.join("run/service.lock")).unwrap();
+            let owner: serde_json::Value = serde_json::from_slice(&owner_bytes[1..]).unwrap();
+            assert_eq!(owner["service_instance_id"], id);
+            let view = controller.view().await;
+            assert_eq!(view["events"], initial_events);
+            for (key, value) in previous["scheduler"].as_object().unwrap() {
+                if ["state", "running", "error", "started_at", "stopped_at"].contains(&key.as_str())
+                {
+                    continue;
+                }
+                assert_eq!(&view["scheduler"][key], value, "GET {key}");
+                if records[0]["payload"].get(key).is_some() {
+                    for record in records {
+                        assert_eq!(&record["payload"][key], value, "payload {key}");
+                    }
+                }
+            }
+            assert!(
+                gb_base::files::FileLock::try_hold(&native.data.join("run/service.lock"))
+                    .unwrap()
+                    .is_some()
+            );
+            ids.push(id.to_owned());
+        }
+        assert_ne!(ids[0], ids[1]);
     }
 
     #[tokio::test]
@@ -1017,7 +1143,13 @@ mod tests {
             let controller = controller.clone();
             tokio::spawn(async move { controller.start().await })
         };
-        tokio::task::yield_now().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while controller.service.status().await.state != "starting" {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(controller.gate.try_lock().is_err());
         assert!(controller.service.status().await.running);
         assert_eq!(controller.service.status().await.state, "starting");

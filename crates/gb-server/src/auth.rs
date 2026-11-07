@@ -400,6 +400,139 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_use_never_renews_its_thirty_day_expiry_and_expired_cookies_are_refused() {
+        use super::*;
+        let data = tempfile::tempdir().unwrap();
+        let auth = ServerAuth::open(data.path(), 8765).unwrap();
+        let link = auth.entry_link("/");
+        let before = now();
+        let (cookie, csrf) = auth
+            .start_session(link.url.split_once('#').unwrap().1)
+            .unwrap()
+            .unwrap();
+        let digest = loopback_auth::digest(&cookie);
+        let expires = auth.state.lock().unwrap().records.sessions[&digest].expires_at;
+        assert!(
+            expires >= before + SESSION_SECONDS as f64 && expires <= now() + SESSION_SECONDS as f64
+        );
+        assert_eq!(SESSION_SECONDS, 30 * 24 * 3600);
+        let session = headers(&[
+            ("cookie", &format!("{}={cookie}", auth.cookie)),
+            (CSRF_HEADER, &csrf),
+        ]);
+        for _ in 0..3 {
+            assert_eq!(auth.authenticate(&Method::POST, &session), Ok(()));
+            assert_eq!(auth.session_csrf(&session), Some(csrf.clone()));
+        }
+        assert_eq!(
+            auth.state.lock().unwrap().records.sessions[&digest].expires_at,
+            expires
+        );
+        auth.state
+            .lock()
+            .unwrap()
+            .records
+            .sessions
+            .get_mut(&digest)
+            .unwrap()
+            .expires_at = now() - 1.0;
+        assert!(auth.session_csrf(&session).is_none());
+        for method in [Method::GET, Method::POST] {
+            assert_eq!(
+                auth.authenticate(&method, &session),
+                Err(Denied::Unauthorized)
+            );
+        }
+    }
+    #[test]
+    fn app_consent_pkce_is_single_use_bound_to_redirect_and_revokes_the_previous_app_token() {
+        use super::*;
+        use base64::Engine;
+        use sha2::Digest;
+        let dir = tempfile::tempdir().unwrap();
+        let auth = ServerAuth::open(dir.path(), 8765).unwrap();
+        let verifier = "a".repeat(43);
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        let redirect = "http://127.0.0.1:54321/callback?own=value";
+        let consent = || {
+            let redirect = auth
+                .authorize(Authorization {
+                    client: "test-app".into(),
+                    redirect_uri: redirect.into(),
+                    state: "state-1".into(),
+                    code_challenge: challenge.clone(),
+                })
+                .unwrap();
+            let url = url::Url::parse(&redirect).unwrap();
+            assert!(url.query_pairs().any(|(k, v)| k == "own" && v == "value"));
+            assert!(
+                url.query_pairs()
+                    .any(|(k, v)| k == "state" && v == "state-1")
+            );
+            url.query_pairs()
+                .find(|(k, _)| k == "code")
+                .unwrap()
+                .1
+                .to_string()
+        };
+        let exchange = |code: String, uri: &str, verifier: &str| {
+            auth.app_token(Exchange {
+                code,
+                redirect_uri: uri.into(),
+                code_verifier: verifier.into(),
+            })
+            .unwrap()
+        };
+        let code = consent();
+        let token = exchange(code.clone(), redirect, &verifier).unwrap();
+        assert!(exchange(code, redirect, &verifier).is_none());
+        let token = token["token"].as_str().unwrap();
+        assert!(auth.known_token(token, true));
+        assert!(!auth.known_token(token, false));
+        assert!(
+            !std::fs::read_to_string(auth.directory.join("auth.json"))
+                .unwrap()
+                .contains(token)
+        );
+        let next = exchange(consent(), redirect, &verifier).unwrap();
+        assert!(auth.known_token(next["token"].as_str().unwrap(), true));
+        assert!(!auth.known_token(token, true));
+        for (uri, v) in [
+            ("http://127.0.0.1:54321/other", verifier.as_str()),
+            (redirect, "wrong"),
+        ] {
+            let code = consent();
+            assert!(exchange(code.clone(), uri, v).is_none());
+            assert!(exchange(code, redirect, &verifier).is_none());
+        }
+        let code = auth.state.lock().unwrap().consents.issue(
+            Consent {
+                client: "test-app".into(),
+                redirect_uri: redirect.into(),
+                challenge,
+            },
+            Instant::now() - std::time::Duration::from_secs(CODE_SECONDS + 1),
+        );
+        assert!(exchange(code, redirect, &verifier).is_none());
+        for uri in [
+            "https://example.com/callback",
+            "http://0.0.0.0:123/callback",
+            "http://127.0.0.1:123/callback?code=owned",
+            "http://127.0.0.1:123/callback?state=owned",
+        ] {
+            assert!(
+                auth.authorize(Authorization {
+                    client: "test-app".into(),
+                    redirect_uri: uri.into(),
+                    state: "state".into(),
+                    code_challenge: "a".repeat(43)
+                })
+                .is_none()
+            );
+        }
+    }
     use super::*;
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {

@@ -903,6 +903,26 @@ pub(crate) fn internal(what: &str, error_type: &str) -> Response {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn working_directories_expand_home_and_admit_only_absolute_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join("work")).unwrap();
+        let expected = gb_base::host_path::normalize(&home.join("work")).unwrap();
+        assert_eq!(
+            super::working_directory(std::path::Path::new("~/work"), &home).unwrap(),
+            expected
+        );
+        assert_eq!(
+            super::working_directory(&home.join("work"), &home).unwrap(),
+            expected
+        );
+        assert!(super::working_directory(std::path::Path::new("relative"), &home).is_err());
+        assert_eq!(
+            super::working_directory(std::path::Path::new("~/missing"), &home).unwrap(),
+            home.join("missing")
+        );
+    }
+    #[test]
     fn run_member_selection_preserves_the_explicit_configured_and_implicit_order() {
         use axum::http::HeaderMap;
         use gb_config::team::Team;

@@ -8,6 +8,16 @@ use gb_environment::Sentence;
 /// The namespaces this executable says something from, by language.
 const FILES: &[(&str, &str, &str)] = &[
     (
+        "app_api.activity_events",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/app_api/activity_events.en.yml"),
+    ),
+    (
+        "app_api.activity_events",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/app_api/activity_events.ja.yml"),
+    ),
+    (
         "intelligences.decisions",
         "en",
         include_str!("../../../guildbotics/templates/locales/intelligences/decisions.en.yml"),
@@ -401,6 +411,41 @@ fn lookup(language: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn api_errors_have_the_same_keys_and_placeholders_in_both_languages() {
+        fn flatten(
+            prefix: &str,
+            value: &serde_json::Value,
+            out: &mut std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        ) {
+            if let Some(text) = value.as_str() {
+                let pattern = regex::Regex::new(r"\{([^}]+)\}").unwrap();
+                out.insert(
+                    prefix.into(),
+                    pattern
+                        .captures_iter(text)
+                        .map(|c| c[1].to_owned())
+                        .collect(),
+                );
+            } else if let Some(map) = value.as_object() {
+                for (key, v) in map {
+                    flatten(&format!("{prefix}.{key}"), v, out);
+                }
+            }
+        }
+        let mut languages = vec![];
+        for language in ["en", "ja"] {
+            let (_, _, source) = FILES
+                .iter()
+                .find(|(namespace, lang, _)| *namespace == "app_api.errors" && *lang == language)
+                .unwrap();
+            let value = gb_config::yaml_value(source).unwrap();
+            let mut keys = std::collections::BTreeMap::new();
+            flatten("", &value[language], &mut keys);
+            languages.push(keys);
+        }
+        assert_eq!(languages[0], languages[1]);
+    }
     use super::*;
 
     #[test]
