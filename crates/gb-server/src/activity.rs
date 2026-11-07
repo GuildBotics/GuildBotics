@@ -49,10 +49,13 @@ pub(crate) async fn reset(State(api): State<Shared>, headers: HeaderMap) -> Resp
                     let project = gb_config::yaml_value(&std::fs::read_to_string(
                         roots.config.join("team/project.yml"),
                     )?)?;
-                    let provider = text(&project["services"]["chat_service"], "name");
+                    let provider =
+                        text(&project["services"]["chat_service"], "name").to_lowercase();
+                    let supported =
+                        gb_integrations::factory::ChatProvider::parse(&provider).is_some();
                     let mut persons = vec![];
                     for member in &team.members {
-                        if !member.is_active || provider.is_empty() {
+                        if !member.is_active || !supported {
                             continue;
                         }
                         let metadata = gb_config::resolved_guest::member(
@@ -78,7 +81,7 @@ pub(crate) async fn reset(State(api): State<Shared>, headers: HeaderMap) -> Resp
                         limit: 500,
                     };
                     let channels =
-                        store.reset_receive(provider, &persons, &Utc::now().to_rfc3339())?;
+                        store.reset_receive(&provider, &persons, &Utc::now().to_rfc3339())?;
                     Ok(json!({"members_reset":persons.len(),"channels_reset":channels}))
                 })
                 .await?;
@@ -266,7 +269,12 @@ fn read(
     }
 
     let mut records:Vec<_>=ActivityEvents::open(workspace).list_between(start,end)?.into_iter().map(|r|json!({"kind":"event","type":r["kind"],"timestamp":r["occurred_at"],"trace_id":r["local_trace_id"],"person_id":r["member_id"],"source":r["source"],"command":r["command"],"workflow":r["workflow"],"payload":r["payload"],"attributes":r["attributes"]})).collect();
-    records.extend(store.activity_targets()?);
+    records.extend(
+        store
+            .activity_targets()?
+            .into_iter()
+            .filter(|r| parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t < end)),
+    );
     records.extend(crate::diagnostics::memory_records(workspace));
     records.retain(|r| parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t <= end));
     let result = gb_observability::timeline::build(

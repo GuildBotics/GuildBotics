@@ -401,6 +401,51 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn session_use_never_renews_its_thirty_day_expiry_and_expired_cookies_are_refused() {
+        use super::*;
+        let data = tempfile::tempdir().unwrap();
+        let auth = ServerAuth::open(data.path(), 8765).unwrap();
+        let link = auth.entry_link("/");
+        let before = now();
+        let (cookie, csrf) = auth
+            .start_session(link.url.split_once('#').unwrap().1)
+            .unwrap()
+            .unwrap();
+        let digest = loopback_auth::digest(&cookie);
+        let expires = auth.state.lock().unwrap().records.sessions[&digest].expires_at;
+        assert!(
+            expires >= before + SESSION_SECONDS as f64 && expires <= now() + SESSION_SECONDS as f64
+        );
+        assert_eq!(SESSION_SECONDS, 30 * 24 * 3600);
+        let session = headers(&[
+            ("cookie", &format!("{}={cookie}", auth.cookie)),
+            (CSRF_HEADER, &csrf),
+        ]);
+        for _ in 0..3 {
+            assert_eq!(auth.authenticate(&Method::POST, &session), Ok(()));
+            assert_eq!(auth.session_csrf(&session), Some(csrf.clone()));
+        }
+        assert_eq!(
+            auth.state.lock().unwrap().records.sessions[&digest].expires_at,
+            expires
+        );
+        auth.state
+            .lock()
+            .unwrap()
+            .records
+            .sessions
+            .get_mut(&digest)
+            .unwrap()
+            .expires_at = now() - 1.0;
+        assert!(auth.session_csrf(&session).is_none());
+        for method in [Method::GET, Method::POST] {
+            assert_eq!(
+                auth.authenticate(&method, &session),
+                Err(Denied::Unauthorized)
+            );
+        }
+    }
+    #[test]
     fn app_consent_pkce_is_single_use_bound_to_redirect_and_revokes_the_previous_app_token() {
         use super::*;
         use base64::Engine;

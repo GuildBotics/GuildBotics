@@ -165,7 +165,7 @@ impl ActivityEvents {
             .unwrap_or(end);
         // Scan existing directories, never enumerate calendar months. Offset
         // timestamps are compared as instants, including neighbouring months.
-        for year in children(&self.root)? {
+        for year in readable_children(&self.root) {
             let Some(year_number) = year
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -176,7 +176,7 @@ impl ActivityEvents {
             if !year.is_dir() {
                 continue;
             }
-            for month in children(&year)? {
+            for month in readable_children(&year) {
                 let Some(month_number) = month
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -193,7 +193,7 @@ impl ActivityEvents {
                 {
                     continue;
                 }
-                for path in children(&month)? {
+                for path in readable_children(&month) {
                     if path.extension().is_none_or(|e| e != "json") {
                         continue;
                     }
@@ -252,6 +252,18 @@ fn read_event(path: &Path, expected: &Value) -> anyhow::Result<Option<Value>> {
     }
 }
 
+/// Display scans preserve readable siblings even when a directory or entry fails.
+pub(crate) fn readable_children(path: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<_> = std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    paths.sort();
+    paths
+}
+
 pub(crate) fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     let entries = match std::fs::read_dir(path) {
         Ok(entries) => entries,
@@ -268,6 +280,80 @@ pub(crate) fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_allowlist_keeps_device_health_and_lifecycle_local() {
+        for kind in DOMAIN_EVENT_TYPES {
+            assert!(is_domain_activity_event(kind));
+        }
+        for kind in [
+            "review_limit.started",
+            "review_limit.finished",
+            "review_limit.failed",
+            "review_limit.deferred",
+            "command.started",
+            "command.finished",
+            "member.command.started",
+            "member.command.failed",
+            "span.finished",
+            "session.pointer",
+            "credential.failed",
+            "diagnostics.completed",
+            "verify.completed",
+            "scheduler.worker.failed",
+            "workflow.started",
+            "github.debug",
+        ] {
+            assert!(!is_domain_activity_event(kind), "{kind}");
+        }
+    }
+
+    #[test]
+    fn display_scans_existing_months_for_bounded_and_calendar_wide_windows() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ActivityEvents::open(root.path());
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            root.path().join("identity"),
+            Some(root.path().into()),
+        );
+        writes
+            .transaction(|writer| {
+                for occurred in [
+                    "2026-06-30T23:00:00Z",
+                    "2026-07-15T09:00:00Z",
+                    "2026-09-01T00:00:00Z",
+                    "2027-01-10T08:00:00Z",
+                ] {
+                    store.record(
+                        writer,
+                        &json!({"type":"repository.push","timestamp":occurred}),
+                        &Redactor::default(),
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let start = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let end = DateTime::parse_from_rfc3339("2026-08-31T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let bounded = store.list_between(start, end).unwrap();
+        assert_eq!(bounded.len(), 1);
+        assert_eq!(bounded[0]["occurred_at"], "2026-07-15T09:00:00Z");
+        let all = store
+            .list_between(DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC)
+            .unwrap();
+        assert_eq!(all.len(), 4);
+        // Unreadable files do not discard other entries in their month.
+        std::fs::create_dir_all(store.root.join("2026/07/unreadable.json")).unwrap();
+        std::fs::write(store.root.join("2026/07/corrupt.json"), "broken").unwrap();
+        assert_eq!(store.list_between(start, end).unwrap(), bounded);
+        std::fs::remove_dir_all(&store.root).unwrap();
+        std::fs::write(&store.root, "not a directory").unwrap();
+        assert!(store.list_between(start, end).unwrap().is_empty());
+    }
 
     #[test]
     fn recovery_partition_uses_the_journal_date_even_when_redacted() {

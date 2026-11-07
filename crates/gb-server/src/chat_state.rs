@@ -147,7 +147,9 @@ impl Store {
             let mut count = 0;
             for person in persons {
                 let root = self.root(service, person)?;
-                writer.write_json(&root.join("receive_cutoff.json"), &json!({"cutoff":cutoff}))?;
+                let mut value = json!({"cutoff":cutoff});
+                stamp(&mut value);
+                writer.write_json(&root.join("receive_cutoff.json"), &value)?;
                 let mut channels = BTreeSet::new();
                 for kind in ["channels", "pending_events"] {
                     for path in json_files(&root.join(kind))? {
@@ -165,7 +167,9 @@ impl Store {
                 for channel in channels {
                     let path = self.file(service, person, "pending_events", &channel)?;
                     if writer.delete(&path).is_err() {
-                        writer.write_json(&path, &json!({"events":[]}))?;
+                        let mut value = json!({"events":[]});
+                        stamp(&mut value);
+                        writer.write_json(&path, &value)?;
                     }
                     for cache in [false, true] {
                         let path = self.thread_file(service, person, &channel, "_", cache)?;
@@ -215,6 +219,7 @@ impl Store {
             });
             value["channel_id"] = json!(subject.channel_id);
             value["thread_id"] = json!(subject.thread_id);
+            stamp(&mut value);
             writer.write_json(&path, &value)?;
             Ok(())
         })
@@ -519,6 +524,30 @@ mod tests {
     fn event(id: &str, second: u32) -> ChatEvent {
         serde_json::from_value(json!({"channel_id":"C1","thread_id":"T1","message_id":id,"event_id":id,"occurred_at":format!("2026-11-05T00:00:{second:02}Z"),"author_id":"owner","text":id})).unwrap()
     }
+    #[test]
+    fn adopted_effort_overwrites_foreign_schema_and_preserves_thread_state() {
+        let root = tempfile::tempdir().unwrap();
+        let s = store(root.path(), 500);
+        let path = s.thread_file("local", "aiko", "C1", "T1", false).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"schema_version":999,"thread_topic":"preserve"}"#).unwrap();
+        let subject = gb_wire::ChatSubject {
+            service: "local".into(),
+            channel_id: "C1".into(),
+            thread_id: "T1".into(),
+            event_id: "E1".into(),
+            self_user_id: "owner".into(),
+        };
+        s.adopt_effort(&subject,"aiko",&json!({"adopt_response_effort":true,"selection":{"route":"agent","response_effort":"high"},"person_id":"aiko"})).unwrap();
+        let value = read(&path).unwrap();
+        assert_eq!(
+            value["schema_version"],
+            gb_base::files::SHARED_RECORD_SCHEMA_VERSION
+        );
+        assert_eq!(value["effort"], "high");
+        assert_eq!(value["thread_topic"], "preserve");
+    }
+
     #[test]
     fn redelivery_retains_attempts_and_unrelated_queue_entries_and_cursor_updates_do_not_lose_acknowledgements()
      {

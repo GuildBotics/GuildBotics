@@ -11,6 +11,7 @@ use std::time::Duration;
 use tower::ServiceExt as _;
 
 mod activity;
+mod activity_feedback;
 mod health;
 mod intelligences;
 

@@ -39,7 +39,8 @@ pub struct TraceSearch<'a> {
 impl Diagnostics {
     /// Only local work declarations enrich the shared activity timeline.
     pub fn activity_targets(&self) -> std::io::Result<Vec<Value>> {
-        Ok(read_records(&self.index)?
+        Ok(read_records(&self.index)
+            .unwrap_or_default()
             .into_iter()
             .filter(|r| r.get("type").and_then(Value::as_str) == Some("target.recorded"))
             .map(Value::Object)

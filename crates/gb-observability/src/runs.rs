@@ -1,7 +1,7 @@
 //! The task-run journal. Completion authorization remains with the member
 //! capability; this store owns persistence and execution lifecycle only.
 use crate::{
-    activity::{children, timestamp},
+    activity::{children, readable_children, timestamp},
     redaction::Redactor,
 };
 use chrono::{DateTime, Utc};
@@ -284,7 +284,7 @@ impl RunStore {
 
     fn readable_records(&self) -> anyhow::Result<Vec<RunRecord>> {
         let mut records = Vec::new();
-        for dir in children(&self.root)? {
+        for dir in readable_children(&self.root) {
             let Ok(bytes) = std::fs::read(dir.join("result.json")) else {
                 continue;
             };

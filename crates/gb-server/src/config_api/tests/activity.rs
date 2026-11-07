@@ -1,6 +1,53 @@
 use super::*;
 
 #[tokio::test]
+async fn consent_rejection_matrix_keeps_http_invalid_shape_and_state_bounds() {
+    let f = fixture();
+    let challenge = loopback_auth::b64(&loopback_auth::sha256(b"verifier"));
+    let base = json!({"client":"Example CLI","redirect_uri":"http://127.0.0.1:12345/callback","state":"state","code_challenge":challenge});
+    for (key, value) in [
+        ("client", "".into()),
+        ("client", "   ".into()),
+        ("client", "a".repeat(65)),
+        ("client", "bad/name".into()),
+        ("redirect_uri", "https://127.0.0.1/callback".into()),
+        ("redirect_uri", "http://evil.example/callback".into()),
+        ("redirect_uri", "http://user@127.0.0.1/callback".into()),
+        ("redirect_uri", "http://127.0.0.1/callback#x".into()),
+        ("redirect_uri", "http://127.0.0.1:99999/callback".into()),
+        ("state", "".into()),
+        ("state", "s".repeat(513)),
+        ("code_challenge", "short".into()),
+        (
+            "code_challenge",
+            format!("{}=", &challenge[..challenge.len() - 1]),
+        ),
+        (
+            "redirect_uri",
+            "http://127.0.0.1/callback?code=existing".into(),
+        ),
+        (
+            "redirect_uri",
+            "http://127.0.0.1/callback?state=existing".into(),
+        ),
+    ] {
+        let mut form = base.clone();
+        form[key] = json!(value);
+        let (status, answer) = f.call("POST", "/apps/authorizations", form).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{key}");
+        assert_eq!(answer["code"], "invalid");
+    }
+    for length in [1, 512] {
+        let mut form = base.clone();
+        form["state"] = json!("s".repeat(length));
+        assert_eq!(
+            f.call("POST", "/apps/authorizations", form).await.0,
+            StatusCode::CREATED
+        );
+    }
+}
+
+#[tokio::test]
 async fn team_failures_keep_json_error_shape_security_headers_and_cross_origin_preflights() {
     let f = fixture();
     f.init().await;
