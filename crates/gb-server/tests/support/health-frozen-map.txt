@@ -65,7 +65,7 @@ API・model の汎用テストには本件4 endpoint 固有の行なし。owner�
 - tests/guildbotics/app_api/test_agent_environment_status.py::test_login_instructions_use_the_managed_cli -> crates/gb-server/src/environment.rs::tool_guidance_uses_labels_language_and_each_credential_state — 既存：login案内と状態。
 - tests/guildbotics/app_api/test_agent_environment_status.py::test_device_authentication_failure_drives_card_and_alert_then_recovers -> crates/gb-server/src/config_api/tests/health.rs::environment_tool_authentication_alert_recovers_without_losing_saved_login
 - tests/guildbotics/app_api/test_agent_environment_status.py::test_card_and_guidance_share_the_login_command -> crates/gb-server/src/environment.rs::tool_guidance_uses_labels_language_and_each_credential_state — 既存：login案内と状態。
-- tests/guildbotics/app_api/test_agent_environment_status.py::test_usage_result_is_shared_by_card_and_alerts -> #147 に回す — usage とアラートの連携。
+- tests/guildbotics/app_api/test_agent_environment_status.py::test_usage_result_is_shared_by_card_and_alerts -> crates/gb-server/src/config_api/tests/health.rs::usage_result_is_shared_by_card_and_alerts — codex/claude/grok × en/ja。未使用toolでもusage失敗で1件、checked_at/trace_id、TTL内は再取得なし、localeのlabel入り安全文、provider詳細非表示、認証失敗の優先、refresh成功で解消。
 - tests/guildbotics/app_api/test_agent_environment_status.py::test_recheck_only_refreshes_the_selected_tool -> crates/gb-server/src/environment.rs::usage_readers_share_refresh_and_cached_readers_do_not_wait — 既存：選択toolのusage再取得。
 
 条件の照合:
@@ -76,3 +76,5 @@ API・model の汎用テストには本件4 endpoint 固有の行なし。owner�
 - runtime: slack/local listener、dismiss後回復・再発・他providerのdismiss維持、worker停止→scheduler running。
 - environment: device/tool/slot範囲、未使用toolはfailed probe時だけ、filesystem理由、image warning、grant理由、dismissでも残り修正で消える。auth失敗→成功を2回繰返し、保存loginを保持してカードとalertの理由を照合。
 - テスト条件の実装差: 凍結版のCodex OAuthダミーは既存fixtureのClaude OAuthダミーへ置換。両者のtool statusは同じproject_tool/認証マーカー経路を通り、失敗と回復でカードとalertが同時に変化しない後退を検出。index rotationはサイズ閾値への依存を避け、実際の保持tail書換を直接実施してdismiss済み最終行をcanaryとして残す。
+
+保存の回帰検査: unchanged_alert_state_is_not_rewritten と interrupted_alert_save_preserves_dismissed_state。変更なしのGETはmtimeを保持し、子プロセスのファイルサイズ上限で保存を中断しても旧dismiss/cursorが残る。rootでも故障を注入できる。
