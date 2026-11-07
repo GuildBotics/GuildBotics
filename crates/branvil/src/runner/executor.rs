@@ -107,6 +107,8 @@ pub struct JobRun<'a> {
     pub image_lock: ImageLock,
     pub cpus: u32,
     pub memory_mib: u64,
+    /// What the job may write to `/work` beyond what it holds at the start.
+    pub work_quota_mib: u64,
     pub timeout_secs: u64,
     /// The host directory mounted at `/work`: a checkout of the commit.
     pub work: &'a Path,
@@ -679,7 +681,10 @@ impl Executor for Microsandbox {
             .args(["--cpus", &job.cpus.to_string()])
             .args(["--memory", &format!("{}M", job.memory_mib)])
             .args(["--user", &format!("{JOB_USER_ID}:{JOB_USER_ID}")])
-            .args(["--mount-dir", &format!("{work}:/work:{owner}")])
+            .args([
+                "--mount-dir",
+                &format!("{work}:/work:{owner},quota={}M", job.work_quota_mib),
+            ])
             .args(["--mount-dir", &format!("{log_dir}:{LOG_MOUNT}:{owner}")])
             // On a disk, not in the VM's memory (msb's default /tmp).
             .args([
@@ -1091,6 +1096,7 @@ esac
                 image_lock,
                 cpus: 1,
                 memory_mib: 256,
+                work_quota_mib: 2048,
                 timeout_secs: 60,
                 work: &work,
                 log_dir: &log_dir,
@@ -1123,15 +1129,32 @@ esac
             assert!(text.contains(line), "{line} in {text}");
         }
         // The job ran as the fixed user, its directories presented as that
-        // user's, its /tmp on a disk volume of its own; the volume is removed
-        // after the sandbox.
+        // user's, its /work with the quota it was given (and no other mount
+        // with one), its /tmp on a disk volume of its own; the volume is
+        // removed after the sandbox.
         let args = std::fs::read_to_string(state.join("args")).unwrap();
         let args: Vec<&str> = args.lines().collect();
+        let quotas: Vec<&str> = args
+            .iter()
+            .copied()
+            .filter(|a| a.contains("quota="))
+            .collect();
+        assert_eq!(
+            quotas,
+            [format!(
+                "{}:/work:uid=1000,gid=1000,quota=2048M",
+                root.join("work").display()
+            )],
+            "{args:?}"
+        );
         for (flag, value) in [
             ("--user", "1000:1000".to_string()),
             (
                 "--mount-dir",
-                format!("{}:/work:uid=1000,gid=1000", root.join("work").display()),
+                format!(
+                    "{}:/work:uid=1000,gid=1000,quota=2048M",
+                    root.join("work").display()
+                ),
             ),
             (
                 "--mount-dir",

@@ -1417,7 +1417,7 @@ runner's (`[ci.microsandbox] home`).
   ```json
   {"runner": {"mode": "auto", "state": "ready", "detail": "1 runner(s) connected.", "runners": [...], "queue": {...}},
    "executor": {"msb": "/…/msb", "problem": null, "home": "/…/.branvil/msb-home"},
-   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1},
+   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1},
    "images": {"error": null,
               "cached": [{"reference": "guildbotics/agent-environment:dev",
                           "digest": "sha256:…", "size_bytes": 3701474304, "created_at": "…",
@@ -1440,9 +1440,11 @@ runner's (`[ci.microsandbox] home`).
 - `PUT /api/v1/admin/ci/runner` (owner) `{"mode": "auto"|"off"}` → the settings.
   `auto` starts the supervised runner, `off` stops it.
 - `PUT /api/v1/admin/ci/limits` (owner) `{"max_cpus", "max_memory_mib",
-  "max_timeout_secs", "cache_max_mib", "max_jobs"}` → the settings; `400
-  invalid` outside 1–64, 128–65536, 1–86400, 0–1048576, 1–64. Every job runs
-  with `max_cpus` and `max_memory_mib`; `max_timeout_secs` is the time limit of
+  "work_quota_mib", "max_timeout_secs", "cache_max_mib", "max_jobs"}` → the
+  settings; `400 invalid` outside 1–64, 128–65536, 1024–1048576, 1–86400,
+  0–1048576, 1–64. Every job runs with `max_cpus` and `max_memory_mib`;
+  `work_quota_mib` is what a job may write to `/work` beyond the checkout and
+  the restored cache; `max_timeout_secs` is the time limit of
   a job that gives no `timeout_secs` and caps one that does; the runner runs up
   to `max_jobs` jobs at once. The runner applies them from its next claim; the
   jobs it is running keep theirs.

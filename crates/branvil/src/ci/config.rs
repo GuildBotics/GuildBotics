@@ -67,6 +67,9 @@ pub struct ExecutorConfig {
     /// The CPUs and memory of every job's microVM.
     pub max_cpus: u32,
     pub max_memory_mib: u64,
+    /// What a job may add to its work directory (`/work`) beyond what it
+    /// holds when the job starts (the checkout and the restored cache).
+    pub work_quota_mib: u64,
     /// Jobs run at once, each in its own microVM.
     pub max_jobs: u32,
     /// The time limit of a job that gives none, and the cap of a pipeline's
@@ -86,6 +89,7 @@ impl Default for ExecutorConfig {
             work_dir: None,
             max_cpus: 4,
             max_memory_mib: 4096,
+            work_quota_mib: 16384,
             max_jobs: 1,
             max_timeout_secs: 3600,
             cache_max_mib: 2048,

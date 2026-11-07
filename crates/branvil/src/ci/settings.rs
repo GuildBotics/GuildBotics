@@ -24,6 +24,7 @@ use crate::util;
 pub struct Limits {
     pub max_cpus: u32,
     pub max_memory_mib: u64,
+    pub work_quota_mib: u64,
     pub max_timeout_secs: u64,
     pub cache_max_mib: u64,
     pub max_jobs: u32,
@@ -34,6 +35,7 @@ impl Limits {
         Self {
             max_cpus: ci.executor.max_cpus,
             max_memory_mib: ci.executor.max_memory_mib,
+            work_quota_mib: ci.executor.work_quota_mib,
             max_timeout_secs: ci.executor.max_timeout_secs,
             cache_max_mib: ci.executor.cache_max_mib,
             max_jobs: ci.executor.max_jobs,
@@ -51,6 +53,9 @@ impl Limits {
         }
         if !(128..=65536).contains(&self.max_memory_mib) {
             return out("max_memory_mib", "128–65536");
+        }
+        if !(1024..=1 << 20).contains(&self.work_quota_mib) {
+            return out("work_quota_mib", "1024–1048576");
         }
         if !(1..=86400).contains(&self.max_timeout_secs) {
             return out("max_timeout_secs", "1–86400");
@@ -149,6 +154,7 @@ impl Control {
             set(t, "max_jobs", i64::from(limits.max_jobs));
             for (key, v) in [
                 ("max_memory_mib", limits.max_memory_mib),
+                ("work_quota_mib", limits.work_quota_mib),
                 ("max_timeout_secs", limits.max_timeout_secs),
                 ("cache_max_mib", limits.cache_max_mib),
             ] {
@@ -304,6 +310,7 @@ mod tests {
         Limits {
             max_cpus: 8,
             max_memory_mib: 8192,
+            work_quota_mib: 32768,
             max_timeout_secs: 5400,
             cache_max_mib: 4096,
             max_jobs: 3,
@@ -334,6 +341,7 @@ mod tests {
         assert_eq!(parsed.listen.as_deref(), Some("127.0.0.1:7878"));
         assert_eq!(parsed.ci.executor.max_cpus, 8);
         assert_eq!(parsed.ci.executor.max_memory_mib, 8192);
+        assert_eq!(parsed.ci.executor.work_quota_mib, 32768);
         assert_eq!(parsed.ci.executor.max_timeout_secs, 5400);
         assert_eq!(parsed.ci.executor.cache_max_mib, 4096);
         assert_eq!(parsed.ci.executor.max_jobs, 3);
@@ -444,6 +452,25 @@ mod tests {
         assert_eq!(parsed.ci.runner, RunnerMode::Auto);
     }
 
+    /// A job may add 16 GiB to its work directory unless the configuration
+    /// says otherwise, and the bounds of the range are accepted.
+    #[tokio::test]
+    async fn the_work_quota_is_16_gib_by_default() {
+        let parsed: crate::config::ConfigFile = toml::from_str("[ci.executor]\n").unwrap();
+        assert_eq!(parsed.ci.executor.work_quota_mib, 16384);
+        assert_eq!(Limits::of(&CiConfig::default()).work_quota_mib, 16384);
+        let dir = tempfile::tempdir().unwrap();
+        let control = Control::new(dir.path().join("branvil.toml"), &CiConfig::default());
+        for quota in [1024, 1 << 20] {
+            let limits = Limits {
+                work_quota_mib: quota,
+                ..limits()
+            };
+            control.set_limits(limits).await.unwrap();
+            assert_eq!(control.limits(), limits);
+        }
+    }
+
     #[tokio::test]
     async fn limits_out_of_range_change_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -460,6 +487,14 @@ mod tests {
             },
             Limits {
                 max_memory_mib: 64,
+                ..limits()
+            },
+            Limits {
+                work_quota_mib: 1023,
+                ..limits()
+            },
+            Limits {
+                work_quota_mib: (1 << 20) + 1,
                 ..limits()
             },
             Limits {
