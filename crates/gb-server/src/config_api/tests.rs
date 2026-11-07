@@ -10,9 +10,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tower::ServiceExt as _;
 
+mod intelligences;
+
 /// Every route that writes the shared config: each compares what its screen
 /// read before writing, and answers a lock held elsewhere with 503.
 pub(crate) const CONFIG_WRITERS: &[(&str, &str)] = &[
+    ("put", "/config/intelligences"),
     ("post", "/config/init"),
     ("put", "/config/project"),
     ("put", "/config/project/default-person"),
@@ -2721,11 +2724,17 @@ async fn writers(f: &Fixture) -> Vec<(&'static str, String, Value)> {
     f.init().await;
     f.add(agent("aiko")).await;
     let project = f.get("/config/project").await["revisions"].clone();
+    let intelligence = f.get("/config/intelligences").await["revisions"].clone();
     let member = f.get("/config/members/aiko").await["revisions"].clone();
     let hello = f.config().join("commands/hello.md");
     f.write(&hello, "hello\n");
     let hello = gb_config::command_files::revision(&std::fs::read(hello).unwrap());
     vec![
+        (
+            "PUT",
+            "/config/intelligences".into(),
+            json!({"config_dir":f.config(),"expected_revisions":intelligence,"model_mapping":{"default":"models/openai/default.yml"}}),
+        ),
         (
             "POST",
             "/config/init".into(),
@@ -2837,6 +2846,10 @@ async fn every_config_writer_answers_config_busy_while_the_locks_are_held() {
 async fn every_config_writer_refuses_a_stale_revision_before_writing() {
     let f = fixture();
     let routes = writers(&f).await;
+    f.write(
+        &f.config().join("intelligences/model_mapping.yml"),
+        "default: models/openai/newer.yml\n",
+    );
     // The files the screens read have changed since.
     f.write(
         &f.config().join("team/project.yml"),
@@ -2857,7 +2870,7 @@ async fn every_config_writer_refuses_a_stale_revision_before_writing() {
         assert_eq!(status, StatusCode::CONFLICT, "{method} {path}: {answer}");
         assert_eq!(answer["code"], "config_changed");
     }
-    assert_eq!(compared, 3);
+    assert_eq!(compared, 4);
     assert_eq!(
         (bytes_under(&f.config()), bytes_under(&f.identities())),
         before
@@ -2902,7 +2915,7 @@ async fn every_composed_save_is_refused_unless_it_names_the_selected_config() {
             "{method} {path}: {answer}"
         );
     }
-    assert_eq!(composed, 3);
+    assert_eq!(composed, 4);
     assert_eq!(
         (
             bytes_under(&f.config()),

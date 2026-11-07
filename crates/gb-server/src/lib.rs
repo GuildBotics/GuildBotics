@@ -22,6 +22,7 @@ pub mod execution;
 pub mod host_window;
 pub mod i18n;
 mod input_files;
+mod intelligences;
 mod keep_awake;
 pub mod member;
 pub mod native_scheduler;

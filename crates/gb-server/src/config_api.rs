@@ -150,7 +150,7 @@ fn workspace(api: &Shared, headers: &HeaderMap) -> Result<PathBuf, Box<Response>
 
 /// The selected workspace, which the project's configuration needs to
 /// have been created in.
-fn project(api: &Shared, headers: &HeaderMap) -> Result<PathBuf, Box<Response>> {
+pub(crate) fn project(api: &Shared, headers: &HeaderMap) -> Result<PathBuf, Box<Response>> {
     let workspace = workspace(api, headers)?;
     let file = workspace.join(".guildbotics/config/team/project.yml");
     if file.is_file() {
@@ -167,7 +167,7 @@ fn project(api: &Shared, headers: &HeaderMap) -> Result<PathBuf, Box<Response>> 
 /// composed against a read names the config it read, since revisions tell
 /// the files of two workspaces apart only by their bytes: a form read in
 /// another workspace is stale here, however alike their files are.
-fn composed_in(
+pub(crate) fn composed_in(
     workspace: PathBuf,
     config_dir: &Path,
     headers: &HeaderMap,
