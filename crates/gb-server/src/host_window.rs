@@ -521,6 +521,108 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn the_guest_is_told_of_the_configuration_and_the_workspace_not_of_the_copy() {
+        struct Keys;
+        impl gb_config::secrets::Keychain for Keys {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                Ok(Some("ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM=".into()))
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let root = gb_base::host_path::normalize(root.path()).unwrap();
+        let workspace = root.join("workspace");
+        let host = gb_environment::Host {
+            data: root.join("data"),
+            home: root.join("home"),
+            package: gb_base::home::python_package(),
+            identity_root: root.join("identity"),
+        };
+        let config = workspace.join(".guildbotics/config");
+        for (path, text) in [
+            ("team/project.yml", "name: test\nlanguage: en\n"),
+            ("team/members/aiko/member.yml", "is_active: true\n"),
+            (
+                "team/members/aiko/commands/probe.md",
+                "---\nbrain: none\n---\n",
+            ),
+            (
+                "intelligences/brain_mapping.yml",
+                "default:\n  kind: model\n  model: broken\n",
+            ),
+            (
+                "intelligences/model_mapping.yml",
+                "broken: models/broken/model.yml\n",
+            ),
+            ("intelligences/models/broken/model.yml", "[\n"),
+        ] {
+            std::fs::create_dir_all(config.join(path).parent().unwrap()).unwrap();
+            std::fs::write(config.join(path), text).unwrap();
+        }
+        let identity = host
+            .identity_root
+            .join(".guildbotics/config/team/members/aiko/identity.yml");
+        std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        std::fs::write(
+            &identity,
+            "person_id: aiko\nname: Aiko\nperson_type: agent\n",
+        )
+        .unwrap();
+        let clones = workspace.join(".guildbotics/local/clones/aiko");
+        std::fs::create_dir_all(clones.join("repo")).unwrap();
+        std::fs::create_dir_all(&host.home).unwrap();
+        let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
+        let command = gb_environment::Command {
+            path: copy.path().join("team/members/aiko/commands/probe.md"),
+            config: copy.clone(),
+            wants_result: false,
+            invocation: None,
+            person_id: "aiko".into(),
+            run_id: "run".into(),
+            trace_id: "trace".into(),
+            work_kind: "manual".into(),
+            work_identity: "work".into(),
+            name: "probe".into(),
+            access: gb_wire::CommandAccess {
+                read_only: true,
+                inspects: vec![],
+            },
+            args: vec![],
+            cwd: workspace.clone(),
+            pipe: String::new(),
+        };
+        let preflight = gb_environment::device::read(&host, &workspace).await;
+        let test = CommandTestServices {
+            catalog: json!([]),
+            keychain: Arc::new(Keys),
+            recorder_port: None,
+        };
+        let services = prepare_command(&host, &workspace, &command, &preflight, None, Some(&test))
+            .await
+            .unwrap();
+        let resolved = &services.session.resolved;
+        let spelled = |path: &std::path::Path| gb_environment::guest_path(path).unwrap();
+        assert_eq!(
+            resolved["commands"]["probe"],
+            spelled(&config.join("team/members/aiko/commands/probe.md"))
+        );
+        assert_eq!(
+            resolved["clone_paths"],
+            json!({"aiko": clones.display().to_string(),
+                "aiko/repo": clones.join("repo").display().to_string()})
+        );
+        // Even what the guest is told of a broken file names the file.
+        let copied = copy.path().display().to_string();
+        assert!(!resolved.to_string().contains(&copied), "{resolved}");
+        assert!(
+            resolved.to_string().contains(&config.display().to_string()),
+            "{resolved}"
+        );
+    }
+
+    #[tokio::test]
     async fn command_preparation_preserves_config_file_and_parse_reason() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
@@ -530,14 +632,11 @@ mod tests {
             package: root.path().join("package"),
             identity_root: root.path().join("identity"),
         };
-        let roots = gb_config::commands::CommandRoots {
-            config: workspace.join(".guildbotics/config"),
-            templates: host.package.join("templates"),
-        };
-        let project = roots.config.join("team/project.yml");
+        let project = workspace.join(".guildbotics/config/team/project.yml");
         std::fs::create_dir_all(project.parent().unwrap()).unwrap();
         std::fs::write(&project, "[").unwrap();
         let command = gb_environment::Command {
+            config: Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap()),
             wants_result: false,
             invocation: None,
             person_id: "aiko".into(),
@@ -556,14 +655,13 @@ mod tests {
             pipe: String::new(),
         };
         let preflight = gb_environment::device::read(&host, &workspace).await;
-        let error = match prepare_command(
-            &host, &workspace, &command, &roots, &preflight, None, None,
-        )
-        .await
+        let error = match prepare_command(&host, &workspace, &command, &preflight, None, None).await
         {
             Ok(_) => panic!("malformed configuration must refuse the command"),
             Err(error) => error,
         };
+        // Named as the file a person edits, not as the run's copy of it.
+        let project = gb_base::host_path::normalize(&project).unwrap();
         assert_eq!(
             error,
             format!("{}: configuration is not a YAML mapping", project.display())
@@ -1641,11 +1739,21 @@ fn configured_tools(resolved: &Value) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
+/// Every string of `value` that names a file of the copy `config`, named as
+/// the configuration's file.
+fn spoken_strings(config: &gb_environment::Configuration, value: &mut Value) {
+    match value {
+        Value::String(text) => *text = config.spoken(text),
+        Value::Array(items) => items.iter_mut().for_each(|v| spoken_strings(config, v)),
+        Value::Object(fields) => fields.values_mut().for_each(|v| spoken_strings(config, v)),
+        _ => {}
+    }
+}
+
 pub async fn prepare_command(
     host: &gb_environment::Host,
     workspace: &std::path::Path,
     command: &gb_environment::Command,
-    roots: &gb_config::commands::CommandRoots,
     preflight: &gb_environment::device::Device,
     member: Option<&crate::member::Backend>,
     #[cfg(test)] test: Option<&CommandTestServices>,
@@ -1659,15 +1767,26 @@ pub async fn prepare_command(
         )
         .map_err(|e| e.to_string())?;
     }
-    let mut resolved =
-        gb_config::resolved_guest::resolve(roots, &host.identity_root, &command.person_id)
-            .map_err(|e| e.to_string())?;
+    let roots = gb_config::commands::CommandRoots {
+        config: command.config.path(),
+        templates: host.package.join("templates"),
+    };
+    let mut resolved = gb_config::resolved_guest::resolve(
+        &roots,
+        workspace,
+        &host.identity_root,
+        &command.person_id,
+    )
+    .map_err(|e| command.config.spoken(&e.to_string()))?;
+    // The guest is told of the configuration, not of the run's copy of it.
+    spoken_strings(&command.config, &mut resolved);
     if let Some(commands) = resolved["commands"].as_object_mut() {
         for value in commands.values_mut() {
             if let Some(path) = value.as_str() {
-                *value = gb_environment::command_path(host, std::path::Path::new(path))
-                    .map_err(|_| "Invalid command guest path.")?
-                    .into();
+                *value =
+                    gb_environment::command_path(host, &command.config, std::path::Path::new(path))
+                        .map_err(|_| "Invalid command guest path.")?
+                        .into();
             }
         }
     }

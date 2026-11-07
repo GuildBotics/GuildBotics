@@ -1465,8 +1465,8 @@ pub(crate) mod tests {
         tickets: Arc<dyn gb_ports::TicketService>,
         native: Native,
         calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
-        /// Each command run, by its file and what it declares of its access.
-        ran: Mutex<Vec<(PathBuf, Value)>>,
+        /// Each command run, by its file and what the file held as it ran.
+        ran: Mutex<Vec<(PathBuf, String)>>,
     }
     impl crate::dispatcher::Driver for MemberTurn {
         fn execute<'a>(
@@ -1481,7 +1481,7 @@ pub(crate) mod tests {
             Box::pin(async move {
                 self.ran.lock().unwrap().push((
                     command.path.clone(),
-                    serde_json::to_value(&command.access).unwrap(),
+                    std::fs::read_to_string(&command.path).unwrap_or_default(),
                 ));
                 if command.name == "functions/talk_as" && command.wants_result {
                     assert!(command.invocation.is_none());
@@ -2227,23 +2227,32 @@ pub(crate) mod tests {
             .unwrap()
     }
     #[tokio::test]
-    async fn a_manual_ticket_run_executes_the_workflow_it_read_with_what_it_declared() {
+    async fn a_manual_ticket_run_executes_the_workflow_of_the_configuration_it_read() {
         let root = tempfile::tempdir().unwrap();
         let native = fixture(root.path());
         let cleanup = tokio_util::task::TaskTracker::new();
         let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
         ready_ticket(&native, &runtime).await;
-        // What the run read before a later save, which it never reads again.
-        let chosen = root.path().join("chosen/ticket_driven_workflow.md");
-        let access: gb_wire::CommandAccess =
-            serde_json::from_value(json!({"read_only": false, "inspects": ["config"]})).unwrap();
-        runtime.chosen = Some((chosen.clone(), access.clone()));
+        let workflow = native
+            .workspace
+            .join(".guildbotics/config/commands/workflows/ticket_driven_workflow.md");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, "---\nbrain: none\n---\nAs read.\n").unwrap();
+        let config = Arc::new(
+            gb_environment::Configuration::copy(&runtime.dispatcher.host, &native.workspace)
+                .unwrap(),
+        );
+        runtime.config = Some(config.clone());
+        // A save after the run read the configuration does not reach it.
+        std::fs::write(&workflow, "---\nbrain: none\n---\nSaved later.\n").unwrap();
         runtime.manual_ticket(|trace| trace).await.unwrap();
-        let ran = driver.ran.lock().unwrap().clone();
-        assert_eq!(ran[0], (chosen, serde_json::to_value(&access).unwrap()));
+        let (path, held) = driver.ran.lock().unwrap()[0].clone();
+        assert!(path.starts_with(config.path()), "{}", path.display());
+        assert_eq!(held, "---\nbrain: none\n---\nAs read.\n");
         cleanup.close();
         cleanup.wait().await;
     }
+
     #[tokio::test]
     async fn a_manual_ticket_run_streams_its_events_and_answers_its_trace() {
         let root = tempfile::tempdir().unwrap();

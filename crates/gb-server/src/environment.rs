@@ -550,6 +550,7 @@ pub async fn status(
         for member in team.members.into_iter().filter(|m| m.is_active) {
             let slots = match gb_config::resolved_guest::resolve(
                 &roots,
+                &workspace,
                 &host.identity_root,
                 &member.person_id,
             ) {

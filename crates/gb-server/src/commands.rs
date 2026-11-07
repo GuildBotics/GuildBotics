@@ -284,8 +284,20 @@ async fn start(
             .context(json!({"path": project}))
             .into_response());
     }
-    let team =
-        crate::command_catalog::team(config.clone(), host.identity_root.clone(), headers).await?;
+    // The run reads the configuration once: from its copy the host decides
+    // which file runs and what it may do, and its microVM is given the copy.
+    let configuration = std::sync::Arc::new(
+        gb_environment::Configuration::copied(&host, workspace)
+            .await
+            .map_err(|e| crate::config_api::failure(e, headers))?,
+    );
+    let team = crate::command_catalog::team(
+        configuration.path(),
+        host.identity_root.clone(),
+        headers,
+        Some(&configuration),
+    )
+    .await?;
     // A run refused for its member never started, but the screens are told.
     let person = person(&team, request.person.as_deref(), headers).map_err(|refused| {
         if let Some(events) = &api.events {
@@ -308,13 +320,11 @@ async fn start(
     }
     // The one reading of the command: the file it runs and what it declares.
     let roots = CommandRoots {
-        config,
+        config: configuration.path(),
         templates: host.package.join("templates"),
     };
     let resolved = roots.resolve(&request.command, &team.language, Some(&person.person_id));
-    // A run of the file the screen read takes its declaration from the very
-    // bytes checked, so a later save cannot change what it may do.
-    let checked = if let (Some(id), Some(expected)) = (
+    if let (Some(id), Some(expected)) = (
         &request.expected_command_file_id,
         &request.expected_command_file_revision,
     ) {
@@ -336,11 +346,11 @@ async fn start(
             directory: workspace.clone(),
             keychain: api.keychain.clone(),
         };
-        let (blocked, _, checked) = crate::command_catalog::evaluate(
+        let (blocked, _) = crate::command_catalog::evaluate(
             &workspace,
             &selected,
             expected,
-            resolved.as_deref().ok(),
+            &request.command,
             Some(&person.person_id),
             language,
         )
@@ -352,10 +362,7 @@ async fn start(
                 .context(context)
                 .into_response());
         }
-        checked
-    } else {
-        None
-    };
+    }
     // Where the run works, once its member and file are known; a directory
     // of its own is made without following a link on the way.
     let cwd = match (&launch.cwd, &request.cwd) {
@@ -379,16 +386,10 @@ async fn start(
         }
         (None, None) => host.home.join(EXCHANGE_DIRECTORY),
     };
-    let resolved = resolved.and_then(|path| {
-        let access = match checked {
-            Some(access) => access,
-            None => command_access(&path)?,
-        };
-        Ok((access, path))
-    });
+    let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
     let (access, path) = resolved.map_err(|problem| {
         error(launch.failure.0, launch.failure.1)
-            .reason(problem.to_string())
+            .reason(configuration.spoken(&problem.to_string()))
             .into_response()
     })?;
     // A stop that does not wait for the work refuses work not started yet.
@@ -420,8 +421,8 @@ async fn start(
         trace
     };
     if request.command == crate::ticket_selector::COMMAND && request.args.is_empty() {
-        let chosen = (path, access);
-        return manual_ticket(api, headers, &person.person_id, chosen, place, opened).await;
+        let config = configuration.clone();
+        return manual_ticket(api, headers, &person.person_id, config, place, opened).await;
     }
     let mut trace = Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id);
     for (key, value) in launch.attributes {
@@ -430,6 +431,7 @@ async fn start(
     let trace = opened(&place, trace);
     let trace_id = trace.id().to_owned();
     let command = gb_environment::Command {
+        config: configuration,
         wants_result: launch.result.is_some(),
         invocation: None,
         person_id: person.person_id.clone(),
@@ -486,10 +488,6 @@ async fn start(
                 &name,
                 &person_id,
                 execute(&workspace, async {
-                    let roots = gb_config::commands::CommandRoots {
-                        config: workspace.join(".guildbotics/config"),
-                        templates: host.package.join("templates"),
-                    };
                     let device = gb_environment::device::read(&host, &workspace).await;
                     if let Some(refusal) = device.refusal.clone() {
                         return Err(failed(Failure::Command(refusal), language));
@@ -498,7 +496,6 @@ async fn start(
                         &host,
                         &workspace,
                         &command,
-                        &roots,
                         &device,
                         member.as_deref(),
                         #[cfg(test)]
@@ -603,7 +600,7 @@ async fn manual_ticket(
     api: &RunState<'_>,
     headers: &HeaderMap,
     person: &str,
-    chosen: (PathBuf, gb_wire::CommandAccess),
+    config: std::sync::Arc<gb_environment::Configuration>,
     place: Option<Place>,
     opened: impl FnOnce(&Option<Place>, Trace) -> Trace + Send + 'static,
 ) -> Result<Ran, Response> {
@@ -613,7 +610,7 @@ async fn manual_ticket(
         .service
         .workflow(person, api.work.clone())
         .map_err(|e| internal(&e.to_string(), "RuntimeError"))?;
-    runtime.chosen = Some(chosen);
+    runtime.config = Some(config);
     let work = api
         .service
         .execution

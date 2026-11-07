@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use gb_environment::{Command, Host, Mount, shape};
+use gb_environment::{Command, Configuration, Host, Mount, shape};
 use gb_wire::{CommandAccess, CommandFacts, InspectsItem};
 
 struct Machine {
@@ -46,6 +46,9 @@ fn machine() -> Machine {
 
 fn command(machine: &Machine, path: PathBuf, inspects: Vec<InspectsItem>) -> Command {
     Command {
+        config: std::sync::Arc::new(
+            Configuration::copy(&machine.host, &machine.workspace).unwrap(),
+        ),
         wants_result: false,
         invocation: None,
         person_id: "yuki".into(),
@@ -137,10 +140,11 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         .host
         .package
         .join("templates/commands/functions/get_os_ui_language.py");
+    let run = command(&machine, path, vec![]);
     let made = shape(
         &machine.host,
         &machine.workspace,
-        &command(&machine, path, vec![]),
+        &run,
         Some("ja_JP".into()),
     )
     .unwrap();
@@ -166,7 +170,8 @@ fn a_read_only_command_reads_and_works_on_its_own() {
                 "/opt/guildbotics/code/guildbotics",
                 &named(&machine.host.package)
             ),
-            read(spelled(&config), &config),
+            // The run's copy of the configuration, at the configuration's place.
+            read(spelled(&config), &run.config.path()),
             read(spelled(&members), &members),
             read(
                 spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
@@ -238,17 +243,15 @@ fn an_inspecting_command_is_told_where_to_look() {
     let path = machine
         .workspace
         .join(".guildbotics/config/commands/look.md");
-    let made = shape(
-        &machine.host,
-        &machine.workspace,
-        &command(
-            &machine,
-            path.clone(),
-            vec![InspectsItem::Diagnostics, InspectsItem::Config],
-        ),
-        None,
-    )
-    .unwrap();
+    let mut inspecting = command(
+        &machine,
+        path.clone(),
+        vec![InspectsItem::Diagnostics, InspectsItem::Config],
+    );
+    // The host resolved the command in the run's copy of the configuration.
+    let copy = inspecting.config.path();
+    inspecting.path = copy.join("commands/look.md");
+    let made = shape(&machine.host, &machine.workspace, &inspecting, None).unwrap();
     let run = named(&machine.workspace.join(".guildbotics/local/run"));
     let config = named(&machine.workspace.join(".guildbotics/config"));
     let members = named(
@@ -257,7 +260,7 @@ fn an_inspecting_command_is_told_where_to_look() {
             .identity_root
             .join(".guildbotics/config/team/members"),
     );
-    // A workspace command is where it is on the host.
+    // A command of the copy is where the configuration's own is.
     assert_eq!(made.request.path, spelled(&named(&path)));
     let expected = vec![
         scratch(spelled(&named(&machine.workspace.join("somewhere")))),
@@ -265,7 +268,7 @@ fn an_inspecting_command_is_told_where_to_look() {
             "/opt/guildbotics/code/guildbotics",
             &named(&machine.host.package),
         ),
-        read(spelled(&config), &config),
+        read(spelled(&config), &copy),
         read(spelled(&members), &members),
         read(spelled(&run), &run),
         read(
@@ -295,18 +298,15 @@ fn an_inspecting_command_is_told_where_to_look() {
 #[test]
 fn what_is_not_there_is_not_mounted() {
     let machine = machine();
-    std::fs::remove_dir_all(machine.workspace.join(".guildbotics/local/run")).unwrap();
     let path = machine
         .host
         .package
         .join("templates/commands/functions/x.py");
-    let made = shape(
-        &machine.host,
-        &machine.workspace,
-        &command(&machine, path, vec![InspectsItem::Diagnostics]),
-        None,
-    )
-    .unwrap();
+    // Taking the copy of the configuration takes the workspace's write lock,
+    // whose file is in `local/run`: gone after, nothing is there to inspect.
+    let run = command(&machine, path, vec![InspectsItem::Diagnostics]);
+    std::fs::remove_dir_all(machine.workspace.join(".guildbotics/local/run")).unwrap();
+    let made = shape(&machine.host, &machine.workspace, &run, None).unwrap();
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert_eq!(made.mounts.len(), 5);
@@ -332,7 +332,7 @@ fn what_is_bound_over_the_working_directory_is_what_is_there() {
         .iter()
         .filter(|m| m.guest == spelled(&config))
         .collect();
-    assert_eq!(at_cwd, [&read(spelled(&config), &config)]);
+    assert_eq!(at_cwd, [&read(spelled(&config), &run.config.path())]);
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert!(!facts.mounts[&spelled(&config)]);

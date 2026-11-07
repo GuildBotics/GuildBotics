@@ -214,11 +214,11 @@ impl Device {
             data: self.vm.data.clone(),
             identity_root: identity,
         };
-        let roots = gb_config::commands::CommandRoots {
-            config,
-            templates: host.package.join("templates"),
-        };
+        // The run reads its copy of the configuration, the probe with it.
+        let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
+        let path = copy.path().join(path.strip_prefix(&config).unwrap());
         let command = gb_environment::Command {
+            config: copy,
             invocation: None,
             wants_result: false,
             person_id: person.into(),
@@ -247,7 +247,6 @@ impl Device {
             &host,
             &workspace,
             &command,
-            &roots,
             &device,
             None,
             Some(&test),

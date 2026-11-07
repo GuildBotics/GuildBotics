@@ -42,9 +42,9 @@ pub struct Runtime {
     pub chat_provider: String,
     identity_services: Vec<(String, String, Arc<dyn ChatService>)>,
     pub reception: Option<crate::chat_receiver::Connection>,
-    /// The ticket workflow a manual run read once, with what it declares:
-    /// the run executes that file with that access, not another reading.
-    pub chosen: Option<(std::path::PathBuf, gb_wire::CommandAccess)>,
+    /// The configuration a manual run read once, which its workflow runs in
+    /// rather than a copy of its own.
+    pub config: Option<Arc<gb_environment::Configuration>>,
 }
 
 #[derive(Debug)]
@@ -258,7 +258,7 @@ impl Runtime {
         };
         Ok((
             Self {
-                chosen: None,
+                config: None,
                 generation: None,
                 service_run_id: None,
                 dispatcher,
@@ -348,6 +348,7 @@ impl Runtime {
         let command = self
             .dispatcher
             .prepare(line, invocation, trace.id())
+            .await
             .map(|mut command| {
                 if source != "manual" {
                     command.work_kind = line.into();
@@ -551,10 +552,17 @@ impl Runner for Runtime {
                 .transpose()
                 .map_err(|_| DispatchFailure::InvalidCommand)?
                 .unwrap_or_default();
-            let mut command = self.dispatcher.prepare(&name, invocation, trace.id())?;
-            if let Some((path, access)) = &self.chosen {
-                (command.path, command.access) = (path.clone(), access.clone());
-            }
+            let mut command = match &self.config {
+                Some(config) => {
+                    self.dispatcher
+                        .prepare_in(config.clone(), &name, invocation, trace.id())?
+                }
+                None => {
+                    self.dispatcher
+                        .prepare(&name, invocation, trace.id())
+                        .await?
+                }
+            };
             command.args = arguments;
             self.dispatcher
                 .dispatch_prepared(command, trace, &self.cancelled)
@@ -571,6 +579,7 @@ impl Runner for Runtime {
             let mut command = self
                 .dispatcher
                 .prepare("functions/talk_as", invocation.clone(), trace.id())
+                .await
                 .ok()?;
             command.args = vec![format!("topic={text}"), "context_location=Ticket".into()];
             command.wants_result = true;

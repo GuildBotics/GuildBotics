@@ -17,8 +17,7 @@ use gb_config::catalog::{Needs, validate_source};
 use gb_config::command_files::{logical_name, revision};
 use gb_config::commands::CommandRoots;
 use gb_config::team::Team;
-use gb_environment::Host;
-use gb_wire::CommandAccess;
+use gb_environment::{Configuration, Host};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -52,21 +51,29 @@ pub(crate) fn host(api: &crate::api::Api) -> anyhow::Result<Arc<Host>> {
 }
 
 /// The team of `config`, or why it cannot be read: a member's broken file is
-/// the person's to fix, as the Python version's `MemberConfigError` is.
+/// the person's to fix, as the Python version's `MemberConfigError` is. Read
+/// from a run's `copy`, a file is named as the one the person edits.
 pub(crate) async fn team(
     config: PathBuf,
     identity_root: PathBuf,
     headers: &HeaderMap,
+    copy: Option<&Configuration>,
 ) -> Result<Team, Response> {
+    let spoken = |text: String| match copy {
+        Some(copy) => copy.spoken(&text),
+        None => text,
+    };
     tokio::task::spawn_blocking(move || Team::load(&config, &identity_root))
         .await
         .map_err(|e| crate::commands::internal(&e.to_string(), "RuntimeError"))?
         .map_err(|e| match e.downcast_ref::<gb_config::ConfigFile>() {
             Some(file) => ApiError::new(StatusCode::BAD_REQUEST, "member_config_invalid", headers)
-                .reason(file.to_string())
-                .context(json!({ "path": file.path() }))
+                .reason(spoken(file.to_string()))
+                .context(json!({ "path": copy
+                    .and_then(|copy| copy.original(file.path()))
+                    .unwrap_or_else(|| file.path().to_owned()) }))
                 .into_response(),
-            None => crate::commands::internal(&format!("{e:#}"), "ValueError"),
+            None => crate::commands::internal(&spoken(format!("{e:#}")), "ValueError"),
         })
 }
 
@@ -88,7 +95,7 @@ pub(crate) async fn workspace(api: &Shared, headers: &HeaderMap) -> Result<Works
     }
     let host =
         host(api).map_err(|e| crate::commands::internal(&format!("{e:#}"), "RuntimeError"))?;
-    let team = team(config.clone(), host.identity_root.clone(), headers).await?;
+    let team = team(config.clone(), host.identity_root.clone(), headers, None).await?;
     let roots = CommandRoots {
         config,
         templates: host.package.join("templates"),
@@ -117,11 +124,11 @@ impl Facts {
     pub(crate) async fn read(
         host: &Host,
         workspace: &Path,
+        config: &Path,
         keychain: &dyn gb_config::secrets::Keychain,
         language: &str,
     ) -> Facts {
         let device = gb_environment::device::read(host, workspace).await;
-        let config = workspace.join(".guildbotics/config");
         let project = std::fs::read_to_string(config.join("team/project.yml"))
             .ok()
             .and_then(|text| gb_config::yaml_value(&text).ok())
@@ -193,34 +200,32 @@ impl Facts {
     }
 }
 
-/// Why the selected file `path` is not the file `runs` (what the command
-/// resolves to for `person`) as the revision `expected` the screen read, with
-/// its context, and what it needs: what a screen's run of it is refused for.
-/// What the bytes it checked declare of the run's access is given back, read
-/// once, for the run to take.
+/// Why the selected file `path` is not what `command` runs for `person`
+/// as the revision `expected` the screen read, with its context, and what it
+/// needs: what a screen's run of it is refused for. A run evaluates it in its
+/// copy of the configuration, which is what it then runs.
 pub(crate) async fn evaluate(
     workspace: &Workspace,
     path: &Path,
     expected: &str,
-    runs: Option<&Path>,
+    command: &str,
     person: Option<&str>,
     language: &str,
-) -> anyhow::Result<(
-    Option<(&'static str, Value)>,
-    Vec<Value>,
-    Option<CommandAccess>,
-)> {
+) -> anyhow::Result<(Option<(&'static str, Value)>, Vec<Value>)> {
     let bytes = std::fs::read(path)?;
     let current = revision(&bytes);
     if current != expected {
         return Ok((
             Some(("command_file_changed", json!({"current_revision": current}))),
             vec![],
-            None,
         ));
     }
     let roots = &workspace.roots;
+    let runs = roots
+        .resolve(command, &workspace.team.language, person)
+        .ok();
     let same = runs
+        .as_deref()
         .and_then(|runs| runs.canonicalize().ok())
         .zip(path.canonicalize().ok())
         .is_some_and(|(runs, selected)| runs == selected);
@@ -228,10 +233,9 @@ pub(crate) async fn evaluate(
         return Ok((
             Some((
                 "command_file_shadowed",
-                json!({"shadow_source": roots.shadow_source(runs)}),
+                json!({"shadow_source": roots.shadow_source(runs.as_deref())}),
             )),
             vec![],
-            None,
         ));
     }
     let Ok(text) = String::from_utf8(bytes) else {
@@ -241,7 +245,6 @@ pub(crate) async fn evaluate(
                 json!({"message": "Command source must be valid UTF-8.", "reason": "invalid_utf8"}),
             )),
             vec![],
-            None,
         ));
     };
     let extension = path
@@ -251,12 +254,13 @@ pub(crate) async fn evaluate(
     if let Err(invalid) = validate_source(&extension, &text) {
         let mut context = invalid.context;
         context.insert("message".into(), invalid.message.into());
-        return Ok((Some((invalid.code, Value::Object(context))), vec![], None));
+        return Ok((Some((invalid.code, Value::Object(context))), vec![]));
     }
     let needs = roots.needs(path, &workspace.team.language, person);
     let facts = Facts::read(
         &workspace.host,
         &workspace.directory,
+        &roots.config,
         &*workspace.keychain,
         language,
     )
@@ -266,7 +270,6 @@ pub(crate) async fn evaluate(
     Ok((
         missing.then(|| ("command_requirement_missing", json!({}))),
         requirements,
-        gb_config::commands::source_access(path, &text).ok(),
     ))
 }
 
@@ -347,6 +350,7 @@ async fn list(
     let facts = Facts::read(
         &workspace.host,
         &workspace.directory,
+        &workspace.roots.config,
         &*workspace.keychain,
         language,
     )
@@ -433,21 +437,17 @@ pub(crate) async fn execution_status(
         .strip_prefix(workspace.roots.config.join("commands"))
         .unwrap_or(&path);
     let command = logical_name(relative, project).unwrap_or_default();
-    let runs = workspace
-        .roots
-        .resolve(&command, &workspace.team.language, person.as_deref())
-        .ok();
     match evaluate(
         &workspace,
         &path,
         &expected,
-        runs.as_deref(),
+        &command,
         person.as_deref(),
         language(&headers),
     )
     .await
     {
-        Ok((blocked, requirements, _)) => {
+        Ok((blocked, requirements)) => {
             let (code, context) = blocked.map_or((Value::Null, json!({})), |(code, context)| {
                 (json!(code), context)
             });

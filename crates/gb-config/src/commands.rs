@@ -156,12 +156,6 @@ pub fn command_access(path: &Path) -> Result<CommandAccess, CommandProblem> {
     declared_access(&command_metadata(path)?)
 }
 
-/// What the command at `path` declares of its access in `text`, its source as
-/// it was read once.
-pub fn source_access(path: &Path, text: &str) -> Result<CommandAccess, CommandProblem> {
-    declared_access(&declared_in(path, Some(text))?)
-}
-
 /// What `declared` says of the access of the command's AI CLI turns.
 pub(crate) fn declared_access(
     declared: &python_literal::Declaration,
@@ -203,28 +197,13 @@ pub(crate) fn declared_access(
 /// file's mapping, a Python file's `COMMAND_METADATA`; empty for any other.
 /// A field without a value is no field, as the Python version reads it.
 pub fn command_metadata(path: &Path) -> Result<python_literal::Declaration, CommandProblem> {
-    declared_in(path, None)
-}
-
-/// What the command at `path` declares in `text`, or in the file when `None`.
-fn declared_in(
-    path: &Path,
-    text: Option<&str>,
-) -> Result<python_literal::Declaration, CommandProblem> {
     let unreadable = || CommandProblem::UnreadableDeclaration(path.into());
     let extension = path.extension().map(|e| e.to_string_lossy().into_owned());
     if !matches!(extension.as_deref(), Some("md" | "yml" | "yaml" | "py")) {
         return Ok(Default::default());
     }
-    let read;
-    let text = match text {
-        Some(text) => text,
-        None => {
-            read = std::fs::read_to_string(path).map_err(|_| unreadable())?;
-            &read
-        }
-    };
-    source_metadata(extension.as_deref().unwrap_or(""), text).map_err(|()| unreadable())
+    let text = std::fs::read_to_string(path).map_err(|_| unreadable())?;
+    source_metadata(extension.as_deref().unwrap_or(""), &text).map_err(|()| unreadable())
 }
 
 /// The metadata `text` holds as the source of a command with `extension`.
@@ -274,23 +253,6 @@ pub(crate) fn frontmatter(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_source_read_once_declares_its_access_whatever_the_file_holds_now() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("look.md");
-        std::fs::write(&path, "---\nbrain: none\n---\n").unwrap();
-        let checked = "---\nbrain: none\nread_only: true\n---\n";
-        assert!(source_access(&path, checked).unwrap().read_only);
-        assert!(!command_access(&path).unwrap().read_only);
-        // A file that declares nothing declares nothing in any source.
-        let script = dir.path().join("run.sh");
-        assert!(
-            !source_access(&script, "read_only: true\n")
-                .unwrap()
-                .read_only
-        );
-    }
 
     #[test]
     fn frontmatter_runs_from_the_first_line_to_the_next_rule() {

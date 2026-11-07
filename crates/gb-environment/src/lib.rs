@@ -8,6 +8,7 @@
 //! writing commands use an authorized mount or a checked copy with write-back.
 
 pub mod broker;
+pub mod configuration;
 pub mod contract;
 pub mod device;
 pub mod gateway;
@@ -25,6 +26,7 @@ use std::path::{Path, PathBuf};
 
 use gb_wire::{CommandAccess, CommandFacts, CommandReply, CommandRequest, InspectsItem};
 
+pub use configuration::Configuration;
 pub use runtime::{Mount, load_image, placed_files};
 
 /// Where the code every microVM mounts is inside it.
@@ -69,6 +71,7 @@ impl Failure {
 }
 
 /// Where the host keeps what a command's microVM is made of.
+#[derive(Clone)]
 pub struct Host {
     /// The machine's own state: `<machine root>/data`, which holds the
     /// runtime under `msb`.
@@ -83,9 +86,11 @@ pub struct Host {
 }
 
 /// One command to run: who runs it, as which run and work, the file the host
-/// resolved for it, what it declared, and its arguments, working directory
-/// (as the host spells it) and input.
+/// resolved for it in the run's copy of the configuration, what it declared,
+/// and its arguments, working directory (as the host spells it) and input.
 pub struct Command {
+    /// The configuration the run reads, once: its file is in it.
+    pub config: std::sync::Arc<Configuration>,
     pub wants_result: bool,
     pub invocation: Option<gb_wire::WorkflowInvocation>,
     pub person_id: String,
@@ -172,7 +177,7 @@ pub async fn run(
         ("AGNO_TELEMETRY".into(), "false".into()),
     ]);
     let mut network = contract::network(
-        &config_dir(workspace),
+        command.config.source(),
         &host.package.join("templates"),
         command.access.read_only,
     )
@@ -233,11 +238,6 @@ pub async fn run(
     .await
 }
 
-/// The workspace's configuration directory.
-fn config_dir(workspace: &Path) -> PathBuf {
-    workspace.join(".guildbotics/config")
-}
-
 /// The microVM `command` runs in, and what its entry is given, told the
 /// host's UI `language`. Every host path is taken as the host spells it
 /// (macOS's `/tmp` is `/private/tmp`), and so is it inside the microVM.
@@ -285,7 +285,7 @@ pub fn shape(
     mounts.extend(access.grants.clone());
     let mut read = vec![InspectsItem::Config];
     read.extend(command.access.inspects.iter().copied());
-    for (_, mount) in inspected_mounts(host, workspace, &read)? {
+    for (_, mount) in inspected_mounts(host, workspace, &command.config, &read)? {
         // What GuildBotics binds over the working directory is what is there.
         match mounts.iter_mut().find(|m| m.guest == mount.guest) {
             Some(over) => *over = mount,
@@ -293,7 +293,7 @@ pub fn shape(
         }
     }
     let mut inspected: HashMap<String, String> =
-        inspected_mounts(host, workspace, &command.access.inspects)?
+        inspected_mounts(host, workspace, &command.config, &command.access.inspects)?
             .into_iter()
             .map(|(name, mount)| (name.to_string(), mount.guest))
             .collect();
@@ -356,7 +356,7 @@ pub fn shape(
         ("GUILDBOTICS_WORKSPACE_ROOT".into(), guest_path(workspace)?),
         (
             "GUILDBOTICS_CONFIG_DIR".into(),
-            guest_path(&config_dir(workspace))?,
+            guest_path(command.config.source())?,
         ),
         (
             "GUILDBOTICS_IDENTITY_ROOT".into(),
@@ -368,7 +368,7 @@ pub fn shape(
         cwd: cwd.clone(),
         invocation: command.invocation.clone(),
         name: command.name.clone(),
-        path: command_path(host, &normalized(&command.path)?)?,
+        path: command_path(host, &command.config, &normalized(&command.path)?)?,
         pipe: command.pipe.clone(),
         wants_result: command.wants_result,
     };
@@ -382,10 +382,12 @@ pub fn shape(
 }
 
 /// The workspace's own directories a command inspecting `scopes` mounts,
-/// read-only at their own paths, by name: those that exist.
+/// read-only at their own paths, by name: those that exist. The
+/// configuration is the run's copy of it.
 fn inspected_mounts(
     host: &Host,
     workspace: &Path,
+    config: &Configuration,
     scopes: &[InspectsItem],
 ) -> Result<Vec<(&'static str, Mount)>, Failure> {
     let mut sorted = scopes.to_vec();
@@ -395,7 +397,7 @@ fn inspected_mounts(
     for scope in sorted {
         let directories: Vec<(&'static str, PathBuf)> = match scope {
             InspectsItem::Config => vec![
-                ("config", config_dir(workspace)),
+                ("config", config.path()),
                 // The members' identities, which every workspace shares: only
                 // their directory, not the identities' Secrets index.
                 (
@@ -412,10 +414,11 @@ fn inspected_mounts(
                 continue;
             }
             let checked = checked_directory(&path)?;
+            let at = config.original(&checked).unwrap_or_else(|| checked.clone());
             mounts.push((
                 name,
                 Mount {
-                    guest: guest_path(&checked)?,
+                    guest: guest_path(&at)?,
                     host: Some(checked),
                     readonly: true,
                     quota_mib: None,
@@ -439,12 +442,13 @@ fn checked_directory(path: &Path) -> Result<PathBuf, Failure> {
 }
 
 /// Where a command file is inside the microVM: a packaged one in the code
-/// every microVM mounts, a workspace one at its own path.
-pub fn command_path(host: &Host, path: &Path) -> Result<String, Failure> {
+/// every microVM mounts, one of the run's copy of the configuration at the
+/// configuration's own path, any other at its own path.
+pub fn command_path(host: &Host, config: &Configuration, path: &Path) -> Result<String, Failure> {
     if path.starts_with(&host.package) {
         code_path(host, path)
     } else {
-        guest_path(path)
+        guest_path(&config.original(path).unwrap_or_else(|| path.to_owned()))
     }
 }
 

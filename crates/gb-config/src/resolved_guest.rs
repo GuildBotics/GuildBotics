@@ -230,8 +230,14 @@ pub fn brain_tool(
 }
 
 /// Output conforms to wire/schema/ResolvedGuest.json. Paths are host paths;
-/// the environment maps package paths to its read-only code mount once.
-pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::Result<Value> {
+/// the environment maps package paths to its read-only code mount once. The
+/// member's clones are `workspace`'s, wherever `roots` read its configuration.
+pub fn resolve(
+    roots: &CommandRoots,
+    workspace: &Path,
+    identity: &Path,
+    person: &str,
+) -> anyhow::Result<Value> {
     let team = crate::team::Team::load(&roots.config, identity)?;
     anyhow::ensure!(
         team.members.iter().any(|m| m.person_id == person),
@@ -260,11 +266,6 @@ pub fn resolve(roots: &CommandRoots, identity: &Path, person: &str) -> anyhow::R
         }
     }
     let mut clone_paths = BTreeMap::new();
-    let workspace = roots
-        .config
-        .parent()
-        .and_then(Path::parent)
-        .context("Workspace config root is invalid")?;
     let member_clones = workspace.join(".guildbotics/local/clones").join(person);
     clone_paths.insert(
         person.to_owned(),
@@ -488,6 +489,17 @@ fn inventory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The workspace whose configuration `roots` reads.
+    fn workspace_of(roots: &CommandRoots) -> std::path::PathBuf {
+        roots
+            .config
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
     fn put(root: &Path, name: &str, content: &str) {
         let path = root.join(name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -518,7 +530,7 @@ mod tests {
         let (_dir, roots, identity) = fixture();
         let relative = "intelligences/brain_mapping.yml";
         put(&roots.config, relative, "[");
-        let error = resolve(&roots, &identity, "aiko").unwrap_err();
+        let error = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
@@ -803,7 +815,7 @@ mod tests {
             "commands/hello.md",
             "---\nbrain: default\n---\noriginal prompt\n",
         );
-        let started = resolve(&roots, &identity, "aiko").unwrap();
+        let started = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         let readonly_payload = serde_json::to_vec(&started).unwrap();
         put(
             &roots.config,
@@ -819,7 +831,7 @@ mod tests {
                 "initial"
             );
         }
-        let next = resolve(&roots, &identity, "aiko").unwrap();
+        let next = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(next["language"], "ja");
         assert_eq!(
             next["brains"]["default"]["definition"]["parameters"]["model"],
@@ -858,7 +870,7 @@ mod tests {
                 "intelligences/cli_agents/claude/fast.yml",
                 content,
             );
-            let value = resolve(&roots, &identity, "aiko").unwrap();
+            let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
             assert_eq!(
                 value["brains"]["fast"]["definition"]["parameters"],
                 parameters
@@ -918,7 +930,7 @@ mod tests {
                         if explicit_empty { "effort: {}\n" } else { "" }
                     ),
                 );
-                let value = resolve(&roots, &identity, "aiko").unwrap();
+                let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
                 assert_eq!(
                     value["brains"]["default"]["definition"]["effort"],
                     if explicit_empty {
@@ -977,7 +989,7 @@ mod tests {
             "commands/hello.py",
             "def main(context): return 'ok'\n",
         );
-        let value = resolve(&roots, &identity, "aiko").unwrap();
+        let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert!(value["brains"].get("template_only").is_none());
         assert_eq!(value["brains"]["broken"]["kind"], "invalid");
         assert_eq!(
@@ -1015,7 +1027,7 @@ mod tests {
             "roles/extra.fr.yml",
             "roles: {engineer: {summary: '', description: Workspace}}\n",
         );
-        let value = resolve(&roots, &identity, "aiko").unwrap();
+        let value = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(value["member"]["roles"]["engineer"]["summary"], "English");
         assert_eq!(
             value["member"]["roles"]["engineer"]["description"],
@@ -1027,13 +1039,15 @@ mod tests {
             "roles: {engineer: {summary: French, description: Localized}}\n",
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["member"]["roles"]["engineer"]["summary"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["member"]["roles"]["engineer"]
+                ["summary"],
             "French"
         );
         std::fs::remove_file(roots.config.join("roles/default.fr.yml")).unwrap();
         std::fs::remove_file(roots.templates.join("roles/default.en.yml")).unwrap();
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["member"]["roles"]["engineer"]["summary"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["member"]["roles"]["engineer"]
+                ["summary"],
             "Unlocalized"
         );
     }
@@ -1076,7 +1090,7 @@ mod tests {
             config: config.clone(),
             templates: templates.clone(),
         };
-        let data = resolve(&roots, &identity, "aiko").unwrap();
+        let data = resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap();
         assert_eq!(data["language"], "ja");
         assert_eq!(data["member"]["person_id"], "aiko");
         assert_eq!(
@@ -1096,8 +1110,8 @@ mod tests {
             &model.replace("fixture", "member"),
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["brains"]["default"]["definition"]["parameters"]
-                ["id"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["brains"]["default"]
+                ["definition"]["parameters"]["id"],
             "member"
         );
         put(
@@ -1106,7 +1120,8 @@ mod tests {
             &model.replace("agno.models.openai.OpenAIChat", "other.UnsafeModel"),
         );
         assert_eq!(
-            resolve(&roots, &identity, "aiko").unwrap()["brains"]["default"]["definition"]["error"],
+            resolve(&roots, &workspace_of(&roots), &identity, "aiko").unwrap()["brains"]["default"]
+                ["definition"]["error"],
             "Unsupported inference model_class"
         );
     }
