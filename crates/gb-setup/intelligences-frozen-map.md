@@ -236,3 +236,13 @@ Rust の既存保存形式に合わせ、brain は `kind/model/cli_agent` で保
 - tests/guildbotics/app_api/test_models.py::test_project_config_update_request_serializes_path_to_json_string -> 移さない：本件の6 endpoint以外。
 - tests/guildbotics/app_api/test_models.py::test_runtime_status_reports_active_work -> 移さない：本件の6 endpoint以外。
 
+
+## Nested and asynchronous frozen tests
+
+- tests/guildbotics/app_api/test_agent_environment_status.py::test_usage_result_is_shared_by_card_and_alerts -> #147 に回す — usage とアラートの連携。
+- tests/guildbotics/app_api/test_agent_environment_status.py::test_recheck_only_refreshes_the_selected_tool -> crates/gb-server/src/environment.rs::usage_readers_share_refresh_and_cached_readers_do_not_wait — 既存：選択toolのusage再取得。
+- tests/guildbotics/app_api/test_api.py::test_app_runtime_cli_agent_usage_reads_the_named_tool -> 移さない：本件の6 endpoint以外。
+- tests/guildbotics/app_api/test_api.py::test_app_runtime_rejects_parallel_commands -> 移さない：本件の6 endpoint以外。
+- tests/guildbotics/app_api/test_api.py::test_manual_command_traces_resolved_default_person_without_activity_session -> 移さない：本件の6 endpoint以外。
+- tests/guildbotics/app_api/test_api.py::test_command_event_preserves_authentication_cause -> 移さない：本件の6 endpoint以外。
+- tests/guildbotics/app_api/test_api.py::test_a_desktop_run_reads_the_files_its_session_handed_over -> 移さない：本件の6 endpoint以外。
