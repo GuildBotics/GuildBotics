@@ -101,6 +101,7 @@ async def test_to_html_reports_the_real_path_of_an_output_through_a_home_link(
     (home / "Documents").mkdir(parents=True)
     (home / "Documents" / "GuildBotics").symlink_to(host)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     ctx = _make_context("sample")
     for output in (
         "~/Documents/GuildBotics/report.html",

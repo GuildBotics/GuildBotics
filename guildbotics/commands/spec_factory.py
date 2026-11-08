@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import posixpath
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -166,7 +166,9 @@ class CommandSpecFactory:
         """
         if raw_cwd is None:
             return default
-        cwd = Path(posixpath.normpath((default / Path(str(raw_cwd))).as_posix()))
+        # The real path: a granted directory is reached from the environment's
+        # home through a link, and is mounted at its own path.
+        cwd = Path(os.path.realpath(default / Path(str(raw_cwd))))
         if not admits(self._mounts, cwd.as_posix()):
             raise CommandError(
                 t(

@@ -220,3 +220,21 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
     assert outcome.result == outcome.text_output == result
     assert ctx.shared_state["ask"] == result
     assert edited_file.read_text(encoding="utf-8") == "local edit"
+
+
+@pytest.mark.usefixtures("symlinks")
+def test_a_subcommand_works_in_the_real_path_of_a_link_from_the_home(tmp_path):
+    # Inside the isolated environment, a granted directory under the home is a
+    # link to where it is mounted; the subcommand and its turns work there.
+    mounted = (tmp_path / "host" / "Documents" / "GuildBotics").resolve()
+    mounted.mkdir(parents=True)
+    home = tmp_path / "guest-home"
+    (home / "Documents").mkdir(parents=True)
+    (home / "Documents" / "GuildBotics").symlink_to(mounted)
+    (home / "elsewhere").symlink_to(tmp_path)
+    factory = CommandSpecFactory(DummyContext(), {mounted.as_posix(): True})
+
+    for cwd in (home / "Documents" / "GuildBotics", Path("Documents/GuildBotics")):
+        assert factory._resolve_cwd(cwd, home) == mounted
+    with pytest.raises(CommandError):
+        factory._resolve_cwd(home / "elsewhere", home)
