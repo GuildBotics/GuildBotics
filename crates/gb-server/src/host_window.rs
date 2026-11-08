@@ -596,12 +596,19 @@ mod tests {
         let preflight = gb_environment::device::read(&host, &workspace).await;
         let test = CommandTestServices {
             catalog: json!([]),
-            keychain: Arc::new(Keys),
             recorder_port: None,
         };
-        let services = prepare_command(&host, &workspace, &command, &preflight, None, Some(&test))
-            .await
-            .unwrap();
+        let services = prepare_command(
+            &host,
+            &workspace,
+            &command,
+            &preflight,
+            Arc::new(Keys),
+            None,
+            Some(&test),
+        )
+        .await
+        .unwrap();
         let resolved = &services.session.resolved;
         let spelled = |path: &std::path::Path| gb_environment::guest_path(path).unwrap();
         assert_eq!(
@@ -620,6 +627,72 @@ mod tests {
             resolved.to_string().contains(&config.display().to_string()),
             "{resolved}"
         );
+        // Exercise the production preparation path with saved credentials;
+        // an empty store would not consult the vault at all.
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            host.identity_root.clone(),
+            Some(workspace.clone()),
+        );
+        let store = gb_config::secrets::SecretStore::new(
+            &writes,
+            gb_config::secrets::Scope::Workspace,
+            gb_config::secrets::DeviceKey {
+                machine_root: root.clone(),
+                keychain: &Keys,
+            },
+        )
+        .unwrap();
+        store
+            .set("TYPESAFE_API_KEY", "synthetic-jev-value")
+            .unwrap();
+        std::fs::write(
+            config.join("intelligences/brain_mapping.yml"),
+            "default: {kind: jev, model: fixture}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            config.join("intelligences/jev.yml"),
+            "base_url: http://127.0.0.1:1\n",
+        )
+        .unwrap();
+        let mut command = command;
+        command.config = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
+        let services = prepare_command(
+            &host,
+            &workspace,
+            &command,
+            &preflight,
+            Arc::new(Keys),
+            None,
+            Some(&test),
+        )
+        .await
+        .unwrap();
+        assert!(
+            services.session.resolved["inference_keys"]["jev"]
+                .as_str()
+                .is_some()
+        );
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response: Value = client
+            .post(format!(
+                "http://127.0.0.1:{}/host/required_io",
+                services._host.port
+            ))
+            .bearer_auth(&services._host.token)
+            .json(&json!({"record_id":"abc1","payload":{"prompt":"synthetic-jev-value"}}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(response.get("error").is_none(), "{response}");
+        let recorded: Value = serde_json::from_slice(
+            &std::fs::read(workspace.join(".guildbotics/local/run/required-io/abc1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recorded["payload"]["prompt"], "***");
     }
 
     #[tokio::test]
@@ -655,7 +728,16 @@ mod tests {
             pipe: String::new(),
         };
         let preflight = gb_environment::device::read(&host, &workspace).await;
-        let error = match prepare_command(&host, &workspace, &command, &preflight, None, None).await
+        let error = match prepare_command(
+            &host,
+            &workspace,
+            &command,
+            &preflight,
+            Arc::new(RecordingKeychain),
+            None,
+            None,
+        )
+        .await
         {
             Ok(_) => panic!("malformed configuration must refuse the command"),
             Err(error) => error,
@@ -775,6 +857,22 @@ mod tests {
         assert!(!admits(&facts, "/code"));
         assert!(!admits(&facts, "/exchange/closed/file"));
         assert!(!admits(&facts, "/unknown"));
+    }
+    #[test]
+    fn command_preparation_never_constructs_an_os_keychain() {
+        // Cover the whole command boundary, including required IO and every
+        // inference provider, rather than only today's reported call sites.
+        let source = include_str!("host_window.rs");
+        for forbidden in [
+            concat!("System", "Keychain"),
+            concat!("get_os_", "credential"),
+            concat!("keep_os_", "credential"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "command boundary bypasses its caller-owned vault"
+            );
+        }
     }
     struct RecordingKeychain;
     impl gb_config::secrets::Keychain for RecordingKeychain {
@@ -1724,7 +1822,6 @@ impl CommandServices {
 #[cfg(test)]
 pub struct CommandTestServices {
     pub catalog: Value,
-    pub keychain: Arc<dyn gb_config::secrets::Keychain>,
     pub recorder_port: Option<u16>,
 }
 
@@ -1754,6 +1851,7 @@ pub async fn prepare_command(
     workspace: &std::path::Path,
     command: &gb_environment::Command,
     preflight: &gb_environment::device::Device,
+    keychain: Arc<dyn gb_config::secrets::Keychain>,
     member: Option<&crate::member::Backend>,
     #[cfg(test)] test: Option<&CommandTestServices>,
 ) -> Result<CommandServices, String> {
@@ -1811,10 +1909,6 @@ pub async fn prepare_command(
         None => Broker::new(program, invocation.clone()),
     };
     let tools = configured_tools(&resolved);
-    let keychain: Arc<dyn gb_config::secrets::Keychain> =
-        Arc::new(gb_config::secrets::SystemKeychain);
-    #[cfg(test)]
-    let keychain = test.map_or(keychain, |test| test.keychain.clone());
     let redactor = command_redactor(host, workspace, keychain.as_ref())?;
     let diagnostics = gb_observability::Diagnostics::open(workspace);
     let trace_id = command.trace_id.clone();
@@ -1937,6 +2031,7 @@ pub async fn prepare_command(
         identity_root: host.identity_root.clone(),
     };
     let required_workspace = workspace.to_path_buf();
+    let required_keychain = keychain.clone();
     let mut required_io = crate::required_io::RequiredIo::new(
         workspace.into(),
         command.trace_id.clone(),
@@ -1945,7 +2040,7 @@ pub async fn prepare_command(
             recording_redactor(
                 &required_host,
                 &required_workspace,
-                &gb_config::secrets::SystemKeychain,
+                required_keychain.as_ref(),
                 true,
             )
         },
@@ -2057,7 +2152,7 @@ pub async fn prepare_command(
             })
             .and_then(|definition| definition["api_key_env"].as_str())
             .unwrap_or(key);
-        let value = host_secret(host, workspace, key)?;
+        let value = host_secret_in(host, workspace, key, keychain.as_ref())?;
         let source: TokenSource = Arc::new(move |_| {
             let value = value.clone();
             Box::pin(async move {
@@ -2095,12 +2190,13 @@ pub async fn prepare_command(
             .ok_or("Jev base_url is missing.")?;
         let parsed = url::Url::parse(base).map_err(|_| "Jev base_url is invalid.")?;
         let route = format!("{}/systemone", parsed.path().trim_end_matches('/'));
-        let value = host_secret(
+        let value = host_secret_in(
             host,
             workspace,
             definition["api_key_env"]
                 .as_str()
                 .unwrap_or("TYPESAFE_API_KEY"),
+            keychain.as_ref(),
         )?;
         let source: TokenSource = Arc::new(move |_| {
             let value = value.clone();
@@ -2236,16 +2332,6 @@ fn recording_redactor(
     ))
 }
 
-pub(crate) fn host_secret(
-    host: &gb_environment::Host,
-    workspace: &std::path::Path,
-    name: &str,
-) -> Result<Option<String>, String> {
-    host_secret_in(host, workspace, name, &gb_config::secrets::SystemKeychain)
-}
-
-/// The secret `name` as [`host_secret`] reads it, with the machine's key in
-/// `keychain`.
 pub(crate) fn host_secret_in(
     host: &gb_environment::Host,
     workspace: &std::path::Path,

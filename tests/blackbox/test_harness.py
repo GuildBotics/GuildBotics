@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.blackbox.environment import EnvironmentSource
-from tests.blackbox.harness import _environment, running_stack
+from tests.blackbox.harness import PERSON, _environment, running_stack
 
 
 def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
@@ -112,6 +112,45 @@ for connect in (
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_product_member_cli_keeps_binary_mismatch_guard(server_stack):
+    command = shlex.split(os.environ.get("GUILDBOTICS_BLACKBOX_CLI", ""))
+    if not command or not os.environ.get("GUILDBOTICS_BLACKBOX_MEMBER_CLI"):
+        pytest.skip("Requires the example server's matching member client launcher")
+    result = subprocess.run(
+        [*command, "member", "help", "--person", PERSON],
+        cwd=server_stack.workspace,
+        env=server_stack.env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "CLI and server versions differ" in result.stderr
+
+
+def test_server_round_trips_secrets_in_its_isolated_vault(server_stack):
+    # Saving forces key creation; a second update and GET force decryption.
+    # Unlike empty-store checks this fails without a working credential vault.
+    api = server_stack.api
+    before = api.get("config/project").json()
+    for provider in ("openai", "gemini"):
+        saved = api.put(
+            "config/project",
+            json={
+                "language": before["language"],
+                "config_dir": server_stack.config_dir,
+                "expected_revisions": before["revisions"],
+                "provider_api_keys": {provider: "synthetic-blackbox-value"},
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        before = api.get("config/project").json()
+        assert before["provider_api_keys"][provider] is True
+    assert before["provider_api_keys"]["openai"] is True
+    assert "synthetic-blackbox-value" not in str(before)
+    assert "DBUS_SESSION_BUS_ADDRESS" not in server_stack.env
 
 
 def test_failed_start_reaps_the_server(tmp_path, monkeypatch):

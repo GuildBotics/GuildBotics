@@ -20,6 +20,18 @@ impl gb_config::secrets::Keychain for Vault {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if !arguments.is_empty() {
+        anyhow::ensure!(
+            arguments[0] == "member",
+            "unsupported test launcher command"
+        );
+        // The member handshake compares executable hashes. Use the production
+        // member client in this binary so both ends retain the real check.
+        std::process::exit(i32::from(
+            gb_server::client::member::run(arguments[1..].to_vec()).await?,
+        ));
+    }
     let server = gb_server::Server::start_with_keychain(Arc::new(Vault::default())).await?;
     let (_, result) = server
         .serve(

@@ -40,11 +40,13 @@ impl Diagnostics {
     /// Only local work declarations enrich the shared activity timeline.
     pub fn activity_targets(&self) -> std::io::Result<Vec<Value>> {
         Ok(self
-            .indexed()?
+            .indexed()
+            .unwrap_or_default()
             .into_iter()
             .filter(|r| r.get("type").and_then(Value::as_str) == Some("target.recorded"))
             .collect())
     }
+
     pub fn transcript_exists(&self, id: &str) -> bool {
         self.sessions
             .join(format!("{}.jsonl", crate::diagnostics::safe_id(id)))
@@ -520,6 +522,18 @@ fn english_trigger(provider: &str) -> String {
 #[cfg(test)]
 mod activity_window_tests {
     use super::*;
+
+    #[test]
+    fn shared_activity_survives_missing_or_unreadable_local_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Diagnostics::open(root.path());
+        assert!(store.activity_targets().unwrap().is_empty());
+        std::fs::create_dir_all(&store.index).unwrap();
+        assert!(store.activity_targets().unwrap().is_empty());
+        std::fs::remove_dir(&store.index).unwrap();
+        std::fs::write(&store.index, "{\"type\":\"log\"}\n").unwrap();
+        assert!(store.activity_targets().unwrap().is_empty());
+    }
 
     #[test]
     fn activity_targets_use_the_same_bounded_window_as_the_frozen_reader() {

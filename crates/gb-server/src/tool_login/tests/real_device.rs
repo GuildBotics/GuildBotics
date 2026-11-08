@@ -240,7 +240,6 @@ impl Device {
         assert!(device.refusal.is_none(), "{:?}", device.refusal);
         let test = crate::host_window::CommandTestServices {
             catalog: json!(catalog),
-            keychain: Arc::new(FakeKeychain),
             recorder_port: port,
         };
         let services = crate::host_window::prepare_command(
@@ -248,6 +247,7 @@ impl Device {
             &workspace,
             &command,
             &device,
+            Arc::new(FakeKeychain),
             None,
             Some(&test),
         )

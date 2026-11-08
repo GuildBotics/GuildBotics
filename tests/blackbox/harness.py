@@ -42,9 +42,12 @@ class Stack:
         return str(self.workspace / ".guildbotics/config")
 
     def cli(self, *arguments: str, content=None, cwd=None, timeout=30):
+        command = os.environ["GUILDBOTICS_BLACKBOX_CLI"]
+        if arguments[:1] == ("member",):
+            command = os.environ.get("GUILDBOTICS_BLACKBOX_MEMBER_CLI", command)
         try:
             result = subprocess.run(
-                [*shlex.split(os.environ["GUILDBOTICS_BLACKBOX_CLI"]), *arguments],
+                [*shlex.split(command), *arguments],
                 cwd=cwd or self.workspace,
                 env=self.env,
                 input=content,

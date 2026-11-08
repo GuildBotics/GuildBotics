@@ -62,6 +62,7 @@ impl gb_observability::Failure for DispatchFailure {
 }
 
 pub struct Dispatcher {
+    pub keychain: Arc<dyn gb_config::secrets::Keychain>,
     pub driver: Arc<dyn Driver>,
     pub host: Arc<Host>,
     pub workspace: PathBuf,
@@ -211,6 +212,7 @@ impl Dispatcher {
             &self.workspace,
             &command,
             &device,
+            self.keychain.clone(),
             self.member.as_deref(),
             #[cfg(test)]
             None,
@@ -237,6 +239,15 @@ impl Dispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct TestKeys;
+    impl gb_config::secrets::Keychain for TestKeys {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+        fn create(&self, _: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
+    }
     use serde_json::json;
     #[tokio::test]
     async fn dispatcher_entry_holds_during_success_failure_and_cancellation() {
@@ -271,6 +282,7 @@ mod tests {
         for mode in 0..3 {
             let entered = CancellationToken::new();
             let dispatcher = Dispatcher {
+                keychain: native.keychain.clone(),
                 driver: Arc::new(Run {
                     count: count.clone(),
                     mode,
@@ -371,6 +383,7 @@ mod tests {
         )
         .unwrap();
         let dispatcher = Dispatcher {
+            keychain: Arc::new(TestKeys),
             driver: Arc::new(MicroVm),
             host: Arc::new(Host {
                 data: root.path().join("data"),

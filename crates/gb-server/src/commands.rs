@@ -506,6 +506,7 @@ async fn start(
         None => None,
     };
     let member = api.member.clone();
+    let keychain = api.keychain.clone();
     let mut admission = crate::execution::Admission {
         generation: None,
         command: name.clone(), workspace: workspace.clone(),
@@ -536,6 +537,7 @@ async fn start(
                     &workspace,
                     &command,
                     &device,
+                    keychain,
                     member.as_deref(),
                     #[cfg(test)]
                     None,

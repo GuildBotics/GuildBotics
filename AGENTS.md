@@ -52,7 +52,11 @@ lychee --no-progress --scheme file --include-fragments --extensions md './*.md' 
 ```
 
 黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
-Rustの入口へ向ける形で残す。サーバー単独の黒箱テストも CI で実行する。
+Rustの入口へ向ける形で残す。サーバーには `cargo build --locked -p gb-server --example browser-test-server`
+で作る `target/debug/examples/browser-test-server` を指定し、OS キーチェーンを使わない。
+`GUILDBOTICS_BLACKBOX_MEMBER_CLI` にも example の絶対パスを指定する。member は
+同じ example 内の製品クライアントを使い、実行ファイル hash の照合を保持する。
+その他の CLI 操作は `GUILDBOTICS_BLACKBOX_CLI` の製品バイナリを直接使う。サーバー単独の黒箱テストも CI で実行する。
 desktop journey は Rust HTTP API と一時 vault で実行する。golden の本番コピー比較は
 CI に含めず、ワークフローで実行する。隔離環境の journey と画面の目視は #108 の範囲。
 Branvilの画面E2Eは継続する。

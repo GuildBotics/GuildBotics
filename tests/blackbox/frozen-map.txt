@@ -6,7 +6,7 @@ tests/blackbox/test_config_service.py::test_service_start_and_stop → 移さな
 tests/blackbox/test_golden.py::test_reads_match_golden → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
 tests/blackbox/test_golden.py::test_copy_leaves_production_behind → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
 tests/blackbox/test_harness.py::test_blackbox_sources_do_not_import_guildbotics → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
-tests/blackbox/test_harness.py::test_children_use_temporary_home_keyring_and_loopback_only → 移さない：HOME・環境変数除去・loopback拒否を同名 Python テストに保持。Python専用keyring stubの検証は削除。Rust vault の隔離は実キーチェーンの無い環境で E2E の鍵保存・再読込とservice起動を確認。
+tests/blackbox/test_harness.py::test_children_use_temporary_home_keyring_and_loopback_only → 移さない：HOME・環境変数除去・loopback拒否を同名 Python テストに保持。サーバーは process-local vault の example を使用。test_server_round_trips_secrets_in_its_isolated_vault で鍵の作成・保存・再読込を検証。CLI は有効な owner token による OS 資格情報の参照回避を client::tests で検証。
 tests/blackbox/test_harness.py::test_failed_start_reaps_the_server → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
 tests/blackbox/test_harness.py::test_environment_adoption_and_cleanup_leave_the_source_intact → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
 tests/blackbox/test_harness.py::test_unknown_provider_does_not_silently_run_local → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。

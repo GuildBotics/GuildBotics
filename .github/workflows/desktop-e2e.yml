@@ -1,26 +1,163 @@
 name: Desktop E2E
+
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      head_ref:
+        description: "Head ref or commit to verify"
+        required: true
+        default: "main"
+  schedule:
+    - cron: "17 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  gate:
-    name: Desktop E2E gate
+  changes:
+    name: Detect E2E changes
     runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.detect.outputs.required }}
     steps:
-      - uses: actions/checkout@v7
+      # The pull request merge commit has the base as its first parent, so
+      # this diff is exactly what merging the pull request would change.
+      - name: Checkout merge commit
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+          fetch-depth: 2
+
+      - name: Detect
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          required=true
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            required=false
+            paths=$(git diff --name-only HEAD^1 HEAD)
+            while IFS= read -r path; do
+              case "$path" in
+                .github/workflows/desktop-e2e.yml | desktop/* | packages/ui/* | crates/branvil/web/package.json | package.json | package-lock.json | guildbotics/* | pyproject.toml | uv.lock | crates/* | Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/*)
+                  required=true
+                  ;;
+              esac
+            done <<< "$paths"
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: Playwright (${{ matrix.revision }})
+    needs: changes
+    if: needs.changes.outputs.required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The migration baseline deliberately throws before starting the stack.
+    # Verify the restored head and nightly main; never waive an E2E failure.
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: ${{ github.event_name == 'schedule' && fromJSON('["main"]') || fromJSON('["head"]') }}
+    steps:
+      - name: Resolve revision
+        id: revision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          INPUT_HEAD_REF: ${{ inputs.head_ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            ref="$PR_HEAD_SHA"
+            repository="$PR_HEAD_REPOSITORY"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            ref="$INPUT_HEAD_REF"
+          else
+            ref="$EVENT_SHA"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ -n "${repository:-}" ]; then
+            echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          else
+            echo "repository=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout ${{ matrix.revision }} revision
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          repository: ${{ steps.revision.outputs.repository }}
+          ref: ${{ steps.revision.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        run: rustup show
+
+      # Each matrix revision supplies its own dependency tree, including
+      # revisions before the screens became workspaces.
+      - name: Locate frontend lock
+        id: frontend
+        run: |
+          directory=desktop
+          while [ ! -f "$directory/package-lock.json" ]; do
+            [ "$directory" != "." ] || exit 1
+            directory=$(dirname "$directory")
+          done
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          echo "lockfile=$directory/package-lock.json" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
-      - run: rustup show
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run e2e --workspace guildbotics-desktop
-      - uses: actions/upload-artifact@v7
+          cache-dependency-path: ${{ steps.frontend.outputs.lockfile }}
+
+      - name: Install frontend dependencies
+        working-directory: ${{ steps.frontend.outputs.directory }}
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: desktop
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        working-directory: desktop
+        run: npm run e2e
+
+      - name: Upload Playwright diagnostics
         if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: desktop-playwright
-          path: desktop/test-results
+          name: playwright-${{ matrix.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            desktop/playwright-report
+            desktop/test-results
           if-no-files-found: ignore
+          retention-days: 14
+
+  # The single required status check: it always reports, and succeeds only
+  # when E2E was not needed or every Playwright job succeeded.
+  gate:
+    name: Desktop E2E gate
+    needs: [changes, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.required }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          echo "changes=$CHANGES_RESULT required=$REQUIRED e2e=$E2E_RESULT"
+          [ "$CHANGES_RESULT" = "success" ]
+          [ "$REQUIRED" = "false" ] || [ "$E2E_RESULT" = "success" ]

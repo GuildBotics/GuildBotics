@@ -604,7 +604,13 @@ pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Respon
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    match status(workspace, api.data.clone(), home, language).await {
+    let host = gb_environment::Host {
+        data: api.data.clone(),
+        home,
+        package: gb_base::home::python_package(),
+        identity_root: api.identity_root.clone(),
+    };
+    match status_with(&host, &workspace, language, api.keychain.as_ref(), false).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => ApiError::new(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
