@@ -90,7 +90,7 @@ async def run(
         if child:
             # The real path, as a subcommand's: a link from the home is not
             # a mount, and the child's turns work where it is mounted.
-            request.cwd = os.path.realpath(request.cwd)
+            request.cwd = Path(os.path.realpath(request.cwd)).as_posix()
             if not admits(facts.mounts, request.cwd):
                 raise CommandError(
                     t(

@@ -217,7 +217,7 @@ async def test_child_works_in_the_real_path_of_a_link_from_the_home(
     )
 
     assert reply.failure is None
-    assert request.cwd == os.path.realpath(tmp_path)
+    assert request.cwd == Path(os.path.realpath(tmp_path)).as_posix()
 
 
 def test_child_cli_requires_existing_environment(monkeypatch):
