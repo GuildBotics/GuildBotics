@@ -202,7 +202,7 @@ pub fn brain_tool(
     let brains = mapping(roots, person, "brain")?;
     for config in brains.values() {
         match config["kind"].as_str() {
-            Some("model") => config["model"]
+            Some("model" | "jev") => config["model"]
                 .as_str()
                 .context("Brain requires model slot")?,
             Some("ai_cli") => config["cli_agent"]
@@ -1124,5 +1124,30 @@ mod tests {
                 ["definition"]["error"],
             "Unsupported inference model_class"
         );
+    }
+    #[test]
+    fn jev_brains_do_not_hide_cli_requirements() {
+        let (_dir, roots, _) = fixture();
+        put(
+            &roots.config,
+            "intelligences/cli_agent_mapping.yml",
+            "default: cli_agents/codex/default.yml\n",
+        );
+        put(
+            &roots.config,
+            "intelligences/brain_mapping.yml",
+            "chat_decision: {kind: jev, model: jev-latest}\nagent: {kind: ai_cli, cli_agent: default}\n",
+        );
+        assert_eq!(brain_tool(&roots, "aiko", "chat_decision").unwrap(), None);
+        assert_eq!(
+            brain_tool(&roots, "aiko", "agent").unwrap().as_deref(),
+            Some("codex")
+        );
+        put(
+            &roots.config,
+            "intelligences/brain_mapping.yml",
+            "chat_decision: {kind: jev}\n",
+        );
+        assert!(brain_tool(&roots, "aiko", "chat_decision").is_err());
     }
 }

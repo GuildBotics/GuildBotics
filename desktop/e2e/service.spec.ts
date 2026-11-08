@@ -75,7 +75,12 @@ test("starts the events target, reaches running via real events, then stops", as
 
   const start = page.getByRole("button", { name: RUN_BUTTON });
   await expect(start).toBeEnabled();
+  const starting = page.waitForResponse(
+    (r) => r.url().endsWith("/scheduler/start") && r.request().method() === "POST",
+  );
   await start.click();
+  const response = await starting;
+  expect(response.status(), await response.text()).toBe(200);
 
   // The REAL backend reports the events unit running; the UI swaps Start for Stop
   // and the events panel state badge reads "Running". The state badge lives in the

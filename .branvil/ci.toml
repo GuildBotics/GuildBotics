@@ -147,12 +147,14 @@ commands = ['''
 set -eu
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0
 uv sync --extra test
+cargo build --locked -p gb-server --example browser-test-server
 cargo build --locked -p guildbotics
 target/debug/guildbotics generate-cli-reference --check
 export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
-export GUILDBOTICS_BLACKBOX_SERVER="$GUILDBOTICS_BLACKBOX_CLI server start"
+export GUILDBOTICS_BLACKBOX_MEMBER_CLI="$PWD/target/debug/examples/browser-test-server"
+export GUILDBOTICS_BLACKBOX_SERVER="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_PROVIDER=local
-uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py::test_service_start_and_stop
+uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py
 ''']
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }

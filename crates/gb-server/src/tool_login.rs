@@ -312,11 +312,9 @@ impl ToolLogin {
             .ok_or("Tool name missing.")?
             .to_owned();
         let broker = &catalog["provision"]["credential_broker"];
-        let command = format!(
-            "'{}' environment login {name}",
-            home.join(".guildbotics/bin/guildbotics")
-                .to_string_lossy()
-                .replace('\'', "'\"'\"'")
+        let command = gb_base::shell::managed_cli_command(
+            &home.join(".guildbotics/bin/guildbotics"),
+            &["environment", "login", &name],
         );
         let source_language = language.to_owned();
         let source_command = command.clone();

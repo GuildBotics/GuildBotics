@@ -222,14 +222,17 @@ impl IntelligenceConfig<'_> {
         mapping: &Value,
         cli: bool,
     ) -> anyhow::Result<Vec<Value>> {
-        let paths: BTreeSet<_> = mapping
+        let paths = mapping
             .as_object()
             .unwrap()
             .values()
-            .filter_map(Value::as_str)
-            .collect();
+            .filter_map(Value::as_str);
+        let mut seen = BTreeSet::new();
         let mut result = Vec::new();
         for path in paths {
+            if !seen.insert(path) {
+                continue;
+            }
             if !cli && !path.starts_with("models/") {
                 continue;
             }
@@ -291,7 +294,8 @@ impl IntelligenceConfig<'_> {
                 let engine = match data["kind"].as_str() {
                     Some("ai_cli") => "cli",
                     Some("jev") => "jev",
-                    _ => "llm",
+                    Some("model") => "llm",
+                    _ => anyhow::bail!("Unsupported brain kind for {name}"),
                 };
                 let class = match engine {
                     "cli" => CLI,
@@ -306,9 +310,9 @@ impl IntelligenceConfig<'_> {
                     })
                     .unwrap_or(&json!("default")),
                 );
-                json!({"name":name,"brain_class":class,"engine":engine,"target":target})
+                Ok(json!({"name":name,"brain_class":class,"engine":engine,"target":target}))
             })
-            .collect();
+            .collect::<anyhow::Result<_>>()?;
         let inherited = |name| -> anyhow::Result<Value> {
             Ok(if person.is_some() {
                 json!(

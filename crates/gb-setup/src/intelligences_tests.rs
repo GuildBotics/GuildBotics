@@ -936,3 +936,53 @@ fn member_cli_save_does_not_validate_unused_member_descriptors() {
         json!({"parameters":{"model":"custom"},"effort":{}})
     );
 }
+
+#[test]
+fn settings_preserve_mapping_order_and_refuse_unknown_brain_kinds() {
+    let (_tmp, repository, templates) = fixture();
+    let service = IntelligenceConfig {
+        repository: &repository,
+        templates: &templates,
+    };
+    let path = repository
+        .view()
+        .path("intelligences/model_mapping.yml")
+        .unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "default: models/openai/default.yml\ntranslation: models/gemini/default.yml\nagain: models/openai/default.yml\n").unwrap();
+    let brains = path.with_file_name("brain_mapping.yml");
+    std::fs::write(&brains, "translation: {kind: model, model: translation}\nagent: {kind: ai_cli, cli_agent: default}\n").unwrap();
+    let read = service.read(None).unwrap();
+    assert_eq!(
+        read["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["provider"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["openai", "gemini"]
+    );
+    assert_eq!(
+        read["brain_mapping"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["translation", "agent"]
+    );
+    for value in [
+        "{}",
+        "{class: old.Brain, args: {model: default}}",
+        "{kind: typo}",
+    ] {
+        std::fs::write(&brains, format!("agent: {value}\n")).unwrap();
+        assert!(
+            service
+                .read(None)
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported brain kind")
+        );
+    }
+}

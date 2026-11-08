@@ -964,7 +964,7 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
     ] {
         gb_base::files::atomic_write(&path, data.as_bytes()).unwrap();
     }
-    let invoke = |args: &[&str]| {
+    let invoke = |args: &[&str], language: &str| {
         Command::new(BIN)
             .args(args)
             .current_dir(&root)
@@ -972,12 +972,12 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
             .env("GUILDBOTICS_HOME", root.join("home"))
             .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
             .env_remove("GUILDBOTICS_IDENTITY_ROOT")
-            .env("LANGUAGE", "en")
+            .env("LANGUAGE", language)
             .stdin(Stdio::null())
             .output()
             .unwrap()
     };
-    let missing = invoke(&["run", "missing@alice", "--cwd", "workspace"]);
+    let missing = invoke(&["run", "missing@alice", "--cwd", "workspace"], "en");
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     assert!(
         String::from_utf8_lossy(&missing.stderr).contains("Unable to locate command 'missing'")
@@ -996,16 +996,30 @@ fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() 
             "topic=review",
         ][..],
     ] {
-        let output = invoke(args);
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert!(output.stdout.is_empty());
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("Cannot place microVM runtime"),
-            "{output:?}"
-        );
+        for language in ["en", "ja"] {
+            let output = invoke(args, language);
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stdout.is_empty());
+            // Keep the frozen localized message and destination exact, while
+            // allowing the operating system to supply its own nonempty reason.
+            let home = root.join("home/data/msb").display().to_string();
+            let prefix = gb_server::i18n::t(
+                language,
+                "intelligences.agent_environment.runtime.not_placed",
+                &[("home", &home), ("error", "")],
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr
+                    .trim()
+                    .strip_prefix(&format!("Error: {prefix}"))
+                    .is_some_and(|reason| !reason.is_empty()),
+                "{output:?}"
+            );
+        }
     }
     let records = run_records(&workspace);
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 6);
     for record in records {
         assert_eq!(record["status"], "failed");
         assert_eq!(record["source"], "manual");

@@ -251,6 +251,7 @@ impl Runtime {
         let mut broker = native.clone();
         broker.runtime_work = Some(cleanup.clone());
         let dispatcher = Dispatcher {
+            keychain: native.keychain.clone(),
             driver: Arc::new(crate::dispatcher::MicroVm),
             host,
             workspace: native.workspace.clone(),

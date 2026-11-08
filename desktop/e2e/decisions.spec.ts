@@ -12,7 +12,7 @@ test("uses the common brain assignment for chat judgment and restores it after r
   const ctx = readStackContext("configured");
   writeFileSync(
     join(ctx.configDir, "intelligences", "brain_mapping.yml"),
-    "default:\n  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain\n  args:\n    model: default\n",
+    "default:\n  kind: model\n  model: default\n",
   );
   await page.goto("/#/setup?section=intelligence&advanced=intelligence");
   const card = page.locator("#decision-settings");

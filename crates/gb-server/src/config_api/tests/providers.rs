@@ -607,11 +607,13 @@ async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
     assert_eq!(connected["owner"], "owner1");
     assert_eq!(connected["base_url"], running.data.base_url());
     let helper = f.api.home.join(".guildbotics/bin/guildbotics");
-    let quoted = helper.to_string_lossy().replace('\'', "'\\''");
+    let quoted = gb_base::shell::managed_cli_command(&helper, &["git-credential"])
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     assert_eq!(
         connected["git_config"],
         format!(
-            "[credential \"{}\"]\n\thelper =\n\thelper = \"!'{quoted}' git-credential\"\n",
+            "[credential \"{}\"]\n\thelper =\n\thelper = \"!{quoted}\"\n",
             running.data.base_url()
         )
     );

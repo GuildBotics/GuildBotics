@@ -118,8 +118,11 @@ pub fn load_command(home: &std::path::Path) -> Result<String, String> {
         .to_str()
         .ok_or("The managed CLI path is not UTF-8.")?;
     Ok(format!(
-        "'{}' environment image load <archive.tar>",
-        executable.replace('\'', "'\"'\"'")
+        "{} <archive.tar>",
+        gb_base::shell::managed_cli_command(
+            std::path::Path::new(executable),
+            &["environment", "image", "load"]
+        )
     ))
 }
 

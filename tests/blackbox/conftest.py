@@ -11,14 +11,22 @@ from tests.blackbox.harness import running_stack
 
 
 @pytest.fixture
-def stack(tmp_path: Path):
-    if not all(
-        os.environ.get(key)
-        for key in ("GUILDBOTICS_BLACKBOX_SERVER", "GUILDBOTICS_BLACKBOX_CLI")
-    ):
-        pytest.skip("Set replaceable server and CLI commands (#91/#92)")
+def server_stack(tmp_path: Path):
+    if not os.environ.get("GUILDBOTICS_BLACKBOX_SERVER"):
+        pytest.skip("Set a replaceable server command")
     with running_stack(tmp_path) as instance:
         yield instance
+
+
+@pytest.fixture
+def cli_available():
+    if not os.environ.get("GUILDBOTICS_BLACKBOX_CLI"):
+        pytest.skip("Set a replaceable CLI command (#92)")
+
+
+@pytest.fixture
+def stack(cli_available, server_stack):
+    return server_stack
 
 
 @dataclass

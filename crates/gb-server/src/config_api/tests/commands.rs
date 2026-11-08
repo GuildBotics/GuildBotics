@@ -466,7 +466,7 @@ async fn a_requirement_is_met_as_the_device_and_the_project_provide_it() {
                 ("tool", "Codex"),
                 (
                     "command",
-                    &format!("'{}' environment login codex", cli.display())
+                    &gb_base::shell::managed_cli_command(&cli, &["environment", "login", "codex"])
                 ),
             ],
         )

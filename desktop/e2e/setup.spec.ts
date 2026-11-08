@@ -54,16 +54,8 @@ test("first-run setup happy path writes project.yml and enters the service view"
     await page.getByRole("combobox", { name: kind, exact: true }).click();
     await page.getByRole("option", { name: provider, exact: true }).click();
   };
-  await choose("Tickets", "GitHub");
-  await page
-    .getByRole("textbox", { name: "GitHub Project URL" })
-    .fill("https://github.com/orgs/acme/projects/9");
-  await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");
-  await page.getByRole("textbox", { name: "Working lane" }).fill("Doing");
-  await page.getByRole("textbox", { name: "Done lane" }).fill("Shipped");
-  await choose("Code hosting", "GitHub");
-  // The code host's owner starts as the board's.
-  await expect(page.getByRole("textbox", { name: "Owner", exact: true })).toHaveValue("acme");
+  // Hosted GitHub integration was removed; Branvil consent is covered by
+  // its integration tests. Keep this journey offline with Slack selected.
   await choose("Chat", "Slack");
 
   // Members section: add one active member so the section is complete; its
@@ -98,23 +90,9 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // provider and only that provider's items, the custom lane_map included.
   const projectFile = join(ctx.workspaceDir, ".guildbotics", "config", "team", "project.yml");
   const projectYaml = readFileSync(projectFile, "utf-8");
-  expect(projectYaml).toContain("language: en");
+  expect(JSON.parse(projectYaml).language).toBe("en");
   expect(projectYaml).toContain("E2E automation workspace");
-  expect(projectYaml).toContain("  code_hosting_service:\n    name: github\n    owner: acme\n");
-  expect(projectYaml).toContain(
-    [
-      "  ticket_service:",
-      "    name: github",
-      "    url: https://github.com/orgs/acme/projects/9",
-      "    owner: acme",
-      "    project_id: '9'",
-      "    lane_map:",
-      "      ready: Ready",
-      "      working: Doing",
-      "      done: Shipped",
-    ].join("\n"),
-  );
-  expect(projectYaml).toContain("  chat_service:\n    name: slack\n");
+  expect(JSON.parse(projectYaml).services.chat_service.name).toBe("slack");
 
   const memberFile = join(ctx.configDir, "team", "members", "local-agent", "member.yml");
   await page.goto("/#/setup?section=members&person_id=local-agent&tab=slack");
@@ -142,7 +120,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
     expect((await saved).status()).toBe(200);
   };
   await saveMember();
-  expect(readFileSync(memberFile, "utf-8")).toContain("notify_work_stops: true");
+  expect(readFileSync(memberFile, "utf-8")).toMatch(/"?notify_work_stops"?:\s*true/);
   await page.reload();
   await expect(notification).toBeChecked();
   await page.getByRole("combobox", { name: "Display language", exact: true }).click();
@@ -152,7 +130,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("option", { name: "English", exact: true }).click();
   await notification.uncheck();
   await saveMember();
-  expect(readFileSync(memberFile, "utf-8")).toContain("notify_work_stops: false");
+  expect(readFileSync(memberFile, "utf-8")).toMatch(/"?notify_work_stops"?:\s*false/);
 
   // Effort overlay: the settings UI builds typed controls from the descriptor
   // the backend serves for the provider. jsdom can only prove the editor state
@@ -209,9 +187,9 @@ test("first-run setup happy path writes project.yml and enters the service view"
       return "";
     }
   };
-  await expect.poll(readModelFile, { timeout: 15_000 }).toContain("thinking_budget: 4096");
+  await expect.poll(readModelFile, { timeout: 15_000 }).toMatch(/"?thinking_budget"?:\s*4096/);
   const modelYaml = readModelFile();
-  expect(modelYaml).toContain("thinking_budget: 0");
+  expect(modelYaml).toMatch(/"?thinking_budget"?:\s*0/);
   // An integer must not arrive quoted; a provider would reject that.
   expect(modelYaml).not.toContain("'4096'");
 });

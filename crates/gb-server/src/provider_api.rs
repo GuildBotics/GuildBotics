@@ -405,10 +405,11 @@ pub(crate) const CONFIG_WRITERS: &[(&str, &str)] = &[
 ];
 
 fn git_config(origin: &str, binary: &std::path::Path) -> String {
-    let path = binary.to_string_lossy();
-    let quoted = format!("'{}'", path.replace('\'', "'\\''"));
-    let helper = format!("!{quoted} git-credential")
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+    let helper = format!(
+        "!{}",
+        gb_base::shell::managed_cli_command(binary, &["git-credential"])
+    )
+    .replace('\\', "\\\\")
+    .replace('"', "\\\"");
     format!("[credential \"{origin}\"]\n\thelper =\n\thelper = \"{helper}\"\n")
 }
