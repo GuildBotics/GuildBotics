@@ -3000,6 +3000,7 @@ impl PrivatePlan {
             memory_mib: vm.memory_mib,
             cpus: vm.cpus,
             mounts: &self.mounts,
+            links: &[],
             network: &self.network,
             worktree: None,
         }

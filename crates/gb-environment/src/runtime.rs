@@ -59,6 +59,8 @@ pub struct Boot<'a> {
     pub memory_mib: u32,
     pub cpus: u8,
     pub mounts: &'a [Mount],
+    /// Made in the microVM's home before the command starts.
+    pub links: &'a [crate::contract::Link],
     pub network: &'a Network,
     pub worktree: Option<&'a crate::worktree::Copy>,
 }
@@ -552,6 +554,22 @@ pub async fn run_once_with_guest(
             1024,
         )
         .await?;
+        for link in boot.links {
+            capture(
+                &sandbox,
+                &["sh".into(), "-ec".into(), link_script(link)],
+                &[],
+                &[],
+                1024,
+            )
+            .await
+            .map_err(|_| {
+                Failure::Command(Sentence::Text(format!(
+                    "The granted {} cannot be reached as ~/{}: the environment's home already has it",
+                    link.target, link.name
+                )))
+            })?;
+        }
         let copied = match boot.worktree {
             None => None,
             Some(copy) => Some(
@@ -1814,6 +1832,26 @@ mod build_tests {
         .await;
         assert_eq!(broken, Err("store unavailable".into()));
     }
+    #[test]
+    fn links_are_made_in_the_microvm_home_with_their_directories() {
+        let links = [
+            crate::contract::Link {
+                name: "Documents/GuildBotics".into(),
+                target: "/Users/me/Documents/GuildBotics".into(),
+            },
+            crate::contract::Link {
+                name: ".cache/uv".into(),
+                target: "/c/Users/me/.cache/my uv".into(),
+            },
+        ];
+        assert_eq!(
+            links.each_ref().map(link_script),
+            [
+                "mkdir -p -- /opt/guildbotics/home/Documents\nln -sT -- /Users/me/Documents/GuildBotics /opt/guildbotics/home/Documents/GuildBotics",
+                "mkdir -p -- /opt/guildbotics/home/.cache\nln -sT -- '/c/Users/me/.cache/my uv' /opt/guildbotics/home/.cache/uv",
+            ]
+        );
+    }
     #[tokio::test]
     async fn recipe_runs_in_order_and_only_snapshots_after_successful_stop() {
         for failure in [None, Some("first script"), Some("stop")] {
@@ -1907,6 +1945,25 @@ fn worktree_argv(operation: &str, copy: &crate::worktree::Copy) -> Vec<String> {
     ];
     argv.extend(copy.excluded.iter().cloned());
     argv
+}
+
+/// Links the name under the microVM's home to its target, making the
+/// directories it is in. No link is inside another, so making it never goes
+/// through one; one already there, as what the snapshot left, fails it.
+fn link_script(link: &crate::contract::Link) -> String {
+    let path = format!("{}/{}", crate::GUEST_HOME, link.name);
+    let parent = path.rsplit_once('/').map_or("/", |(parent, _)| parent);
+    [
+        gb_base::shell::join(&["mkdir".into(), "-p".into(), "--".into(), parent.into()]),
+        gb_base::shell::join(&[
+            "ln".into(),
+            "-sT".into(),
+            "--".into(),
+            link.target.clone(),
+            path,
+        ]),
+    ]
+    .join("\n")
 }
 
 async fn capture(

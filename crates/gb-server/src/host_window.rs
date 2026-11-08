@@ -1875,23 +1875,25 @@ pub async fn prepare_command(
     .map_err(|e| command.config.spoken(&e.to_string()))?;
     // The guest is told of the configuration, not of the run's copy of it.
     spoken_strings(&command.config, &mut resolved);
+    let language = resolved["language"].as_str().unwrap_or("en").to_owned();
+    // Why a path cannot reach the microVM, naming the file the user edits.
+    let refusal = |failure: gb_environment::Failure| {
+        command
+            .config
+            .spoken(&crate::i18n::say(failure.sentence(), &language))
+    };
     if let Some(commands) = resolved["commands"].as_object_mut() {
         for value in commands.values_mut() {
             if let Some(path) = value.as_str() {
                 *value =
                     gb_environment::command_path(host, &command.config, std::path::Path::new(path))
-                        .map_err(|_| "Invalid command guest path.")?
+                        .map_err(refusal)?
                         .into();
             }
         }
     }
-    let shape = gb_environment::shape(
-        host,
-        workspace,
-        command,
-        Some(resolved["language"].as_str().unwrap_or("en").into()),
-    )
-    .map_err(|_| "The command access contract cannot be resolved.".to_owned())?;
+    let shape =
+        gb_environment::shape(host, workspace, command, Some(language.clone())).map_err(refusal)?;
     let invocation = broker_invocation(command);
     let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
         .map(std::path::PathBuf::from)

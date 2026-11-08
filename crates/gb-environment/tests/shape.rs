@@ -91,14 +91,10 @@ fn read(guest: impl Into<String>, host: &Path) -> Mount {
     }
 }
 
-/// The exchange folder, read-only: at its host path, and again under the
-/// microVM's own home.
-fn exchange(machine: &Machine) -> [Mount; 2] {
+/// The exchange folder, read-only, at its host path.
+fn exchange(machine: &Machine) -> Mount {
     let host = named(&machine.host.home.join(gb_environment::EXCHANGE));
-    [
-        read(spelled(&host), &host),
-        read(gb_environment::guest_exchange(), &host),
-    ]
+    read(spelled(&host), &host)
 }
 
 fn sorted(mut mounts: Vec<Mount>) -> Vec<Mount> {
@@ -209,7 +205,7 @@ fn a_read_only_command_reads_and_works_on_its_own() {
                 read(spelled(&members), &members),
             ]
             .into_iter()
-            .chain(exchange(&machine))
+            .chain([exchange(&machine)])
             .collect()
         )
     );
@@ -235,7 +231,6 @@ fn a_read_only_command_reads_and_works_on_its_own() {
                 spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
                 true
             ),
-            (gb_environment::guest_exchange(), true),
             ("/opt/guildbotics/code/guildbotics".into(), false),
             (spelled(&config), false),
             (spelled(&members), false),
@@ -306,7 +301,7 @@ fn an_inspecting_command_is_told_where_to_look() {
         read(spelled(&run), &run),
     ]
     .into_iter()
-    .chain(exchange(&machine))
+    .chain([exchange(&machine)])
     .collect::<Vec<_>>();
     assert_eq!(sorted(made.mounts.clone()), sorted(expected));
     let facts: CommandFacts =
@@ -341,7 +336,7 @@ fn what_is_not_there_is_not_mounted() {
     let made = shape(&machine.host, &machine.workspace, &run, None).unwrap();
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
-    assert_eq!(made.mounts.len(), 6);
+    assert_eq!(made.mounts.len(), 5);
     assert_eq!(facts.inspected, HashMap::new());
 }
 
@@ -403,6 +398,51 @@ fn guest_paths_keep_posix_spelling_and_map_windows_drives() {
         (r"D:\Work Area\資料", "/d/Work Area/資料"),
     ] {
         assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), guest);
+    }
+}
+
+#[test]
+fn host_paths_never_reach_what_the_microvm_keeps_for_itself() {
+    for path in [
+        "/",
+        "/opt",
+        "/opt/guildbotics",
+        "/opt/guildbotics/home",
+        "/opt/guildbotics/home/work",
+        "/opt/guildbotics/venv/",
+        "/opt//guildbotics/home",
+        "/opt/./guildbotics",
+        "/run",
+        "/run/guildbotics/resolved",
+    ] {
+        assert!(
+            gb_environment::guest_path(Path::new(path)).is_err(),
+            "{path} is admitted"
+        );
+    }
+    for path in ["/opt/homebrew", "/opt/guildbotics-other", "/runner"] {
+        assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), path);
+    }
+}
+
+#[test]
+fn a_command_cannot_work_in_what_the_microvm_keeps_for_itself() {
+    let machine = machine();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/x.py");
+    for read_only in [true, false] {
+        let mut request = command(&machine, path.clone(), vec![]);
+        request.access.read_only = read_only;
+        request.cwd = PathBuf::from("/opt/guildbotics/home");
+        let Err(failure) = shape(&machine.host, &machine.workspace, &request, None) else {
+            panic!("a working directory over the microVM's home is admitted");
+        };
+        let gb_environment::Sentence::Text(text) = failure.sentence() else {
+            panic!("the refusal says no reason");
+        };
+        assert!(text.contains("/opt/guildbotics"), "{text}");
     }
 }
 
@@ -509,7 +549,6 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
             spelled(&named(&machine.workspace.join(".guildbotics/config"))),
             spelled(&named(&machine.workspace.join(".guildbotics/local/run"))),
             home("Documents/GuildBotics"),
-            gb_environment::guest_exchange(),
             home("Documents/read"),
             home("Documents/write"),
             clone_guest.clone(),
@@ -523,6 +562,22 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
                 "{guest} is not mounted ({read_only})"
             );
         }
+        // `~` reaches each grant under the host's home through a link of
+        // the same name; the microVM's home is never a mount.
+        assert_eq!(
+            made.links,
+            ["Documents/GuildBotics", "Documents/read", "Documents/write"].map(|name| {
+                gb_environment::contract::Link {
+                    name: name.into(),
+                    target: home(name),
+                }
+            })
+        );
+        assert!(
+            made.mounts
+                .iter()
+                .all(|m| !m.guest.starts_with(gb_environment::GUEST_HOME))
+        );
         for mount in &made.mounts {
             let expected =
                 (mount.guest == clone_guest).then_some(gb_environment::contract::CLONE_QUOTA_MIB);

@@ -89,6 +89,31 @@ async def test_to_html_writes_output_file_when_requested(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("symlinks")
+async def test_to_html_reports_the_real_path_of_an_output_through_a_home_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Inside the isolated environment `~/Documents/GuildBotics` is a link from
+    # the environment's own home to the host's folder, which the user opens.
+    home = tmp_path / "guest-home"
+    host = (tmp_path / "host" / "Documents" / "GuildBotics").resolve()
+    host.mkdir(parents=True)
+    (home / "Documents").mkdir(parents=True)
+    (home / "Documents" / "GuildBotics").symlink_to(host)
+    monkeypatch.setenv("HOME", str(home))
+    ctx = _make_context("sample")
+    for output in (
+        "~/Documents/GuildBotics/report.html",
+        str(home / "Documents/GuildBotics/report.html"),
+    ):
+        spec = _make_spec(tmp_path, params={"output": output})
+        outcome = await ToHtmlCommand(ctx, spec, tmp_path).run()
+
+        assert outcome.text_output == str(host / "report.html")
+        assert (host / "report.html").read_text(encoding="utf-8") == outcome.result
+
+
+@pytest.mark.asyncio
 async def test_to_html_reads_input_file_when_provided(tmp_path: Path):
     input_path = tmp_path / "input.md"
     input_path.write_text("# From file", encoding="utf-8")

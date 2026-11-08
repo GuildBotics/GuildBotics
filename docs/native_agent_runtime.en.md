@@ -293,10 +293,11 @@ opening it.
   Apart from that file, `Documents/GuildBotics` (the exchange directory) is
   always granted read/write: a run from the screens that names no working
   directory runs there, and what an agent makes for the user goes under it
-  unless the request names a destination. The exchange directory, with what is
-  granted in it, alone is bound again under the environment's home with the
-  same access, so `~/Documents/GuildBotics` names the same folder inside and
-  out. What the screens hand over (a pasted
+  unless the request names a destination. Each granted directory under the
+  host's home, the exchange directory included, is linked from the same name
+  under the environment's home, so `~/Documents/GuildBotics` and `~/<grant>`
+  name the same folder inside and out; it is bound once, at its host path,
+  where its access applies. What the screens hand over (a pasted
   image, or a file dropped on the input, which the browser uploads as a copy)
   is kept in GuildBotics' own storage (`~/.guildbotics/data/command_inputs`),
   bound read-only at the same path into the runs the screens start, and removed

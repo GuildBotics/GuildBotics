@@ -110,6 +110,7 @@ impl Device {
             memory_mib: self.vm.memory_mib,
             cpus: self.vm.cpus,
             mounts,
+            links: &[],
             network,
             worktree: None,
         }

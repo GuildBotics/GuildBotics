@@ -51,8 +51,27 @@ pub struct Local {
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub grants: Vec<Mount>,
+    /// The grants under the host's home, by their names there, so `~`
+    /// reaches them inside too: only the outermost of nested ones.
+    pub links: Vec<Link>,
     pub denied: Vec<PathBuf>,
     pub view: serde_json::Value,
+}
+
+/// A link from the microVM's home to a granted directory: `name` is the
+/// grant's path under the host's home, `target` its guest path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Link {
+    pub name: String,
+    pub target: String,
+}
+
+/// A host path as the microVM names it, or why it cannot be mounted.
+fn spelled(path: &Path) -> Result<String, String> {
+    crate::guest_path(path).map_err(|failure| match failure.sentence() {
+        crate::Sentence::Text(text) => text,
+        _ => format!("{} cannot be mounted", path.display()),
+    })
 }
 
 /// A proposed edit's refusal, with the runtime's text and the editor's locale
@@ -474,10 +493,9 @@ pub fn resolve_values(
         }
     }
     let mut grants = Vec::new();
+    let mut links: Vec<Link> = Vec::new();
     let mut documents = Vec::new();
     let mut paths = Vec::new();
-    // The exchange folder, the first of the plan when it is there.
-    let mut exchange = None;
     for (path, access, document, grant, builtin) in planned {
         if create && document {
             std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
@@ -493,32 +511,36 @@ pub fn resolve_values(
             continue;
         }
         let checked = validate_source(&path, &denied, true, false)?;
-        let mount = Mount {
-            guest: crate::guest_path(&checked).map_err(|_| "Invalid guest path")?,
+        let guest = spelled(&checked)?;
+        if let Ok(inner) = checked.strip_prefix(&home) {
+            links.push(Link {
+                name: inner
+                    .iter()
+                    .map(|part| part.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+                target: guest.clone(),
+            });
+        }
+        grants.push(Mount {
+            guest,
             host: Some(checked),
             readonly: read_only || matches!(access, Access::Read),
             quota_mib: None,
-        };
-        if builtin {
-            exchange = mount.host.clone();
-        }
-        // What is in the exchange folder is mounted again under its `~`
-        // spelling too, with the same access, so no grant is looser there.
-        let again = exchange
-            .as_ref()
-            .and_then(|root| mount.host.as_ref()?.strip_prefix(root).ok())
-            .map(|inner| Mount {
-                guest: std::iter::once(crate::guest_exchange())
-                    .chain(inner.iter().map(|part| part.to_string_lossy().into_owned()))
-                    .collect::<Vec<_>>()
-                    .join("/"),
-                ..mount.clone()
-            });
-        grants.push(mount);
-        grants.extend(again);
+        });
     }
+    // A link inside another would be made in the host's directory.
+    let names: Vec<String> = links.iter().map(|link| format!("{}/", link.name)).collect();
+    links.retain(|link| {
+        !names
+            .iter()
+            .any(|outer| link.name.starts_with(outer.as_str()))
+    });
+    links.sort_by(|a, b| a.name.cmp(&b.name));
+    links.dedup_by(|a, b| a.name == b.name);
     Ok(Resolved {
         grants,
+        links,
         denied,
         view: serde_json::json!({"documents":documents,"paths":paths,"denied":denied_view,"problem":""}),
     })
@@ -897,7 +919,7 @@ pub fn copy_plan(
     {
         return Err("The working directory is inside a read-only grant".into());
     }
-    let guest = crate::guest_path(&source).map_err(|_| "Invalid working directory guest path")?;
+    let guest = spelled(&source)?;
     let mut excluded = vec![".git".into(), ".guildbotics".into()];
     for mount in mounts.iter().chain(&access.grants) {
         if let Some(relative) = mount.guest.strip_prefix(&format!("{guest}/"))
@@ -932,7 +954,7 @@ pub fn plan(
     read_only: bool,
 ) -> Result<Plan, String> {
     let cwd = gb_base::host_path::directory(cwd, read_only).map_err(|e| e.to_string())?;
-    let guest = crate::guest_path(&cwd).map_err(|_| "Invalid working directory guest path")?;
+    let guest = spelled(&cwd)?;
     mounts.retain(|m| m.guest != guest || m.host.is_some());
     let clones = workspace.join(".guildbotics/local/clones").join(person);
     let managed = cwd
@@ -948,7 +970,7 @@ pub fn plan(
     if clones.exists() {
         let checked = validate_source(&clones, &access.denied, false, false)?;
         let mount = Mount {
-            guest: crate::guest_path(&checked).map_err(|_| "Invalid clone guest path")?,
+            guest: spelled(&checked)?,
             host: Some(checked),
             readonly: read_only,
             quota_mib: Some(CLONE_QUOTA_MIB),

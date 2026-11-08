@@ -27,9 +27,9 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
     for read_only in [true, false] {
         let plan = contract::resolve(&workspace, &home, &[], read_only, true).unwrap();
         assert!(home.join("Documents/project").is_dir());
-        // Every grant is at its host path. The exchange folder, and what is
-        // granted in it, is mounted again under the microVM's own home, as
-        // `~` names it there, with the same access.
+        // Every grant is mounted once, at its host path, with its own
+        // access; `~` reaches those under the host's home through links,
+        // the outermost of nested ones alone.
         let exchange = home.join(gb_environment::EXCHANGE).canonicalize().unwrap();
         let project = home.join("Documents/project").canonicalize().unwrap();
         let reference = exchange.join("reference");
@@ -38,30 +38,26 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
             .iter()
             .map(|m| (m.guest.clone(), m.host.clone().unwrap(), m.readonly))
             .collect();
+        let spelled = |path: &Path| gb_environment::guest_path(path).unwrap();
         assert_eq!(
             guests,
             [
-                (
-                    gb_environment::guest_path(&exchange).unwrap(),
-                    exchange.clone(),
-                    read_only
-                ),
-                (gb_environment::guest_exchange(), exchange, read_only),
-                (
-                    gb_environment::guest_path(&project).unwrap(),
-                    project,
-                    read_only
-                ),
-                (
-                    gb_environment::guest_path(&reference).unwrap(),
-                    reference.clone(),
-                    true
-                ),
-                (
-                    format!("{}/reference", gb_environment::guest_exchange()),
-                    reference,
-                    true
-                ),
+                (spelled(&exchange), exchange.clone(), read_only),
+                (spelled(&project), project.clone(), read_only),
+                (spelled(&reference), reference, true),
+            ]
+        );
+        assert_eq!(
+            plan.links,
+            [
+                contract::Link {
+                    name: "Documents/GuildBotics".into(),
+                    target: spelled(&exchange),
+                },
+                contract::Link {
+                    name: "Documents/project".into(),
+                    target: spelled(&project),
+                },
             ]
         );
     }
