@@ -1366,9 +1366,13 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
     std::fs::write(&msb, "not a directory").unwrap();
     let server = Server::spawn(command, dir.path(), port);
     let refusals = [
-        "Cannot place microVM runtime at",
-        "The resources in",
-        "この端末にはエージェント実行環境がありません。",
+        gb_server::i18n::t(
+            "ja",
+            "intelligences.agent_environment.runtime.not_placed",
+            &[("home", &msb.display().to_string()), ("error", "")],
+        ),
+        "The resources in".into(),
+        "この端末にはエージェント実行環境がありません。".into(),
     ];
     for (step, refusal) in refusals.iter().enumerate() {
         match step {
@@ -1391,9 +1395,21 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
         assert_eq!(failed["code"], "command_error");
         assert!(
-            failed["message"].as_str().unwrap().starts_with(refusal),
+            failed["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(refusal.as_str()),
             "{failed}"
         );
+        if step == 0 {
+            assert!(
+                failed["message"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix(refusal.as_str())
+                    .is_some_and(|reason| !reason.trim().is_empty())
+            );
+        }
         if step == 1 {
             gb_environment::runtime::ready(&msb)
                 .expect("doctor must repair the outdated bundle before validating resources");
