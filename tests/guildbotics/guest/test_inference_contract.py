@@ -211,6 +211,7 @@ async def test_incomplete_provider_run_fails_without_a_refusal(
     assert error.value.error_type == "RuntimeError"
     assert error.value.category == "other"
     assert captured["records"][-1].status == "failed"
+    assert captured["records"][-1].error_category == "other"
 
 
 @pytest.mark.asyncio
@@ -221,6 +222,40 @@ async def test_cancellation_still_records_a_failed_summary(harness):
         await brain().run("question")
     assert captured["records"][-1].type == "summary"
     assert captured["records"][-1].status == "failed"
+    assert captured["records"][-1].error_category is None
+    assert captured["records"][-1].error_response == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_class,status,reported,category",
+    [
+        ("agno.models.openai.OpenAIChat", 429, "insufficient_quota", "credit"),
+        ("agno.models.openai.OpenAIChat", 429, "", "rate_limit"),
+        ("agno.models.anthropic.Claude", 401, "", "authentication"),
+        ("agno.models.google.Gemini", 429, "", "other"),
+        ("agno.models.openai.OpenAIChat", None, "", "other"),
+    ],
+)
+async def test_summary_transports_classified_failure_to_host_only(
+    harness, model_class, status, reported, category
+):
+    resolved, captured, brain, _ = harness
+    resolved.brains["default"].definition["model_class"] = model_class
+    resolved.inference_urls.update(anthropic="http://gateway", gemini="http://gateway")
+    resolved.inference_keys.update(anthropic="placeholder", gemini="placeholder")
+    cause = RuntimeError("synthetic-response")
+    cause.status_code = status
+    cause.type = reported
+    captured["status"] = RunStatus.error
+    captured["provider_error"] = cause
+    with pytest.raises(InferenceFailure) as error:
+        await brain().run("question")
+    summary = captured["records"][-1]
+    assert summary.error_category == category
+    assert summary.error_status_code == status
+    assert summary.error_response == "synthetic-response"
+    assert "synthetic-response" not in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -294,6 +329,9 @@ async def test_jev_uses_leased_gateway_and_records_success_or_refusal(
             await implementation.jev(call)
         assert error.value.category == "authentication"
         assert captured["records"][-1].status == "failed"
+        assert captured["records"][-1].error_category == "authentication"
+        assert captured["records"][-1].error_status_code == 401
+        assert '"model":"jev-1"' in captured["records"][-1].error_response
     else:
         assert (await implementation.jev(call))["model"] == "jev-1"
         assert captured["records"][-1].usage == {"input_tokens": 3}

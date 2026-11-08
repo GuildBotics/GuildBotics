@@ -155,6 +155,9 @@ class GuestInference:
             )
             return answer
         except (Exception, CancelledError) as exc:
+            failure = None if isinstance(exc, CancelledError) else InferenceFailure(exc)
+            if failure:
+                failure.category = classify_failure(provider, failure)
             await self.client.record(
                 [
                     SummaryEntry(
@@ -164,13 +167,14 @@ class GuestInference:
                         tool=provider,
                         model_specified=bool(params.get("id")),
                         status="failed",
+                        error_category=failure.category if failure else None,
+                        error_status_code=failure.status_code if failure else None,
+                        error_response=failure.response if failure else "",
                     )
                 ]
             )
-            if isinstance(exc, CancelledError):
+            if failure is None:
                 raise
-            failure = InferenceFailure(exc)
-            failure.category = classify_failure(provider, failure)
             raise failure from exc
 
     async def jev(self, call: JevCall) -> dict[str, Any]:
@@ -220,6 +224,9 @@ class GuestInference:
             )
             return answer
         except (Exception, CancelledError) as exc:
+            failure = None if isinstance(exc, CancelledError) else InferenceFailure(exc)
+            if failure:
+                failure.category = classify_failure("jev", failure)
             await self.client.record(
                 [
                     SummaryEntry(
@@ -228,13 +235,14 @@ class GuestInference:
                         tool="jev",
                         model_specified=True,
                         status="failed",
+                        error_category=failure.category if failure else None,
+                        error_status_code=failure.status_code if failure else None,
+                        error_response=failure.response if failure else "",
                     )
                 ]
             )
-            if isinstance(exc, CancelledError):
+            if failure is None:
                 raise
-            failure = InferenceFailure(exc)
-            failure.category = classify_failure("jev", failure)
             raise failure from exc
 
 

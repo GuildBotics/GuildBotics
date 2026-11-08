@@ -998,6 +998,66 @@ mod tests {
         assert_eq!(summary["payload"]["usage"]["input_tokens"], 4);
     }
     #[test]
+    fn inference_summaries_drive_failures_and_account_alerts_and_success_clears_them() {
+        use gb_observability::{Diagnostics, health::SystemAlerts, redaction::Redactor};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Diagnostics::open(dir.path());
+        let redactor = Redactor::with_min_length(["synthetic-key".into(), "tiny".into()], 1);
+        for (tool, category, status) in [
+            ("openai", "credit", 429),
+            ("anthropic", "authentication", 401),
+            ("gemini", "other", 429),
+            ("jev", "authentication", 403),
+        ] {
+            let entry = json!({"type":"summary","span":null,"slot":"main","tool":tool,"model_specified":true,"status":"failed","error_category":category,"error_status_code":status,"error_response":format!("synthetic-key tiny {}synthetic-key", "界".repeat(490))});
+            serde_json::from_value::<gb_wire::Entry>(entry.clone()).unwrap();
+            let mut record = redact_record(
+                Some(&redactor),
+                record_entry(entry, "trace", "run", "aiko", "test").unwrap(),
+            );
+            record["timestamp"] = "2026-11-09T00:00:00Z".into();
+            assert_eq!(
+                record["attributes"]["agent.kind"],
+                if tool == "jev" { "jev" } else { "llm" }
+            );
+            let response = record["attributes"]["error.response"].as_str().unwrap();
+            assert_eq!(response.chars().count(), 500);
+            assert!(response.starts_with("*** *** "));
+            assert!(!response.contains("synthetic-key"));
+            assert!(!response.ends_with("synthetic"));
+            store.record(record.as_object().unwrap().clone());
+            let failures = store.inference_failures();
+            let failure = if tool == "jev" {
+                &failures["jev"]
+            } else {
+                &failures["llm"][tool]
+            };
+            assert_eq!(failure["category"], category);
+            assert_eq!(failure["status_code"], status);
+            assert_eq!(failure["response"], response);
+        }
+        let alerts = SystemAlerts::list(&store, &json!({}), &[], None);
+        assert_eq!(alerts["alerts"].as_array().unwrap().len(), 3);
+        for tool in ["openai", "anthropic", "gemini", "jev"] {
+            let mut record = record_entry(json!({"type":"summary","span":null,"slot":"other","tool":tool,"model_specified":true,"status":"finished"}), "trace", "run", "aiko", "test").unwrap();
+            record["timestamp"] = "2026-11-09T00:00:01Z".into();
+            store.record(record.as_object().unwrap().clone());
+        }
+        assert_eq!(store.inference_failures(), json!({"llm":{},"jev":null}));
+        assert_eq!(
+            SystemAlerts::list(&store, &json!({}), &[], None)["alerts"],
+            json!([])
+        );
+        let cli = record_entry(json!({"type":"summary","span":null,"slot":"main","tool":"codex","status":"failed","error_category":"credit"}), "trace", "run", "aiko", "test").unwrap();
+        assert!(cli["attributes"].get("credential.provider").is_none());
+        let omitted = redact_record(
+            None,
+            json!({"attributes":{"error.response":"unavailable-secret","error.category":"credit"}}),
+        );
+        assert_eq!(omitted["attributes"]["error.response"], "");
+        assert_eq!(omitted["attributes"]["error.category"], "credit");
+    }
+    #[test]
     fn recorded_provider_event_uses_kind_and_never_impersonates_a_command_boundary() {
         let entry = json!({"type":"event","span":null,"conversation":{"person_id":"aiko","adapter":"codex","work_kind":"ticket","work_identity":"87"},"generation":2,"context_cursor":"cursor","event":{"kind":"assistant","name":"completed","message":"reply","command":"","path":"","approval":"","usage":{},"details":{},"provider_session_id":"session","provider_turn_id":"turn"}});
         let record = record_entry(entry.clone(), "trace", "run", "aiko", "write").unwrap();
@@ -1917,6 +1977,7 @@ pub async fn prepare_command(
     };
     let tools = configured_tools(&resolved);
     let redactor = command_redactor(host, workspace, keychain.as_ref())?;
+    let inference_redactor = recording_redactor(host, workspace, keychain.as_ref(), true, 1).ok();
     let diagnostics = gb_observability::Diagnostics::open(workspace);
     let trace_id = command.trace_id.clone();
     let person_id = command.person_id.clone();
@@ -1938,7 +1999,8 @@ pub async fn prepare_command(
             &person_id,
             &command_name,
             full_transcript,
-        ) && let Value::Object(value) = redactor.local(value)
+        ) && let Value::Object(value) =
+            redactor.local(redact_record(inference_redactor.as_ref(), value))
         {
             if value["type"] == "workflow.completed" {
                 if let Err(error) = diagnostics.record_once(value) {
@@ -2048,6 +2110,7 @@ pub async fn prepare_command(
                 &required_workspace,
                 required_keychain.as_ref(),
                 true,
+                1,
             )
         },
     );
@@ -2266,7 +2329,7 @@ pub(crate) fn command_redactor(
     workspace: &std::path::Path,
     keychain: &dyn gb_config::secrets::Keychain,
 ) -> Result<gb_observability::redaction::Redactor, String> {
-    recording_redactor(host, workspace, keychain, false)
+    recording_redactor(host, workspace, keychain, false, 8)
 }
 
 fn recording_redactor(
@@ -2274,6 +2337,7 @@ fn recording_redactor(
     workspace: &std::path::Path,
     keychain: &dyn gb_config::secrets::Keychain,
     required: bool,
+    minimum_chars: usize,
 ) -> Result<gb_observability::redaction::Redactor, String> {
     let writes = gb_base::shared_writes::SharedWrites::new(
         host.identity_root.clone(),
@@ -2333,7 +2397,7 @@ fn recording_redactor(
     );
     Ok(gb_observability::redaction::Redactor::with_min_length(
         values,
-        if required { 1 } else { 8 },
+        minimum_chars,
     ))
 }
 
@@ -2581,6 +2645,19 @@ fn record_entry_detail(
             };
             attributes =
                 json!({"agent.kind":agent_kind,"agent.slot":entry["slot"],"agent.adapter":tool});
+            if agent_kind != "cli_agent" {
+                attributes["credential.provider"] = agent_kind.into();
+                if agent_kind == "llm" {
+                    attributes["llm.provider"] = tool.into();
+                }
+                if entry["status"] == "failed" && entry["error_category"].is_string() {
+                    attributes["error.category"] = entry["error_category"].clone();
+                    attributes["error.response"] = entry["error_response"].clone();
+                    if entry["error_status_code"].is_number() {
+                        attributes["error.status_code"] = entry["error_status_code"].clone();
+                    }
+                }
+            }
             let mut payload = json!({"model":entry["model"],"model_specified":entry["model_specified"],"effort":entry["effort"],"usage":entry.get("usage").filter(|v|!v.is_null()).cloned().unwrap_or(json!({}))});
             if !entry["duration_ms"].is_null() {
                 payload["duration_ms"] = entry["duration_ms"].clone();
@@ -2638,6 +2715,19 @@ fn record_entry_detail(
     Some(
         json!({"kind":kind,"type":event_type,"trace_id":trace,"span_id":span["span_id"],"call_id":span["call_id"],"parent_id":span["parent_id"],"span":span["name"].as_str().unwrap_or(""),"source":source,"person_id":person,"command":command,"workflow":"","timestamp":chrono::Utc::now().to_rfc3339(),"attributes":attributes,"payload":payload}),
     )
+}
+
+fn redact_record(redactor: Option<&gb_observability::redaction::Redactor>, value: Value) -> Value {
+    // Mask before truncation, including a secret crossing the length boundary.
+    let mut value = value;
+    if let Some(response) = value["attributes"]["error.response"].as_str() {
+        // An incomplete secret snapshot must never publish a provider's text.
+        value["attributes"]["error.response"] = redactor
+            .map(|r| r.text(response))
+            .unwrap_or_default()
+            .into();
+    }
+    value
 }
 
 fn event_redact(value: Value) -> Value {
