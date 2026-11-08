@@ -627,6 +627,8 @@ async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
 
 #[tokio::test]
 async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_force() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     for args in [
@@ -665,26 +667,42 @@ async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_forc
         }
         let mut cli = peer_cli(root, &args);
         cli.env("LANGUAGE", "en");
-        let mut stop = tokio::spawn(async move { cli.output().await.unwrap() });
+        let mut stop = cli
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(stop.stdout.take().unwrap());
+        let mut stdout = String::new();
         peer.prove().await;
         let (socket, body) = peer.authorized("POST", "shutdown").await;
         assert_eq!(body, json!({"force":force}));
         CliPeer::respond(socket, "200 OK", "{}").await;
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(if force { 250 } else { 2200 }),
-                &mut stop
-            )
+        if force {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(250), stop.wait())
+                    .await
+                    .is_err()
+            );
+        } else {
+            let waiting = gb_server::i18n::t("en", "runtime.service_lock.waiting_for_work", &[]);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !stdout.contains(&waiting) {
+                    assert!(reader.read_line(&mut stdout).await.unwrap() > 0, "{stdout}");
+                }
+            })
             .await
-            .is_err()
-        );
+            .expect("server stop must report waiting while the peer holds the lock");
+            assert!(stop.try_wait().unwrap().is_none());
+        }
         drop(peer);
-        let result = tokio::time::timeout(Duration::from_secs(5), stop)
-            .await
-            .unwrap()
-            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            reader.read_to_string(&mut stdout).await.unwrap();
+            stop.wait_with_output().await.unwrap()
+        })
+        .await
+        .unwrap();
         assert!(result.status.success(), "{result:?}");
-        let stdout = String::from_utf8(result.stdout).unwrap();
         for key in if force {
             &["runtime.service_lock.stopped_after_cancel"][..]
         } else {
