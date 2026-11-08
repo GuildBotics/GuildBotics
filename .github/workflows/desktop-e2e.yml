@@ -101,6 +101,13 @@ jobs:
       - name: Setup Rust toolchain
         run: rustup show
 
+      # The Rust server's microVM runtime links libcap-ng on Linux, even
+      # when the journeys do not boot a microVM.
+      - name: Install Rust native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcap-ng-dev
+
       # Each matrix revision supplies its own dependency tree, including
       # revisions before the screens became workspaces.
       - name: Locate frontend lock
