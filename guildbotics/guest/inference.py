@@ -114,10 +114,13 @@ class GuestInference:
                 )
             ]
         )
+        refusal: InferenceFailure | None = None
         try:
             response = await agent.arun(call.message)
             if response.status != RunStatus.completed:
                 if failures:
+                    refusal = InferenceFailure(failures[-1])
+                    refusal.category = classify_failure(provider, refusal)
                     raise failures[-1]
                 raise RuntimeError(
                     "The inference provider did not complete the request."
@@ -167,9 +170,9 @@ class GuestInference:
                         tool=provider,
                         model_specified=bool(params.get("id")),
                         status="failed",
-                        error_category=failure.category if failure else None,
-                        error_status_code=failure.status_code if failure else None,
-                        error_response=failure.response if failure else "",
+                        error_category=refusal.category if refusal else None,
+                        error_status_code=refusal.status_code if refusal else None,
+                        error_response=refusal.response if refusal else "",
                     )
                 ]
             )

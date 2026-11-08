@@ -1038,6 +1038,17 @@ mod tests {
         }
         let alerts = SystemAlerts::list(&store, &json!({}), &[], None);
         assert_eq!(alerts["alerts"].as_array().unwrap().len(), 3);
+        let failures = store.inference_failures();
+        for tool in ["openai", "anthropic", "gemini"] {
+            let mut record = record_entry(json!({"type":"summary","span":null,"slot":"main","tool":tool,"model_specified":true,"status":"failed","error_category":null}), "trace", "run", "aiko", "test").unwrap();
+            record["timestamp"] = "2026-11-09T00:00:00.500Z".into();
+            store.record(record.as_object().unwrap().clone());
+        }
+        assert_eq!(store.inference_failures(), failures);
+        assert_eq!(
+            SystemAlerts::list(&store, &json!({}), &[], None)["alerts"],
+            alerts["alerts"]
+        );
         for tool in ["openai", "anthropic", "gemini", "jev"] {
             let mut record = record_entry(json!({"type":"summary","span":null,"slot":"other","tool":tool,"model_specified":true,"status":"finished"}), "trace", "run", "aiko", "test").unwrap();
             record["timestamp"] = "2026-11-09T00:00:01Z".into();

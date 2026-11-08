@@ -57,8 +57,12 @@ def harness(monkeypatch):
                 if captured.get("provider_retry_succeeds"):
                     captured.pop("provider_error")
                     await self.model.ainvoke()
+            if captured.get("arun_error_after_provider"):
+                raise captured["arun_error_after_provider"]
             return SimpleNamespace(
-                status=captured["status"], content=captured["response"], metrics=None
+                status=captured["status"],
+                content=captured["response"],
+                metrics=captured.get("metrics"),
             )
 
     class Window:
@@ -211,7 +215,51 @@ async def test_incomplete_provider_run_fails_without_a_refusal(
     assert error.value.error_type == "RuntimeError"
     assert error.value.category == "other"
     assert captured["records"][-1].status == "failed"
-    assert captured["records"][-1].error_category == "other"
+    assert captured["records"][-1].error_category is None
+    assert captured["records"][-1].error_status_code is None
+    assert captured["records"][-1].error_response == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_provider", [False, True])
+async def test_arun_exception_records_no_provider_refusal(harness, after_provider):
+    _, captured, brain, _ = harness
+    response = httpx.Response(401, request=httpx.Request("POST", "http://gateway"))
+    captured["error" if not after_provider else "arun_error_after_provider"] = (
+        httpx.HTTPStatusError(
+            "synthetic-internal-error", request=response.request, response=response
+        )
+    )
+    if after_provider:
+        captured["provider_error"] = RuntimeError("provider attempt failed")
+    with pytest.raises(InferenceFailure):
+        await brain().run("question")
+    summary = captured["records"][-1]
+    assert summary.status == "failed"
+    assert summary.error_category is None
+    assert summary.error_status_code is None
+    assert summary.error_response == ""
+
+
+@pytest.mark.asyncio
+async def test_postprocessing_exception_does_not_record_an_earlier_provider_error(
+    harness,
+):
+    _, captured, brain, _ = harness
+
+    class Metrics:
+        def to_dict(self):
+            raise RuntimeError("metrics failed")
+
+    captured["metrics"] = Metrics()
+    captured["provider_error"] = RuntimeError("earlier provider attempt")
+    with pytest.raises(InferenceFailure):
+        await brain().run("question")
+    summary = captured["records"][-1]
+    assert summary.status == "failed"
+    assert summary.error_category is None
+    assert summary.error_status_code is None
+    assert summary.error_response == ""
 
 
 @pytest.mark.asyncio
