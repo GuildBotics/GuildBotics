@@ -1210,7 +1210,6 @@ pub struct Build<'a> {
     pub recipe: &'a crate::recipe::Recipe,
     pub image: &'a str,
     pub pull: bool,
-    pub guest_home: &'a str,
     pub resources: gb_config::agent_environment::Resources,
     pub nameservers: &'a [String],
 }
@@ -1279,32 +1278,25 @@ where
 
 async fn run_recipe<Run, Ran, Stop, Stopped, Save, Saved>(
     recipe: &crate::recipe::Recipe,
-    home: &str,
     on_line: impl Fn(&str),
     mut run: Run,
     stop: Stop,
     save: Save,
 ) -> Result<PathBuf, String>
 where
-    Run: FnMut(String, String) -> Ran,
+    Run: FnMut(String) -> Ran,
     Ran: Future<Output = Result<i32, String>>,
     Stop: FnOnce() -> Stopped,
     Stopped: Future<Output = Result<(), String>>,
     Save: FnOnce() -> Saved,
     Saved: Future<Output = Result<PathBuf, String>>,
 {
-    if run(
-        "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6".into(),
-        home.into(),
-    )
-    .await?
-        != 0
-    {
+    if run("echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6".into()).await? != 0 {
         return Err("Cannot disable guest IPv6".into());
     }
     for step in &recipe.steps {
         on_line(&format!("[{}]", step.label));
-        let code = run(step.script.clone(), home.into()).await?;
+        let code = run(step.script.clone()).await?;
         if code != 0 {
             return Err(format!("Build step {} exited with {code}", step.label));
         }
@@ -1459,7 +1451,6 @@ pub async fn build_snapshot(
         recipe,
         image,
         pull,
-        guest_home,
         resources,
         nameservers,
     } = plan;
@@ -1515,13 +1506,12 @@ pub async fn build_snapshot(
         let output = &on_line;
         run_recipe(
             recipe,
-            guest_home,
             &on_line,
-            |script, home| async move {
+            |script| async move {
                 let mut stream = guest
                     .exec_stream_with("sh", |e| {
                         e.args(["-ec", script.as_str()])
-                            .env("HOME", home)
+                            .env("HOME", crate::GUEST_HOME)
                             .env("DEBIAN_FRONTEND", "noninteractive")
                     })
                     .await
@@ -1825,7 +1815,7 @@ mod build_tests {
         assert_eq!(broken, Err("store unavailable".into()));
     }
     #[tokio::test]
-    async fn recipe_runs_in_order_with_the_home_and_only_snapshots_after_successful_stop() {
+    async fn recipe_runs_in_order_and_only_snapshots_after_successful_stop() {
         for failure in [None, Some("first script"), Some("stop")] {
             let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             let ran = events.clone();
@@ -1834,10 +1824,9 @@ mod build_tests {
             let lines = std::sync::Mutex::new(Vec::<String>::new());
             let result = run_recipe(
                 &recipe(),
-                "/home/member",
                 |line| lines.lock().unwrap().push(line.to_owned()),
-                move |script, home| {
-                    ran.lock().unwrap().push(format!("{home}:{script}"));
+                move |script| {
+                    ran.lock().unwrap().push(script.clone());
                     std::future::ready(Ok(if failure == Some(script.as_str()) {
                         13
                     } else {
@@ -1869,16 +1858,13 @@ mod build_tests {
             let events = events.lock().unwrap();
             assert_eq!(
                 events[0],
-                "/home/member:echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
+                "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
             );
-            assert_eq!(events[1], "/home/member:first script");
+            assert_eq!(events[1], "first script");
             match failure {
                 None => {
                     assert_eq!(result.unwrap(), PathBuf::from("/snapshot"));
-                    assert_eq!(
-                        &events[2..],
-                        ["/home/member:second script", "stop", "snapshot"]
-                    );
+                    assert_eq!(&events[2..], ["second script", "stop", "snapshot"]);
                 }
                 Some("first script") => {
                     assert_eq!(result, Err("Build step first exited with 13".into()));

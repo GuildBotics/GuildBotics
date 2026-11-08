@@ -571,11 +571,15 @@ receives only the new event; a new or rotated session receives the earlier snaps
 once.
 
 **Paths between the host and the isolated agent environment** follow three rules.
-(1) A host path means the same thing inside: every mount is at its host path and the
-guest's home is the host's, so GuildBotics never rewrites a path in user content. The
-one exception is Windows, where a drive becomes `/c/`; `guest_path()` in
-`environment/spec.py` is the single translation point, applied to
-the mount table and the working directory only. (2) A turn reaches only its working
+(1) A host path means the same thing inside: every mount is at its host path, so
+GuildBotics never rewrites a path in user content. The one exception is Windows, where
+a drive becomes `/c/`; `guest_path()` in `crates/gb-environment` is the single
+translation point, applied to the mount table and the working directory only. The
+guest's home is its own, `GUEST_HOME` (`/opt/guildbotics/home`), a path no host has: a
+path under it is never taken for the host's, and what is done to it never reaches the
+host's home. A `~` therefore names the guest's home inside; only the exchange directory,
+with what is granted in it, is mounted under it again with the same access, so
+`~/Documents/GuildBotics` names the same folder inside and out. (2) A turn reaches only its working
 directory, the granted directories, and what GuildBotics itself binds; everything else
 is absent rather than forbidden. (3) Hand-overs go through the exchange directory
 `~/Documents/GuildBotics`, which every turn is granted read-write by GuildBotics itself

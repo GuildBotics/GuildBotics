@@ -22,12 +22,49 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
     write(
         &workspace,
         ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",
-        "documents:\n  - path: Documents/project\n    access: read_write\n",
+        "documents:\n  - path: Documents/project\n    access: read_write\n  - path: Documents/GuildBotics/reference\n    access: read\n",
     );
-    let plan = contract::resolve(&workspace, &home, &[], true, true).unwrap();
-    assert_eq!(plan.grants.len(), 2);
-    assert!(plan.grants.iter().all(|m| m.readonly));
-    assert!(home.join("Documents/project").is_dir());
+    for read_only in [true, false] {
+        let plan = contract::resolve(&workspace, &home, &[], read_only, true).unwrap();
+        assert!(home.join("Documents/project").is_dir());
+        // Every grant is at its host path. The exchange folder, and what is
+        // granted in it, is mounted again under the microVM's own home, as
+        // `~` names it there, with the same access.
+        let exchange = home.join(gb_environment::EXCHANGE).canonicalize().unwrap();
+        let project = home.join("Documents/project").canonicalize().unwrap();
+        let reference = exchange.join("reference");
+        let guests: Vec<_> = plan
+            .grants
+            .iter()
+            .map(|m| (m.guest.clone(), m.host.clone().unwrap(), m.readonly))
+            .collect();
+        assert_eq!(
+            guests,
+            [
+                (
+                    gb_environment::guest_path(&exchange).unwrap(),
+                    exchange.clone(),
+                    read_only
+                ),
+                (gb_environment::guest_exchange(), exchange, read_only),
+                (
+                    gb_environment::guest_path(&project).unwrap(),
+                    project,
+                    read_only
+                ),
+                (
+                    gb_environment::guest_path(&reference).unwrap(),
+                    reference.clone(),
+                    true
+                ),
+                (
+                    format!("{}/reference", gb_environment::guest_exchange()),
+                    reference,
+                    true
+                ),
+            ]
+        );
+    }
     write(
         &workspace,
         ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",

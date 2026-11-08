@@ -26,10 +26,6 @@ use serde_json::json;
 use crate::api::{ApiError, Body, Shared};
 use crate::i18n;
 
-/// Where a run that names no working directory runs: the exchange
-/// directory, under the person's home.
-const EXCHANGE_DIRECTORY: &str = "Documents/GuildBotics";
-
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunRequest {
@@ -415,7 +411,8 @@ async fn start(
                     .into_response(),
             })?
         }
-        (None, None) => host.home.join(EXCHANGE_DIRECTORY),
+        // A run that names no working directory runs in the exchange folder.
+        (None, None) => host.home.join(gb_environment::EXCHANGE),
     };
     let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
     let (access, path) = resolved.map_err(|problem| {

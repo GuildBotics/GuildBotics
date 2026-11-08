@@ -1172,7 +1172,6 @@ mod tests {
             broker: Broker::new(root.join("unused-cli"), invocation.clone()),
             invocation,
             workspace: root.into(),
-            home: root.to_string_lossy().into(),
             mounts: BTreeMap::new(),
             turn_mounts: BTreeMap::new(),
             tools: ["codex".into()].into(),
@@ -1397,7 +1396,6 @@ mod tests {
 pub struct Context {
     pub invocation: gb_environment::broker::Invocation,
     pub workspace: std::path::PathBuf,
-    pub home: String,
     /// Work admission, from CommandFacts: true admits a turn cwd.
     pub mounts: BTreeMap<String, bool>,
     /// Actual guest mount access, from Shape: true means read-only.
@@ -1477,7 +1475,7 @@ impl HttpHost {
                         let (url, token) =
                             endpoint.get().expect("endpoint installed before serving");
                         Ok(
-                            json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":context.home,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
+                            json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":gb_environment::GUEST_HOME,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
                         )
                     }
                     "end_turn" => {
@@ -1973,7 +1971,6 @@ pub async fn prepare_command(
             resolved["language"].as_str().unwrap_or("en"),
             crate::tool_login::LoginVm {
                 data: host.data.clone(),
-                home: host.home.clone(),
                 package: host.package.clone(),
                 snapshot: preflight
                     .snapshot
@@ -2065,7 +2062,6 @@ pub async fn prepare_command(
     let context = Context {
         invocation,
         workspace: workspace.into(),
-        home: gb_environment::guest_path(&host.home).map_err(|_| "Invalid guest home.")?,
         mounts: serde_json::from_str::<gb_wire::CommandFacts>(
             &shape
                 .env

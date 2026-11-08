@@ -728,11 +728,6 @@ pub async fn build(
         .unwrap_or(&recipe.image)
         .to_owned();
     let pull = declared.is_none();
-    let guest_home = gb_environment::guest_path(home).map_err(|reason| match reason {
-        gb_environment::Failure::Command(sentence) | gb_environment::Failure::Runtime(sentence) => {
-            anyhow::anyhow!(crate::commands::say(sentence, language))
-        }
-    })?;
     let result = snapshot::build(
         workspace,
         &name,
@@ -745,7 +740,6 @@ pub async fn build(
                     recipe: &recipe,
                     image: &base,
                     pull,
-                    guest_home: &guest_home,
                     resources,
                     nameservers: &network.nameservers,
                 },

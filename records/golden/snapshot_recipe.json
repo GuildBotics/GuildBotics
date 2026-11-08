@@ -1,11 +1,11 @@
 {
   "source_commit": "fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0",
-  "inputs": "Frozen snapshot.build_steps with REQUIREMENTS set to main guest dependencies; frozen CLI pins and recipe constants unchanged.",
+  "inputs": "Frozen snapshot.build_steps with REQUIREMENTS set to main guest dependencies; frozen CLI pins and recipe constants unchanged. The home step names the microVM's own home, /opt/guildbotics/home, instead of the frozen host's \"$HOME\" (#107).",
   "image": "node:24.22.1-bookworm",
   "steps": [
     {
       "label": "home",
-      "script": "install -d -m 0700 \"$HOME\""
+      "script": "install -d -m 0700 /opt/guildbotics/home"
     },
     {
       "label": "uv",
@@ -43,15 +43,15 @@
   "names": [
     {
       "held": null,
-      "expected": "guildbotics-3657cc394a6398bc"
+      "expected": "guildbotics-fe6113c5782fb977"
     },
     {
       "held": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "guildbotics-d64cc4cde0e5cd3c"
+      "expected": "guildbotics-82def3eac2f6c734"
     },
     {
       "held": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "expected": "guildbotics-f447bb01666c5d8f"
+      "expected": "guildbotics-9ccd59ae2428f194"
     }
   ]
 }

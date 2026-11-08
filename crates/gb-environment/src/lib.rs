@@ -31,6 +31,19 @@ pub use runtime::{Mount, load_image, placed_files};
 
 /// Where the code every microVM mounts is inside it.
 pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
+/// The home of every microVM, the snapshot's build included: the microVM's
+/// own, at a path no host has, so a path under it is never taken for the
+/// host's. What the host mounts keeps its host path.
+pub const GUEST_HOME: &str = "/opt/guildbotics/home";
+/// The exchange folder, relative to a home: the host's, where it is, and the
+/// microVM's, where the host's is mounted again, so `~/Documents/GuildBotics`
+/// names the same folder inside and out.
+pub const EXCHANGE: &str = "Documents/GuildBotics";
+
+/// The exchange folder where the microVM mounts it again, under its own home.
+pub fn guest_exchange() -> String {
+    format!("{GUEST_HOME}/{EXCHANGE}")
+}
 /// The command execution machinery's entry inside the microVM.
 pub const ENTRY: &[&str] = &[
     "/opt/guildbotics/venv/bin/python",
@@ -76,8 +89,8 @@ pub struct Host {
     /// The machine's own state: `<machine root>/data`, which holds the
     /// runtime under `msb`.
     pub data: PathBuf,
-    /// The person's home directory, which is the microVM's too: the snapshot
-    /// was built with it.
+    /// The person's home directory on the host, which grants are relative
+    /// to. The microVM's home is [`GUEST_HOME`].
     pub home: PathBuf,
     /// The Python package of the checkout the server runs from.
     pub package: PathBuf,
@@ -341,7 +354,7 @@ pub fn shape(
         work_kind: command.work_kind.clone(),
     };
     let mut env = vec![
-        ("HOME".to_string(), guest_path(&host.home)?),
+        ("HOME".to_string(), GUEST_HOME.into()),
         ("TZ".into(), language::time_zone()),
         ("AGNO_TELEMETRY".into(), "false".into()),
     ];

@@ -459,14 +459,7 @@ impl ToolLogin {
         .map_err(|_| "The credential gateway cannot start.")?;
         gateway.revoke();
         let root = tempfile::tempdir().map_err(|_| "Cannot hold the tool's stand-in.")?;
-        let guest_root = gb_environment::guest_path(
-            &home.join(
-                catalog["provision"]["state_root"]
-                    .as_str()
-                    .ok_or("Tool state root missing.")?,
-            ),
-        )
-        .map_err(|_| "Invalid tool guest path.")?;
+        let guest_root = state_root(&catalog["provision"])?;
         Ok(Arc::new(Self {
             name,
             guest_root,
@@ -1156,19 +1149,30 @@ mod tests {
         .unwrap();
         let vm = LoginVm {
             data: dir.path().into(),
-            home: dir.path().join("home"),
             package: dir.path().join("package"),
             snapshot: dir.path().join("snapshot"),
             memory_mib: 512,
             cpus: 1,
             nameservers: vec![],
         };
-        let first = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), "en", vm.clone())
-            .await
-            .unwrap();
-        let second = ToolLogin::prepare(dir.path(), &vm.home, catalog, "en", vm.clone())
-            .await
-            .unwrap();
+        let first = ToolLogin::prepare(
+            dir.path(),
+            &dir.path().join("home"),
+            catalog.clone(),
+            "en",
+            vm.clone(),
+        )
+        .await
+        .unwrap();
+        let second = ToolLogin::prepare(
+            dir.path(),
+            &dir.path().join("home"),
+            catalog,
+            "en",
+            vm.clone(),
+        )
+        .await
+        .unwrap();
         first
             .begin_with_keychain(Arc::new(FakeKeychain))
             .await
@@ -1445,14 +1449,13 @@ mod tests {
         catalog["provision"]["credential_broker"]["upstream"] = json!("https://api.example.test");
         let vm = LoginVm {
             data: data.into(),
-            home: data.join("home"),
             package: data.join("package"),
             snapshot: data.join("snapshot"),
             memory_mib: 512,
             cpus: 1,
             nameservers: vec![],
         };
-        ToolLogin::prepare(data, &vm.home, catalog, "en", vm.clone())
+        ToolLogin::prepare(data, &data.join("home"), catalog, "en", vm.clone())
             .await
             .unwrap()
     }
@@ -1803,7 +1806,6 @@ mod tests {
             ),
             invocation,
             workspace: dir.path().into(),
-            home: gb_environment::guest_path(dir.path()).unwrap(),
             mounts: BTreeMap::from([(gb_environment::guest_path(dir.path()).unwrap(), true)]),
             turn_mounts: BTreeMap::new(),
             tools: ["tool".into()].into(),
@@ -1895,8 +1897,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = tool(dir.path()).await;
         let shared = dir.path().join("agent_environment/tool/.tool");
+        // A turn finds the tool's state under the microVM's own home, never
+        // under a host path.
+        let root = format!("{}/.tool", gb_environment::GUEST_HOME);
+        assert_eq!(tool.guest_root, root);
         let mounts = tool.persisted_mounts(false).unwrap();
         assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].guest, format!("{root}/sessions"));
         assert_eq!(
             mounts[0].host.as_deref(),
             Some(shared.join("sessions").as_path())
@@ -2147,16 +2154,21 @@ mod tests {
             .unwrap();
             let vm = LoginVm {
                 data: dir.path().into(),
-                home: dir.path().join("home"),
                 package: dir.path().join("package"),
                 snapshot: dir.path().join("snapshot"),
                 memory_mib: 512,
                 cpus: 1,
                 nameservers: vec![],
             };
-            let tool = ToolLogin::prepare(dir.path(), &vm.home, catalog.clone(), "en", vm.clone())
-                .await
-                .unwrap();
+            let tool = ToolLogin::prepare(
+                dir.path(),
+                &dir.path().join("home"),
+                catalog.clone(),
+                "en",
+                vm.clone(),
+            )
+            .await
+            .unwrap();
             let environment = tool
                 .begin_with_keychain(Arc::new(FakeKeychain))
                 .await
@@ -2413,10 +2425,11 @@ mod tests {
         assert!(!valid(&files, &jwt));
     }
     #[test]
-    fn private_windows_login_uses_guest_paths_for_home_auth_capture_and_injection() {
+    fn private_plans_keep_home_and_state_root_in_the_microvm_on_any_host_and_first_login() {
+        // A Windows host spells its paths with a drive; none of them is the
+        // microVM's home, which is the same on every host.
         let vm = LoginVm {
             data: PathBuf::from(r"C:\data"),
-            home: PathBuf::from(r"C:\Users\member"),
             package: PathBuf::from(r"C:\checkout\guildbotics"),
             snapshot: PathBuf::from(r"C:\snapshot"),
             memory_mib: 777,
@@ -2426,29 +2439,38 @@ mod tests {
         let mut catalog = catalog();
         catalog["provision"]["state_root_env"] = json!("TOOL_CONFIG_DIR");
         catalog["provision"]["auth_env"] = json!("TOOL_AUTH_PATH");
-        for interactive in [true, false] {
-            let plan = private_plan(
-                &vm,
-                &catalog,
-                credentials("synthetic"),
-                vec!["tool".into()],
-                interactive,
-            )
-            .unwrap();
-            assert_eq!(plan.home, "/c/Users/member");
-            assert_eq!(plan.root, "/c/Users/member/.tool");
-            assert_eq!(plan.mounts[0].guest, "/c/Users/member");
-            assert_eq!(plan.mounts[1].host.as_ref(), Some(&vm.package));
-            assert_eq!(plan.process().cwd, "/c/Users/member");
-            let env = plan.env.iter().cloned().collect::<BTreeMap<_, _>>();
-            assert_eq!(env["HOME"], "/c/Users/member");
-            assert_eq!(env["TOOL_CONFIG_DIR"], "/c/Users/member/.tool");
-            assert_eq!(env["TOOL_AUTH_PATH"], "/c/Users/member/.tool/auth.json");
-            assert!(
-                plan.injection
-                    .contains_key("/c/Users/member/.tool/auth.json")
-            );
-            assert_eq!(plan.capture[0], "/c/Users/member/.tool/auth.json");
+        let home = gb_environment::GUEST_HOME;
+        let root = format!("{home}/.tool");
+        for (files, first) in [(credentials("synthetic"), false), (Files::new(), true)] {
+            for interactive in [true, false] {
+                let plan = private_plan(
+                    &vm,
+                    &catalog,
+                    files.clone(),
+                    vec!["tool".into()],
+                    interactive,
+                )
+                .unwrap();
+                assert_eq!(plan.home, home);
+                assert_eq!(plan.root, root);
+                // A first login puts no file there, and the tool still finds
+                // its state root.
+                for (mount, guest) in plan.mounts.iter().zip([home, root.as_str()]) {
+                    assert_eq!(mount.guest, guest);
+                    assert!(mount.host.is_none() && !mount.readonly);
+                }
+                assert_eq!(plan.mounts[2].host.as_ref(), Some(&vm.package));
+                assert_eq!(plan.process().cwd, home);
+                let env = plan.env.iter().cloned().collect::<BTreeMap<_, _>>();
+                assert_eq!(env["HOME"], home);
+                assert_eq!(env["TOOL_CONFIG_DIR"], root);
+                assert_eq!(env["TOOL_AUTH_PATH"], format!("{root}/auth.json"));
+                assert_eq!(
+                    plan.injection.contains_key(&format!("{root}/auth.json")),
+                    !first
+                );
+                assert_eq!(plan.capture[0], format!("{root}/auth.json"));
+            }
         }
     }
     #[test]
@@ -2456,7 +2478,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let vm = LoginVm {
             data: root.path().join("data"),
-            home: root.path().join("home"),
             package: root.path().join("package"),
             snapshot: root.path().join("expected-snapshot"),
             memory_mib: 777,
@@ -2485,42 +2506,29 @@ mod tests {
             assert_eq!(boot.snapshot, vm.snapshot);
             assert_eq!((boot.memory_mib, boot.cpus), (777, 3));
             assert!(boot.worktree.is_none());
-            assert_eq!(
-                boot.mounts[0].guest,
-                gb_environment::guest_path(&vm.home).unwrap()
-            );
-            assert!(boot.mounts[0].host.is_none());
-            assert!(!boot.mounts[0].readonly);
-            assert_eq!(boot.mounts[1].host.as_deref(), Some(vm.package.as_path()));
-            assert!(boot.mounts[1].readonly);
+            let home = gb_environment::GUEST_HOME;
+            for (mount, guest) in boot.mounts.iter().zip([home, &format!("{home}/.tool")]) {
+                assert_eq!(mount.guest, guest);
+                assert!(mount.host.is_none() && !mount.readonly);
+            }
+            assert_eq!(boot.mounts[2].host.as_deref(), Some(vm.package.as_path()));
+            assert!(boot.mounts[2].readonly);
             assert_eq!(plan.interactive, interactive);
             assert_eq!(boot.network.unrestricted, interactive);
             assert_eq!(boot.network.nameservers, ["192.0.2.53"]);
             assert_eq!(process.argv, argv);
-            assert_eq!(process.cwd, gb_environment::guest_path(&vm.home).unwrap());
+            assert_eq!(process.cwd, home);
             assert!(process.stdin.is_empty());
             let env = process.env.iter().cloned().collect::<BTreeMap<_, _>>();
-            assert_eq!(env["HOME"], gb_environment::guest_path(&vm.home).unwrap());
-            assert_eq!(
-                env["TOOL_CONFIG_DIR"],
-                format!("{}/.tool", gb_environment::guest_path(&vm.home).unwrap())
-            );
-            assert_eq!(
-                env["TOOL_AUTH_PATH"],
-                format!(
-                    "{}/.tool/auth.json",
-                    gb_environment::guest_path(&vm.home).unwrap()
-                )
-            );
+            assert_eq!(env["HOME"], home);
+            assert_eq!(env["TOOL_CONFIG_DIR"], format!("{home}/.tool"));
+            assert_eq!(env["TOOL_AUTH_PATH"], format!("{home}/.tool/auth.json"));
             assert_eq!(env["AGNO_TELEMETRY"], "false");
             assert_eq!(env["PYTHONPATH"], gb_environment::CODE_ROOT);
             assert_eq!(
                 plan.injection,
                 Files::from([(
-                    vm.home
-                        .join(".tool/auth.json")
-                        .to_string_lossy()
-                        .into_owned(),
+                    format!("{home}/.tool/auth.json"),
                     files["auth.json"].clone()
                 )])
             );
@@ -2597,7 +2605,6 @@ mod tests {
 #[derive(Clone)]
 pub struct LoginVm {
     pub data: PathBuf,
-    pub home: PathBuf,
     pub package: PathBuf,
     pub snapshot: PathBuf,
     pub memory_mib: u32,
@@ -3006,6 +3013,13 @@ impl PrivatePlan {
         }
     }
 }
+/// Where a tool keeps its state inside a microVM: under the microVM's home.
+fn state_root(provision: &Value) -> Result<String, String> {
+    let state = provision["state_root"]
+        .as_str()
+        .ok_or("Tool state root missing.")?;
+    Ok(format!("{}/{state}", gb_environment::GUEST_HOME))
+}
 fn private_plan(
     vm: &LoginVm,
     catalog: &Value,
@@ -3014,13 +3028,8 @@ fn private_plan(
     interactive: bool,
 ) -> Result<PrivatePlan, String> {
     let provision = &catalog["provision"];
-    let home = gb_environment::guest_path(&vm.home).map_err(|_| "Invalid tool guest home.")?;
-    let root = format!(
-        "{home}/{}",
-        provision["state_root"]
-            .as_str()
-            .ok_or("Tool state root missing.")?
-    );
+    let home = gb_environment::GUEST_HOME.to_owned();
+    let root = state_root(provision)?;
     let mut env = vec![
         ("HOME".into(), home.clone()),
         ("AGNO_TELEMETRY".into(), "false".into()),
@@ -3038,9 +3047,17 @@ fn private_plan(
             format!("{root}/{}", provision["auth"].as_str().unwrap_or("")),
         ));
     }
+    // The home and the tool's state root are the microVM's own, in memory:
+    // the root exists even when no file is put in it, as on a first login.
     let mounts = vec![
         gb_environment::Mount {
             guest: home.clone(),
+            host: None,
+            readonly: false,
+            quota_mib: None,
+        },
+        gb_environment::Mount {
+            guest: root.clone(),
             host: None,
             readonly: false,
             quota_mib: None,
@@ -3185,7 +3202,6 @@ async fn login_with_cancellation(
     }
     let vm = LoginVm {
         data: host.data.clone(),
-        home: host.home.clone(),
         package: host.package.clone(),
         snapshot: status
             .snapshot

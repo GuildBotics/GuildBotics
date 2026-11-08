@@ -30,8 +30,8 @@
 # archive it prints. The image is per CPU architecture: the environment runs
 # the device's own CPU, so the declaration names one digest per
 # architecture. The turn's
-# HOME is the host's home path, not the one this image was built with, so
-# nothing below lives under /root: interpreters and toolchains sit under /opt
+# HOME is the environment's own /opt/guildbotics/home, not the one this image
+# was built with, so nothing below lives under /root: interpreters and toolchains sit under /opt
 # and are reached through /usr/local/bin and the ENV settings, which the
 # environment passes to every process it starts.
 FROM node:24.22.1-bookworm

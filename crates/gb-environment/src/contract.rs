@@ -202,7 +202,7 @@ fn location(path: &Path, home: &Path, missing: bool) -> Result<PathBuf, Sentence
     )
     .unwrap_or_default();
     let local: Local = load(&workspace.join(".guildbotics/local").join(FILE)).unwrap_or_default();
-    let grants = std::iter::once(home.join("Documents/GuildBotics"))
+    let grants = std::iter::once(home.join(crate::EXCHANGE))
         .chain(
             shared
                 .documents
@@ -394,15 +394,15 @@ pub fn resolve_values(
         denied.push(p);
     }
     let mut planned = vec![(
-        home.join("Documents/GuildBotics"),
+        home.join(crate::EXCHANGE),
         Access::ReadWrite,
         true,
-        "Documents/GuildBotics".to_owned(),
+        crate::EXCHANGE.to_owned(),
         true,
     )];
     for grant in shared.documents {
         let p = proposed_target(&grant.path, &home, false)?;
-        if p != home.join("Documents/GuildBotics") {
+        if p != home.join(crate::EXCHANGE) {
             planned.push((p, grant.access, true, grant.path, false));
         }
     }
@@ -476,6 +476,8 @@ pub fn resolve_values(
     let mut grants = Vec::new();
     let mut documents = Vec::new();
     let mut paths = Vec::new();
+    // The exchange folder, the first of the plan when it is there.
+    let mut exchange = None;
     for (path, access, document, grant, builtin) in planned {
         if create && document {
             std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
@@ -491,12 +493,29 @@ pub fn resolve_values(
             continue;
         }
         let checked = validate_source(&path, &denied, true, false)?;
-        grants.push(Mount {
+        let mount = Mount {
             guest: crate::guest_path(&checked).map_err(|_| "Invalid guest path")?,
             host: Some(checked),
             readonly: read_only || matches!(access, Access::Read),
             quota_mib: None,
-        });
+        };
+        if builtin {
+            exchange = mount.host.clone();
+        }
+        // What is in the exchange folder is mounted again under its `~`
+        // spelling too, with the same access, so no grant is looser there.
+        let again = exchange
+            .as_ref()
+            .and_then(|root| mount.host.as_ref()?.strip_prefix(root).ok())
+            .map(|inner| Mount {
+                guest: std::iter::once(crate::guest_exchange())
+                    .chain(inner.iter().map(|part| part.to_string_lossy().into_owned()))
+                    .collect::<Vec<_>>()
+                    .join("/"),
+                ..mount.clone()
+            });
+        grants.push(mount);
+        grants.extend(again);
     }
     Ok(Resolved {
         grants,
