@@ -1393,6 +1393,10 @@ mod tests {
 
 /// Authority resolved by the host once for the entire command. Guest calls
 /// may supply data, but cannot change this member, work, or mounted paths.
+/// Where a turn's provider finds the member broker's token
+/// (`MEMBER_BROKER_TOKEN_ENV` in `intelligences/agent_runtime/wire.py`).
+pub(crate) const MEMBER_BROKER_TOKEN_ENV: &str = "GUILDBOTICS_MEMBER_BROKER_TOKEN";
+
 #[derive(Clone)]
 pub struct Context {
     pub invocation: gb_environment::broker::Invocation,
@@ -1467,7 +1471,7 @@ impl HttpHost {
                         if active.is_some() {
                             return Err(HostError::refused("A turn of this command is running."));
                         }
-                        let env = if let Some(loan) = context.loans.get(tool) {
+                        let mut env = if let Some(loan) = context.loans.get(tool) {
                             loan.begin().await.map_err(HostError::refused)?
                         } else {
                             return Err(HostError::refused("The tool has no credential broker."));
@@ -1476,6 +1480,9 @@ impl HttpHost {
                         *active = Some(grant.clone());
                         let (url, token) =
                             endpoint.get().expect("endpoint installed before serving");
+                        // The provider's MCP client reads the broker's token from
+                        // here (Codex's `bearer_token_env_var`, Claude's header).
+                        env.insert(MEMBER_BROKER_TOKEN_ENV.into(), token.clone());
                         Ok(
                             json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":context.home,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
                         )
