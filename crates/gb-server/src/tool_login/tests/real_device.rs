@@ -65,6 +65,7 @@ impl tracing::Subscriber for CommandLog {
 
 struct Device {
     dir: tempfile::TempDir,
+    home: PathBuf,
     vm: LoginVm,
 }
 
@@ -78,7 +79,7 @@ impl Device {
             std::env::var_os("GUILDBOTICS_REAL_DEVICE_ROOT").expect("verification root required"),
         )
         .unwrap();
-        let home = root.join("guest-home");
+        let home = root.join("host-home");
         assert!(home.is_dir());
         let package = gb_base::home::python_package();
         let recipe = gb_environment::recipe::Recipe::load(&package.join("templates")).unwrap();
@@ -93,14 +94,13 @@ impl Device {
         runtime::ensure(&data.join("msb")).unwrap();
         let vm = LoginVm {
             data,
-            home,
             package,
             snapshot,
             memory_mib: 4096,
             cpus: 2,
             nameservers: vec![],
         };
-        Self { dir, vm }
+        Self { dir, home, vm }
     }
 
     fn boot<'a>(&'a self, home: &'a Path, mounts: &'a [Mount], network: &'a Network) -> Boot<'a> {
@@ -110,6 +110,7 @@ impl Device {
             memory_mib: self.vm.memory_mib,
             cpus: self.vm.cpus,
             mounts,
+            links: &[],
             network,
             worktree: None,
         }
@@ -208,7 +209,7 @@ impl Device {
             ),
         );
         let host = gb_environment::Host {
-            home: self.vm.home.clone(),
+            home: self.home.clone(),
             package: checkout
                 .map_or_else(|| self.vm.package.clone(), |path| path.join("guildbotics")),
             data: self.vm.data.clone(),
@@ -288,7 +289,7 @@ impl Device {
         {
             assert!(
                 disk_matches(source, CANARY).is_empty(),
-                "a login reached a guest HOME mount"
+                "a login reached a host HOME mount"
             );
         }
         reply.text_output.trim().to_owned()
@@ -686,7 +687,7 @@ async fn real_device_snapshot_has_no_saved_login() {
     for mark in [CANARY, "SYNTH459SECRET"] {
         assert!(disk_matches(&device.vm.snapshot, mark).is_empty());
     }
-    let home = gb_environment::guest_path(&device.vm.home).unwrap();
+    let home = gb_environment::GUEST_HOME;
     let auth: Vec<_> = device
         .catalog()
         .iter()

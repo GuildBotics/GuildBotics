@@ -54,7 +54,8 @@ impl Recipe {
                 script,
             });
         };
-        step("home", "install -d -m 0700 \"$HOME\"".into());
+        // The home is in the recipe, so a snapshot names the home it was built with.
+        step("home", format!("install -d -m 0700 {}", crate::GUEST_HOME));
         step(
             "uv",
             format!(

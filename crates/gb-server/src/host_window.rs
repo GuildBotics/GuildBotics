@@ -1172,7 +1172,6 @@ mod tests {
             broker: Broker::new(root.join("unused-cli"), invocation.clone()),
             invocation,
             workspace: root.into(),
-            home: root.to_string_lossy().into(),
             mounts: BTreeMap::new(),
             turn_mounts: BTreeMap::new(),
             tools: ["codex".into()].into(),
@@ -1397,7 +1396,6 @@ mod tests {
 pub struct Context {
     pub invocation: gb_environment::broker::Invocation,
     pub workspace: std::path::PathBuf,
-    pub home: String,
     /// Work admission, from CommandFacts: true admits a turn cwd.
     pub mounts: BTreeMap<String, bool>,
     /// Actual guest mount access, from Shape: true means read-only.
@@ -1477,7 +1475,7 @@ impl HttpHost {
                         let (url, token) =
                             endpoint.get().expect("endpoint installed before serving");
                         Ok(
-                            json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":context.home,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
+                            json!({"turn_grant":grant,"env":env,"cwd":cwd,"home":gb_environment::GUEST_HOME,"mounts":context.turn_mounts,"member":{"name":"guildbotics_member","url":url,"authorization":format!("Bearer {token}")}}),
                         )
                     }
                     "end_turn" => {
@@ -1877,23 +1875,25 @@ pub async fn prepare_command(
     .map_err(|e| command.config.spoken(&e.to_string()))?;
     // The guest is told of the configuration, not of the run's copy of it.
     spoken_strings(&command.config, &mut resolved);
+    let language = resolved["language"].as_str().unwrap_or("en").to_owned();
+    // Why a path cannot reach the microVM, naming the file the user edits.
+    let refusal = |failure: gb_environment::Failure| {
+        command
+            .config
+            .spoken(&crate::i18n::say(failure.sentence(), &language))
+    };
     if let Some(commands) = resolved["commands"].as_object_mut() {
         for value in commands.values_mut() {
             if let Some(path) = value.as_str() {
                 *value =
                     gb_environment::command_path(host, &command.config, std::path::Path::new(path))
-                        .map_err(|_| "Invalid command guest path.")?
+                        .map_err(refusal)?
                         .into();
             }
         }
     }
-    let shape = gb_environment::shape(
-        host,
-        workspace,
-        command,
-        Some(resolved["language"].as_str().unwrap_or("en").into()),
-    )
-    .map_err(|_| "The command access contract cannot be resolved.".to_owned())?;
+    let shape =
+        gb_environment::shape(host, workspace, command, Some(language.clone())).map_err(refusal)?;
     let invocation = broker_invocation(command);
     let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
         .map(std::path::PathBuf::from)
@@ -1973,7 +1973,6 @@ pub async fn prepare_command(
             resolved["language"].as_str().unwrap_or("en"),
             crate::tool_login::LoginVm {
                 data: host.data.clone(),
-                home: host.home.clone(),
                 package: host.package.clone(),
                 snapshot: preflight
                     .snapshot
@@ -2065,7 +2064,6 @@ pub async fn prepare_command(
     let context = Context {
         invocation,
         workspace: workspace.into(),
-        home: gb_environment::guest_path(&host.home).map_err(|_| "Invalid guest home.")?,
         mounts: serde_json::from_str::<gb_wire::CommandFacts>(
             &shape
                 .env

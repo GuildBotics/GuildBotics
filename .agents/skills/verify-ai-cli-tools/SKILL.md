@@ -24,7 +24,7 @@ On macOS or Linux, create a short disposable root to fit the microVM runtime's U
 export GUILDBOTICS_REAL_DEVICE_ROOT="$(mktemp -d /tmp/gbv.XXXXXX)"
 GUILDBOTICS_REAL_DEVICE_ROOT="$(cd "$GUILDBOTICS_REAL_DEVICE_ROOT" && pwd -P)"
 ROOT="$GUILDBOTICS_REAL_DEVICE_ROOT"
-mkdir -p "$ROOT/guest-home" "$ROOT/machine" "$ROOT/workspace/.guildbotics/config"
+mkdir -p "$ROOT/host-home" "$ROOT/machine" "$ROOT/workspace/.guildbotics/config"
 export MSB_CONFIG_PATH="$ROOT/runtime-config.toml"
 ```
 
@@ -35,11 +35,11 @@ Before **each** snapshot build, login, or real-device test, show the owner the e
 After build approval:
 
 ```bash
-HOME="$ROOT/guest-home" GUILDBOTICS_HOME="$ROOT/machine" \
+HOME="$ROOT/host-home" GUILDBOTICS_HOME="$ROOT/machine" \
   target/debug/guildbotics environment build --workspace "$ROOT/workspace"
 ```
 
-The build downloads the base image and packages. It uses no provider login or inference quota. The build's recipe includes the pins. Rebuild after changing pins or the recipe. The same disposable guest HOME must be used for the snapshot and its tests.
+The build downloads the base image and packages. It uses no provider login or inference quota. The build's recipe includes the pins. Rebuild after changing pins or the recipe. The disposable HOME stands for the host's; every microVM's own home is fixed, so the snapshot does not depend on it.
 
 ## Run one approved test at a time
 

@@ -21,8 +21,8 @@ impl Device {
         );
         let verification = fs::canonicalize(verification).unwrap();
         assert!(
-            verification.join("guest-home").is_dir(),
-            "missing disposable guest HOME"
+            verification.join("host-home").is_dir(),
+            "missing disposable host HOME"
         );
         let snapshots = gb_environment::snapshot::snapshots_dir(&verification.join("workspace"));
         let package = gb_base::home::python_package();
@@ -61,7 +61,7 @@ impl Device {
         let mut command = server_command(self.dir.path(), port);
         command
             .env("GUILDBOTICS_WORKSPACE_ROOT", &self.workspace)
-            .env("HOME", self.verification.join("guest-home"))
+            .env("HOME", self.verification.join("host-home"))
             .env_remove("GUILDBOTICS_IDENTITY_ROOT")
             .env("GUILDBOTICS_TEST_HOST_ONLY", "host")
             .env("GUILDBOTICS_LOG", "gb_environment=info,gb_server=info");
@@ -477,7 +477,7 @@ impl Device {
         command
             .args(["environment", "usage", tool, "--workspace"])
             .arg(&self.workspace)
-            .env("HOME", self.verification.join("guest-home"))
+            .env("HOME", self.verification.join("host-home"))
             .env("GUILDBOTICS_HOME", self.dir.path().join("home"))
             .env_remove("GUILDBOTICS_IDENTITY_ROOT");
         let output = command.output().unwrap();

@@ -284,14 +284,20 @@ opening it.
   settings they ran with. The declaration is independent of `read_only`: what a turn may change and what it needs to
   read are separate questions.
 - **Beyond the working directory** there are two things, both bound at their
-  host paths under a home directory that is the host's own. **documents**:
+  host paths. The environment's home is not the host's: it is its own
+  `/opt/guildbotics/home` on every machine, so a `~` inside never names the
+  host's home. **documents**:
   directories under the home directory the work reads from or writes to
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
   Apart from that file, `Documents/GuildBotics` (the exchange directory) is
   always granted read/write: a run from the screens that names no working
   directory runs there, and what an agent makes for the user goes under it
-  unless the request names a destination. What the screens hand over (a pasted
+  unless the request names a destination. Each granted directory under the
+  host's home, the exchange directory included, is linked from the same name
+  under the environment's home, so `~/Documents/GuildBotics` and `~/<grant>`
+  name the same folder inside and out; it is bound once, at its host path,
+  where its access applies. What the screens hand over (a pasted
   image, or a file dropped on the input, which the browser uploads as a copy)
   is kept in GuildBotics' own storage (`~/.guildbotics/data/command_inputs`),
   bound read-only at the same path into the runs the screens start, and removed

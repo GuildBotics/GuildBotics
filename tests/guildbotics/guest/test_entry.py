@@ -197,6 +197,29 @@ async def test_child_rejects_cwd_outside_main_mounts(config_dir, tmp_path):
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("symlinks")
+async def test_child_works_in_the_real_path_of_a_link_from_the_home(
+    config_dir, tmp_path
+):
+    path = config_dir / "commands" / "probe.py"
+    path.write_text(_PROBE, encoding="utf-8")
+    home = tmp_path.parent / f"{tmp_path.name}-home"
+    home.mkdir()
+    (home / "work").symlink_to(tmp_path)
+    request = _request(tmp_path / "not-the-child.py", home / "work", wants_result=True)
+
+    reply = await command_entry.run(
+        request,
+        _facts(tmp_path),
+        HostClient("http://window.test/host", "token"),
+        child=True,
+    )
+
+    assert reply.failure is None
+    assert request.cwd == Path(os.path.realpath(tmp_path)).as_posix()
+
+
 def test_child_cli_requires_existing_environment(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["command_entry", "repository/issue_inspect"])
     monkeypatch.delenv(HOST_URL_ENV, raising=False)

@@ -59,6 +59,8 @@ pub struct Boot<'a> {
     pub memory_mib: u32,
     pub cpus: u8,
     pub mounts: &'a [Mount],
+    /// Made in the microVM's home before the command starts.
+    pub links: &'a [crate::contract::Link],
     pub network: &'a Network,
     pub worktree: Option<&'a crate::worktree::Copy>,
 }
@@ -552,6 +554,22 @@ pub async fn run_once_with_guest(
             1024,
         )
         .await?;
+        for link in boot.links {
+            capture(
+                &sandbox,
+                &["sh".into(), "-ec".into(), link_script(link)],
+                &[],
+                &[],
+                1024,
+            )
+            .await
+            .map_err(|_| {
+                Failure::Command(Sentence::Text(format!(
+                    "The granted {} cannot be reached as ~/{}: the environment's home already has it",
+                    link.target, link.name
+                )))
+            })?;
+        }
         let copied = match boot.worktree {
             None => None,
             Some(copy) => Some(
@@ -1210,7 +1228,6 @@ pub struct Build<'a> {
     pub recipe: &'a crate::recipe::Recipe,
     pub image: &'a str,
     pub pull: bool,
-    pub guest_home: &'a str,
     pub resources: gb_config::agent_environment::Resources,
     pub nameservers: &'a [String],
 }
@@ -1279,32 +1296,25 @@ where
 
 async fn run_recipe<Run, Ran, Stop, Stopped, Save, Saved>(
     recipe: &crate::recipe::Recipe,
-    home: &str,
     on_line: impl Fn(&str),
     mut run: Run,
     stop: Stop,
     save: Save,
 ) -> Result<PathBuf, String>
 where
-    Run: FnMut(String, String) -> Ran,
+    Run: FnMut(String) -> Ran,
     Ran: Future<Output = Result<i32, String>>,
     Stop: FnOnce() -> Stopped,
     Stopped: Future<Output = Result<(), String>>,
     Save: FnOnce() -> Saved,
     Saved: Future<Output = Result<PathBuf, String>>,
 {
-    if run(
-        "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6".into(),
-        home.into(),
-    )
-    .await?
-        != 0
-    {
+    if run("echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6".into()).await? != 0 {
         return Err("Cannot disable guest IPv6".into());
     }
     for step in &recipe.steps {
         on_line(&format!("[{}]", step.label));
-        let code = run(step.script.clone(), home.into()).await?;
+        let code = run(step.script.clone()).await?;
         if code != 0 {
             return Err(format!("Build step {} exited with {code}", step.label));
         }
@@ -1459,7 +1469,6 @@ pub async fn build_snapshot(
         recipe,
         image,
         pull,
-        guest_home,
         resources,
         nameservers,
     } = plan;
@@ -1515,13 +1524,12 @@ pub async fn build_snapshot(
         let output = &on_line;
         run_recipe(
             recipe,
-            guest_home,
             &on_line,
-            |script, home| async move {
+            |script| async move {
                 let mut stream = guest
                     .exec_stream_with("sh", |e| {
                         e.args(["-ec", script.as_str()])
-                            .env("HOME", home)
+                            .env("HOME", crate::GUEST_HOME)
                             .env("DEBIAN_FRONTEND", "noninteractive")
                     })
                     .await
@@ -1824,8 +1832,28 @@ mod build_tests {
         .await;
         assert_eq!(broken, Err("store unavailable".into()));
     }
+    #[test]
+    fn links_are_made_in_the_microvm_home_with_their_directories() {
+        let links = [
+            crate::contract::Link {
+                name: "Documents/GuildBotics".into(),
+                target: "/Users/me/Documents/GuildBotics".into(),
+            },
+            crate::contract::Link {
+                name: ".cache/uv".into(),
+                target: "/c/Users/me/.cache/my uv".into(),
+            },
+        ];
+        assert_eq!(
+            links.each_ref().map(link_script),
+            [
+                "mkdir -p -- /opt/guildbotics/home/Documents\nln -sT -- /Users/me/Documents/GuildBotics /opt/guildbotics/home/Documents/GuildBotics",
+                "mkdir -p -- /opt/guildbotics/home/.cache\nln -sT -- '/c/Users/me/.cache/my uv' /opt/guildbotics/home/.cache/uv",
+            ]
+        );
+    }
     #[tokio::test]
-    async fn recipe_runs_in_order_with_the_home_and_only_snapshots_after_successful_stop() {
+    async fn recipe_runs_in_order_and_only_snapshots_after_successful_stop() {
         for failure in [None, Some("first script"), Some("stop")] {
             let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             let ran = events.clone();
@@ -1834,10 +1862,9 @@ mod build_tests {
             let lines = std::sync::Mutex::new(Vec::<String>::new());
             let result = run_recipe(
                 &recipe(),
-                "/home/member",
                 |line| lines.lock().unwrap().push(line.to_owned()),
-                move |script, home| {
-                    ran.lock().unwrap().push(format!("{home}:{script}"));
+                move |script| {
+                    ran.lock().unwrap().push(script.clone());
                     std::future::ready(Ok(if failure == Some(script.as_str()) {
                         13
                     } else {
@@ -1869,16 +1896,13 @@ mod build_tests {
             let events = events.lock().unwrap();
             assert_eq!(
                 events[0],
-                "/home/member:echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
+                "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
             );
-            assert_eq!(events[1], "/home/member:first script");
+            assert_eq!(events[1], "first script");
             match failure {
                 None => {
                     assert_eq!(result.unwrap(), PathBuf::from("/snapshot"));
-                    assert_eq!(
-                        &events[2..],
-                        ["/home/member:second script", "stop", "snapshot"]
-                    );
+                    assert_eq!(&events[2..], ["second script", "stop", "snapshot"]);
                 }
                 Some("first script") => {
                     assert_eq!(result, Err("Build step first exited with 13".into()));
@@ -1921,6 +1945,25 @@ fn worktree_argv(operation: &str, copy: &crate::worktree::Copy) -> Vec<String> {
     ];
     argv.extend(copy.excluded.iter().cloned());
     argv
+}
+
+/// Links the name under the microVM's home to its target, making the
+/// directories it is in. No link is inside another, so making it never goes
+/// through one; one already there, as what the snapshot left, fails it.
+fn link_script(link: &crate::contract::Link) -> String {
+    let path = format!("{}/{}", crate::GUEST_HOME, link.name);
+    let parent = path.rsplit_once('/').map_or("/", |(parent, _)| parent);
+    [
+        gb_base::shell::join(&["mkdir".into(), "-p".into(), "--".into(), parent.into()]),
+        gb_base::shell::join(&[
+            "ln".into(),
+            "-sT".into(),
+            "--".into(),
+            link.target.clone(),
+            path,
+        ]),
+    ]
+    .join("\n")
 }
 
 async fn capture(

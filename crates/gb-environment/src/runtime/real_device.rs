@@ -128,6 +128,7 @@ async fn hold_synthetic_login(home: &Path, snapshot: &Path) {
             readonly: false,
             quota_mib: None,
         }],
+        links: &[],
         network: &Network::default(),
         worktree: None,
     };

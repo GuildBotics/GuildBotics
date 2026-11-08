@@ -91,10 +91,9 @@ class DocumentConversionCommand(CommandBase):
         if output_value is None:
             return None
 
-        output_path = Path(str(output_value)).expanduser()
-        if not output_path.is_absolute():
-            output_path = (self.cwd / output_path).resolve()
-        return output_path
+        # The real path: `~` inside the isolated environment is its own home,
+        # where a granted directory is a link to the host's path.
+        return (self.cwd / Path(str(output_value)).expanduser()).resolve()
 
     def _get_preferred_value(
         self, key: str, inline_config: dict[str, Any]

@@ -22,12 +22,45 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
     write(
         &workspace,
         ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",
-        "documents:\n  - path: Documents/project\n    access: read_write\n",
+        "documents:\n  - path: Documents/project\n    access: read_write\n  - path: Documents/GuildBotics/reference\n    access: read\n",
     );
-    let plan = contract::resolve(&workspace, &home, &[], true, true).unwrap();
-    assert_eq!(plan.grants.len(), 2);
-    assert!(plan.grants.iter().all(|m| m.readonly));
-    assert!(home.join("Documents/project").is_dir());
+    for read_only in [true, false] {
+        let plan = contract::resolve(&workspace, &home, &[], read_only, true).unwrap();
+        assert!(home.join("Documents/project").is_dir());
+        // Every grant is mounted once, at its host path, with its own
+        // access; `~` reaches those under the host's home through links,
+        // the outermost of nested ones alone.
+        let exchange = home.join(gb_environment::EXCHANGE).canonicalize().unwrap();
+        let project = home.join("Documents/project").canonicalize().unwrap();
+        let reference = exchange.join("reference");
+        let guests: Vec<_> = plan
+            .grants
+            .iter()
+            .map(|m| (m.guest.clone(), m.host.clone().unwrap(), m.readonly))
+            .collect();
+        let spelled = |path: &Path| gb_environment::guest_path(path).unwrap();
+        assert_eq!(
+            guests,
+            [
+                (spelled(&exchange), exchange.clone(), read_only),
+                (spelled(&project), project.clone(), read_only),
+                (spelled(&reference), reference, true),
+            ]
+        );
+        assert_eq!(
+            plan.links,
+            [
+                contract::Link {
+                    name: "Documents/GuildBotics".into(),
+                    target: spelled(&exchange),
+                },
+                contract::Link {
+                    name: "Documents/project".into(),
+                    target: spelled(&project),
+                },
+            ]
+        );
+    }
     write(
         &workspace,
         ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",

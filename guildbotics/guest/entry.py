@@ -88,6 +88,9 @@ async def run(
             raise CommandError(f"Person '{facts.person_id}' not found.")
         context = context.clone_for(person)
         if child:
+            # The real path, as a subcommand's: a link from the home is not
+            # a mount, and the child's turns work where it is mounted.
+            request.cwd = Path(os.path.realpath(request.cwd)).as_posix()
             if not admits(facts.mounts, request.cwd):
                 raise CommandError(
                     t(

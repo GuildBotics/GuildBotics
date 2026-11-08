@@ -31,6 +31,16 @@ pub use runtime::{Mount, load_image, placed_files};
 
 /// Where the code every microVM mounts is inside it.
 pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
+/// The home of every microVM, the snapshot's build included: the microVM's
+/// own, at a path no host has, so a path under it is never taken for the
+/// host's. What the host mounts keeps its host path; a grant under the
+/// host's home is linked from the same place under this one.
+pub const GUEST_HOME: &str = "/opt/guildbotics/home";
+/// The exchange folder, relative to the host's home.
+pub const EXCHANGE: &str = "Documents/GuildBotics";
+/// GuildBotics' own roots in the microVM: its code, its venv, the home and
+/// its run state. No host path is taken over or under them.
+const RESERVED: [&str; 2] = ["/opt/guildbotics", "/run/guildbotics"];
 /// The command execution machinery's entry inside the microVM.
 pub const ENTRY: &[&str] = &[
     "/opt/guildbotics/venv/bin/python",
@@ -76,8 +86,8 @@ pub struct Host {
     /// The machine's own state: `<machine root>/data`, which holds the
     /// runtime under `msb`.
     pub data: PathBuf,
-    /// The person's home directory, which is the microVM's too: the snapshot
-    /// was built with it.
+    /// The person's home directory on the host, which grants are relative
+    /// to. The microVM's home is [`GUEST_HOME`].
     pub home: PathBuf,
     /// The Python package of the checkout the server runs from.
     pub package: PathBuf,
@@ -111,6 +121,7 @@ pub struct Command {
 pub struct Shape {
     pub copy: Option<worktree::Copy>,
     pub mounts: Vec<Mount>,
+    pub links: Vec<contract::Link>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
     pub request: CommandRequest,
@@ -224,6 +235,7 @@ pub async fn run(
             memory_mib: resources.memory_mib,
             cpus: resources.cpus,
             mounts: &shape.mounts,
+            links: &shape.links,
             network: &network,
             worktree: shape.copy.as_ref(),
         },
@@ -341,7 +353,7 @@ pub fn shape(
         work_kind: command.work_kind.clone(),
     };
     let mut env = vec![
-        ("HOME".to_string(), guest_path(&host.home)?),
+        ("HOME".to_string(), GUEST_HOME.into()),
         ("TZ".into(), language::time_zone()),
         ("AGNO_TELEMETRY".into(), "false".into()),
     ];
@@ -378,6 +390,7 @@ pub fn shape(
     Ok(Shape {
         copy,
         mounts,
+        links: access.links.clone(),
         cwd,
         env,
         request,
@@ -494,6 +507,15 @@ pub fn guest_path(path: &Path) -> Result<String, Failure> {
     if !text.starts_with('/') {
         return Err(Failure::Command(Sentence::Text(format!(
             "'{text}' is not an absolute path"
+        ))));
+    }
+    // Containing a reserved path or contained by one alike, by components.
+    if let Some(reserved) = RESERVED
+        .iter()
+        .find(|reserved| path.starts_with(reserved) || Path::new(reserved).starts_with(path))
+    {
+        return Err(Failure::Command(Sentence::Text(format!(
+            "'{text}' overlaps {reserved}, which the environment keeps for itself"
         ))));
     }
     Ok(text.to_owned())

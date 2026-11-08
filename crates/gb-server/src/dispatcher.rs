@@ -141,7 +141,7 @@ impl Dispatcher {
             serde_json::to_value(&invocation.work).map_err(|_| DispatchFailure::InvalidCommand)?;
         let kind = work["kind"].as_str().unwrap_or("manual").to_owned();
         let identity = work["identity"].as_str().unwrap_or(trace_id).to_owned();
-        let cwd = self.host.home.join("Documents/GuildBotics");
+        let cwd = self.host.home.join(gb_environment::EXCHANGE);
         gb_base::host_path::open_directory(&cwd, true).map_err(|error| {
             DispatchFailure::Environment(Failure::Command(Sentence::Text(error.to_string())))
         })?;
