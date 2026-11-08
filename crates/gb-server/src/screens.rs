@@ -63,7 +63,12 @@ pub(crate) async fn status(api: &crate::api::Api) -> Value {
     let workspace = &api.selected().workspace;
     let config = workspace.as_ref().map(|w| w.join(".guildbotics/config"));
     let project = config.as_ref().map(|c| c.join("team/project.yml"));
-    json!({"workspace_problem":"","input_store_problem":input_store_problem,
+    let language = crate::client::language().await;
+    let workspace_problem = gb_workspace::selection::registered(&api.data)
+        .err()
+        .map(|error| crate::workspace::registry_error(error, language).to_string())
+        .unwrap_or_default();
+    json!({"workspace_problem":workspace_problem,"input_store_problem":input_store_problem,
         "cwd":api.home.join("Documents/GuildBotics"),
         "workspace":workspace,"config_dir":config,"project_file":project,
         "project_file_exists":project.as_ref().is_some_and(|p| p.exists()),"storage_dir":workspace,
@@ -81,9 +86,6 @@ pub(crate) async fn team(State(api): State<Shared>, headers: HeaderMap) -> Respo
         return Json(empty_team()).into_response();
     };
     let config = workspace.join(".guildbotics/config");
-    if !config.join("team/project.yml").exists() {
-        return Json(empty_team()).into_response();
-    }
     let language = crate::i18n::language(
         headers
             .get("x-guildbotics-language")
@@ -101,6 +103,11 @@ pub(crate) async fn team(State(api): State<Shared>, headers: HeaderMap) -> Respo
         json!({"person_id": member.person_id, "name": member.name, "person_type": member.person_type,
             "is_active": member.is_active, "roles": roles})
     };
+    if !config.join("team/project.yml").exists() {
+        let mut team = empty_team();
+        team["members"] = json!(stored.iter().map(summary).collect::<Vec<_>>());
+        return Json(team).into_response();
+    }
     answer(
         (|| match Team::load(&config, &identity_root) {
             Ok(team) => {

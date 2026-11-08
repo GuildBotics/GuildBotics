@@ -78,10 +78,12 @@ test("creates, edits and saves a shared command, and says why it cannot run here
     );
   });
   await expect(message).toHaveValue(
-    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\][a-f0-9]{8}-clipboard\.png$/,
+    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\]upload-[a-f0-9]{32}-clipboard\.png$/,
   );
   const pastedImage = await message.inputValue();
-  const storedPath = pastedImage.match(/[/\\](session-[^/\\]+)[/\\]([a-f0-9]{8}-clipboard\.png)$/);
+  const storedPath = pastedImage.match(
+    /[/\\](session-[^/\\]+)[/\\](upload-[a-f0-9]{32}-clipboard\.png)$/,
+  );
   expect(storedPath).not.toBeNull();
   const [, session, name] = storedPath as RegExpMatchArray;
   const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", session, name);

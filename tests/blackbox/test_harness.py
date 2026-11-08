@@ -14,6 +14,43 @@ from tests.blackbox.environment import EnvironmentSource
 from tests.blackbox.harness import _environment, running_stack
 
 
+def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from tests.blackbox import conftest
+
+    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_SERVER", "server-command")
+    monkeypatch.delenv("GUILDBOTICS_BLACKBOX_CLI", raising=False)
+    lifecycle = []
+    instance = object()
+
+    @contextmanager
+    def server(root):
+        assert root == tmp_path
+        lifecycle.append("start")
+        try:
+            yield instance
+        finally:
+            lifecycle.append("stop")
+
+    monkeypatch.setattr(conftest, "running_stack", server)
+    with contextmanager(conftest.server_stack.__wrapped__)(tmp_path) as stack:
+        assert stack is instance
+        assert lifecycle == ["start"]
+    assert lifecycle == ["start", "stop"]
+    with pytest.raises(pytest.skip.Exception, match="CLI command"):
+        conftest.cli_available.__wrapped__()
+
+
+def test_server_fixture_requires_a_server_command(tmp_path, monkeypatch):
+    from tests.blackbox import conftest
+
+    monkeypatch.delenv("GUILDBOTICS_BLACKBOX_SERVER", raising=False)
+    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_CLI", "cli-command")
+    with pytest.raises(pytest.skip.Exception, match="server command"):
+        next(conftest.server_stack.__wrapped__(tmp_path))
+
+
 def test_blackbox_sources_do_not_import_guildbotics():
     for path in Path(__file__).parent.rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -51,18 +88,11 @@ import os
 import socket
 import tempfile
 from pathlib import Path
-import keyring
 
 home = Path.home()
 assert Path.cwd().parent == home
 assert Path(tempfile.gettempdir()).parent == home
 assert 'ambient-setting-must-not-be-inherited' not in os.environ.values()
-assert type(keyring.get_keyring()).__name__ == 'FileKeyring'
-keyring.set_password('blackbox-test', 'user', 'throwaway-test-value')
-assert keyring.get_password('blackbox-test', 'user') == 'throwaway-test-value'
-assert (home / 'blackbox-keyring.json').is_file()
-keyring.delete_password('blackbox-test', 'user')
-assert keyring.get_password('blackbox-test', 'user') is None
 for connect in (
     lambda: socket.getaddrinfo('example.invalid', 443),
     lambda: socket.socket().connect(('192.0.2.1', 443)),

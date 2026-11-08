@@ -329,7 +329,7 @@ async fn list(
             }
         },
     };
-    let language = language(headers);
+    let language = language(headers, &workspace.team.language);
     let options = {
         let (roots, project) = (
             CommandRoots {
@@ -443,7 +443,7 @@ pub(crate) async fn execution_status(
         &expected,
         &command,
         person.as_deref(),
-        language(&headers),
+        language(&headers, &workspace.team.language),
     )
     .await
     {
@@ -461,11 +461,11 @@ pub(crate) async fn execution_status(
     }
 }
 
-fn language(headers: &HeaderMap) -> &'static str {
+fn language(headers: &HeaderMap, fallback: &str) -> &'static str {
     i18n::language(
         headers
             .get("x-guildbotics-language")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or(""),
+            .unwrap_or(fallback),
     )
 }

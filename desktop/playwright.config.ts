@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Real-browser E2E layer for the desktop app. Each run boots the REAL Python
+// Real-browser E2E layer for the desktop app. Each run boots the REAL Rust
 // Local API backend against a fresh temp workspace; the backend serves the
 // screens itself (the Vite build `npm run e2e` makes first), and each test
 // enters them as the owner does, through an entry link (`e2e/stack-context.ts`).

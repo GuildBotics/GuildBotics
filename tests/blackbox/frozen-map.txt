@@ -1,0 +1,18 @@
+tests/blackbox/test_code_host.py::test_tickets_and_their_relations → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_code_host.py::test_push_pr_and_human_merge → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_code_host.py::test_checks_follow_the_head_and_base → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_config_service.py::test_settings_round_trip_and_stale_write → 移さない：HTTP 黒箱テストを保持。サーバー専用fixtureに分離し project/member の両条件、保存・revision 更新・409拒否・状態不変を検証。
+tests/blackbox/test_config_service.py::test_service_start_and_stop → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_golden.py::test_reads_match_golden → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_golden.py::test_copy_leaves_production_behind → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_harness.py::test_blackbox_sources_do_not_import_guildbotics → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_harness.py::test_children_use_temporary_home_keyring_and_loopback_only → 移さない：HOME・環境変数除去・loopback拒否を同名 Python テストに保持。Python専用keyring stubの検証は削除。Rust vault の隔離は実キーチェーンの無い環境で E2E の鍵保存・再読込とservice起動を確認。
+tests/blackbox/test_harness.py::test_failed_start_reaps_the_server → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_harness.py::test_environment_adoption_and_cleanup_leave_the_source_intact → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_harness.py::test_unknown_provider_does_not_silently_run_local → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_member.py::test_ticket_create_read_and_comment → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_member.py::test_pr_create_and_read → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_member.py::test_chat_post_and_read → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_member.py::test_memory_record_and_search → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
+tests/blackbox/test_record_golden.py::test_existing_record_endpoints_match_golden → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
+tests/blackbox/test_run.py::test_bundled_inspections_run_in_the_environment → #108 に回す：実機の隔離環境が必要な opt-in テスト。両入口と broker の検証を同名 Python テストに保持。

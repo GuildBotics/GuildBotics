@@ -126,10 +126,13 @@ pub fn doctor(home: &Path, bundled: &Path) -> Result<(), Failure> {
 
 fn place(home: &Path, bytes: [&[u8]; 2]) -> Result<(), Failure> {
     let failed = |e: std::io::Error| {
-        Failure::Command(Sentence::Text(format!(
-            "Cannot place microVM runtime at {}: {e}",
-            home.display()
-        )))
+        Failure::Command(Sentence::Key(
+            "intelligences.agent_environment.runtime.not_placed",
+            vec![
+                ("home", home.display().to_string()),
+                ("error", e.to_string()),
+            ],
+        ))
     };
     let _held = gb_base::files::FileLock::hold(&home.join("install.lock"), Duration::from_secs(30))
         .map_err(failed)?;

@@ -249,7 +249,7 @@ async fn the_device_and_the_default_tool_are_checked_by_their_own_refusals() {
                 ("tool", "Codex"),
                 (
                     "command",
-                    &format!("'{}' environment login codex", cli.display())
+                    &gb_base::shell::managed_cli_command(&cli, &["environment", "login", "codex"])
                 ),
             ],
         )

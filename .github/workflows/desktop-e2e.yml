@@ -7,4 +7,20 @@ jobs:
     name: Desktop E2E gate
     runs-on: ubuntu-latest
     steps:
-      - run: echo 'Desktop journeys paused until Rust HTTP API (#91); Branvil E2E runs in branvil-e2e.yml.'
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: rustup show
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e --workspace guildbotics-desktop
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: desktop-playwright
+          path: desktop/test-results
+          if-no-files-found: ignore

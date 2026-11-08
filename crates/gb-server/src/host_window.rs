@@ -1699,8 +1699,7 @@ pub fn tool_status(
   let name=tool["name"].as_str()?;let provision=&tool["provision"];let broker=&provision["credential_broker"];
   let path=data.join("agent_environment").join(name).join("login.sealed");
   let label=format!("{name}:default:{}",broker["format"].as_str().unwrap_or(""));
-  let cli=home.join(".guildbotics/bin/guildbotics").to_string_lossy().replace('\'',"'\"'\"'");
-  let command=format!("'{cli}' environment login {name}");
+  let command=gb_base::shell::managed_cli_command(&home.join(".guildbotics/bin/guildbotics"), &["environment", "login", name]);
   let mut status=gb_config::credential_vault::status(&device,&path,&label,command.clone());
   if status.saved {
     let valid=gb_config::credential_vault::unseal(&device,&path,&label).ok().flatten().is_some_and(|files| crate::tool_login::valid(&files,tool));

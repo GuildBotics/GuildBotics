@@ -133,18 +133,5 @@ impl Recipe {
 }
 
 fn args(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|s| {
-            if !s.is_empty()
-                && s.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&b))
-            {
-                s.clone()
-            } else {
-                format!("'{}'", s.replace('\'', "'\"'\"'"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    gb_base::shell::join(values)
 }

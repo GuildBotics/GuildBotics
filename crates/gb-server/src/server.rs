@@ -187,6 +187,14 @@ impl Server {
     /// Holds the machine's lock before binding or touching any records, binds
     /// the loopback port, keeps the owner token, and says that it listens.
     pub async fn start() -> anyhow::Result<Server> {
+        Self::start_with_keychain(Arc::new(gb_config::secrets::SystemKeychain)).await
+    }
+
+    /// Starts the same HTTP server with a caller-owned credential vault.
+    /// Browser integration harnesses use an ephemeral vault, never the device's.
+    pub async fn start_with_keychain(
+        keychain: Arc<dyn gb_config::secrets::Keychain>,
+    ) -> anyhow::Result<Server> {
         let port = port()?;
         let data = gb_base::home::data()?;
         let lock = ServerLock::hold(&data, port)?;
@@ -206,13 +214,15 @@ impl Server {
                 tracing::error!("{error:#}");
                 None
             });
-        let api = Arc::new(Api::new(
+        let mut api = Api::new(
             Selected::default(),
             crate::input_files::InputFileStore::deferred(&data.join("command_inputs")),
             auth,
             loopback_auth::hex(&loopback_auth::random_bytes::<16>()),
             data,
-        ));
+        );
+        api.keychain = keychain;
+        let api = Arc::new(api);
         api.select(Selected::open(workspace, &api, None));
         if let Some(workspace) = &api.selected().workspace {
             let diagnostics = gb_observability::Diagnostics::open(workspace);
@@ -349,12 +359,18 @@ impl Selected {
         let Some(workspace) = workspace else {
             return Selected::default();
         };
-        let mut service = service_controller(Some(&workspace), &api.data);
+        let mut service = service_controller(Some(&workspace), &api.data, api.keychain.clone());
         if let Some(branvil) = &branvil {
             service.attach_branvil(branvil.clone());
         }
         Selected {
-            member: member_backend(&workspace, &api.data, &api.work, branvil),
+            member: member_backend(
+                &workspace,
+                &api.data,
+                &api.work,
+                branvil,
+                api.keychain.clone(),
+            ),
             service,
             workspace: Some(workspace),
         }
@@ -365,10 +381,12 @@ impl Selected {
 pub(crate) fn service_controller(
     workspace: Option<&Path>,
     data: &Path,
+    keychain: Arc<dyn gb_config::secrets::Keychain>,
 ) -> crate::service_runtime::Controller {
     let built = (|| -> anyhow::Result<_> {
         let workspace = workspace.ok_or_else(|| anyhow::anyhow!("workspace not selected"))?;
-        let native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        let mut native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        native.keychain = keychain;
         let host = Arc::new(gb_environment::Host {
             data: data.into(),
             home: std::env::var_os("HOME")
@@ -387,9 +405,11 @@ pub(crate) fn member_backend(
     data: &Path,
     work: &tokio_util::task::TaskTracker,
     branvil: Option<branvil::api::DataApi>,
+    keychain: Arc<dyn gb_config::secrets::Keychain>,
 ) -> Option<Arc<crate::member::Backend>> {
     let built = (|| -> anyhow::Result<_> {
         let mut native = crate::member::native::Native::new(workspace.into(), data.into())?;
+        native.keychain = keychain;
         native.runtime_work = Some(work.clone());
         native.branvil = branvil;
         native.backend().map(Some)

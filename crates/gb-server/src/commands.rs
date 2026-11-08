@@ -200,8 +200,18 @@ pub(crate) async fn run_locally(
 ) -> anyhow::Result<String> {
     let work = tokio_util::task::TaskTracker::new();
     let cancelled = tokio_util::sync::CancellationToken::new();
-    let service = crate::server::service_controller(Some(workspace), data);
-    let member = crate::server::member_backend(workspace, data, &work, None);
+    let service = crate::server::service_controller(
+        Some(workspace),
+        data,
+        std::sync::Arc::new(gb_config::secrets::SystemKeychain),
+    );
+    let member = crate::server::member_backend(
+        workspace,
+        data,
+        &work,
+        None,
+        std::sync::Arc::new(gb_config::secrets::SystemKeychain),
+    );
     let state = RunState {
         home: std::env::var_os("HOME")
             .filter(|home| !home.is_empty())

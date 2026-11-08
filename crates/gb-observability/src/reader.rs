@@ -39,11 +39,10 @@ pub struct TraceSearch<'a> {
 impl Diagnostics {
     /// Only local work declarations enrich the shared activity timeline.
     pub fn activity_targets(&self) -> std::io::Result<Vec<Value>> {
-        Ok(read_records(&self.index)
-            .unwrap_or_default()
+        Ok(self
+            .indexed()?
             .into_iter()
             .filter(|r| r.get("type").and_then(Value::as_str) == Some("target.recorded"))
-            .map(Value::Object)
             .collect())
     }
     pub fn transcript_exists(&self, id: &str) -> bool {
@@ -516,4 +515,25 @@ fn english_trigger(provider: &str) -> String {
         })
         .collect::<String>();
     format!("{provider} thread")
+}
+
+#[cfg(test)]
+mod activity_window_tests {
+    use super::*;
+
+    #[test]
+    fn activity_targets_use_the_same_bounded_window_as_the_frozen_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Diagnostics::open(root.path());
+        std::fs::create_dir_all(store.index.parent().unwrap()).unwrap();
+        let mut lines = String::from("{\"type\":\"target.recorded\",\"trace_id\":\"expired\"}\n");
+        for _ in 0..crate::diagnostics::INDEX_RETAINED - 1 {
+            lines.push_str("{\"type\":\"log\"}\n");
+        }
+        lines.push_str("{\"type\":\"target.recorded\",\"trace_id\":\"retained\"}\n");
+        std::fs::write(&store.index, lines).unwrap();
+        let targets = store.activity_targets().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0]["trace_id"], "retained");
+    }
 }
