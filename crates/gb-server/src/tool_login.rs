@@ -1829,6 +1829,25 @@ mod tests {
             .await
             .unwrap();
         let grant = begin["result"]["turn_grant"].as_str().unwrap();
+        // The provider's MCP client authenticates to the member broker with the
+        // token the turn's environment carries, under the guest's name for it.
+        assert!(
+            include_str!("../../../guildbotics/intelligences/agent_runtime/wire.py").contains(
+                &format!(
+                    "MEMBER_BROKER_TOKEN_ENV = \"{}\"",
+                    crate::host_window::MEMBER_BROKER_TOKEN_ENV
+                )
+            )
+        );
+        assert_eq!(
+            format!(
+                "Bearer {}",
+                begin["result"]["env"][crate::host_window::MEMBER_BROKER_TOKEN_ENV]
+                    .as_str()
+                    .unwrap()
+            ),
+            begin["result"]["member"]["authorization"].as_str().unwrap()
+        );
         loan.state.lock().await.as_mut().unwrap().refusal = Some("refresh_failed");
         let end = || {
             client
