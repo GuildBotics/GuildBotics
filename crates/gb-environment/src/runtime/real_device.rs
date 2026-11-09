@@ -13,6 +13,90 @@ const TEST: &str = "runtime::real_device::real_device_owner_exit_stops_the_vm";
 const LOGIN: &str = "synthetic-owner-login";
 const CANARY: &str = "synthetic-owner-disk-positive-control";
 
+#[tokio::test]
+#[ignore = "real_device: owner approval and disposable snapshot; run with #108"]
+async fn real_device_large_stdin_reaches_all_guest_process_entries() {
+    use sha2::{Digest, Sha256};
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "real_device requires an attending owner"
+    );
+    let root = std::fs::canonicalize(
+        std::env::var_os("GUILDBOTICS_REAL_DEVICE_ROOT").expect("verification root required"),
+    )
+    .unwrap();
+    let recipe =
+        crate::recipe::Recipe::load(&gb_base::home::python_package().join("templates")).unwrap();
+    let snapshot = crate::snapshot::ready(&root.join("workspace"), &recipe.name(None)).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("gb")
+        .rand_bytes(6)
+        .tempdir_in("/tmp")
+        .unwrap();
+    let home = dir.path().join("msb");
+    ensure(&home).unwrap();
+    let boot = Boot {
+        home: &home,
+        snapshot: &snapshot,
+        memory_mib: 4096,
+        cpus: 2,
+        mounts: &[],
+        links: &[],
+        network: &Network::default(),
+        worktree: None,
+    };
+    let vm = create_vm(&boot, SCRATCH_MIB).await.unwrap();
+    let bytes: Vec<u8> = (0..5 * 1024 * 1024 + 73)
+        .map(|i| ((i * 31 + i / 251) % 256) as u8)
+        .collect();
+    let expected = (Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        + "\n")
+        .into_bytes();
+    let argv = vec![
+        "python3".into(),
+        "-c".into(),
+        "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())".into(),
+    ];
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        let process = Process {
+            argv: &argv,
+            cwd: "/",
+            env: &[],
+            stdin: &bytes,
+        };
+        let ended = execute(&vm, &process).await?;
+        assert_eq!(ended.code, 0);
+        assert_eq!(ended.reply, expected);
+        assert_eq!(capture(&vm, &argv, &bytes, &[], 1024).await?, expected);
+        let ended = execute_private(&vm, &process, |_| {}).await?;
+        assert_eq!(ended.code, 0);
+        assert_eq!(ended.reply, expected);
+        let guest = crate::guest_process::Process {
+            argv: argv.clone(),
+            cwd: "/".into(),
+            env: vec![],
+            stdin: bytes,
+            limit: 1024,
+        };
+        let output = execute_guest_process(
+            &vm,
+            &guest,
+            &[],
+            std::time::Instant::now() + Duration::from_secs(30),
+        )
+        .await?;
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, expected);
+        Ok::<_, Failure>(())
+    })
+    .await;
+    stop_vm(&vm).await;
+    result.expect("large stdin probe timed out").unwrap();
+}
+
 #[test]
 fn the_disk_scan_detects_a_planted_login() {
     let home = tempfile::tempdir().unwrap();

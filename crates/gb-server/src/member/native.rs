@@ -399,6 +399,7 @@ impl Native {
         .await?}else{json!({})};
         let guest = Guest {
             channel: self.guest.as_ref(),
+            language: &team.language,
             deadline,
         };
         let git_root = self
@@ -982,6 +983,7 @@ impl Services<'_> {
     }
 }
 struct Guest<'a> {
+    language: &'a str,
     channel: Option<&'a gb_environment::guest_process::Channel>,
     deadline: Instant,
 }
@@ -1016,7 +1018,14 @@ impl gb_member::git::Guest for Guest<'_> {
                     self.deadline,
                 )
                 .await
-                .map_err(|_| MemberError::Capability("capabilities.member_git.git_failed"))?;
+                .map_err(|error| MemberError::CapabilityArgs {
+                    key: "capabilities.member_git.git_failed_reason",
+                    args: [(
+                        "reason".into(),
+                        crate::i18n::say(error.sentence(), self.language),
+                    )]
+                    .into(),
+                })?;
             Ok(gb_member::git::Output {
                 code: result.code,
                 stdout: result.stdout,
@@ -5881,5 +5890,60 @@ pub(crate) mod tests {
             .await;
         assert_ne!(refused.exit_code, 0);
         assert!(refused.stderr.starts_with("Error:"));
+    }
+}
+
+#[cfg(test)]
+mod guest_failure_tests {
+    use super::*;
+    use gb_member::git::Guest as _;
+
+    #[tokio::test]
+    async fn member_git_preserves_the_localized_guest_failure() {
+        let channel = gb_environment::guest_process::Channel::new();
+        let guest = Guest {
+            channel: Some(&channel),
+            language: "ja",
+            deadline: Instant::now() + std::time::Duration::from_secs(1),
+        };
+        let error = guest
+            .run(
+                Path::new("/clones/work"),
+                vec![],
+                BTreeMap::new(),
+                vec![],
+                1024,
+            )
+            .await
+            .err()
+            .expect("invalid process must fail");
+        assert!(
+            matches!(error, MemberError::CapabilityArgs { key: "capabilities.member_git.git_failed_reason", args } if args["reason"] == crate::i18n::t("ja", "capabilities.member_git.invalid_path", &[]))
+        );
+    }
+
+    #[test]
+    fn guest_failure_stages_render_in_both_languages() {
+        for language in ["en", "ja"] {
+            for key in [
+                "capabilities.member_git.guest_start_failed",
+                "capabilities.member_git.guest_stdin_failed",
+                "capabilities.member_git.guest_stdout_limit",
+                "capabilities.member_git.guest_stderr_limit",
+                "capabilities.member_git.guest_execution_failed",
+                "capabilities.member_git.guest_stream_closed",
+                "capabilities.member_git.guest_timeout",
+            ] {
+                let text = crate::i18n::say(
+                    gb_environment::Sentence::Key(key, vec![("reason", "synthetic reason".into())]),
+                    language,
+                );
+                assert_ne!(text, key);
+                assert!(!text.contains("%{"));
+                if key.ends_with("failed") || key.ends_with("limit") {
+                    assert!(text.contains("synthetic reason"));
+                }
+            }
+        }
     }
 }

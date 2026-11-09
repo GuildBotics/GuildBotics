@@ -696,6 +696,32 @@ mod guest_environment_tests {
     }
 }
 
+/// Leave room for the protocol envelope below microsandbox's 4 MiB frame limit.
+const STDIN_CHUNK_BYTES: usize = 1024 * 1024;
+
+trait ChunkInput: Send + Sync {
+    fn write_chunk<'a>(
+        &'a self,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = Result<(), String>> + Send + 'a;
+}
+impl ChunkInput for microsandbox::sandbox::exec::ExecSink {
+    async fn write_chunk<'a>(&'a self, bytes: &'a [u8]) -> Result<(), String> {
+        self.write(bytes).await.map_err(|error| error.to_string())
+    }
+}
+async fn write_stdin(input: &impl ChunkInput, bytes: &[u8]) -> Result<(), String> {
+    for chunk in bytes.chunks(STDIN_CHUNK_BYTES) {
+        input.write_chunk(chunk).await?;
+    }
+    Ok(())
+}
+
+fn guest_process_failure(key: &'static str, reason: String) -> Failure {
+    tracing::warn!(stage = key, reason, "Guest process failed");
+    Failure::Command(Sentence::Key(key, vec![("reason", reason)]))
+}
+
 async fn execute_guest_process(
     vm: &Sandbox,
     process: &crate::guest_process::Process,
@@ -703,7 +729,7 @@ async fn execute_guest_process(
     deadline: std::time::Instant,
 ) -> Result<crate::guest_process::Output, Failure> {
     let (program, args) = process.argv.split_first().expect("validated guest process");
-    let fail = || Failure::Command(Sentence::key("capabilities.member_git.git_failed"));
+    let fail = guest_process_failure;
     let mut handle = vm
         .exec_stream_with(program, |e| {
             e.args(args.iter().cloned())
@@ -712,42 +738,18 @@ async fn execute_guest_process(
                 .stdin_pipe()
         })
         .await
-        .map_err(|_| fail())?;
+        .map_err(|e| fail("capabilities.member_git.guest_start_failed", e.to_string()))?;
     let input = handle.take_stdin().expect("piped stdin");
     let sending = async {
-        input.write(&process.stdin).await.map_err(|_| fail())?;
-        input.close().await.map_err(|_| fail())
+        write_stdin(&input, &process.stdin)
+            .await
+            .map_err(|e| fail("capabilities.member_git.guest_stdin_failed", e))?;
+        input
+            .close()
+            .await
+            .map_err(|e| fail("capabilities.member_git.guest_stdin_failed", e.to_string()))
     };
-    let reading = async {
-        let mut result = crate::guest_process::Output {
-            code: -1,
-            stdout: vec![],
-            stderr: vec![],
-        };
-        while let Some(event) = handle.recv().await {
-            match event {
-                ExecEvent::Stdout(bytes) => {
-                    if result.stdout.len() + bytes.len() > process.limit {
-                        return Err(fail());
-                    }
-                    result.stdout.extend(bytes);
-                }
-                ExecEvent::Stderr(bytes) => {
-                    if result.stderr.len() + bytes.len() > 1 << 24 {
-                        return Err(fail());
-                    }
-                    result.stderr.extend(bytes);
-                }
-                ExecEvent::Exited { code } => {
-                    result.code = code;
-                    return Ok(result);
-                }
-                ExecEvent::Failed(_) => return Err(fail()),
-                _ => {}
-            }
-        }
-        Err(fail())
-    };
+    let reading = read_guest_output(&mut handle, process.limit);
     let result = tokio::time::timeout_at(deadline.into(), async {
         let ((), output) = tokio::try_join!(sending, reading)?;
         Ok::<_, Failure>(output)
@@ -755,7 +757,12 @@ async fn execute_guest_process(
     .await;
     match result {
         Ok(Ok(output)) => Ok(output),
-        _ => {
+        failed => {
+            let error = match failed {
+                Ok(Err(error)) => error,
+                Err(_) => fail("capabilities.member_git.guest_timeout", String::new()),
+                Ok(Ok(_)) => unreachable!(),
+            };
             let _ = handle.kill().await;
             let _ = tokio::time::timeout(Duration::from_secs(2), async {
                 while let Some(event) = handle.recv().await {
@@ -765,9 +772,61 @@ async fn execute_guest_process(
                 }
             })
             .await;
-            Err(fail())
+            Err(error)
         }
     }
+}
+
+async fn read_guest_output(
+    next: &mut impl CommandEvents,
+    limit: usize,
+) -> Result<crate::guest_process::Output, Failure> {
+    let fail = guest_process_failure;
+    let mut result = crate::guest_process::Output {
+        code: -1,
+        stdout: vec![],
+        stderr: vec![],
+    };
+    while let Some(event) = next.next().await {
+        match event {
+            ExecEvent::Stdout(bytes) => {
+                if result.stdout.len() + bytes.len() > limit {
+                    return Err(fail(
+                        "capabilities.member_git.guest_stdout_limit",
+                        limit.to_string(),
+                    ));
+                }
+                result.stdout.extend(bytes);
+            }
+            ExecEvent::Stderr(bytes) => {
+                if result.stderr.len() + bytes.len() > 1 << 24 {
+                    return Err(fail(
+                        "capabilities.member_git.guest_stderr_limit",
+                        (1 << 24).to_string(),
+                    ));
+                }
+                result.stderr.extend(bytes);
+            }
+            ExecEvent::Exited { code } => {
+                if code != 0 {
+                    tracing::warn!(code, "Guest process exited unsuccessfully");
+                }
+                result.code = code;
+                return Ok(result);
+            }
+            ExecEvent::Failed(error) => {
+                return Err(fail(
+                    "capabilities.member_git.guest_execution_failed",
+                    error.message,
+                ));
+            }
+            _ => {}
+        }
+    }
+    Err(fail(
+        "capabilities.member_git.guest_stream_closed",
+        String::new(),
+    ))
 }
 
 async fn finish_command<F, Fut>(
@@ -865,8 +924,7 @@ async fn execute(sandbox: &Sandbox, process: &Process<'_>) -> Result<Ended, Fail
         .await
         .map_err(|e| exec_failed(e.to_string()))?;
     let stdin = handle.take_stdin().expect("a piped standard input");
-    stdin
-        .write(process.stdin)
+    write_stdin(&stdin, process.stdin)
         .await
         .map_err(|e| exec_failed(e.to_string()))?;
     stdin
@@ -1985,7 +2043,7 @@ async fn capture(
         .await
         .map_err(|e| fail(e.to_string()))?;
     let stdin = handle.take_stdin().expect("piped stdin");
-    stdin.write(input).await.map_err(|e| fail(e.to_string()))?;
+    write_stdin(&stdin, input).await.map_err(fail)?;
     stdin.close().await.map_err(|e| fail(e.to_string()))?;
     capture_events(&mut handle, program, limit).await
 }
@@ -2238,8 +2296,8 @@ trait PrivateInput: Send + Sync {
 impl PrivateInput for microsandbox::sandbox::exec::ExecSink {
     async fn send<'a>(&'a self, bytes: Option<&'a [u8]>) -> Result<(), Failure> {
         let result = match bytes {
-            Some(bytes) => self.write(bytes).await,
-            None => self.close().await,
+            Some(bytes) => write_stdin(self, bytes).await,
+            None => self.close().await.map_err(|error| error.to_string()),
         };
         result.map_err(|_| {
             Failure::Runtime(Sentence::Text("The private provider process failed".into()))
@@ -2754,3 +2812,6 @@ mod private_files_tests {
 
 #[cfg(all(test, unix))]
 mod real_device;
+
+#[cfg(test)]
+mod stdin_tests;
