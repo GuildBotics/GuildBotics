@@ -2227,6 +2227,53 @@ function lastMemberAddRequest() {
 }
 
 describe("MembersSection", () => {
+  it("names missing Basic fields beside Save from another tab", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail({ person_name: "" }));
+    renderSetupPage("/setup?section=members");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    await user.click(await screen.findByRole("tab", { name: "Branvil" }));
+    const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
+    expect(save).toBeDisabled();
+    const summary = within(save.closest(".form-footer") as HTMLElement).getByRole("alert");
+    expect(summary).toHaveTextContent(t("setup.members.tabs.basic"));
+    expect(summary).toHaveTextContent(t("setup.validation.memberNameRequired"));
+  });
+
+  it("explains missing Slack tokens beside Save while editing the Branvil tab", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        chat_channels: ["general"],
+        accounts: { branvil: { username: "alice", has_token: true } },
+      }),
+    );
+    renderSetupPage("/setup?section=members");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    await user.click(await screen.findByRole("tab", { name: "Branvil" }));
+    await user.click(await screen.findByLabelText(t("setup.branvil.member.reissue")));
+
+    const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
+    expect(save).toBeDisabled();
+    const footer = save.closest(".form-footer") as HTMLElement;
+    const summary = within(footer).getByRole("alert");
+    expect(summary).toHaveTextContent("Slack");
+    expect(summary).toHaveTextContent(t("setup.validation.slackBotTokenRequired"));
+    expect(summary).toHaveTextContent(t("setup.validation.slackAppTokenRequired"));
+    expect(save).toHaveAccessibleDescription(expect.stringContaining("Slack"));
+
+    await user.click(screen.getByRole("tab", { name: /Slack/ }));
+    await fill(
+      user,
+      await screen.findByLabelText(t("setup.members.slackBotToken")),
+      "xoxb-testtoken",
+    );
+    await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-testtoken");
+    await user.click(screen.getByRole("tab", { name: "Branvil" }));
+    expect(within(footer).queryByRole("alert")).not.toBeInTheDocument();
+    expect(save).toBeEnabled();
+  });
+
   describe("member form busy state", () => {
     async function editAlice(user: ReturnType<typeof userEvent.setup>) {
       vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());

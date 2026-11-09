@@ -2882,6 +2882,7 @@ function MembersSection({
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
   const changedSaveHintId = useId();
+  const validationSummaryId = useId();
   const [mode, setMode] = useState<"idle" | "add" | "edit">(initialMemberId ? "edit" : "idle");
   const [editingPersonId, setEditingPersonId] = useState<string | null>(initialMemberId ?? null);
   const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
@@ -3498,6 +3499,22 @@ function MembersSection({
         "characterContributionText",
       ];
   const basicTabHasError = hasMemberError(basicErrorKeys);
+  const validationGroups = [
+    {
+      tab: t("setup.members.tabs.basic"),
+      messages: basicErrorKeys.map((key) => memberErrors[key]).filter(Boolean),
+    },
+    {
+      tab:
+        accountTabs.find((provider) => provider.name === chatProvider)?.title ??
+        t("setup.integrations.kinds.chat_service"),
+      messages: [memberErrors.chatChannels].filter(Boolean),
+    },
+    ...accountTabs.map((provider) => ({
+      tab: provider.title,
+      messages: Object.values(accountErrors[provider.name]).filter(Boolean),
+    })),
+  ].filter((group) => group.messages.length > 0);
   const addChatChannel = () => {
     const channel = chatChannelInput.trim();
     if (!channel) {
@@ -4477,6 +4494,19 @@ function MembersSection({
                 ) : null}
               </Box>
               <Stack gap="xs" align="flex-end">
+                {validationGroups.length > 0 ? (
+                  <Alert
+                    id={validationSummaryId}
+                    color="danger"
+                    title={t("setup.members.validationSummary")}
+                  >
+                    {validationGroups.map((group, index) => (
+                      <Text key={index} size="sm">
+                        {group.tab}: {group.messages.join(" ")}
+                      </Text>
+                    ))}
+                  </Alert>
+                ) : null}
                 {memberChanged ? (
                   <Text id={changedSaveHintId} size="sm" c="dimmed">
                     {t("setup.members.changedSaveHint")}
@@ -4487,7 +4517,12 @@ function MembersSection({
                     savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
                   }
                   disabled={!canSubmit || memberChanged || memberLoading}
-                  aria-describedby={memberChanged ? changedSaveHintId : undefined}
+                  aria-describedby={
+                    [
+                      ...(memberChanged ? [changedSaveHintId] : []),
+                      ...(validationGroups.length > 0 ? [validationSummaryId] : []),
+                    ].join(" ") || undefined
+                  }
                   onClick={() => void handleSaveMember()}
                 >
                   {formMode === "edit"

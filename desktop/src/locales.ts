@@ -946,6 +946,7 @@ export const resources = {
           cancelButton: "Cancel",
           deleteButton: "Delete",
           tabHasError: "This tab has incomplete or invalid fields.",
+          validationSummary: "Complete or correct these fields before saving.",
           deleteConfirmTitle: "Delete member?",
           deleteConfirmBody:
             "This deletes {{name}} itself: it leaves this workspace, and its name, accounts, credentials in the OS secret store, and the tokens GuildBotics issued it with the services are deleted for every workspace. Another workspace that still has the member cannot use it until the member is removed there too. This action cannot be undone.",
@@ -2037,6 +2038,7 @@ export const resources = {
           cancelButton: "キャンセル",
           deleteButton: "削除",
           tabHasError: "このタブに未入力または形式エラーの項目があります。",
+          validationSummary: "保存するには、次のタブの項目を入力・修正してください。",
           deleteConfirmTitle: "メンバーを削除しますか？",
           deleteConfirmBody:
             "{{name}} そのものを削除します。このワークスペースから外し、名前・アカウント・OS 秘密ストア内の認証情報・各サービスで GuildBotics が発行したトークンを、すべてのワークスペースから削除します。ほかのワークスペースにこのメンバーが残っている場合、そこからも外すまでそのワークスペースでは使えません。この操作は元に戻せません。",
