@@ -51,7 +51,9 @@ test("enters with a single-use link and keeps the session across reloads", async
   // Without the session cookie every page shows how to get one; an unknown code is refused.
   await context.clearCookies();
   await page.goto("/-/settings");
-  await expect(page.getByText(/branvil open/).first()).toBeVisible();
+  await expect(page.getByText("guildbotics branvil open --print", { exact: true })).toBeVisible();
+  await expect(page.getByText(/address bar of this same browser|この画面と同じブラウザのアドレスバー/)).toBeVisible();
+  await expect(page.getByText(/browser showing its consent page|同意画面を開いているブラウザ/)).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
   await page.goto("/-/enter#reused-or-made-up");
   await expect(page.getByText(/expired or was already used|期限切れか、すでに使われています/)).toBeVisible();

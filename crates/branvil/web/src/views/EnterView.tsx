@@ -10,7 +10,7 @@ import { navigate } from "../router/Router";
 import { href } from "../router/routes";
 
 /**
- * `/-/enter#<code>`: the page a `branvil open` link opens. The code is taken
+ * `/-/enter#<code>`: the page a `guildbotics branvil open` link opens. The code is taken
  * from the fragment, removed from the address bar and history, and exchanged
  * once for the owner's session.
  */
@@ -94,7 +94,7 @@ export function GuidanceView({
           {lead && <Text size="sm">{lead}</Text>}
           <Text size="sm">{t("guide.run")}</Text>
           <pre>
-            <code>branvil open</code>
+            <code>guildbotics branvil open --print</code>
           </pre>
           <Text size="sm" c="dimmed">
             {t("guide.why")}

@@ -29,8 +29,8 @@ export const en = {
   "notFound.title": "Page not found",
 
   "enter.expired": "This link has expired or was already used.",
-  "guide.run": "Open Branvil from the Hub machine with:",
-  "guide.why": "Branvil has no sign-in screen: the command opens this page with a link that works once, for 60 seconds.",
+  "guide.run": "On the Hub machine, print an entry link with:",
+  "guide.why": "Paste the printed URL into the address bar of this same browser. If you are connecting an app, use the browser showing its consent page. The link works once, for 60 seconds; access applies only to that browser.",
   "authorize.title": "Allow {client} to manage Branvil?",
   "authorize.rights": "It gets the owner's rights: it can do everything you can do in Branvil.",
   "authorize.revoke": "You can revoke it under Settings → Members → {owner} → Tokens, where it is listed as app:{client}.",

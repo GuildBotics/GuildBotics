@@ -7,6 +7,14 @@ import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
 
 describe("entering without a sign-in screen", () => {
+  it.each(["en", "ja"] as const)("explains how to open the printed link in the same browser (%s)", async (language) => {
+    fakeApi({});
+    renderApp("/-/enter", language);
+    expect(await screen.findByText("guildbotics branvil open --print")).toBeInTheDocument();
+    expect(screen.getByText(language === "en" ? /Paste the printed URL into the address bar of this same browser/ : /表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて/)).toBeInTheDocument();
+    expect(screen.getByText(language === "en" ? /browser showing its consent page/ : /同意画面を開いているブラウザ/)).toBeInTheDocument();
+  });
+
   it("exchanges the link's code once, drops it from the address bar, and keeps the CSRF value", async () => {
     const fake = fakeApi({
       "POST /api/v1/session": json(200, SESSION),
@@ -42,7 +50,7 @@ describe("entering without a sign-in screen", () => {
     expect(
       await screen.findByText("This link has expired or was already used."),
     ).toBeInTheDocument();
-    expect(screen.getByText("branvil open")).toBeInTheDocument();
+    expect(screen.getByText("guildbotics branvil open --print")).toBeInTheDocument();
     expect(window.location.hash).toBe("");
   });
 
@@ -78,7 +86,7 @@ describe("entering without a sign-in screen", () => {
     const fake = fakeApi({});
     renderApp("/-/enter");
     expect(
-      await screen.findByText("Open Branvil from the Hub machine with:"),
+      await screen.findByText("On the Hub machine, print an entry link with:"),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("This link has expired or was already used."),
@@ -96,7 +104,7 @@ describe("entering without a sign-in screen", () => {
     });
     renderApp("/acme/demo");
     expect(
-      await screen.findByText("Open Branvil from the Hub machine with:"),
+      await screen.findByText("On the Hub machine, print an entry link with:"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
@@ -114,7 +122,7 @@ describe("entering without a sign-in screen", () => {
     const user = userEvent.setup();
     renderApp("/");
     expect(
-      await screen.findByText("Open Branvil from the Hub machine with:"),
+      await screen.findByText("On the Hub machine, print an entry link with:"),
     ).toBeInTheDocument();
     expect(
       await screen.findByText("This Host is not Branvil's."),
