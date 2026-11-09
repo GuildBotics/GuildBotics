@@ -249,6 +249,7 @@ export type SystemAlert = {
     | "command_failed"
     | "rate_limited"
     | "scheduler_failed"
+    | "events_failed"
     | "worker_stopped"
     | "agent_environment_unavailable"
     | "agent_environment_tool_unavailable"

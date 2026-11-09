@@ -289,6 +289,33 @@ describe("App", () => {
     vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
   });
 
+  it("renders reception failure alerts in both languages", () => {
+    for (const [language, expected] of [
+      ["en", "Chat reception stopped because of an unexpected error."],
+      ["ja", "想定外エラーによりチャットの受信が停止しました。"],
+    ]) {
+      expect(
+        systemAlertMessage(
+          i18n.getFixedT(language) as TFunction,
+          {
+            id: "runtime:events",
+            code: "events_failed",
+            severity: "critical",
+            opened_at: "",
+            updated_at: "",
+            occurrence_count: 1,
+            person_id: "",
+            command: "",
+            trace_id: "",
+            provider: "",
+            actions: ["service", "diagnostics"],
+          },
+          "studio",
+        ),
+      ).toBe(expected);
+    }
+  });
+
   it("links an environment alert to the row that is the problem", () => {
     const base = {
       severity: "warning" as const,

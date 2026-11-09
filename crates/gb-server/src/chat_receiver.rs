@@ -465,11 +465,13 @@ impl Group {
             let live=async {
                 loop {
                     tokio::select! {biased; ()=stop.cancelled()=>break, ()=self.drain()=>()}
+                    anyhow::ensure!(!self.listener.terminated(), "chat reception task terminated");
                     tokio::select! {()=stop.cancelled()=>break, ()=self.receivers[0].wake.notified()=>(), ()=tokio::time::sleep(std::time::Duration::from_secs(5))=>()}
                 }
+                Ok::<(), anyhow::Error>(())
             };
             let histories=futures_util::future::join_all(self.receivers.iter().map(|r|r.backfill_loop(&stop)));
-            tokio::join!(live,histories);Ok(())
+            tokio::try_join!(live, async { histories.await; Ok::<(), anyhow::Error>(()) })?;Ok(())
         }.await;
         for receiver in &self.receivers {
             for channel in receiver.channels.lock().await.iter() {
@@ -484,6 +486,47 @@ impl Group {
 #[cfg(test)]
 mod tests {
 
+    struct Terminated;
+    impl EventListener for Terminated {
+        fn terminated(&self) -> bool {
+            true
+        }
+        fn connected(&self) -> bool {
+            false
+        }
+        fn auth_failed(&self) -> bool {
+            false
+        }
+        fn start(&self) -> gb_ports::ServiceFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn stop(&self) -> gb_ports::ServiceFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn drain_events(&self) -> Vec<ChatEvent> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn group_propagates_internal_listener_termination_without_waiting_for_backfill() {
+        let mut f = Fixture::new();
+        f.connection.listener = Arc::new(Terminated);
+        let receiver = f.receiver("aiko", json!({})).await;
+        let group = Group::new(vec![receiver]).unwrap();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            group.run(CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.to_string().contains("reception task terminated"));
+        assert_eq!(state(&f, "aiko"), "unavailable");
+        let stopped = CancellationToken::new();
+        stopped.cancel();
+        group.run(stopped).await.unwrap();
+    }
     fn subject() -> Subject {
         Subject {
             service: "local".into(),

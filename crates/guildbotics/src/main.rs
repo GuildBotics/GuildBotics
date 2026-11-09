@@ -111,6 +111,7 @@ mod environment_cli;
 mod install_cli;
 mod secrets_cli;
 mod service_cli;
+mod startup;
 mod workspace_cli;
 use environment_cli::EnvironmentCommand;
 
@@ -145,6 +146,7 @@ enum ServerCommand {
 }
 
 fn main() -> ExitCode {
+    startup::initialize();
     // Started by Git as GIT_ASKPASS when Branvil talks to an upstream host.
     if let Some(code) = branvil::askpass_main() {
         return code;
