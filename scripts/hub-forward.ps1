@@ -28,14 +28,24 @@ $taskName = 'hub-forward-' + $identity.User.Value
 $shell = Join-Path $PSHOME 'powershell.exe'
 # Keep diagnostics outside AppData, which packaged apps may virtualize.
 $stateDir = Join-Path $env:USERPROFILE '.hub-forward'
-$configPath = Join-Path $stateDir 'ports.json'
 $exitPath = Join-Path $stateDir 'last-exit.json'
 
 if ($Action -eq 'status') {
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if (-not $task) { Write-Output 'Not installed'; return }
     $info = Get-ScheduledTaskInfo -TaskName $taskName
-    $ports = @(Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json)
+    # Read the registered task, the authority for both old and new installs.
+    # Parse literals only; never execute the stored command during status.
+    $ports = @()
+    if ($task.Actions[0].Arguments -match '-EncodedCommand ([A-Za-z0-9+/=]+)$') {
+        $source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1]))
+        $tokens = $null; $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+        $ports = @($ast.FindAll({ param($node)
+            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                $node.Value -match '^127\.0\.0\.1:([1-9][0-9]{0,4}):127\.0\.0\.1:\1$'
+        }, $true) | ForEach-Object { [int]($_.Value.Split(':')[1]) } | Select-Object -Unique)
+    }
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
     $lastExit = if (Test-Path -LiteralPath $exitPath) {
         Get-Content -LiteralPath $exitPath -Raw | ConvertFrom-Json
@@ -43,15 +53,18 @@ if ($Action -eq 'status') {
     [pscustomobject]@{
         TaskName = $task.TaskName; State = $task.State
         LastRunTime = $info.LastRunTime; LastTaskResult = $info.LastTaskResult
-        Ports = ($ports | ForEach-Object {
+        Ports = if ($ports) { ($ports | ForEach-Object {
             $p = $_
             $listening = [bool]($listeners | Where-Object {
                 $_.LocalPort -eq $p -and $_.LocalAddress -in @('127.0.0.1', '0.0.0.0', '::')
             })
             "${p}: Listening=$listening"
-        }) -join [Environment]::NewLine
+        }) -join [Environment]::NewLine } else { 'Unknown ports. Install the task again to inspect forwarding ports.' }
         LastSshEndedAt = $lastExit.EndedAt; LastSshExitCode = $lastExit.ExitCode
         LastSshStderr = $lastExit.Stderr -join [Environment]::NewLine
+        DiagnosticStatus = if ($lastExit) { 'Recorded' } else {
+            'No SSH exit recorded yet. Tasks installed with an earlier version must be installed again to record SSH exits.'
+        }
         DiagnosticPath = $exitPath
     }
     return
@@ -99,7 +112,6 @@ if ($existing) {
 }
 if ($Action -eq 'uninstall') { return }
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-ConvertTo-Json -InputObject @($ports) | Set-Content -LiteralPath $configPath -Encoding UTF8
 Remove-Item -LiteralPath $exitPath -Force -ErrorAction SilentlyContinue
 # Encode arguments as PowerShell literals, without evaluating any user text.
 function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
@@ -156,3 +168,4 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
 Start-ScheduledTask -TaskName $taskName
 Write-Output 'Installed hub-forward. Use -Action status to inspect the task.'
 Write-Output 'Use an SSH config alias or user@host as -Hub. Connect with ssh first to accept the host key.'
+Write-Output 'After a few seconds, use -Action status and check that each port shows Listening=True.'

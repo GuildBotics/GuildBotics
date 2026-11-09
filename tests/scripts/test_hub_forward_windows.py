@@ -217,6 +217,7 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
     assert "23456: Listening=False" in result["statusText"]
     assert status["DiagnosticPath"].endswith("last-exit.json")
     assert result["freshStatus"]["LastSshEndedAt"] is None
+    assert "No SSH exit recorded yet" in result["freshStatus"]["DiagnosticStatus"]
     assert result["freshStatus"]["Ports"] == "34567: Listening=False"
     assert "23456" not in result["updated"]
     assert "34567" in result["updated"]
@@ -249,6 +250,59 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
         "user@hub",
     ]
     assert [json.loads(line) for line in lines] == [expected_args, expected_args]
+
+
+@pytest.mark.parametrize("ports", [[12345], [12345, 23456, 12345]])
+def test_status_reads_existing_task_without_state_files(tmp_path, ports):
+    forwards = ", ".join(f"'-L', '127.0.0.1:{p}:127.0.0.1:{p}'" for p in ports)
+    result = run_powershell(
+        tmp_path,
+        r"""
+# Model an already registered task without invoking this version's install.
+$source = @'
+$ErrorActionPreference = 'Stop'
+$sshArgs = @('-N', FORWARDS, '--', 'hub')
+throw 'status must not execute the task source'
+while ($true) { & 'ssh.exe' @sshArgs; Start-Sleep -Seconds 15 }
+'@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
+$global:HFregistration = [pscustomobject]@{
+    Action=[pscustomobject]@{Argument="--headless powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded"}
+}
+$global:HFexists = $true
+$status = & $env:HF_SCRIPT -Action status
+@{status=$status; written=(Test-Path -LiteralPath $env:USERPROFILE); calls=$global:HFcalls} |
+    ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
+""".replace("FORWARDS", forwards),
+    )
+    assert result["status"]["State"] == "Running"
+    assert result["status"]["Ports"].splitlines() == [
+        f"{p}: Listening={p == 12345}" for p in dict.fromkeys(ports)
+    ]
+    assert "No SSH exit recorded yet" in result["status"]["DiagnosticStatus"]
+    assert "installed again" in result["status"]["DiagnosticStatus"]
+    assert result["status"]["LastSshEndedAt"] is None
+    assert not result["written"]
+    assert result["calls"] == ["status"]
+
+
+def test_status_with_task_without_embedded_ports(tmp_path):
+    result = run_powershell(
+        tmp_path,
+        r"""
+$global:HFregistration = [pscustomobject]@{
+    Action=[pscustomobject]@{Argument='-NoProfile -File "missing runner.ps1"'}
+}
+$global:HFexists = $true
+$status = & $env:HF_SCRIPT -Action status
+$status | ConvertTo-Json -Depth 10 |
+    Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
+""",
+    )
+    assert result["State"] == "Running"
+    assert "Unknown ports" in result["Ports"]
+    assert "Install the task again" in result["Ports"]
+    assert "No SSH exit recorded yet" in result["DiagnosticStatus"]
 
 
 def test_native_stderr_is_retained_without_stopping_retries(tmp_path):
