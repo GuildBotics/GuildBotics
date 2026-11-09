@@ -116,11 +116,13 @@ describe("the consent page of a local app", () => {
     });
     const first = renderApp(authorizePath());
     expect(await screen.findByText(/To allow Desk App, open Branvil first/)).toBeInTheDocument();
-    expect(screen.getByText("branvil open")).toBeInTheDocument();
+    expect(screen.getByText("guildbotics branvil open --print")).toBeInTheDocument();
+    expect(screen.getByText(/Paste the printed URL into the address bar of this same browser/)).toBeInTheDocument();
+    expect(screen.getByText(/browser showing its consent page/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
     expect(fake.calls("POST", "/api/v1/apps/authorizations")).toHaveLength(0);
 
-    // `branvil open`'s link, opened in the same browser, comes back here once.
+    // The printed entry link, opened in the same browser, comes back here once.
     first.unmount();
     renderApp("/-/enter#code-1");
     expect(await screen.findByRole("heading", { name: "Allow Desk App to manage Branvil?" })).toBeInTheDocument();

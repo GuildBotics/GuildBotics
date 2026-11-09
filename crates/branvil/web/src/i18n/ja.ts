@@ -31,8 +31,8 @@ export const ja: Record<MessageKey, string> = {
   "notFound.title": "ページが見つかりません",
 
   "enter.expired": "このリンクは期限切れか、すでに使われています。",
-  "guide.run": "Hubマシンで次のコマンドを実行して Branvil を開きます：",
-  "guide.why": "Branvil にサインイン画面はありません。このコマンドが、60秒間に1回だけ使えるリンクでこのページを開きます。",
+  "guide.run": "Hubマシンで次のコマンドを実行して、入口のURLを表示します：",
+  "guide.why": "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。アプリを接続する場合は、同意画面を開いているブラウザを使ってください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
   "authorize.title": "{client} に Branvil の管理を許可しますか？",
   "authorize.rights": "オーナーの権限を得て、Branvil であなたにできることをすべて行えるようになります。",
   "authorize.revoke": "設定 → メンバー → {owner} → トークン で app:{client} を削除すると取り消せます。",
