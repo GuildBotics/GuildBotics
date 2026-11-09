@@ -35,9 +35,20 @@ struct WebSocket(
 impl SocketTransport for WebSocketTransport {
     fn connect<'a>(&'a self, url: &'a str) -> SlackFuture<'a, Box<dyn Socket>> {
         Box::pin(async move {
-            let (ws, _) = tokio_tungstenite::connect_async_with_config(url, None, true)
-                .await
-                .map_err(|_| SlackFailure::Unavailable)?;
+            let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map_err(|_| SlackFailure::Unavailable)?
+            .with_root_certificates(rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            })
+            .with_no_client_auth();
+            let connector = tokio_tungstenite::Connector::Rustls(Arc::new(config));
+            let (ws, _) =
+                tokio_tungstenite::connect_async_tls_with_config(url, None, true, Some(connector))
+                    .await
+                    .map_err(|_| SlackFailure::Unavailable)?;
             Ok(Box::new(WebSocket(ws)) as Box<dyn Socket>)
         })
     }

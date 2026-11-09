@@ -1136,3 +1136,24 @@ async fn socket_task_panic_is_visible_as_termination() {
     assert!(!listener.connected());
     listener.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn websocket_tls_without_process_provider_rejects_invalid_peer_without_panicking() {
+    use tokio::io::AsyncWriteExt;
+    assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("wss://{}", server.local_addr().unwrap());
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = server.accept().await.unwrap();
+        stream.write_all(b"invalid TLS peer").await.unwrap();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        super::listener::WebSocketTransport.connect(&url),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(SlackFailure::Unavailable)));
+    server_task.await.unwrap();
+    assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+}

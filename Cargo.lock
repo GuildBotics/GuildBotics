@@ -2119,6 +2119,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
+ "rustls",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -2131,6 +2132,7 @@ dependencies = [
  "unicode-casefold",
  "url",
  "uuid",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]

@@ -290,13 +290,15 @@ impl Gateway {
         parameters.use_authority_key_identifier_extension = true;
         lifetime(&mut parameters);
         let certificate = parameters.signed_by(&key, &rcgen::Issuer::new(ca, ca_key))?;
-        let config = tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![certificate.der().clone()],
-                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der())
-                    .into(),
-            )?;
+        let config = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.der().clone()],
+            tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        )?;
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();

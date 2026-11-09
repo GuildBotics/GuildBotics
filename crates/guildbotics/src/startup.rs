@@ -35,7 +35,7 @@ mod tests {
             super::initialize();
             super::initialize();
         }
-        // Tungstenite's rustls connector builds this same client configuration.
+        // Other dependencies may still use the process-wide default.
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(rustls::RootCertStore::empty())
             .with_no_client_auth();
