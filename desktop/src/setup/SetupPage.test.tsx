@@ -2235,7 +2235,7 @@ describe("MembersSection", () => {
     await user.click(await screen.findByRole("tab", { name: "Branvil" }));
     const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
     expect(save).toBeDisabled();
-    const summary = within(save.closest(".form-footer") as HTMLElement).getByRole("alert");
+    const summary = within(save.closest(".form-footer") as HTMLElement).getByRole("note");
     expect(summary).toHaveTextContent(t("setup.members.tabs.basic"));
     expect(summary).toHaveTextContent(t("setup.validation.memberNameRequired"));
   });
@@ -2256,7 +2256,7 @@ describe("MembersSection", () => {
     const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
     expect(save).toBeDisabled();
     const footer = save.closest(".form-footer") as HTMLElement;
-    const summary = within(footer).getByRole("alert");
+    const summary = within(footer).getByRole("note");
     expect(summary).toHaveTextContent("Slack");
     expect(summary).toHaveTextContent(t("setup.validation.slackBotTokenRequired"));
     expect(summary).toHaveTextContent(t("setup.validation.slackAppTokenRequired"));
@@ -2270,7 +2270,7 @@ describe("MembersSection", () => {
     );
     await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-testtoken");
     await user.click(screen.getByRole("tab", { name: "Branvil" }));
-    expect(within(footer).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(footer).queryByRole("note")).not.toBeInTheDocument();
     expect(save).toBeEnabled();
   });
 
@@ -2944,6 +2944,11 @@ describe("MembersSection", () => {
 
     expect(await screen.findByText(t("setup.validation.chatChannelsInvalid"))).toBeInTheDocument();
     expect(save).toBeDisabled();
+    expect(tabErrorMark(screen.getByRole("tab", { name: "Slack" }))).not.toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Basic" }));
+    expect(save).toHaveAccessibleDescription(
+      expect.stringContaining(t("setup.validation.chatChannelsInvalid")),
+    );
   });
 
   it("marks the account tab and blocks saving while the account is incomplete", async () => {
@@ -3799,6 +3804,68 @@ describe("PatrolSettingsEditor", () => {
     });
   });
 
+  it.each(["routine-empty", "routine-ineligible", "command-empty", "cron-empty", "cron-invalid"])(
+    "explains %s beside Save from Basic and clears the reason after repair",
+    async (kind) => {
+      const user = userEvent.setup();
+      if (kind === "routine-ineligible") {
+        vi.mocked(getMemberConfig).mockResolvedValue(
+          memberConfigDetail({ routine_commands: ["workflows/needs_input"] }),
+        );
+      }
+      await openPatrolTab(user);
+      let reason: string;
+      if (kind === "routine-empty") {
+        await user.click(screen.getByText(t("setup.members.patrol.overrideRoutine")));
+        const input = screen
+          .getAllByLabelText(t("setup.members.patrol.routineCommands"))
+          .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
+        await user.click(input as HTMLElement);
+        await user.keyboard("{Backspace}{Escape}");
+        reason = t("setup.members.patrol.routineRequired");
+      } else if (kind === "routine-ineligible") {
+        reason = t("setup.members.patrol.routineIneligible");
+      } else {
+        await user.click(
+          screen.getByRole("button", { name: t("setup.members.patrol.addSchedule") }),
+        );
+        if (kind === "command-empty") {
+          await user.click(screen.getByRole("radio", { name: t("commands.modeCustom") }));
+          reason = t("setup.members.patrol.commandRequired");
+        } else {
+          await user.click(
+            screen.getByRole("radio", { name: t("setup.members.patrol.cronPresets.custom") }),
+          );
+          const input = screen.getByLabelText(t("setup.members.patrol.cron"));
+          await user.clear(input);
+          if (kind === "cron-invalid") await user.type(input, "0 9 * *");
+          reason = t("setup.members.patrol.cronInvalid");
+        }
+      }
+      await user.click(screen.getByRole("tab", { name: /Basic/ }));
+      const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
+      expect(save).toBeDisabled();
+      expect(save).toHaveAccessibleDescription(expect.stringContaining(`Patrol: ${reason}`));
+      const summary = document.getElementById(save.getAttribute("aria-describedby")!);
+      expect(summary).toHaveTextContent(reason);
+      expect(summary).not.toHaveAttribute("role", "alert");
+      expect(summary).not.toHaveAttribute("aria-live");
+      expect(tabErrorMark(screen.getByRole("tab", { name: "Patrol" }))).not.toBeNull();
+      await user.click(screen.getByRole("tab", { name: /Patrol/ }));
+      if (kind.startsWith("routine")) {
+        await user.click(screen.getByText(t("setup.members.patrol.overrideRoutine")));
+      } else {
+        await user.click(
+          screen.getByRole("button", { name: t("setup.members.patrol.removeSchedule") }),
+        );
+      }
+      await user.click(screen.getByRole("tab", { name: /Basic/ }));
+      expect(save).toBeEnabled();
+      expect(save).not.toHaveAttribute("aria-describedby");
+      expect(tabErrorMark(screen.getByRole("tab", { name: "Patrol" }))).toBeNull();
+    },
+  );
+
   it("lists routine candidates from the dedicated routine catalog", async () => {
     const user = userEvent.setup();
     await openPatrolTab(user);
@@ -3919,7 +3986,9 @@ describe("PatrolSettingsEditor", () => {
       .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
     await user.click(routineInput as HTMLElement);
     await user.keyboard("{Backspace}");
-    expect(await screen.findByText(t("setup.members.patrol.routineRequired"))).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText(t("setup.members.patrol.routineRequired"))).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
   });
 
@@ -4043,7 +4112,9 @@ describe("PatrolSettingsEditor", () => {
     await user.clear(cronField);
     await fill(user, cronField, "0 9 * *");
 
-    expect(await screen.findByText(t("setup.members.patrol.cronInvalid"))).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText(t("setup.members.patrol.cronInvalid"))).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
   });
 });
