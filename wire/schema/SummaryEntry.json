@@ -37,7 +37,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "How a turn's span ended, and what it ran on.",
+  "description": "How a turn's span ended, and what it ran on.\n\nInference failure text travels only to the host, which masks secrets and\nbounds it before recording. It is never part of the host's answer.",
   "properties": {
     "duration_ms": {
       "anyOf": [
@@ -55,6 +55,41 @@
       "default": "",
       "title": "Effort",
       "type": "string"
+    },
+    "error_category": {
+      "anyOf": [
+        {
+          "enum": [
+            "authentication",
+            "credit",
+            "rate_limit",
+            "other"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Category"
+    },
+    "error_response": {
+      "default": "",
+      "title": "Error Response",
+      "type": "string"
+    },
+    "error_status_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Status Code"
     },
     "model": {
       "default": "",

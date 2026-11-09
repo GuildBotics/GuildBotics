@@ -208,7 +208,11 @@ class IoEntry(BaseModel):
 
 
 class SummaryEntry(BaseModel):
-    """How a turn's span ended, and what it ran on."""
+    """How a turn's span ended, and what it ran on.
+
+    Inference failure text travels only to the host, which masks secrets and
+    bounds it before recording. It is never part of the host's answer.
+    """
 
     type: Literal["summary"] = "summary"
     span: SpanContext | None
@@ -220,6 +224,11 @@ class SummaryEntry(BaseModel):
     effort: str = ""
     duration_ms: float | None = None
     usage: dict[str, int] | None = None
+    error_category: (
+        Literal["authentication", "credit", "rate_limit", "other"] | None
+    ) = None
+    error_status_code: int | None = None
+    error_response: str = ""
 
 
 class CredentialEntry(BaseModel):
