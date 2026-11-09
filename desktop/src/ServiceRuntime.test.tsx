@@ -560,6 +560,31 @@ describe("Service Runtime screen", () => {
     ).toBeInTheDocument();
   });
 
+  it("surfaces missing chat credentials with the affected member id in the events card", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({
+        events: runtimeUnit("events", {
+          state: "running",
+          running: true,
+          events_missing_credential_count: 1,
+          events_missing_credential_persons: ["yuki"],
+          events_chat_provider: "slack",
+          member_routines: [],
+        }),
+      }),
+    );
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+
+    expect(
+      await screen.findByText(t("overview.eventsCard.missingCredentialTitle")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(t("overview.eventsCard.missingCredentialBody", { persons: "yuki" })),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t("overview.eventsCard.authFailedTitle"))).not.toBeInTheDocument();
+  });
+
   it("shows the stop-timeout pending warning instead of an error", async () => {
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
@@ -815,6 +840,8 @@ function runtimeUnit(
     events_drained_count: 0,
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
+    events_missing_credential_count: 0,
+    events_missing_credential_persons: [],
     events_chat_provider: "",
     member_routines: [],
     ...overrides,

@@ -575,6 +575,7 @@ fn empty_events_status() -> serde_json::Value {
             "target":"events", "subscription_count":null,"listener_count":null,
             "events_drained_count":null,"events_auth_failed_count":null,
             "events_auth_failed_persons":[],"events_chat_provider":"",
+            "events_missing_credential_count":0,"events_missing_credential_persons":[],
             "events_missing_channel_count":0,"events_missing_channel_persons":[],
             "events_error_count":0
         })

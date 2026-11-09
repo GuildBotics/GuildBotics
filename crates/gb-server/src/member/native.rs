@@ -1303,17 +1303,38 @@ pub(crate) mod tests {
         project["services"]["chat_service"] = json!({"name":"slack"});
         std::fs::write(&project_path, project.to_string()).unwrap();
         assert!(api.selected().service.start().await.unwrap().running);
-        let view = api.selected().service.view().await;
-        assert_eq!(view["events"]["events_auth_failed_count"], 1);
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/scheduler/status")
+                    .header("host", "127.0.0.1:8765")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let view: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(view["events"]["events_auth_failed_count"], 0);
+        assert_eq!(view["events"]["events_auth_failed_persons"], json!([]));
+        assert_eq!(view["events"]["events_missing_credential_count"], 1);
         assert_eq!(
-            view["events"]["events_auth_failed_persons"],
+            view["events"]["events_missing_credential_persons"],
             json!(["aiko"])
         );
         assert_eq!(view["events"]["events_chat_provider"], "slack");
         assert!(!api.selected().service.stop(true).await.running);
         let stopped = api.selected().service.view().await;
-        assert_eq!(stopped["events"]["events_auth_failed_count"], 0);
-        assert_eq!(stopped["events"]["events_auth_failed_persons"], json!([]));
+        assert_eq!(stopped["events"]["events_missing_credential_count"], 0);
+        assert_eq!(
+            stopped["events"]["events_missing_credential_persons"],
+            json!([])
+        );
         project["services"]["chat_service"] = json!({"name":"local"});
         std::fs::write(&project_path, project.to_string()).unwrap();
         assert!(api.selected().service.start().await.unwrap().running);

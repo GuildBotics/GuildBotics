@@ -167,10 +167,12 @@ impl Controller {
             "listener_count",
             "events_drained_count",
             "events_auth_failed_count",
+            "events_missing_credential_count",
         ] {
             scheduler[key] = serde_json::Value::Null;
         }
         scheduler["events_auth_failed_persons"] = serde_json::json!([]);
+        scheduler["events_missing_credential_persons"] = serde_json::json!([]);
         scheduler["events_chat_provider"] = serde_json::json!("");
         let worker_guard = self.worker.read().await;
         let worker = worker_guard.as_ref().filter(|_| status.state != "starting");
@@ -309,7 +311,7 @@ pub struct NativeWorker {
     cancelled: CancellationToken,
     stop_reception: CancellationToken,
     reception_failed: Arc<std::sync::atomic::AtomicBool>,
-    auth_skipped: Vec<String>,
+    missing_credentials: Vec<String>,
     chat_provider: String,
 }
 
@@ -333,7 +335,7 @@ impl NativeWorker {
         let mut listeners = BTreeMap::<String, crate::chat_receiver::Connection>::new();
         let mut groups = BTreeMap::<String, Vec<Arc<crate::chat_receiver::Receiver>>>::new();
         let mut members = vec![];
-        let mut auth_skipped = vec![];
+        let mut missing_credentials = vec![];
         let mut chat_provider = String::new();
         for member in team
             .members
@@ -359,7 +361,7 @@ impl NativeWorker {
                     Some(gb_ports::ServiceError::MissingCredential { .. })
                 )
             {
-                auth_skipped.push(member.person_id.clone());
+                missing_credentials.push(member.person_id.clone());
             }
             let store = Arc::new(crate::chat_state::Store {
                 workspace: native.workspace.clone(),
@@ -437,7 +439,7 @@ impl NativeWorker {
                 cancelled,
                 stop_reception: CancellationToken::new(),
                 reception_failed: Default::default(),
-                auth_skipped,
+                missing_credentials,
                 chat_provider,
             }),
             members,
@@ -502,8 +504,6 @@ impl Worker for NativeWorker {
                 }
                 missing_people.extend(group.missing_channel_people());
             }
-            auth_people.extend(self.auth_skipped.clone());
-            auth_count += self.auth_skipped.len();
         }
         auth_people.sort();
         auth_people.dedup();
@@ -522,6 +522,8 @@ impl Worker for NativeWorker {
                 "events_missing_channel_persons":missing_people,
                 "listener_count":if status.running {self.groups.len()} else {0},
                 "events_auth_failed_count":auth_count,"events_auth_failed_persons":auth_people,
+                "events_missing_credential_count":if status.running {self.missing_credentials.len()} else {0},
+                "events_missing_credential_persons":if status.running {self.missing_credentials.clone()} else {vec![]},
                 "events_chat_provider":self.chat_provider
             })
             .as_object()
@@ -862,7 +864,7 @@ mod tests {
             cancelled: generation.cancelled.clone(),
             stop_reception: CancellationToken::new(),
             reception_failed: Default::default(),
-            auth_skipped: vec![],
+            missing_credentials: vec![],
             chat_provider: String::new(),
         });
         let release = CancellationToken::new();
@@ -994,7 +996,7 @@ mod tests {
         let old = Arc::get_mut(&mut worker).unwrap();
         old.reception_failed
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        old.auth_skipped.push("previous-agent".into());
+        old.missing_credentials.push("previous-agent".into());
         old.chat_provider = "previous-provider".into();
         controller
             .service
@@ -1071,6 +1073,93 @@ mod tests {
         }
     }
 
+    struct RejectedCredentials;
+    impl gb_ports::EventListener for RejectedCredentials {
+        fn connected(&self) -> bool {
+            false
+        }
+        fn auth_failed(&self) -> bool {
+            true
+        }
+        fn start(&self) -> gb_ports::ServiceFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn stop(&self) -> gb_ports::ServiceFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn drain_events(&self) -> Vec<gb_ports::ChatEvent> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn events_status_distinguishes_rejected_credentials_from_missing_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let native = crate::member::native::tests::fixture(root.path());
+        let host = Arc::new(gb_environment::Host {
+            data: native.data.clone(),
+            home: root.path().join("home"),
+            package: native.package.clone(),
+            identity_root: native.identity_root.clone(),
+        });
+        let controller = Controller::new(native.clone(), host.clone());
+        let runtime = controller.workflow("aiko", TaskTracker::new()).unwrap();
+        let receiver = Arc::new(
+            crate::chat_receiver::Receiver::new(
+                "rejected-agent".into(),
+                runtime.chat.clone().unwrap(),
+                crate::chat_receiver::Connection {
+                    service: "local".into(),
+                    key: "test".into(),
+                    listener: Arc::new(RejectedCredentials),
+                    wake: Default::default(),
+                },
+                vec![],
+                Arc::new(crate::chat_state::Store {
+                    workspace: native.workspace.clone(),
+                    writes: runtime.writes.clone(),
+                    limit: 500,
+                }),
+            )
+            .await
+            .unwrap(),
+        );
+        let (mut worker, _) = NativeWorker::assemble(
+            &native,
+            host,
+            &Settings::default(),
+            controller.execution.clone(),
+            "test-run".into(),
+        )
+        .await
+        .unwrap();
+        let worker = Arc::get_mut(&mut worker).unwrap();
+        worker.groups.push(Arc::new(
+            crate::chat_receiver::Group::new(vec![receiver]).unwrap(),
+        ));
+        worker.missing_credentials.push("missing-agent".into());
+        let status = crate::service::Status {
+            running: true,
+            ..Default::default()
+        };
+        let events = worker.event_status(&status);
+        assert_eq!(events["events_auth_failed_count"], 1);
+        assert_eq!(
+            events["events_auth_failed_persons"],
+            serde_json::json!(["rejected-agent"])
+        );
+        assert_eq!(events["events_missing_credential_count"], 1);
+        assert_eq!(
+            events["events_missing_credential_persons"],
+            serde_json::json!(["missing-agent"])
+        );
+        let stopped = worker.event_status(&crate::service::Status::default());
+        for prefix in ["events_auth_failed", "events_missing_credential"] {
+            assert_eq!(stopped[format!("{prefix}_count")], 0);
+            assert_eq!(stopped[format!("{prefix}_persons")], serde_json::json!([]));
+        }
+    }
+
     #[tokio::test]
     async fn native_events_payload_matches_get_metadata_and_admitted_worker_identity() {
         let root = tempfile::tempdir().unwrap();
@@ -1109,6 +1198,7 @@ mod tests {
             "subscription_count",
             "events_drained_count",
             "events_auth_failed_count",
+            "events_missing_credential_count",
             "events_missing_channel_count",
             "events_error_count",
         ] {

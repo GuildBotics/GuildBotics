@@ -1233,6 +1233,9 @@ export const resources = {
           workerValue: "{{workers}}",
           processed: "Received events",
           processedValue: "received {{drained}} / failures {{failures}}",
+          missingCredentialTitle: "Chat token missing",
+          missingCredentialBody:
+            "No chat token is configured for: {{persons}}. Add their tokens and restart the service to receive events.",
           authFailedTitle: "Chat authentication failed",
           authFailedBody:
             "The chat rejected the credentials of: {{persons}}. These members cannot receive events until their credentials are fixed and the service is restarted.",
@@ -2641,6 +2644,9 @@ export const resources = {
           workerValue: "{{workers}}",
           processed: "受信イベント",
           processedValue: "受信 {{drained}} / 失敗 {{failures}}",
+          missingCredentialTitle: "チャットのトークンがありません",
+          missingCredentialBody:
+            "次のメンバーにチャットのトークンが設定されていません: {{persons}}。トークンを設定してサービスを再起動するとイベントを受信できます。",
           authFailedTitle: "チャットの認証に失敗しました",
           authFailedBody:
             "チャットが次のメンバーの資格情報を拒否しました: {{persons}}。これらのメンバーは資格情報を修正してサービスを再起動するまでイベントを受信できません。",
