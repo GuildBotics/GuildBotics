@@ -1,16 +1,10 @@
 """Where a brain's call to an external inference API goes.
 
 A brain that calls an external API with a key (the agno model of a slot, Jev)
-expands its template and reads the result wherever it runs, but the call
-itself is made on the host, where the key is: the process has one way to it
-(:func:`inference`). On the host that is the call itself
-(:mod:`~guildbotics.environment.inference_host`); inside a command's
-isolated environment it is the command's window to the host, which answers it
-under the command's grant.
-
-What crosses is data only -- the expanded messages, the JSON Schema of the
-output, the session state -- never a class to load or code to run: the
-host builds nothing from what the environment names.
+expands its template and reads the result, and the process has one way to
+make the call (:func:`inference`). Inside a command's isolated environment
+that is the guest's inference, which reaches the API through the gateway the
+host leases to the command, so the key itself stays on the host.
 """
 
 from __future__ import annotations
@@ -140,8 +134,7 @@ _installed: Inference | None = None
 
 def install_inference(implementation: Inference) -> None:
     """Make ``implementation`` the process's way to the external inference
-    APIs: the calls themselves on the host, the command's window inside its
-    isolated environment. Each place that builds a context installs its own."""
+    APIs. The entry that builds a command's context installs it."""
     global _installed
     _installed = implementation
 

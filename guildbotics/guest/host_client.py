@@ -31,6 +31,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
     CommandFacts,
+    Evidence,
     HostCallError,
     HostTurn,
 )
@@ -128,7 +129,7 @@ class ClientRunLedger:
         """Raise unless the run has recorded a terminal completion."""
         self._client.call("require_completion")
 
-    def evidence(self) -> list[dict[str, Any]]:
+    def evidence(self) -> list[Evidence]:
         """Return the evidence the run has recorded so far."""
         return list(self._client.call("evidence"))
 

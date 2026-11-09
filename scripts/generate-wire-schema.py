@@ -23,7 +23,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
 )
-from guildbotics.intelligences.brains.inference import AgnoAnswer, AgnoCall, JevCall
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.runtime.chat_service import (
     ChatChannelOutput,
@@ -46,7 +45,7 @@ HOST_RESULTS = {
     "begin_turn": wire.HostTurn,
     "end_turn": wire.EndTurnResult,
     "require_completion": type(None),
-    "evidence": list[dict[str, object]],
+    "evidence": list[wire.Evidence],
     "record_completed": type(None),
     "record_completion_missing": type(None),
     "resolve": ConversationRecord,
@@ -55,8 +54,6 @@ HOST_RESULTS = {
     "record": type(None),
     "required_io": type(None),
     "member": wire.MemberCommandResult,
-    "agno": AgnoAnswer,
-    "jev": dict[str, object],
 }
 
 TYPES = (
@@ -82,9 +79,6 @@ TYPES = (
     CliAgentExecutionResult,
     CommandAuthoringResult,
     TroubleshootingResult,
-    AgnoCall,
-    AgnoAnswer,
-    JevCall,
     wire.MemberCommandResult,
     ConversationKey,
     ConversationRecord,

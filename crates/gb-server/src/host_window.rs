@@ -1201,6 +1201,107 @@ mod tests {
         assert_eq!(event["payload"], metadata);
     }
 
+    #[tokio::test]
+    async fn the_run_ledger_answers_in_the_wire_shape_and_records_how_the_run_ended() {
+        let root = tempfile::tempdir().unwrap();
+        let mut context = command_context(root.path());
+        let record: gb_observability::runs::RunRecord = serde_json::from_value(json!({
+            "run_id":"run-1","member_id":"aiko","work_kind":"ticket","device_id":"device",
+            "execution_mode":"autonomous","started_at":"2026-11-09T00:00:00Z"}))
+        .unwrap();
+        let writes = gb_base::shared_writes::SharedWrites::new(
+            root.path().join("identity"),
+            Some(root.path().into()),
+        );
+        let store = gb_observability::runs::RunStore::open(root.path());
+        let masks = gb_observability::redaction::Redactor::default();
+        writes
+            .transaction(|writer| {
+                let record = store.start(writer, record, &masks)?;
+                store.append(
+                    writer,
+                    record,
+                    &json!({"kind":"evidence","evidence_type":"chat_batch",
+                    "payload":{"event_ids":["E1"]}}),
+                    "2026-11-09T00:00:01Z",
+                    &masks,
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = records.clone();
+        context.record = Arc::new(move |entry| {
+            captured
+                .lock()
+                .unwrap()
+                .push(record_entry(entry, "trace-1", "run-1", "aiko", "chat").unwrap());
+        });
+        let host = HttpHost::start_context(context).await.unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let call = |name: &str, body: Value| {
+            client
+                .post(format!("http://127.0.0.1:{}/host/{name}", host.port))
+                .bearer_auth(&host.token)
+                .json(&body)
+                .send()
+        };
+        let evidence = call("evidence", json!({}))
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        // The guest reads each item as the wire's Evidence.
+        let evidence: gb_wire::EvidenceResult =
+            serde_json::from_value(evidence["result"].clone()).unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].type_, "chat_batch");
+        let early = call("record_completed", json!({"attempt":1}))
+            .await
+            .unwrap();
+        assert_eq!(early.status(), reqwest::StatusCode::FORBIDDEN);
+        writes
+            .transaction(|writer| {
+                let result = serde_json::from_value(json!({"subject_type":"ticket",
+                    "subject_id":"T-1","status":"awaiting_checks"}))?;
+                let completion = gb_observability::runs::RunCompletion {
+                    result,
+                    member_id: "aiko",
+                    summary: "",
+                    now: "2026-11-09T00:00:02Z",
+                };
+                store.record_completion(writer, "run-1", completion, &masks)?;
+                Ok(())
+            })
+            .unwrap();
+        let completed = call("record_completed", json!({"attempt":2}))
+            .await
+            .unwrap();
+        assert_eq!(completed.status(), reqwest::StatusCode::OK);
+        call(
+            "record_completion_missing",
+            json!({"attempt":1,"max_attempts":3,"error":"none"}),
+        )
+        .await
+        .unwrap();
+        let records = records.lock().unwrap();
+        let [completed, missing] = &records[..] else {
+            panic!("{records:?}")
+        };
+        assert_eq!(completed["type"], "workflow.completed");
+        assert_eq!(
+            completed["payload"],
+            json!({"run_id":"run-1","attempt":2,"recovered":false,"status":"awaiting_checks"})
+        );
+        assert_eq!(completed["attributes"]["workflow.completion"], "recorded");
+        assert_eq!(missing["type"], "workflow.completion_missing");
+        assert_eq!(
+            missing["payload"],
+            json!({"run_id":"run-1","attempt":1,"max_attempts":3,"error":"none"})
+        );
+    }
+
     #[test]
     fn evaluated_decision_metadata_is_bounded_and_redacted() {
         let event = record_entry(
@@ -1608,21 +1709,30 @@ impl HttpHost {
                         acquire_inference(name, limit).await;
                         Ok(Value::Null)
                     }
-                    "require_completion" | "evidence" => {
+                    "require_completion" | "evidence" | "record_completed" => {
                         let run = gb_observability::runs::RunStore::open(&context.workspace)
                             .read(&context.invocation.run_id)
                             .map_err(|_| HostError::refused("Run record unavailable."))?;
                         if name == "evidence" {
-                            return Ok(json!(run.map(|r| r.provider_evidence).unwrap_or_default()));
+                            let evidence = run.map(|r| r.provider_evidence).unwrap_or_default();
+                            let evidence: gb_wire::EvidenceResult =
+                                serde_json::from_value(Value::Array(evidence))
+                                    .map_err(|_| HostError::refused("Run evidence unreadable."))?;
+                            return Ok(json!(evidence));
                         }
-                        if run.and_then(|r| r.result).is_none() {
+                        let Some(result) = run.and_then(|r| r.result) else {
                             return Err(HostError::refused(
                                 "Run completion has not been recorded.",
                             ));
+                        };
+                        if name == "record_completed" {
+                            // How the member said the run ended (awaiting_checks is shown as such).
+                            (context.record)(json!({"type":name,"payload":{
+                                "attempt":args["attempt"],"status":result.status}}));
                         }
                         Ok(Value::Null)
                     }
-                    "record_completed" | "record_completion_missing" => {
+                    "record_completion_missing" => {
                         (context.record)(json!({"type":name,"payload":args}));
                         Ok(Value::Null)
                     }
@@ -2701,16 +2811,26 @@ fn record_entry_detail(
                 event_redact(Value::Object(payload)),
             )
         }
-        "record_completed" => (
-            "workflow.completed".into(),
-            "workflow",
-            entry["payload"].clone(),
-        ),
-        "record_completion_missing" => (
-            "workflow.completion_missing".into(),
-            "workflow",
-            entry["payload"].clone(),
-        ),
+        name @ ("record_completed" | "record_completion_missing") => {
+            let payload = &entry["payload"];
+            let attempt = payload["attempt"].as_u64()?;
+            let event = if name == "record_completed" {
+                gb_member::events::completed(run, attempt, false, payload["status"].as_str()?)
+            } else {
+                gb_member::events::completion_missing(
+                    run,
+                    attempt,
+                    payload["max_attempts"].as_u64()?,
+                    payload["error"].as_str()?,
+                )
+            };
+            attributes = event["attributes"].clone();
+            (
+                event["type"].as_str()?.to_owned(),
+                "workflow",
+                event["payload"].clone(),
+            )
+        }
         _ => return None,
     };
     if !full && event_type == "cli_agent.response" {

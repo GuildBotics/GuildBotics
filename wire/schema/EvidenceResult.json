@@ -1,8 +1,34 @@
 {
+  "$defs": {
+    "Evidence": {
+      "description": "One piece of evidence a run has recorded, as its run record keeps it.",
+      "properties": {
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload",
+        "recorded_at"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "items": {
-    "additionalProperties": true,
-    "type": "object"
+    "$ref": "#/$defs/Evidence"
   },
   "title": "EvidenceResult",
   "type": "array"
