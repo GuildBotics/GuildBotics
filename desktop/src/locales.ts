@@ -946,6 +946,7 @@ export const resources = {
           cancelButton: "Cancel",
           deleteButton: "Delete",
           tabHasError: "This tab has incomplete or invalid fields.",
+          validationSummary: "Complete or correct these fields before saving.",
           deleteConfirmTitle: "Delete member?",
           deleteConfirmBody:
             "This deletes {{name}} itself: it leaves this workspace, and its name, accounts, credentials in the OS secret store, and the tokens GuildBotics issued it with the services are deleted for every workspace. Another workspace that still has the member cannot use it until the member is removed there too. This action cannot be undone.",
@@ -982,6 +983,7 @@ export const resources = {
             routineLoadError: "Failed to load patrol command candidates.",
             cron: "Detailed schedule",
             cronHint: "Use five-field cron notation: minute hour day-of-month month day-of-week.",
+            commandRequired: "Enter or select a scheduled command.",
             cronInvalid: "Enter a five-field cron schedule.",
             generatedCron: "Schedule",
             minute: "Minute",
@@ -2037,6 +2039,7 @@ export const resources = {
           cancelButton: "キャンセル",
           deleteButton: "削除",
           tabHasError: "このタブに未入力または形式エラーの項目があります。",
+          validationSummary: "保存するには、次のタブの項目を入力・修正してください。",
           deleteConfirmTitle: "メンバーを削除しますか？",
           deleteConfirmBody:
             "{{name}} そのものを削除します。このワークスペースから外し、名前・アカウント・OS 秘密ストア内の認証情報・各サービスで GuildBotics が発行したトークンを、すべてのワークスペースから削除します。ほかのワークスペースにこのメンバーが残っている場合、そこからも外すまでそのワークスペースでは使えません。この操作は元に戻せません。",
@@ -2075,6 +2078,7 @@ export const resources = {
             routineLoadError: "巡回実行コマンド候補の読み込みに失敗しました。",
             cron: "詳細スケジュール",
             cronHint: "5フィールドの cron 表記で入力します: 分 時 日 月 曜日。",
+            commandRequired: "定期実行するコマンドを入力・選択してください。",
             cronInvalid: "5フィールドの cron 表記で入力してください。",
             generatedCron: "スケジュール",
             minute: "分",

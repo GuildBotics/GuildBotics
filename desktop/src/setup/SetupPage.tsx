@@ -2882,6 +2882,7 @@ function MembersSection({
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
   const changedSaveHintId = useId();
+  const validationSummaryId = useId();
   const [mode, setMode] = useState<"idle" | "add" | "edit">(initialMemberId ? "edit" : "idle");
   const [editingPersonId, setEditingPersonId] = useState<string | null>(initialMemberId ?? null);
   const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
@@ -3414,30 +3415,25 @@ function MembersSection({
     },
     t,
   );
-  const routineSettingsValid =
-    isHumanMember ||
-    !routineOverrideEnabled ||
-    (routineCommands.length > 0 &&
-      routineCommands.every(
-        (command) => routineCommandOptionByValue.get(command)?.routine_eligible !== false,
-      ));
-  const scheduledSettingsValid =
-    isHumanMember ||
-    scheduledCommands.every(
-      (draft) =>
-        buildScheduledCommandExpression(draft, commandOptionByValue).trim().length > 0 &&
-        isValidCron(draftToCron(draft)),
-    );
-  const patrolSettingsValid = routineSettingsValid && scheduledSettingsValid;
-  const memberProfileValid =
-    isHumanMember ||
-    (speakingStyle.trim().length > 0 &&
-      characterArchetype.trim().length > 0 &&
-      characterTraits.length > 0 &&
-      characterInterests.length > 0 &&
-      characterJoinWhenText.trim().length > 0 &&
-      characterAvoidWhenText.trim().length > 0 &&
-      characterContributionText.trim().length > 0);
+  const patrolMessages = isHumanMember
+    ? []
+    : [
+        ...(!routineOverrideEnabled
+          ? []
+          : routineCommands.length === 0
+            ? [t("setup.members.patrol.routineRequired")]
+            : routineCommands.some(
+                  (command) => routineCommandOptionByValue.get(command)?.routine_eligible === false,
+                )
+              ? [t("setup.members.patrol.routineIneligible")]
+              : []),
+        ...scheduledCommands.flatMap((draft) => [
+          ...(buildScheduledCommandExpression(draft, commandOptionByValue).trim()
+            ? []
+            : [t("setup.members.patrol.commandRequired")]),
+          ...(isValidCron(draftToCron(draft)) ? [] : [t("setup.members.patrol.cronInvalid")]),
+        ]),
+      ];
   const seedDefaultRoutineCommands = useCallback(() => {
     setRoutineOverrideEnabled(true);
     if (!routineDefaultCommand) {
@@ -3471,15 +3467,6 @@ function MembersSection({
       PROVIDER_UIS[provider.name].member!.errors(accountForm(provider.name), memberContext, t),
     ]),
   );
-  const canSubmit =
-    configDir.trim().length > 0 &&
-    personId.trim().length > 0 &&
-    personName.trim().length > 0 &&
-    roles.length > 0 &&
-    memberProfileValid &&
-    patrolSettingsValid &&
-    Object.keys(memberErrors).length === 0 &&
-    Object.values(accountErrors).every((errors) => Object.keys(errors).length === 0);
   const activePresetSample = characterPresetExamples[speakingStylePreset || "energetic"];
   const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
     keys.some((key) => Boolean(memberErrors[key]));
@@ -3498,6 +3485,25 @@ function MembersSection({
         "characterContributionText",
       ];
   const basicTabHasError = hasMemberError(basicErrorKeys);
+  const validationGroups = [
+    {
+      tab: t("setup.members.tabs.basic"),
+      messages: basicErrorKeys.map((key) => memberErrors[key]).filter(Boolean),
+    },
+    {
+      tab:
+        accountTabs.find((provider) => provider.name === chatProvider)?.title ??
+        t("setup.integrations.kinds.chat_service"),
+      messages: [memberErrors.chatChannels].filter(Boolean),
+    },
+    { tab: t("setup.members.tabs.patrol"), messages: patrolMessages },
+    ...accountTabs.map((provider) => ({
+      tab: provider.title,
+      // Empty provider messages still block saving while the panel explains a transient state.
+      messages: Object.values(accountErrors[provider.name]),
+    })),
+  ].filter((group) => group.messages.length > 0);
+  const canSubmit = configDir.trim().length > 0 && validationGroups.length === 0;
   const addChatChannel = () => {
     const channel = chatChannelInput.trim();
     if (!channel) {
@@ -3994,17 +4000,36 @@ function MembersSection({
                   <Tabs.Tab value="intelligence">{t("setup.members.tabs.intelligence")}</Tabs.Tab>
                 ) : null}
                 {!isHumanMember ? (
-                  <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
+                  <Tabs.Tab
+                    value="patrol"
+                    rightSection={
+                      patrolMessages.length > 0 ? (
+                        <TabErrorIcon label={t("setup.members.tabHasError")} />
+                      ) : null
+                    }
+                  >
+                    {t("setup.members.tabs.patrol")}
+                  </Tabs.Tab>
                 ) : null}
                 {chatChannelsTab ? (
-                  <Tabs.Tab value="chat">{t("setup.integrations.kinds.chat_service")}</Tabs.Tab>
+                  <Tabs.Tab
+                    value="chat"
+                    rightSection={
+                      memberErrors.chatChannels ? (
+                        <TabErrorIcon label={t("setup.members.tabHasError")} />
+                      ) : null
+                    }
+                  >
+                    {t("setup.integrations.kinds.chat_service")}
+                  </Tabs.Tab>
                 ) : null}
                 {accountTabs.map((provider) => (
                   <Tabs.Tab
                     key={provider.name}
                     value={provider.name}
                     rightSection={
-                      Object.keys(accountErrors[provider.name] ?? {}).length > 0 ? (
+                      Object.keys(accountErrors[provider.name] ?? {}).length > 0 ||
+                      (provider.name === chatProvider && memberErrors.chatChannels) ? (
                         <TabErrorIcon label={t("setup.members.tabHasError")} />
                       ) : null
                     }
@@ -4477,6 +4502,20 @@ function MembersSection({
                 ) : null}
               </Box>
               <Stack gap="xs" align="flex-end">
+                {validationGroups.length > 0 ? (
+                  <Alert
+                    id={validationSummaryId}
+                    role="note"
+                    color="danger"
+                    title={t("setup.members.validationSummary")}
+                  >
+                    {validationGroups.map((group, index) => (
+                      <Text key={index} size="sm">
+                        {group.tab}: {group.messages.join(" ")}
+                      </Text>
+                    ))}
+                  </Alert>
+                ) : null}
                 {memberChanged ? (
                   <Text id={changedSaveHintId} size="sm" c="dimmed">
                     {t("setup.members.changedSaveHint")}
@@ -4487,7 +4526,12 @@ function MembersSection({
                     savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
                   }
                   disabled={!canSubmit || memberChanged || memberLoading}
-                  aria-describedby={memberChanged ? changedSaveHintId : undefined}
+                  aria-describedby={
+                    [
+                      ...(memberChanged ? [changedSaveHintId] : []),
+                      ...(validationGroups.length > 0 ? [validationSummaryId] : []),
+                    ].join(" ") || undefined
+                  }
                   onClick={() => void handleSaveMember()}
                 >
                   {formMode === "edit"
