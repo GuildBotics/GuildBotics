@@ -546,9 +546,9 @@ impl Runner {
             let limits = self.limits();
             let mut wait = Duration::from_secs(2);
             if running.len() < limits.max_jobs as usize {
-                // Keep the ready executor's health cache. Only resolve again
-                // when unavailable, so a runtime installed later can recover.
-                if !current.health().await.ready {
+                // Retry unresolved runtimes only. An accepted runtime retains
+                // both its ready and unavailable health cache across claims.
+                if current.needs_resolution() {
                     current = executor();
                 }
                 match self.claim(&*current).await {
@@ -1490,22 +1490,25 @@ mod tests {
         // environment or depending on an msb installed in the developer's home.
         const CHILD: &str = "BRANVIL_TEST_LATE_RUNTIME_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            let home = tempfile::tempdir().unwrap();
-            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
-                    "--nocapture",
-                ])
-                .env(CHILD, "1")
-                .env("HOME", home.path())
-                .env("USERPROFILE", home.path())
-                .output()
-                .await
-                .unwrap();
-            assert!(output.status.success(), "{output:?}");
+            for mode in ["ready", "doctor-failure"] {
+                let home = tempfile::tempdir().unwrap();
+                let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, mode)
+                    .env("HOME", home.path())
+                    .env("USERPROFILE", home.path())
+                    .output()
+                    .await
+                    .unwrap();
+                assert!(output.status.success(), "{mode}: {output:?}");
+            }
             return;
         }
+        let doctor_fails = std::env::var(CHILD).unwrap() == "doctor-failure";
         let s =
             service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"echo ok\"]\n")
                 .await;
@@ -1549,7 +1552,8 @@ mod tests {
 echo "$1" >> "$0.calls"
 case "$1" in
 --version) echo 'msb 0.6.17' ;;
-doctor|remove) exit 0 ;;
+doctor) [ ! -f "$MSB_HOME/doctor-fails" ] ;;
+remove) exit 0 ;;
 volume) echo '[]' ;;
 image) printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}' ;;
 run)
@@ -1565,18 +1569,27 @@ run)
 esac
 "#,
         );
+        if doctor_fails {
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::write(home.join("doctor-fails"), "").unwrap();
+        }
         std::fs::rename(staged, &msb).unwrap();
+        let expected = if doctor_fails {
+            "startup_failure"
+        } else {
+            "success"
+        };
         let next_sha = empty_main(&s, "runtime installed").await;
         let next = settled(next_sha).await;
-        assert_eq!(next.conclusion.as_deref(), Some("success"), "{next:?}");
-        assert!(home.join("ran").is_file(), "msb ran the next job");
+        assert_eq!(next.conclusion.as_deref(), Some(expected), "{next:?}");
+        assert_eq!(home.join("ran").is_file(), !doctor_fails);
         assert!(!serving.is_finished(), "the same runner is still serving");
-        // Exercise both another job and several idle polls within the ready
-        // health TTL. Neither resolution nor doctor should run again.
+        // Exercise another job and idle polls within either health TTL.
+        // Neither resolution nor doctor should run again, even when unready.
         let another_sha = empty_main(&s, "runtime still ready").await;
         assert_eq!(
             settled(another_sha).await.conclusion.as_deref(),
-            Some("success")
+            Some(expected)
         );
         tokio::time::sleep(Duration::from_secs(5)).await;
         let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
