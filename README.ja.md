@@ -1,15 +1,13 @@
-> main の Python host・CLI は #122 で削除済みです。以下の Python host の手順は凍結点 `origin/python-host` のものです。Rust 向けの利用手順は #96 で更新します。
-
 <h1>GuildBotics</h1>
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発チームで継続的に働く「チームメンバー」として運用するためのツールです。各メンバーには固有の名前、GitHub / Slack のアカウント、役割、記憶を設定できます。実際の調査・実装・判断は AI CLI ツールが行い、メンバーとしての外部操作（コミット、PR 作成、コメント、Slack 投稿、記憶の保存）はすべて専用 CLI（`guildbotics member`）を通して実行・記録されます。
+GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発チームで継続的に働く「チームメンバー」として運用するためのツールです。各メンバーには固有の名前、Branvil / Slack のアカウント、役割、記憶を設定できます。実際の調査・実装・判断は AI CLI ツールが行い、メンバーとしての外部操作（コミット、PR 作成、コメント、Slack 投稿、記憶の保存）はすべて専用 CLI（`guildbotics member`）を通して実行・記録されます。
 
 同じメンバーと 2 つの方法で仕事ができます。
 
 - **一緒に作業する** — Claude Code や Codex のセッションにメンバーを呼び出し、いま開いているリポジトリでペアプログラミングします（→ [メンバーと一緒に作業する](#メンバーと一緒に作業する)）
-- **任せる** — GitHub Projects のチケットや Slack のメンションで依頼すると、メンバーが調査・実装・PR 作成・返信まで自律的に進めます（→ [GitHub チケットを任せる](#github-チケットを任せる) / [Slack で作業を依頼する](#slack-で作業を依頼する)）
+- **任せる** — Branvilのチケットや Slack のメンションで依頼すると、メンバーが調査・実装・PR 作成・返信まで自律的に進めます（→ [Branvil チケットを任せる](#branvil-チケットを任せる) / [Slack で作業を依頼する](#slack-で作業を依頼する)）
 
 どちらの働き方でも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
 
@@ -27,7 +25,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - [何ができるか](#何ができるか)
 - [はじめる](#はじめる)
 - [メンバーと一緒に作業する](#メンバーと一緒に作業する)
-- [GitHub チケットを任せる](#github-チケットを任せる)
+- [Branvil チケットを任せる](#branvil-チケットを任せる)
 - [Slack で作業を依頼する](#slack-で作業を依頼する)
 - [決まった作業を自動で実行する](#決まった作業を自動で実行する)
 - [独自のコマンドを作る](#独自のコマンドを作る)
@@ -39,7 +37,6 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 ## 何ができるか
 
 - **複数メンバーの定義**: 異なる役割、個性、記憶を持つ複数の AI メンバーを定義できます（設定ファイル上の識別子は `person`）
-- **GitHub 統合**: GitHub Projects / Issues によるチケット管理と、メンバーによる PR 作成・コメント・レビュー対応
 - **Slack 統合**: 設定したチャネルをメンバーが監視し、そこで受けた依頼を本人として処理・応答
 - **Branvil 統合**: Hub のマシンで自分で動かすコードホスト兼ボード [Branvil](docs/branvil_integration.ja.md) を、GitHub の代わりにリポジトリ・PR・CI・チケットに使う
 - **メンバー記憶**: メンバーがセッションを越えて参照・維持する個人/チームの記憶
@@ -54,44 +51,28 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 ### 必要なもの
 
-- **OS**: Linux（Ubuntu 24.04 で動作確認）、macOS（Sequoia で動作確認）、または Windows 11
-  - Hub でサーバーを OS のサービスとして動かすスクリプトは macOS 向けです（→ [インストール](#インストール)）
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: チェックアウトに GuildBotics の Python 環境を入れます
-- **[Node.js](https://nodejs.org/) 24 以上**: サーバーが配る画面をビルドします
-- **LLM API キー**（いずれか 1 つを事前に取得）:
-  - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
-  - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
-  - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
-- **OpenSSH**（別のマシンのブラウザから使う場合のみ）:
-  - GuildBotics は 1 台のマシン（**Hub**）で動きます。そこを使うほかの各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
-  - Hub には OpenSSH **サーバー**が必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
-- **ハードウェア仮想化**（エージェント隔離環境のため）。コマンドはすべて、サブコマンドや AI CLI の turn も含めて、コマンドを実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
-- **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**エージェント実行環境** 画面にそのコマンドが表示されます）。GuildBotics が隔離環境に導入するツールは次のとおりです:
-  - [OpenAI Codex CLI](https://github.com/openai/codex/)
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（Claude Pro または Max サブスクリプションが必要）
-  - [Grok Build](https://docs.x.ai/build)
-  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)（環境にはキーチェーンが無いため、ログイン時に token を端末の store のファイルへ置くかを 1 回確認されます）
-  - [Antigravity CLI](https://antigravity.google/docs/cli)
-
-メンバーはセッションを引き継いで前回の続きから作業を再開できます。隔離環境、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
+- HubはApple Silicon搭載のMacです。Rustは `rust-toolchain.toml` の指定版、画面のビルドにはNode.js 24とnpmを使います。Gitも `PATH` に入れてください。CIはLinuxで実行します。
+- 他のマシンのブラウザから使う場合は、Hubで「リモートログイン」を有効にし、接続元にOpenSSHクライアントを用意します。接続元にはWindowsも使えます。
+- 翻訳などのモデルを使うコマンドには、Google Gemini、OpenAI、AnthropicのいずれかのAPIキーが必要です。AI CLIを使うメンバーは、セットアップ後に `guildbotics environment login <tool>` でHub上の隔離環境にログインします。対応ツールはCodex、Claude Code、Grok Build、GitHub Copilot CLI、Antigravityです。
 
 ### インストール
 
-Hub にあるチェックアウトから、Rust の CLI と画面をビルドします。
+Hubのチェックアウトから画面と実行ファイルを作ります。次は、初回セットアップをターミナルで行う手順です。
 
-```bash
+```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspace desktop
+npm ci && npm run build --workspaces
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
+"$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
-`install` はビルドした実行ファイルを `~/.guildbotics/bin/guildbotics` に配置し、見つかった対応ツールのユーザースキル用ディレクトリに GuildBotics スキルをコピーします。Unix では、空いていれば `~/.local/bin/guildbotics` にもリンクを作ります。ユーザー自身が置いたコマンドと、編集済みのスキルは保持します。実行ファイルを更新するときは、再ビルドしてから `install` を実行してください。
+別のターミナルで `"$HOME/.guildbotics/bin/guildbotics" open` を実行すると、ブラウザに設定画面が開きます。既存のワークスペースを使う場合は、サーバー起動前に `guildbotics workspace use <path>` で選びます。
 
-既にワークスペースがあれば、`~/.guildbotics/bin/guildbotics workspace use <パス>` で選びます。ターミナルで `~/.guildbotics/bin/guildbotics server start` を実行し、別のターミナルで `guildbotics open` を実行すると GuildBotics の画面が開きます。Branvil の画面を開く場合は `guildbotics open --branvil` を使います。
+`install` はビルド済みの実行ファイルを `~/.guildbotics/bin/guildbotics` に置き、利用可能なAI CLIのユーザー領域に同梱スキルを配置します。ユーザーが編集したスキルと既存のコマンドは保持します。`~/.local/bin/guildbotics` のリンクを使うには `~/.local/bin` を `PATH` に加えます。
 
-エージェント隔離環境の runtime は、最初に必要になったときに `~/.guildbotics/data/msb` へ、GuildBotics に同梱された複製から配置します（ダウンロードはしません）。Windows ではこの固定パスに対する firewall 規則を、昇格の確認 1 回で作成します。
+Branvilを使う場合は `guildbotics branvil init --data-dir <絶対パス>` で用意し、`BRANVIL_DATA_DIR` をそのパスに設定して起動します。稼働中は `guildbotics open --branvil` で画面を開けます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
 
 ### 初期セットアップ
 
@@ -101,29 +82,28 @@ Hub で `guildbotics open` を実行して画面を開きます。ブラウザ�
 - ワークスペースフォルダの選択。作業するリポジトリの外に置いてください。たとえば作業リポジトリを `~/repos/myproject`、ワークスペースを `~/teams/myproject` に分けます。受け渡しフォルダ `~/Documents/GuildBotics` の中にも置けません
 - プロジェクトの説明文
 
-**GitHub / Slack と連携する場合は、設定を始める前にサービス側の準備が必要です。** どの連携も任意で、あとから **設定 → 連携** で有効にできます。まず動かしてみたい場合は、連携を使わずに進めてください。
+**Branvil / Slack と連携する場合は、設定を始める前にサービス側の準備が必要です。** どの連携も任意で、あとから **設定 → 連携** で有効にできます。まず動かしてみたい場合は、連携を使わずに進めてください。
 
-- **GitHub**: 初期設定を完了するには、有効な GitHub Project の URL が必須です。先に [GitHub プロジェクトを作成する](#github-プロジェクトを作成する)（Todo / In Progress / Done のステータスを用意）と [AI エージェント用の GitHub アカウントを用意する](#ai-エージェント用の-github-アカウントを用意する)（アカウント種別の選択とトークン発行）を済ませてください。メンバーに GitHub アカウントを割り当てる場合は、そのメンバーのユーザー名・git メールアドレス・認証情報も必須になります
 - **Slack**: メンバーが Slack で依頼を受けるには、Socket Mode の Slack App と bot / app トークンが必要です。準備する内容は [Slack で作業を依頼する](#slack-で作業を依頼する)を参照してください
 - **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。GuildBotics はオーナーの同意で一度だけ Branvil に接続し、メンバーごとの Branvil のエージェントとトークンは GuildBotics が用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
 
 GuildBotics では、プロジェクトの設定と状態を置くフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 
 - `.guildbotics/local/debug.env`: デバイス固有の非シークレットなデバッグ設定（ログレベル）
-- `.guildbotics/config/secrets.yml`: OS キーチェーンに保存したシークレットのキー名一覧（値は含まない）
+- `.guildbotics/config/secrets.yml`: 暗号化ストアに保存したシークレットのキー名一覧（値は含まない）
 - `.guildbotics/config/team/project.yml`: プロジェクト定義
 - `.guildbotics/config/intelligences/`: LLM と AI CLI ツールの設定
 
 メンバーのアイデンティティ（名前・人格・アイコン・各サービスのアカウント）はすべてのワークスペースで共通なので、メンバーの認証情報とともにワークスペースの外の `~/.guildbotics/identity/` に書き出されます。ワークスペースには、そのワークスペースでのメンバーの設定（役割・巡回・チャットのチャンネル・AI 設定）が置かれます（→ [設定ファイル](#設定ファイル)）。
 
-API キーやアカウントトークンの値は、利用可能な場合は OS キーチェーンに保存され、上記ファイルにはキー名だけが記録されます（→ [API キーとトークンの保存](#api-キーとトークンの保存)）。
+API キーやアカウントトークンの値は、暗号化したローカルストアに保存され、上記ファイルにはキー名だけが記録されます（→ [API キーとトークンの保存](#api-キーとトークンの保存)）。
 
 プロジェクト設定に続けて、画面で以下を設定します。
 
 - **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択、LLM API キーの設定
 - **エージェント実行環境**: **ビルド** でこのマシンに環境を作り、表示されるコマンドで選んだツールへログインします。どちらもマシンごとの作業です
-- **連携**: コードホスティング・チケット・チャットに使うサービスを選び（どれも任意）、選んだサービスを設定します。GitHub のチケットでは GitHub Project の URL、独自ステータス名を使う場合の[レーンマッピング](#タスクボードの取り決め)、`Agent` フィールドを設定します。選んだサービスでのメンバーのアカウントは、メンバーのそのサービスのタブで設定します
-- **メンバー**: チームメンバーの追加と設定（GitHub アカウントを割り当てる場合は、上記の認証情報が必要です）。名前・人格・アイコン・各サービスのアカウントはすべてのワークスペースで共通で、役割・巡回・チャット・AI 設定はこのワークスペースだけの設定です。メンバー ID は保存後に変更できません。**既存のメンバーを追加** は、ほかのワークスペースにいるメンバーをこのワークスペースに追加します。**このワークスペースから外す** は、このワークスペースからだけメンバーを外します（アイデンティティ・認証情報・各サービスのトークンは残ります）。**削除** は、メンバーをこのワークスペースから外してアイデンティティと認証情報を削除し、Branvil などのサービスで GuildBotics が発行したトークンを無効にします。そのメンバーがまだいるほかのワークスペースでは、そこから外すまでそのメンバーだけが使えません
+- **連携**: コードホスト、チケット、チャットのサービスを選んで設定します。各サービスは任意です。
+- **メンバー**: チームメンバーの追加と設定。名前・人格・アイコン・各サービスのアカウントはすべてのワークスペースで共通で、役割・巡回・チャット・AI 設定はこのワークスペースだけの設定です。メンバー ID は保存後に変更できません。**既存のメンバーを追加** は、ほかのワークスペースにいるメンバーをこのワークスペースに追加します。**このワークスペースから外す** は、このワークスペースからだけメンバーを外します（アイデンティティ・認証情報・各サービスのトークンは残ります）。**削除** は、メンバーをこのワークスペースから外してアイデンティティと認証情報を削除し、Branvil などのサービスで GuildBotics が発行したトークンを無効にします。そのメンバーがまだいるほかのワークスペースでは、そこから外すまでそのメンバーだけが使えません
 - **検証**: **設定を検証** を押すと、LLM、AI CLI ツール、連携先、Git を読み取り専用でチェックします。連携先のデータは更新しません
 
 ### クイックスタート
@@ -141,7 +121,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 ### 次にやること
 
 - いま開いているリポジトリでメンバーとペアプログラミングする → [メンバーと一緒に作業する](#メンバーと一緒に作業する)
-- チケットから PR 作成までを任せる → [GitHub チケットを任せる](#github-チケットを任せる)
+- チケットから PR 作成までを任せる → [Branvil チケットを任せる](#branvil-チケットを任せる)
 - Slack でメンバーに作業を依頼する → [Slack で作業を依頼する](#slack-で作業を依頼する)
 - 定期処理や独自コマンドを作る → [決まった作業を自動で実行する](#決まった作業を自動で実行する) / [独自のコマンドを作る](#独自のコマンドを作る)
 
@@ -184,116 +164,11 @@ host の `guildbotics run` は、同じワークスペースを選んだサー�
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics server start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
 
-## GitHub チケットを任せる
+## Branvil チケットを任せる
 
-GitHub Projects のチケットでメンバーに作業を依頼し、調査・実装・PR 作成までを任せる使い方です（デフォルトの `ticket_driven_workflow` を使用）。
+Branvilのチケットをメンバーに渡すと、既定の `ticket_driven_workflow` が調査、実装、プルリクエストの作成を進めます。**設定 → 連携** でコードホストとチケットにBranvilを選び、対象のワークスペースを指定します。Branvilの接続とアカウント、ボードの準備は [Branvil連携ガイド](docs/branvil_integration.ja.md) を参照してください。
 
-**注**: GitHub 統合は任意です。GitHub 統合なしでも、Slack チャットワークフローやスケジュール実行によるコマンド自動化は利用できます。
-
-**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とします。GitHub 側の認可は、その認証情報で push や変更ができるリポジトリを限定しますが、**Only select repositories** を選んでも、公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。そのため GuildBotics は、メンバーの GitHub への書き込み（`git push` を含む）のうち、書き込み先リポジトリの owner がそのサービスに設定した owner（`team/project.yml` の、コードホスト（`git push` を含む）は `services.code_hosting_service.owner`、Issue と Project は `services.ticket_service.owner`）と異なるものを、送信する前に拒否します。読み取りは制限しません（フォークからの Pull Request はチェックアウトしてレビューできますが、フォークへは push しません）。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
-
-### できること
-
-- **タスクボードでのタスク依頼**: チケットの `Agent` フィールドでメンバーを選び、着手可能レーンへ移動すれば、メンバーがそのタスクを実行します
-- **実行結果の確認**: タスクが完了すると、メンバーがコメント、PR、レビュー返信、リアクションのいずれかの形で結果を残します
-- **Pull Request の作成**: コード変更が必要な場合、メンバーが作業ブランチを公開し、Pull Request を作成または再利用します
-- **チケット作成**: follow-up ticket の作成を指示すると、メンバーがリポジトリに実 issue を作成します
-
-### GitHub プロジェクトを作成する
-
-organization で GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステータス）をあらかじめ追加しておきます。
-
-- Todo（着手可能）
-- In Progress（進行中）
-- Done（完了）
-
-既存プロジェクトのステータス名をそのまま使いたい場合は、後述のレーンマッピングで紐付けできます。
-
-### AI エージェント用の GitHub アカウントを用意する
-
-メンバーが GitHub にアクセスするためのアカウントを用意します。以下のいずれかの方法が利用可能です。
-
-- **マシンアカウント**（マシンユーザー）
-  - 「AIエージェントとタスクボードやPull Requestを通じて対話しながら進める」という雰囲気が味わえるという意味でおすすめの方法ですが、[GitHub の利用規約上](https://docs.github.com/ja/site-policy/github-terms/github-terms-of-service#3-account-requirements)、無料で作成できるマシンアカウントは、1ユーザーにつき1つだけとなっていますのでご注意ください。
-- **GitHub App**
-  - アカウント作成数に制限がないというメリットがあります。ただし、GitHub サイト上ではボットであることが明記されるため、少し雰囲気が削がれます。
-
-**マシンアカウントを利用する場合**:
-
-マシンアカウントには、対象リポジトリだけに権限を絞った **fine-grained PAT**（Fine-grained personal access token）を発行します。Classic PAT は利用しません（Classic PAT はアカウントがアクセスできる全リポジトリに及ぶため、リポジトリ単位の境界を作れません）。
-
-1. 作成したマシンアカウントを organization の**メンバー**として参加させてください。招待は organization の People ページ（`https://github.com/orgs/<org名>/people`）の **Invite member** から行えます。参加後、同じページの **Members** 一覧にマシンアカウントが表示されることを確認してください（**Outside collaborators** 側に表示されている場合はメンバーではありません。outside collaborator のままでは、後の手順で fine-grained PAT の **Resource owner** に organization を選べません）
-2. organization 側で fine-grained PAT のアクセスを許可してください。organization の **Settings → Third-party Access → Personal access tokens → Settings** で **Allow access via fine-grained personal access tokens** を選択します。**Require administrator approval** を有効にしている場合は、後の手順でトークンを発行したあと、organization の owner が **Settings → Third-party Access → Personal access tokens → Pending requests** で承認するまでトークンは機能しません
-3. 担当させる各リポジトリの **Settings → Collaborators and teams** で、マシンアカウントを Collaborator（Write 以上）として追加してください（organization の **Member privileges → Base permissions** で全メンバーに Write 以上を与えている場合は個別追加不要ですが、既定は Read です）
-4. Project のボードを開き、右上の **…**（三点）メニューから **Settings** を選び、**Manage access** を確認してください（organization の Settings ではなく、Project 自体の設定画面です）。画面上部の **Who has access** に、この Project の **Base role**（organization のメンバー全員に与えられる権限。手順 3 のリポジトリの Base permissions とは別の設定です）が表示されます。Base role が Write 以上なら個別追加は不要です。Read 以下の場合は、**Invite collaborators** でマシンアカウントを Collaborator（Write 以上）として追加してください
-5. マシンアカウントでログインし、**Settings → Developer settings → Personal access tokens → Fine-grained tokens** を開き、**Generate new token** を押してください
-6. 以下を設定します
-   - **Token name**: 任意（例: `guildbotics-alice`）
-   - **Expiration**: 任意（期限が切れたら再発行し、画面でもう一度登録してください）
-   - **Resource owner**: マシンアカウント自身ではなく、対象の **organization** を選択します
-   - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します（これだけでは公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。上記の「前提」のとおり、設定した owner の外へは GuildBotics が書き込ませません）
-   - **Repository permissions**:
-     - **Actions**: Read-only（workflow run・失敗 job のログ・artifact の読み取り）
-     - **Checks**: Read-only（pull request の commit に対する check run の読み取り）
-     - **Commit statuses**: Read-only（pull request の commit に対する外部 CI status の読み取り）
-     - **Contents**: Read and write（リポジトリの複製と作業ブランチの push）
-     - **Dependabot alerts**: Read-only（依存ライブラリの脆弱性アラートの読み取り）
-     - **Issues**: Read and write（Issue の読み書き、コメント、ラベル、開閉、リアクション）
-     - **Metadata**: Read-only（他の権限を選ぶと自動で付きます）
-     - **Pull requests**: Read and write（PR の作成・更新、レビューコメントと返信、リアクション、自動再レビューの上限での Draft への変換）
-     - **Workflows**: Read and write（メンバーに `.github/workflows` 配下を変更させる場合のみ）
-   - **Organization permissions**:
-     - **Projects**: Read and write（Projects v2 のボード読み取りと、`Agent` フィールドの作成・更新）
-
-7. **Generate token** を押し、表示されたトークンをコピーしてください（この画面を離れると再表示できません）。発行後にトークン名の横へ **Pending** と表示された場合は承認待ちの状態で、organization の owner が手順 2 の **Pending requests** で承認するまでそのトークンは機能しません。承認を済ませてから次へ進んでください
-8. 画面の **設定 → メンバー → GitHub** タブで「マシンアカウント（マシンユーザー）」を選び、**アクセストークン** に貼り付けて保存してください
-
-既存の fine-grained PAT は、手順 5 の **Fine-grained tokens** で対象トークンを開き、権限を編集して **Repository permissions → Dependabot alerts → Read-only** を追加してください。同じトークンの権限だけを更新する場合、画面での再登録は不要です。organization が承認を必須にしている場合は、編集後の権限も owner に承認してもらってから再試行してください。対象リポジトリが **Repository access** に含まれていることも確認します。[GitHub の必要権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts)と[承認リクエストの管理](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization)も参照してください。
-
-**GitHub App を利用する場合**:
-
-メンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで App ID とインストール ID が自動で取り込まれ、メンバーを保存すると App の秘密鍵がキーチェーンに保存されるため、以下の手動手順は不要です。登録を始めてから 30 分以内にメンバーを保存してください。過ぎると登録の有効期限が切れ、App の登録をやり直すことになります。
-
-手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
-
-- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** / **Dependabot alerts** を Read-only、**Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
-- **Organization permissions**: **Projects** を Read & Write
-
-既存 App に権限を追加した場合は、利用する前に各インストール先で変更を承認してください。Dependabot アラートでは、App の **Permissions & events → Repository permissions → Dependabot alerts** を **Read-only** に変更し、organization owner が **Organization Settings → GitHub Apps → Configure** で変更内容を確認・承認します。対象リポジトリがインストール先に含まれていることも確認してください。GuildBotics から新規登録する App は、この権限を最初から要求します。[GitHub の承認手順](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app)も参照してください。
-
-最新のアラートは `guildbotics run repository/security_alerts --person alice repo=org/repo` で確認できます。個別確認は `alert=42` を追加します。実行環境の準備は必要ですが、LLM は呼びません。ページ送り・構造化結果・アクセスエラーは[Dependabot アラート確認コマンド](docs/custom_command_guide.ja.md#41-依存ライブラリの脆弱性アラートの確認)を参照してください。
-
-GitHub App 作成後に以下の作業を行ってください。
-
-1. GitHub App 設定ページで「Generate a private key」により `.pem` ファイルをダウンロードして、保存してください
-2. 「Install App」から organization にインストールを行い、**インストールID**を取得してください。インストール先のリポジトリは、そのメンバーに担当させるものだけを選択してください。インストール後に表示された画面の URL の末尾の数字（`.../settings/installations/<インストールID>`）がインストール ID です。設定時に利用するため、メモしておいてください
-
-### 認証情報と実行環境を準備する
-
-- 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、画面のメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
-- チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/local/clones/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
-- このディレクトリの git はすべて隔離環境の中で動き、host では動きません。メンバーのトークンを使うのは host の GuildBotics だけです（→ [member git とメンバーの clone](docs/native_agent_runtime.ja.md#member-git-とメンバーの-clone)）。そのため、プロジェクトの git hooks は環境の中で image にあるツールを使って動き、Git LFS は扱いません
-- AI CLI ツールを対話的にも使う場合は、`gh`、直接のトークン / API 書き込み、`git push` を拒否または承認必須にすることを推奨します。これは利用者自身の GitHub アカウントへフォールバックすることを避けるための防止策であり、トークン流出を完全に技術的に封じ込めるサンドボックスではありません
-- AI CLI の turn は、サービスを実行するマシンのエージェント隔離環境の中で動きます。**設定 → エージェント実行環境** で環境が **準備完了**、ツールが **この端末に認証情報保存済み** になっていることを確認してください。ターミナルからは次で確認できます:
-
-  ```bash
-  guildbotics environment status
-  ```
-
-### 設定を検証する
-
-**設定 → 検証** で **設定を検証** を押すと、各アクティブメンバーの LLM・AI CLI ツール・GitHub・Slack・Git 設定が実際に利用可能かをチェックできます（GitHub / Slack へは読み取り専用でアクセスします）。
-
-### タスクボードの取り決め
-
-**カスタムフィールド**: タスクを実行するメンバーを選ぶ `Agent` フィールドが管理されます。**設定** の GitHub ボードの設定から作成し、メンバーに合わせて選択肢を追加します。人間以外の GitHub メンバーを保存すると自動で更新されます。このフィールドが必要なのに選択肢の無いメンバーは **設定を検証** が知らせます。GitHub App のメンバーは GitHub の assignee にできないため、メンバーの指定にはこのフィールドを使います。
-
-**レーンマッピング**: GuildBotics は GitHub Projects のステータスを 3 つのレーン（着手可能 / 作業中 / 完了）として扱います。
-
-- 既定では `Todo` が着手可能、`In Progress` が作業中、`Done` が完了です。標準的なボードなら設定は不要です
-- 着手可能と完了の**間**にあるステータス（例: `In Review`）は、自動的に作業中として扱われます
-- 着手可能より**前**のステータス（例: `Backlog`）と、完了**以降**のステータス（例: `Icebox`）は無視されます。途中レーンや保留レーンは、ボード列の並び順だけで追加できます
-- 独自のステータス名を使っている場合は、**設定 → 連携** の **チケット** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_service.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
+**設定 → エージェント実行環境** で環境が準備済みで、AI CLIにログイン済みかを確認します。端末では `guildbotics environment status` で同じ状態を確認できます。
 
 ### サービスを起動して作業を依頼する
 
@@ -309,11 +184,11 @@ GitHub App 作成後に以下の作業を行ってください。
 
 実行中の状況は **診断** 画面の **Global / システム** セッション（イベント / ログ）で確認でき、メンバーごとの作業結果は **アクティビティ** 画面にまとまります。
 
-タスクを依頼するには、GitHub Projects のチケットを以下のように操作します。
+タスクを依頼するには、Branvilのチケットを以下のように操作します。
 
-1. チケットを作成し、対象の Git リポジトリを選択して Issue として保存
+1. Branvilで対象リポジトリのチケットを作成します。
 2. チケットにメンバーへの指示を記述（この内容がプロンプトとなるため、できるだけ具体的に記述）
-3. `Agent` フィールドで対象のメンバーを選択
+3. Branvilの担当者にメンバーを選びます。
 4. チケットを着手可能レーンへ移動
 
 作業が始まると、メンバーとは次のようにやり取りします。
@@ -327,25 +202,24 @@ GitHub App 作成後に以下の作業を行ってください。
 コマンドの実行中は、操作がないことによるスリープ（アイドルスリープ）を常に抑止します。サービスの待機中もスリープさせたくない場合は、**サービス実行** 画面の **このマシンをスリープさせない** をオンにします（既定はオフ）。稼働中に切り替えても 1 秒ほどで反映され、CLI から開始したサービスにも、サーバーの起動時に開始したサービスにも効きます。設定はこのマシンだけのもので、ワークスペースの `.guildbotics/local/service.yml` に保存されます。
 
 - 蓋を閉じたときのスリープと、手動で行うスリープは抑止しません
-- Linux ではデスクトップセッション（GNOME / KDE など）の仕組みで抑止するため、デスクトップセッションの無い環境では抑止できません。その場合もコマンドとサービスはそのまま動き、ログに警告が 1 回残ります
 
 CLI からサービスを起動・停止する方法は [サーバーで運用する](#サーバーで運用する)を参照してください。
 
 ### Pull Request の巡回
 
-巡回のたびに、チケットのレーンを見る前に、プロジェクトのオーナー配下でメンバーが関わっている open な pull request を確認します。チケットは不要で、PR そのものが作業単位です。
+巡回のたびに、チケットのレーンを見る前に、設定したBranvilワークスペースでメンバーが関わっている open な pull request を確認します。チケットは不要で、PR そのものが作業単位です。
 
 どちらの役割でも、メンバーは他の人の発言をすべて読み、対応するかどうかは読んだうえで判断し、発言ごとに必ず応答を残します。対応したら何をしたかを返信し、採らない指摘には理由を返信し、対応するものが無ければ（お礼や LGTM など）リアクションします。発言とは、最後の発言が他の人の未解決 review thread、本文のある review（承認も含む）、conversation comment です。メンバーが後から書いたコメント・review・thread 返信か、その発言へのリアクションがあれば応答済みです。本文の無い review とワークフローの状態通知は拾いません。
 
 - **メンバーが作成した PR**: まだ応答していない発言を拾います。メンバーは妥当な指摘についてコードを修正します
 - **CI 待ち**: メンバーは実行の中で CI を待ちません。チケット・チャットのスレッド・定期または手動のコマンドのどれから始まった実行でも、PR の完了を妨げているのが終わっていないチェックだけなら、PR に告知を残して実行を終え（チケットとチャットのスレッドの実行は画面で「CI 待ち」と表示）、チェックが終わるか新しいコミットが積まれると、巡回が同じ作業を再開します。再開した実行は失敗を直すか、PR と作業の入口（チケット、スレッド、コマンドの報告先）に結果を報告します。マージ・クローズされた PR は拾い直しません
-- **メンバーがレビューする PR**: レビューを依頼されたとき（personal token のメンバーのみ。GitHub Apps にはレビュー依頼ができません）、前回のレビュー後に新しいコミットが積まれたとき、まだ応答していない発言があるとき（thread は参加中のものだけ）に起動します。発言だけで起動して結論が変わらないときは、review を submit し直しません（本文付きの review は作成者の巡回を起こすため）。依頼によらない自動再レビューは、レビューした head が 3 つに達したあと、そのメンバーがまだレビューしていない head が積まれた時点で止まります。このとき、host の ticket selector が候補を選ぶ時点でその PR を Draft にし、Activity に記録して、PR とレビュワーの `notify_work_stops: true` のチャットチャンネルに告知します（下の Draft の扱いのとおり、作成者側の巡回も止まります）。レビュー済み head のまま発言・thread 返信に応える run は上限後も起動します（force push で戻った head や、回数を数え直す前にレビューした head も含みます）。明示的なレビュー依頼は上限の対象外です。そのまま続けてよければ **Ready for review** に戻してください。回数は Ready for review に戻した時点より後のレビューから、どのレビュワーも数え直します。進め方を見直すなら、Slack か対話セッションで指示し、区切りがついたら Ready for review に戻してください
-- 結論は GitHub の review（approve か request changes）として submit します。これがレビュー依頼を消化し、メンバーをその PR のレビュワーにします。最初のレビューは Slack か対話セッションで依頼してください（→ [Slack で作業を依頼する](#slack-で作業を依頼する)）。以降は巡回がその PR を追います
+- **メンバーがレビューする PR**: レビューを依頼されたとき、前回のレビュー後に新しいコミットが積まれたとき、まだ応答していない発言があるとき（thread は参加中のものだけ）に起動します。発言だけで起動して結論が変わらないときは、review を submit し直しません（本文付きの review は作成者の巡回を起こすため）。依頼によらない自動再レビューは、レビューした head が 3 つに達したあと、そのメンバーがまだレビューしていない head が積まれた時点で止まります。このとき、host の ticket selector が候補を選ぶ時点でその PR を Draft にし、Activity に記録して、PR とレビュワーの `notify_work_stops: true` のチャットチャンネルに告知します（下の Draft の扱いのとおり、作成者側の巡回も止まります）。レビュー済み head のまま発言・thread 返信に応える run は上限後も起動します（force push で戻った head や、回数を数え直す前にレビューした head も含みます）。明示的なレビュー依頼は上限の対象外です。そのまま続けてよければ **Ready for review** に戻してください。回数は Ready for review に戻した時点より後のレビューから、どのレビュワーも数え直します。進め方を見直すなら、Slack か対話セッションで指示し、区切りがついたら Ready for review に戻してください
+- 結論は Branvil のレビュー（approve か request changes）として submit します。これがレビュー依頼を消化し、メンバーをその PR のレビュワーにします。最初のレビューはBranvil、Slack、対話セッションで依頼できます（→ [Slack で作業を依頼する](#slack-で作業を依頼する)）。以降は巡回がその PR を追います
 - **Draft の PR はどちらの役割でも巡回しません。** Draft にするのは人と、自動再レビューの上限に達したときの host の ticket selector だけで、Ready for review に戻すのは人だけです（メンバーの作業からは変えられません）。ある PR をしばらく自分の手で進めたいとき（例: 対話セッションで方針を練り直す間、他のメンバーの再レビューを止めたいとき）は、その PR を Draft に変換してください。サービスはそれ以外の作業を続けます。終わったら **Ready for review** に戻すと、次の巡回から再び拾われ、新しいコミットには再レビューが走ります（自動再レビューの回数も、失敗で止まっていたメンバーの保留も、そこから数え直します）
 
 ## Slack で作業を依頼する
 
-メンバーが指定された Slack チャンネルを監視し、そこで受けた依頼を本人として処理します。「この PR のレビューコメントに対応して」のように依頼すると、メンバーは対象リポジトリを特定して作業ブランチを準備し、実際に調査・修正・GitHub 操作まで行ったうえで、その結果を Slack に返します。
+メンバーが指定された Slack チャンネルを監視し、そこで受けた依頼を本人として処理します。「この PR のレビューコメントに対応して」のように依頼すると、メンバーは対象リポジトリを特定して作業ブランチを準備し、実際に調査・修正・Branvil 操作まで行ったうえで、その結果を Slack に返します。
 
 Slack でどう振る舞うか（本文で返信する / リアクションだけ付ける / 何もしない / 確認の質問を返す / 対応できない理由を報告する）は、メンバー（AI CLI ツール）がメッセージ内容、自身の役割とプロフィール、チャンネルごとの参加条件から判断します。単なる雑談や、自分の役割で価値を足せない会話には無理に返信しません。
 
@@ -465,12 +339,13 @@ commands:
 
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
-- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
+- **暗号化ストア**。値は各ルートの `.guildbotics/local/secrets.enc.json` に保存します。macOSキーチェーンが暗号化鍵を保持し、`.guildbotics/config/secrets.yml` にはキー名だけを記録します。
 - **2 つのストア:** メンバーの認証情報（`{PERSON_ID}_...`）とサービスへの接続（`BRANVIL_ADMIN_TOKEN`）は、マシン内のすべてのワークスペースで共有するアイデンティティのストアに保存します（インデックスは `~/.guildbotics/identity/.guildbotics/config/secrets.yml`）。LLM API キーなどそれ以外のキーは、ワークスペースのストアに保存します。プロセスはアイデンティティのストア、ワークスペースのストアの順に読み込みます。
-- **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
-- **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
-- **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。自動登録で発行された鍵はファイルにも画面にも出さず、メンバーを保存するまで Local API のメモリに保持します。鍵の中身は環境変数には出しません。
-- **交換形式:** `guildbotics secrets export` / `import` は dotenv を転送ファイルとしてだけ使います。`secrets set --from-file` は PEM などのファイルをキーチェーンへ取り込みます。
+
+- **優先順位:** 実環境変数 > 暗号化ストア。GuildBotics はワークスペースの `.env` を読みません。
+- **交換形式:** `guildbotics secrets export` / `import` は dotenv を転送ファイルとしてだけ使います。`secrets set --from-file` は PEM などのファイルを暗号化ストアへ取り込みます。
+
+インポートするUTF-8のファイルには `KEY=value` を書きます。値の `$NAME` と `${VAR}` は展開されません。空行とコメントを除き、`=` のない行が1行でもあると、値を書き込む前にファイル全体を拒否します。
 
 シークレットの管理には `guildbotics secrets` CLI を使います（サブコマンドとオプションの一覧は [CLI リファレンス](docs/cli_reference.md#guildbotics-secrets)を参照）。
 
@@ -483,7 +358,7 @@ guildbotics secrets --identities status           # メンバーの認証情報�
 
 サブコマンドの前に `--identities` を指定すると、アイデンティティのストアを操作します。指定しない場合、CLI はメンバーのキーをワークスペースのストアに保存することを拒否します。メンバーのキーのプレフィックスはすべてのワークスペースで共通なので、`-` と `_` だけが違う 2 つの ID（`foo-bar` と `foo_bar`）は、別のワークスペースであっても同時には存在できません。
 
-ワークスペースのシークレットはワークスペースごとに保存されます（キーチェーンのエントリは、ワークスペースの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
+ワークスペースのシークレットはワークスペースごとに保存されます（暗号化ファイルは `.guildbotics/local/secrets.json` の `store_id` にひも付きます。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -492,13 +367,12 @@ guildbotics secrets --workspace /path/to/workspace list
 
 ### サーバーで運用する
 
-非シークレットの設定はすべてワークスペース内のプレーンテキストファイルに保存されるため、一度セットアップすれば GUI のない環境（ヘッドレスサーバー等）へ移して CLI だけで運用できます。
+非シークレットの設定はすべてワークスペース内のプレーンテキストファイルに保存されるため、一度セットアップすれば 別のHubへ移して CLI だけで運用できます。
 
-1. 移行先で [インストール](#インストール) のとおりチェックアウトを用意します（Linux では `guildbotics server start` で自分でサーバーを動かします）
+1. 移行先で [インストール](#インストール) のとおりチェックアウトを用意します
 2. ワークスペースフォルダと `~/.guildbotics/identity/`（メンバーのアイデンティティ）を移行先へコピーします
-3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行し、メンバーの認証情報についても `--identities` を付けて同じ操作をします（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
-4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか（Linux では [ヘッドレスの Linux サーバーの秘密ストア](#ヘッドレスの-linux-サーバーの秘密ストア) を参照）、実行時の環境変数でシークレットを渡してください
-5. サーバー上でエージェント隔離環境をビルドし、AI CLI ツールへログインします（サーバーには KVM が必要です。[必要なもの](#必要なもの) を参照）:
+3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行し、メンバーの認証情報についても `--identities` を付けて同じ操作をします（エクスポートファイルは使用後に削除してください）。暗号化鍵は移行元のマシンに残ります
+4. サーバー上でエージェント隔離環境をビルドし、AI CLI ツールへログインします:
 
    ```bash
    guildbotics environment status                    # このマシンの runtime・ベースイメージ・環境・ログイン状態
@@ -542,52 +416,11 @@ echo "Hello" | guildbotics run translate
 
 `--person` または `<command>@<person_id>` で実行メンバーを指定できます。
 
-サーバーは生存期間中ずっとマシン共通の lock（`~/.guildbotics/data/run/app-api.lock`）を持つため、1 台のマシンで動くサーバーは 1 つだけです。2 つ目のサーバーは起動しません。`service.lock` とスリープ抑止は、サービスの稼働中だけ保持します。
+サーバーは起動から終了までマシンルートのlock（`~/.guildbotics/data/run/app-api.lock`）を持つため、同じマシンルートを使えるサーバーは1つだけです。2 つ目のサーバーは起動しません。`service.lock` とスリープ抑止は、サービスの稼働中だけ保持します。
 
 サーバーは API と画面も提供するため、`guildbotics run` の委譲先になります。**サービス実行** 画面や `guildbotics service stop` でサービスを止めても、サーバーは画面を配り続けます。
 
 完了した仕事は TaskRun の記録（`state/task-runs/`）に残るため、サービスを再起動しても同じ入力を再度受け付けません。
-
-#### ヘッドレスの Linux サーバーの秘密ストア
-
-ヘッドレスの Linux サーバーでは、OS 秘密ストア（Secret Service）がデスクトップセッション
-無しでも動くようにします。
-
-1. Secret Service の実装（`gnome-keyring` など）と D-Bus をインストールします。
-2. ログインしていない間もユーザーの systemd とセッションバスが動くように lingering を
-   有効にします。
-
-   ```bash
-   sudo loginctl enable-linger "$USER"
-   ```
-
-   `gnome-keyring-daemon` を自分で常駐させる必要はありません。最近のディストリビューションは
-   socket activation（`gnome-keyring-daemon.socket`）で必要時に自動起動します。ただし、
-   そうして起動した daemon は**ロックされたまま**制御ソケットと D-Bus 名を握るため、
-   次の手順はそれをいったん止めてから解錠済みの daemon に置き換えます。
-
-3. 再起動のたびに、解錠付きで daemon を起動し直します。キーリングのパスワードは、
-   通常はそのアカウントの（作成時の）ログインパスワードです。
-
-   ```bash
-   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
-   ```
-
-   `pkill` は必ず `-x`（プロセス名の完全一致）で実行します。`-f` にすると、このコマンド列
-   自身がパターンにマッチしてシェルごと終了します。
-
-4. 解錠できたかどうかはコマンドの出力からは分からないため、必ず確認します。
-
-   ```bash
-   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
-   ```
-
-   `b false` なら解錠済みです。`b true` のままの場合はパスワードが一致していません。
-   キーリングはログインパスワードの変更に追随しないため、後から変更した場合は
-   変更前のパスワードを使います。
-
-   この解除が済むまで、Secret を使うワークフローは実行時エラーになります。GuildBotics が
-   平文のファイルへ書き出すことはありません。
 
 ### ターミナルでサーバーを動かす
 
@@ -670,18 +503,13 @@ guildbotics open
 - `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token
 - `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token
 
-**GitHub アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
-
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント用の fine-grained PAT
-- GitHub App の ID はメンバーの `identity.yml`（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
-
 **Branvil アクセス**:
 
 - `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。すべてのワークスペースで 1 つです。ホストがメンバーの用意と Branvil の GUI を開くのに使います
 - `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行し、すべてのワークスペースで使います（Branvil での名前はメンバーの `identity.yml` の `account_info.branvil_username`）
 - 自分の git の Branvil トークン: マシンごとに 1 つのオーナーのトークン。自分の git が `guildbotics git-credential` に最初に求めたときに発行し、そのマシンの OS キーチェーンにだけ保存して共有しません（→ [自分のチェックアウトで Branvil を使う](docs/branvil_integration.ja.md#自分のチェックアウトで-branvil-を使う)）
 
-OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
+GuildBoticsは暗号化ストアを自動で読み込みます。GuildBotics はワークスペースの `.env` を読みません。
 
 ### ワークスペースとデータの保存場所
 
@@ -716,9 +544,8 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 - `name`: プロジェクト名
 - `description`: エージェント文脈として使う短いプロジェクト説明
 - `language`: プロジェクト言語
-- `services.ticket_service`: GitHub の Issue と Projects の設定
-- `services.ticket_service.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
-- `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
+- `services.ticket_service`: チケットサービスの設定
+- `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使うBranvilワークスペース）
 - Branvil では、どちらのサービスも `name: branvil` で、`workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます。Branvil に届く URL は、すべてのワークスペースで共通の接続の設定です（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
 - `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 
@@ -763,13 +590,11 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | `guildbotics` コマンドが見つからない | `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。どちらも無ければ、配置し直します（→ [インストール](#インストール)） |
 | サーバーが起動しない・止まった | `guildbotics server start` の出力を確認します（[ターミナルでサーバーを動かす](#ターミナルでサーバーを動かす)を参照） |
 | どのワークスペースが使われているか分からない | **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
-| メンバーが動作しない・設定に不安がある       | **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
-| GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます。`GitHub writes are limited to repositories of '<owner>'` というエラーは、書き込み先リポジトリの owner がプロジェクトに設定した owner と異なるため、GuildBotics が送信せずに拒否したことを表します |
-| 脆弱性アラートを読めない（403） | メンバーの GitHub App または fine-grained PAT に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスがあるか確認してください。App はインストール先で追加権限を承認し、PAT はトークンの権限を編集して organization が要求する承認を済ませます。手順は [GitHub アカウントの準備](#ai-エージェント用の-github-アカウントを用意する)を参照してください。403 だけでは原因を断定できません |
+| メンバーが動作しない・設定に不安がある       | **設定 → 検証** で LLM・AI CLI ツール・Branvil・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
 | Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めているか（サービスはどう開始してもこの設定で動きます）を確認してください                                                                                                                                                                                                                                       |
 | コマンド実行が失敗した                       | **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
 | スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |
-| AI CLI の turn が始まらない・「この端末では実行できません」と警告が出る | **設定 → エージェント実行環境** の **この端末の状態**（または `guildbotics environment status`）を確認してください。runtime にはハードウェア仮想化（Apple Silicon / Windows ハイパーバイザー プラットフォーム / KVM）が必要で、環境が **準備完了**（**ビルド** を押す。サービス稼働中は宣言の変更で自動再ビルド）、ツールの認証情報がこのマシンに保存されている必要があります（画面のログインコマンドを実行）。保存済みは認証の成功を保証しません。ビルド中は作業が失敗ではなく見送りになります |
+| AI CLI の turn が始まらない・「この端末では実行できません」と警告が出る | **設定 → エージェント実行環境** の **この端末の状態**（または `guildbotics environment status`）を確認してください。runtime にはハードウェア仮想化（Apple Silicon）が必要で、環境が **準備完了**（**ビルド** を押す。サービス稼働中は宣言の変更で自動再ビルド）、ツールの認証情報がこのマシンに保存されている必要があります（画面のログインコマンドを実行）。保存済みは認証の成功を保証しません。ビルド中は作業が失敗ではなく見送りになります |
 | 認証情報保存済みなのに AI CLI の認証に失敗する | **設定 → エージェント実行環境** で対象ツールのログインコマンドをコピーし、ターミナルで実行してください。画面を開いている間、状態は10秒ごとに自動更新されます。保存状態を読み直すには **表示を更新** を押します。利用レートの再取得には、対応ツールの **再確認** を使います。コマンドは管理用 CLI の絶対パスを使います。**認証情報保存済み** はファイルの存在だけを表します（Claude Code と Grok Build は、この端末のキーチェーンで暗号化保存したログインを開けること。これらのログインは turn の microVM に入らず、以前の平文ファイルのログインは読まないため、更新後に一度ログインし直し、旧ファイルを削除してください。詳しくは[こちら](docs/native_agent_runtime.ja.md#vmの外で管理するログイン)）。認証失敗は同じ端末・同じツールを使う全メンバーへ反映され、ログイン完了または後続の正常実行で解除されます。ネットワーク障害やレート制限は認証結果を変えず、過去の失敗が再試行を妨げることもありません |
 
 AI CLI の利用レート取得に失敗すると、画面上部と設定の対象行に同じ問題を表示します。対象行には最終確認時刻も表示します。**再確認** は対象ツールのキャッシュを使わずに取得し、**エラー詳細** は該当する診断セッションを開きます。再取得に成功すると通知と対象行の警告が解除されます。この通知だけで認証期限切れと断定するものではありません。通信障害や利用枠を表示できない認証方式でも取得に失敗するためです。**表示を更新** は保存状態を読み直し、ツールへの再取得は行いません。アクティビティ画面ではツールごとに個別に取得し、同じツールを使うメンバー間で結果を共有するため、遅いツールが他のツールの表示を待たせません。更新中も前回取得できた値を取得時刻つきで表示し続けます。更新に失敗した場合は前回の値であることを示し、その値では Rate limit 表示を判定せず、通常の5分ではなく30秒後に再取得します。

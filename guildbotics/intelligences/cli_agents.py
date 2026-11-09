@@ -276,7 +276,7 @@ class CliAgentProvision(BaseModel):
     state_root_env: str = ""
     #: Where the tool on this machine reads user skills from, relative to the
     #: home directory; one under the state root moves with ``state_root_env``.
-    #: GuildBotics puts its skill there (``scripts/install_cli_assets.py``).
+    #: GuildBotics puts its skill there (``crates/guildbotics/src/install_cli.rs``).
     user_skills: str = ""
     auth: str = ""
     #: The variable that points the tool at ``auth``, for a tool whose

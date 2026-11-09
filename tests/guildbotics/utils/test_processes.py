@@ -11,7 +11,6 @@ import pytest
 from guildbotics.utils import processes
 
 
-@pytest.mark.windows
 def test_native_process_lifecycle() -> None:
     """Exercise real process handles, including their ctypes types on Windows."""
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -71,66 +70,7 @@ def test_launching_app_name_does_not_probe_other_platforms(monkeypatch, fake_pla
     assert processes.launching_app_name() == ""
 
 
-def test_pid_exists_windows_uses_open_process_without_os_kill(monkeypatch) -> None:
-    calls: list[tuple[int, int]] = []
-    inspected: list[int] = []
-    closed: list[int] = []
-
-    monkeypatch.setattr(processes, "_WINDOWS", True)
-    monkeypatch.setattr(
-        processes,
-        "_open_windows_process",
-        lambda access, pid: calls.append((access, pid)) or 42,
-    )
-    monkeypatch.setattr(
-        processes, "_close_windows_handle", lambda handle: closed.append(handle)
-    )
-    monkeypatch.setattr(
-        processes,
-        "_windows_process_is_active",
-        lambda handle: inspected.append(handle) or True,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        processes.os,
-        "kill",
-        lambda *_args: pytest.fail("Windows existence checks must not call os.kill"),
-    )
-
-    assert processes.pid_exists(1234) is True
-    assert calls == [(processes._PROCESS_QUERY_LIMITED_INFORMATION, 1234)]
-    assert inspected == [42]
-    assert closed == [42]
-
-
-def test_pid_exists_windows_rejects_an_exited_process(monkeypatch) -> None:
-    closed: list[int] = []
-
-    monkeypatch.setattr(processes, "_WINDOWS", True)
-    monkeypatch.setattr(processes, "_open_windows_process", lambda _access, _pid: 42)
-    monkeypatch.setattr(
-        processes, "_windows_process_is_active", lambda _handle: False, raising=False
-    )
-    monkeypatch.setattr(
-        processes, "_close_windows_handle", lambda handle: closed.append(handle)
-    )
-
-    assert processes.pid_exists(1234) is False
-    assert closed == [42]
-
-
-def test_pid_exists_windows_treats_access_denied_as_existing(monkeypatch) -> None:
-    monkeypatch.setattr(processes, "_WINDOWS", True)
-    monkeypatch.setattr(processes, "_open_windows_process", lambda _access, _pid: 0)
-    monkeypatch.setattr(
-        processes, "_windows_last_error", lambda: processes._ERROR_ACCESS_DENIED
-    )
-
-    assert processes.pid_exists(1234) is True
-
-
 def test_pid_exists_posix_handles_missing_and_permission_denied(monkeypatch) -> None:
-    monkeypatch.setattr(processes, "_WINDOWS", False)
 
     monkeypatch.setattr(
         processes.os,
@@ -149,32 +89,8 @@ def test_pid_exists_posix_handles_missing_and_permission_denied(monkeypatch) -> 
     assert processes.pid_exists(1234) is True
 
 
-def test_force_terminate_pid_windows_uses_terminate_process(monkeypatch) -> None:
-    terminated: list[tuple[int, int]] = []
-    closed: list[int] = []
-
-    class Kernel32:
-        @staticmethod
-        def TerminateProcess(handle: int, exit_code: int) -> bool:
-            terminated.append((handle, exit_code))
-            return True
-
-    monkeypatch.setattr(processes, "_WINDOWS", True)
-    monkeypatch.setattr(processes, "_open_windows_process", lambda _access, _pid: 9)
-    monkeypatch.setattr(processes, "_windows_kernel32", lambda: Kernel32())
-    monkeypatch.setattr(
-        processes, "_close_windows_handle", lambda handle: closed.append(handle)
-    )
-
-    processes.force_terminate_pid(1234)
-
-    assert terminated == [(9, 1)]
-    assert closed == [9]
-
-
 def test_force_terminate_pid_posix_uses_sigkill(monkeypatch) -> None:
     calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(processes, "_WINDOWS", False)
     monkeypatch.setattr(processes.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(
         processes.os,

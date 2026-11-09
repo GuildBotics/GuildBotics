@@ -1,15 +1,13 @@
-> main no longer contains the Python host or CLI (#122). Python host instructions below describe the frozen `origin/python-host` implementation; the Rust usage guide is updated in #96.
-
 <h1>GuildBotics</h1>
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, GitHub / Slack account, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
+GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, Branvil / Slack account, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
 
 There are two ways to work with the same member:
 
 - **Work together** — invoke the member in your Claude Code or Codex session and pair-program in the repository you currently have open (→ [Work Together with a Member](#work-together-with-a-member))
-- **Delegate** — ask through a GitHub Projects ticket or a Slack message, and the member investigates, implements, opens the pull request, and replies on its own (→ [Delegate GitHub Tickets](#delegate-github-tickets) / [Ask for Work in Slack](#ask-for-work-in-slack))
+- **Delegate** — ask through a Branvil ticket or a Slack message, and the member investigates, implements, opens the pull request, and replies on its own (→ [Delegate Branvil Tickets](#delegate-branvil-tickets) / [Ask for Work in Slack](#ask-for-work-in-slack))
 
 Both ways drive the same member — same identity, same memory. What you teach while working together is kept as memory and carries over to the work you delegate.
 
@@ -27,7 +25,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 - [What You Can Do](#what-you-can-do)
 - [Getting Started](#getting-started)
 - [Work Together with a Member](#work-together-with-a-member)
-- [Delegate GitHub Tickets](#delegate-github-tickets)
+- [Delegate Branvil Tickets](#delegate-branvil-tickets)
 - [Ask for Work in Slack](#ask-for-work-in-slack)
 - [Automate Recurring Work](#automate-recurring-work)
 - [Create Your Own Commands](#create-your-own-commands)
@@ -39,7 +37,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 ## What You Can Do
 
 - **Multiple members**: Define multiple AI members with distinct roles, personalities, and memory (the identifier in configuration files is `person`)
-- **GitHub integration**: Ticket management via GitHub Projects / Issues, plus PR creation, comments, and review handling by members
+
 - **Slack integration**: Members watch configured channels and handle the requests they receive there as themselves
 - **Branvil integration**: Use [Branvil](docs/branvil_integration.en.md), a code host and board you run yourself on the Hub machine, in place of GitHub for repositories, pull requests, CI, and tickets
 - **Member memory**: Personal and team memory that members recall and maintain across sessions
@@ -54,44 +52,28 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 
 ### What You Need
 
-- **OS**: Linux (verified on Ubuntu 24.04), macOS (verified on Sequoia), or Windows 11
-  - The script that runs the server as a service on the Hub is for macOS (see [Installation](#installation))
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**: installs GuildBotics' Python environment in the checkout
-- **[Node.js](https://nodejs.org/) 24 or later**: builds the screens the server serves
-- **An LLM API key** (obtain one of the following in advance):
-  - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
-  - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
-  - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
-- **OpenSSH** (only to use GuildBotics from a browser on another machine):
-  - GuildBotics runs on one machine, the **Hub**. Each other machine you use it from needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
-  - The Hub needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
-- **Hardware virtualization** for the isolated agent environment. Every command, with its subcommands and AI CLI turns, runs inside a microVM that GuildBotics boots on the machine running the command, so that machine needs: on macOS, Apple Silicon (Intel Macs are not supported); on Windows 11, the **Windows Hypervisor Platform** optional feature; on Linux, KVM (`/dev/kvm` readable by the user). The runtime itself ([microsandbox](https://microsandbox.dev/)) ships with GuildBotics and is placed under `~/.guildbotics/data/msb` on first use; nothing else needs to be installed
-- **An account for an AI CLI tool**. The tools themselves are installed by GuildBotics inside the isolated environment, so nothing has to be installed on the machine for turns. What you need is the account: after setup, log in once per machine from a terminal with `guildbotics environment login <tool>` (the **Agent execution environment** screen shows the exact command). The tools GuildBotics provisions in the environment:
-  - [OpenAI Codex CLI](https://github.com/openai/codex/)
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires a Claude Pro or Max subscription)
-  - [Grok Build](https://docs.x.ai/build)
-  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (the environment has no system keychain, so the login asks once whether to keep its token in a file under the device's store)
-  - [Antigravity CLI](https://antigravity.google/docs/cli)
-
-A member can carry a session over and resume where it left off. For the isolated environment, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
+- An Apple Silicon Mac for the Hub, Git, the Rust toolchain pinned in `rust-toolchain.toml`, and Node.js 24 with npm to build the screens. CI runs on Linux.
+- To use a browser on another machine, enable Remote Login on the Hub and install an OpenSSH client on that machine. Windows can be a client.
+- For model-backed commands such as translation, an API key for Google Gemini, OpenAI, or Anthropic. To use an AI CLI member, log in on the Hub after setup with `guildbotics environment login <tool>`. The environment provisions Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity.
 
 ### Installation
 
-Build the Rust CLI and the screens from the checkout on the Hub.
+Build the screens and the executable from the Hub checkout. To try the setup from a terminal:
 
-```bash
+```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspace desktop
+npm ci && npm run build --workspaces
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
+"$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
-`install` places the built executable at `~/.guildbotics/bin/guildbotics` and copies the GuildBotics skill to the user skill directories of supported tools it finds. On Unix it also adds `~/.local/bin/guildbotics` if the path is available. It preserves user-owned commands and edited skills. Run `install` again after rebuilding to update the managed binary.
+In another terminal, run `"$HOME/.guildbotics/bin/guildbotics" open` to open the setup screen. To use an existing workspace, select it with `guildbotics workspace use <path>` before starting the server.
 
-If you already have a workspace, select it with `~/.guildbotics/bin/guildbotics workspace use <path>`. Start the server in a terminal with `~/.guildbotics/bin/guildbotics server start`. Run `guildbotics open` from another terminal to open the GuildBotics screens, or `guildbotics open --branvil` to open Branvil.
+`install` places the executable in `~/.guildbotics/bin/guildbotics` and copies the bundled skill into the user directories of the AI CLI tools it finds. It preserves edited skills and user-owned commands. Add `~/.local/bin` to `PATH` to use the link there.
 
-The isolated agent environment's runtime is embedded in that executable and placed under `~/.guildbotics/data/msb` on first use, without a runtime download. Windows builds supply the pinned `msb.exe` and `libkrunfw.dll` under `MSB_HOME` during the native build. Windows may ask for firewall permission for that fixed runtime binary.
+To include Branvil, initialize it with `guildbotics branvil init --data-dir <absolute-path>` and set `BRANVIL_DATA_DIR` to that path before starting the server. Once running, open it with `guildbotics open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
 
 ### Initial Setup
 
@@ -101,9 +83,8 @@ Open the screens with `guildbotics open` on the Hub. The browser opens on **Proj
 - The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside the exchange folder `~/Documents/GuildBotics`
 - The project description
 
-**Integrating with GitHub or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
+**Integrating with Branvil or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
 
-- **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
 - **Branvil**: a running Branvil, reachable at the same base URL on every machine. GuildBotics connects to it once on the owner's consent and sets up each member's Branvil agent and token itself. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
 
@@ -116,14 +97,14 @@ In GuildBotics, the folder that holds a project's settings and state is called t
 
 Each member's identity (name, character, avatar, and service accounts) is the same in every workspace, so it is written outside the workspace, to `~/.guildbotics/identity/`, together with the members' credentials. The workspace keeps what each member does there (roles, patrol, chat channels, AI settings) (→ [Configuration Files](#configuration-files)).
 
-API keys and account tokens are stored in the OS keychain when one is available, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
+API keys and account tokens are kept in an encrypted local store, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
 
 After project setup, configure the following on the screens:
 
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
-- **Integrations**: choose the service for code hosting, tickets, and chat (each is optional) and configure the chosen one. For GitHub tickets, enter the GitHub Project URL, configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field. A member's account with a chosen service is set on that service's tab of the member
-- **Members**: add and configure team members (assigning a GitHub account needs the credentials above). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace, deletes its identity and credentials, and revokes the tokens GuildBotics issued it on services such as Branvil; another workspace that still has the member leaves it out until it is removed there too
+- **Integrations**: choose and configure the services for code hosting, tickets, and chat. Each is optional.
+- **Members**: add and configure team members (service accounts are configured on the member’s service tab). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace, deletes its identity and credentials, and revokes the tokens GuildBotics issued it on services such as Branvil; another workspace that still has the member leaves it out until it is removed there too
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
 
 ### Quick Start
@@ -141,7 +122,7 @@ You are set if the translated text appears under **Output**. The default LLM you
 ### What Next
 
 - Pair-program with a member in the repository you have open → [Work Together with a Member](#work-together-with-a-member)
-- Delegate everything from ticket to pull request → [Delegate GitHub Tickets](#delegate-github-tickets)
+- Delegate everything from ticket to pull request → [Delegate Branvil Tickets](#delegate-branvil-tickets)
 - Have a member handle requests in Slack → [Ask for Work in Slack](#ask-for-work-in-slack)
 - Automate recurring work or build your own commands → [Automate Recurring Work](#automate-recurring-work) / [Create Your Own Commands](#create-your-own-commands)
 
@@ -184,117 +165,11 @@ Host `guildbotics run` commands execute on the server when it runs with the same
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
-## Delegate GitHub Tickets
+## Delegate Branvil Tickets
 
-This is the flow where you ask a member for work through a GitHub Projects ticket and delegate investigation, implementation, and PR creation (using the default `ticket_driven_workflow`).
+The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Setup → Integrations**, choose Branvil for code hosting and tickets, and select the workspace. For the connection, member accounts, and board setup, see the [Branvil integration guide](docs/branvil_integration.en.md).
 
-**Note**: GitHub integration is optional. Without it you can still use the Slack chat workflow and automate commands on a schedule.
-
-**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App. GitHub's own authorization limits which repositories that credential can push to and change, but **Only select repositories** does not stop it from creating issues, comments, reviews, or reactions on any public repository. So GuildBotics refuses, before sending anything, every GitHub write of a member (including `git push`) to a repository whose owner is not the owner configured for that service (`services.code_hosting_service.owner` in `team/project.yml` for the code host, including `git push`, and `services.ticket_service.owner` for issues and the Project). Reads are not limited: a pull request from a fork can be checked out and reviewed, but its fork is not pushed to. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
-
-### What It Does
-
-- **Assign work on the task board**: pick the member in the ticket's `Agent` field and move the ticket to the ready lane, and the member runs that task
-- **Check the results**: when a task completes, the member leaves the result as a comment, a PR, a review reply, or a reaction
-- **Create pull requests**: when code changes are needed, the member publishes a working branch and creates or reuses a pull request
-- **Create tickets**: when asked to file a follow-up ticket, the member creates a real issue in the repository
-
-### Create a GitHub Project
-
-Create a GitHub Projects (v2) project in the organization and add the following columns (statuses) up front:
-
-- Todo (ready)
-- In Progress
-- Done
-
-If you want to keep the status names of an existing project, map them with the lane mapping described below.
-
-### Prepare a GitHub Account for the AI Agent
-
-Prepare an account the member uses to access GitHub. Any of the following works:
-
-- **Machine account** (machine user)
-  - Recommended if you want the feel of "working with an AI agent through the task board and pull requests". Note that under [GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#3-account-requirements), each user may create only one free machine account.
-- **GitHub App**
-  - There is no limit on the number of accounts. GitHub labels it as a bot, which takes away some of the atmosphere.
-
-**Using a machine account**:
-
-Issue a **fine-grained personal access token** for the machine account, scoped to the target repositories only. Classic PATs are not used: a classic PAT reaches every repository the account can see, so it cannot carry a per-repository boundary.
-
-1. Make the machine account a **member** of the organization. Invitations are sent from the organization's People page (`https://github.com/orgs/<org>/people`) with **Invite member**. After it joins, confirm the account appears in the **Members** list on that page (if it appears under **Outside collaborators** instead, it is not a member, and an outside collaborator cannot select the organization as the fine-grained PAT's **Resource owner** in a later step)
-2. Allow fine-grained PAT access on the organization side: in the organization's **Settings → Third-party Access → Personal access tokens → Settings**, select **Allow access via fine-grained personal access tokens**. If **Require administrator approval** is enabled, the token you create in a later step does not work until an organization owner approves it under **Settings → Third-party Access → Personal access tokens → Pending requests**
-3. On each repository that member works on, open **Settings → Collaborators and teams** and add the machine account as a collaborator (Write or higher) (when the organization grants Write or higher to all members under **Member privileges → Base permissions**, no individual entry is needed; the default is Read)
-4. Open the Project board, choose **Settings** from the **…** menu at the top right, and check **Manage access** (this is the Project's own settings page, not the organization's Settings). The **Who has access** section at the top of the page shows the Project's **Base role** — the permission every organization member gets on this Project (a separate setting from the repository Base permissions in step 3). When the Base role is Write or higher, no individual entry is needed. When it is Read or lower, add the machine account as a collaborator (Write or higher) with **Invite collaborators**
-5. Sign in as the machine account, open **Settings → Developer settings → Personal access tokens → Fine-grained tokens**, and press **Generate new token**
-6. Configure the token as follows
-
-   - **Token name**: anything (for example `guildbotics-alice`)
-   - **Expiration**: your choice (when it expires, reissue the token and register it again on the screens)
-   - **Resource owner**: select the target **organization**, not the machine account itself
-   - **Repository access**: choose **Only select repositories** and select only the repositories that member works on (this does not keep the token from writing issues, comments, reviews, or reactions to public repositories; GuildBotics keeps members inside the configured owner, as described in the Prerequisite above)
-   - **Repository permissions**:
-     - **Actions**: Read-only (reading workflow runs, failed job logs, and artifacts)
-     - **Checks**: Read-only (reading check runs for pull request commits)
-     - **Commit statuses**: Read-only (reading external CI statuses for pull request commits)
-     - **Contents**: Read and write (cloning the repository and pushing the working branch)
-     - **Dependabot alerts**: Read-only (reading dependency vulnerability alerts)
-     - **Issues**: Read and write (reading and writing issues, comments, labels, open/close, reactions)
-     - **Metadata**: Read-only (added automatically once any other permission is selected)
-     - **Pull requests**: Read and write (creating and updating PRs, review comments and replies, reactions, converting a PR to a draft at the automatic re-review limit)
-     - **Workflows**: Read and write (only if the member changes files under `.github/workflows`)
-   - **Organization permissions**:
-     - **Projects**: Read and write (reading the Projects v2 board and creating / updating the `Agent` field)
-
-7. Press **Generate token** and copy the token shown (it cannot be displayed again once you leave the page). If a **Pending** badge appears next to the token name, it is awaiting approval and does not work until an organization owner approves it on the **Pending requests** page from step 2; complete the approval before moving on
-8. On the screens, open **Setup → Members → GitHub**, select "Machine Account (Machine User)", paste the token into **Access token**, and save
-
-For an existing fine-grained PAT, open the token under **Fine-grained tokens** from step 5 and edit its permissions to add **Repository permissions → Dependabot alerts → Read-only**. Updating only the permissions of the same token does not require registering it again on the screens. If the organization requires approval, have an owner approve the updated permissions before retrying. Also confirm the target repository is included under **Repository access**. See GitHub's [required permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts) and [token approval requests](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization).
-
-**Using a GitHub App**:
-
-The member edit screen (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID and installation ID are then filled in automatically, and saving the member stores the app's private key in the keychain, so the manual steps below are not needed. Save the member within 30 minutes of starting the registration; after that, the registration expires and the app has to be registered again.
-
-When creating the GitHub App manually, configure the following permissions.
-
-- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** / **Dependabot alerts** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
-- **Organization permissions**: **Projects** as Read & Write
-
-When adding permissions to an existing App, approve the update for each installation before using them. For Dependabot alerts, set **Repository permissions → Dependabot alerts → Read-only** in the App's **Permissions & events**, then have an organization owner review and accept the update under **Organization Settings → GitHub Apps → Configure**. Confirm the target repository is included in the installation. New apps registered through GuildBotics request this permission automatically. See [GitHub's approval procedure](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app).
-
-To inspect current alerts, run `guildbotics run repository/security_alerts --person alice repo=org/repo`; add `alert=42` for an individual alert. This command needs a ready execution environment but no LLM call. See [Dependabot alert commands](docs/custom_command_guide.en.md#41-checking-dependency-vulnerability-alerts) for pagination, structured results, and access errors.
-
-After creating the GitHub App:
-
-1. Use "Generate a private key" on the GitHub App settings page to download and store the `.pem` file
-2. Install the app to the organization from "Install App" and obtain the **installation ID**. Select only the repositories that member works on. The trailing number of the URL shown after installation (`.../settings/installations/<installation ID>`) is the installation ID. Keep it — you need it during configuration
-
-### Prepare Credentials and the Execution Environment
-
-- Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings on the screens. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
-- Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/local/clones/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
-- Every git of that directory runs inside the isolated agent environment, never on the host, and the member's token is used only by GuildBotics on the host (→ [Member git and the member's clones](docs/native_agent_runtime.en.md#member-git-and-the-members-clones)). So your project's git hooks run inside the environment with the tools of its image, and Git LFS is not supported
-- If you also use the AI CLI tool interactively, we recommend denying or requiring approval for `gh`, direct token / API writes, and `git push`. This is a guardrail against falling back to your own GitHub account, not a sandbox that fully contains token leakage
-- The AI CLI turn runs inside the isolated agent environment of the machine that runs the service. Check under **Setup → Agent execution environment** that the environment is **Ready** and the tool shows **Credentials saved on this device**, or from a terminal:
-
-  ```bash
-  guildbotics environment status
-  ```
-
-### Validate the Configuration
-
-Press **Validate settings** under **Setup → Verification** to check whether each active member's LLM, AI CLI tool, GitHub, Slack, and Git settings actually work (GitHub and Slack are accessed read-only).
-
-### Task Board Conventions
-
-**Custom fields**: GuildBotics manages an `Agent` field that selects the member who runs a task. It is created, and kept in step with your members, from the GitHub board settings under **Setup**; saving a non-human GitHub member updates it automatically. **Validate settings** reports a member that needs the field but has no option in it. Because a GitHub App member cannot be a GitHub assignee, use this field to pick the member.
-
-**Lane mapping**: GuildBotics treats GitHub Projects statuses as three lanes (ready / working / done).
-
-- By default `Todo` is ready, `In Progress` is working, and `Done` is done. A standard board needs no configuration
-- Statuses **between** ready and done (for example `In Review`) are automatically treated as working
-- Statuses **before** ready (for example `Backlog`) and **at or after** done (for example `Icebox`) are ignored. Intermediate or holding lanes can be added just by ordering the board columns
-- If you use your own status names, map them under **Setup → Integrations** → **Tickets** → **Lane mapping**. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
+Under **Setup → Agent execution environment**, confirm that the environment is ready and that the AI CLI login is saved. From a terminal, run `guildbotics environment status`.
 
 ### Start the Service and Ask for Work
 
@@ -310,11 +185,11 @@ To use the ticket-driven workflow, start the service with **Patrol commands** in
 
 You can follow what is happening in the events and logs of the **Global / system** session on the **Diagnostics** screen, and per-member results are collected on the **Activity** screen.
 
-To ask for work, use a GitHub Projects ticket as follows:
+To ask for work, use a Branvil ticket as follows:
 
-1. Create a ticket, select the target Git repository, and save it as an issue
+1. Create a Branvil ticket in the target repository.
 2. Write the instructions for the member in the ticket (this becomes the prompt, so be as specific as possible)
-3. Select the member in the `Agent` field
+3. Assign the ticket to the member in Branvil.
 4. Move the ticket to the ready lane
 
 Once work starts, you interact with the member like this:
@@ -328,25 +203,24 @@ To stop, press **Stop**. The service stops accepting new work and stops after in
 While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started from the CLI or by the server as it starts. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
 
 - Closing the lid and putting the machine to sleep by hand still put it to sleep
-- On Linux, sleep is held off through the desktop session (GNOME, KDE, and so on), so it cannot be held off where there is no desktop session. Commands and the service still run, and one warning is logged
 
 To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
 
 ### Pull Request Patrol
 
-Before looking at the ticket lanes, every patrol run checks the open pull requests under the project owner that involve the member. No ticket is needed for this; the PR itself is the unit of work.
+Before looking at the ticket lanes, every patrol run checks the open pull requests under the configured Branvil workspace that involve the member. No ticket is needed for this; the PR itself is the unit of work.
 
 In both roles, the member reads everything someone else says, decides what to do only after reading it, and leaves an answer for every statement: a reply saying what it did, a reply with the reason when it does not adopt a point, or a reaction when there is nothing to act on (thanks, LGTM). A statement is an unresolved review thread whose last word is someone else's, a review with a body (approvals included), or a conversation comment. It is answered by a later comment, review, or thread reply from the member, or by the member's reaction on it. Reviews without a body and workflow status notices are not picked up.
 
 - **PRs the member wrote**: statements the member has not answered are picked up. The member fixes the code where the point is valid
 - **Waiting for CI**: a member does not wait for CI inside its run. Whatever started the run (a ticket, a chat thread, a scheduled or manual command), when checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR (a ticket's or a chat thread's run shows "Waiting for CI" on the screens), and the patrol picks the same work up again once the checks finish or new commits land on it. The resumed run fixes the failures, or reports the outcome on the PR and where the work came from (the ticket, the thread, or where the command reports). A merged or closed PR is not picked up again
-- **PRs the member reviews**: the member starts when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. After a member has reviewed 3 heads, automatic re-review not driven by a request stops when a head that member has never reviewed is pushed: the host ticket selector converts the PR to a draft during candidate selection, records it in Activity, and announces it on the PR and in the reviewer’s chat channels with `notify_work_stops: true` (the author's patrol stops too, as drafts are skipped below). Statements and thread replies on an already reviewed head still start a run after the limit; this includes a head restored by force push and heads reviewed before the count restarted. Explicit review requests remain outside the limit. To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
-- The verdict is submitted as a GitHub review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Ask for the first review in Slack or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
+- **PRs the member reviews**: the member starts when a review is requested, when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. After a member has reviewed 3 heads, automatic re-review not driven by a request stops when a head that member has never reviewed is pushed: the host ticket selector converts the PR to a draft during candidate selection, records it in Activity, and announces it on the PR and in the reviewer’s chat channels with `notify_work_stops: true` (the author's patrol stops too, as drafts are skipped below). Statements and thread replies on an already reviewed head still start a run after the limit; this includes a head restored by force push and heads reviewed before the count restarted. Explicit review requests remain outside the limit. To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
+- The verdict is submitted as a Branvil review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Request the first review in Branvil, Slack, or an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
 - **Draft PRs are skipped**, in both roles. Only humans and, at the automatic re-review limit, the host ticket selector convert a PR to a draft, and only humans mark it ready for review again (a member's work cannot change it). To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits (the automatic re-review rounds, and any member held by a failure, start over from that point)
 
 ## Ask for Work in Slack
 
-A member watches the Slack channels you configure and handles the requests it receives there as itself. Ask something like "please handle the review comments on this PR" and the member identifies the target repository, prepares a working branch, actually investigates, edits code, and performs the GitHub operations, then reports the result back in Slack.
+A member watches the Slack channels you configure and handles the requests it receives there as itself. Ask something like "please handle the review comments on this PR" and the member identifies the target repository, prepares a working branch, actually investigates, edits code, and performs the Branvil operations, then reports the result back in Slack.
 
 How it behaves in Slack (reply with a message / only add a reaction / do nothing / ask a clarifying question / report why it is blocked) is decided by the member (the AI CLI tool) from the message content, its own role and profile, and the per-channel participation policy. It does not force a reply into small talk or into conversations where its role adds nothing.
 
@@ -465,12 +339,13 @@ For all front matter options, context injection, and command composition, see th
 
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
-- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names. This machine's keychain namespace is in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
+- **Encrypted store:** the OS keychain holds the encryption key. Values live in encrypted `.guildbotics/local/secrets.enc.json` files for the workspace and identities. The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names. This machine's keychain namespace is in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
 - **Two stores:** the members' credentials (`{PERSON_ID}_...`) and the services' connections (`BRANVIL_ADMIN_TOKEN`) are kept in the identities' store, shared by every workspace on the machine (its index is `~/.guildbotics/identity/.guildbotics/config/secrets.yml`). The workspace's store keeps the other keys, such as LLM API keys. A process reads the identities' store first, then the workspace's.
-- **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
-- **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
-- **GitHub App private key:** member save absorbs the PEM into the keychain. A key from auto-registration is never written to a file or shown on screen: the Local API holds it in memory until the member is saved. The key material is never exposed in environment variables.
-- **Exchange format:** `guildbotics secrets export` / `import` use dotenv only as a transfer file. `secrets set --from-file` absorbs a file (for example a PEM) into the keychain.
+
+- **Precedence:** real environment variables > encrypted store. GuildBotics does not read a workspace `.env`.
+- **Exchange format:** `guildbotics secrets export` / `import` use dotenv only as a transfer file. `secrets set --from-file` absorbs a file (for example a PEM) into the encrypted store.
+
+Put `KEY=value` entries in a UTF-8 import file. The values `$NAME` and `${VAR}` are stored literally. Apart from blank lines and comments, a line without `=` causes the entire file to be rejected before any value is written.
 
 Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):
 
@@ -483,7 +358,7 @@ guildbotics secrets --identities status           # the same, for the members' c
 
 `--identities` before the subcommand makes it act on the identities' store; without it, the CLI refuses to store a member's key in a workspace. A member's key prefix is shared by every workspace, so two IDs that differ only in `-` and `_` (`foo-bar` and `foo_bar`) cannot both exist, even in different workspaces.
 
-A workspace's secrets are stored per workspace (keychain entries are namespaced by the `store_id` in the workspace's `.guildbotics/local/secrets.json`. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
+A workspace's secrets are stored per workspace (the encrypted file is tied to the `store_id` in the workspace's `.guildbotics/local/secrets.json`. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -492,13 +367,12 @@ guildbotics secrets --workspace /path/to/workspace list
 
 ### Run on a Server
 
-All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to an environment without a GUI (a headless server, for example) and operate with the CLI alone.
+All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to another Hub and operate with the CLI alone.
 
-1. Set up a checkout on the target machine as in [Installation](#installation) (on Linux, run the server with `guildbotics server start` yourself)
+1. Set up a checkout on the target machine as in [Installation](#installation)
 2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine
-3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain entries themselves never leave the machine
-4. On servers without a keychain, set up an OS secret store (on Linux, see [A headless Linux server's secret store](#a-headless-linux-servers-secret-store)) or pass the secrets as environment variables at run time
-5. Build the isolated agent environment on the server and log in to the AI CLI tool there (the server needs KVM; see [What You Need](#what-you-need)):
+3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain encryption key never leaves the machine
+4. Build the isolated agent environment on the server and log in to the AI CLI tool there:
 
    ```bash
    guildbotics environment status                    # runtime, base image, environment, and logins on this machine
@@ -542,52 +416,12 @@ echo "Hello" | guildbotics run translate
 
 Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
-The server holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so only one server runs on a machine; a second one refuses to start. Services hold `service.lock`, including the keep-awake setting, only while running.
+The server holds a lock for the machine root (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so only one server can use that root; a second one refuses to start. Services hold `service.lock`, including the keep-awake setting, only while running.
 
 The server also serves the API and the screens, so `guildbotics run` can delegate commands to it. Stopping the services, on the **Service** screen or with `guildbotics service stop`, leaves the server serving the screens.
 
 Completed work is kept in TaskRun records (`state/task-runs/`), so a service restart does not accept the same input again.
 
-#### A headless Linux server's secret store
-
-On a headless Linux server, the OS secret store (Secret Service) has to run without a
-desktop session.
-
-1. Install a Secret Service implementation (`gnome-keyring` or similar) and D-Bus.
-2. Enable lingering, so the user's systemd and session bus keep running while nobody is
-   logged in.
-
-   ```bash
-   sudo loginctl enable-linger "$USER"
-   ```
-
-   There is no need to keep `gnome-keyring-daemon` running yourself: recent distributions
-   start it on demand through socket activation (`gnome-keyring-daemon.socket`). A daemon
-   started that way holds the control socket and the D-Bus name **while still locked**,
-   though, so the next step stops it before starting an unlocked one in its place.
-
-3. After each restart, restart the daemon with an unlock. The keyring password is normally
-   the account's login password (the one it was created with).
-
-   ```bash
-   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
-   ```
-
-   Run `pkill` with `-x` (exact process-name match) and nothing else: with `-f`, the
-   pattern matches this command line itself and kills the shell running it.
-
-4. The command's output does not say whether the unlock worked, so always check.
-
-   ```bash
-   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
-   ```
-
-   `b false` means unlocked. If it stays `b true`, the password did not match: the keyring
-   does not follow login password changes, so an account whose password was changed later
-   still uses the old one.
-
-   Until that unlock, workflows that need a secret fail at run time. GuildBotics never
-   falls back to a plaintext file.
 
 ### Run the Server in a Terminal
 
@@ -670,10 +504,6 @@ The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in 
 - `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token
 - `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token
 
-**GitHub access** (per member, format: `{PERSON_ID}_...`):
-
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: fine-grained PAT for a machine account
-- GitHub App IDs live in the member's `identity.yml` (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
 
 **Branvil access**:
 
@@ -681,7 +511,7 @@ The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in 
 - `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved and used in every workspace (its Branvil name is `account_info.branvil_username` in the member's `identity.yml`)
 - Your own git's Branvil token: one owner token per machine, issued the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use Branvil from your own checkouts](docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts))
 
-Secrets stored in the OS keychain are loaded automatically. GuildBotics does not read a workspace `.env`.
+GuildBotics reads the encrypted stores automatically. GuildBotics does not read a workspace `.env`.
 
 ### Workspace and Data Locations
 
@@ -703,7 +533,7 @@ The process cwd is never treated as a workspace. From the selected workspace, `G
 
 GuildBotics stores three kinds of local data:
 
-- Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
+- Machine-wide management information — the workspace in use, the server’s selection, and so on — is stored in `$HOME/.guildbotics/data`
 - The members' identities, shared by every workspace, are stored in `$HOME/.guildbotics/identity/.guildbotics`, laid out like a workspace's `.guildbotics`
 - Workspace state — memory, chat control, task-run records, interactive session records, activity events — is stored in `<workspace>/.guildbotics/state`
 - Device-local data — diagnostics, transcripts, chat cache, member clones, the built agent environment (`local/agent_environment/snapshots`) — is stored in `<workspace>/.guildbotics/local`
@@ -716,9 +546,8 @@ GuildBotics stores three kinds of local data:
 - `name`: project name
 - `description`: short project description used as agent context
 - `language`: project language
-- `services.ticket_service`: GitHub issues and Projects settings
-- `services.ticket_service.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
-- `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
+- `services.ticket_service`: ticket service settings
+- `services.code_hosting_service`: code hosting service settings (the Branvil workspace used for repository operations)
 - With Branvil, both services are `name: branvil` with a `workspace` (members write only to its repositories and take tickets from its board). Where Branvil is reached is part of the connection, shared by every workspace (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
@@ -727,7 +556,7 @@ GuildBotics stores three kinds of local data:
 - `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only). It cannot be changed
 - `name`: display name
 - `person_type`: `human` for the human member, `agent` for an AI member
-- `account_info`: account names with each service (`git_user`, `git_email`, `github_*`, `slack_user_id`, `branvil_username`)
+- `account_info`: account names with each service (`git_user`, `git_email`, `slack_user_id`, `branvil_username`)
 - `profile.character`: profile such as interests, preferences, and conversation participation policy
 - `speaking_style`, `relationships`
 
@@ -763,13 +592,11 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. If neither exists, install them again (→ [Installation](#installation)) |
 | The server does not start, or has stopped | Read the output of `guildbotics server start` (see [Run the Server in a Terminal](#run-the-server-in-a-terminal)) |
 | Not sure which workspace is in use | Check and change it under **Setup → Project**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
-| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** |
-| Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
-| Cannot read vulnerability alerts (403) | Check **Dependabot alerts: Read-only** and target repository access for the member's GitHub App or fine-grained PAT. For an App, approve updated permissions for the installation; for a PAT, edit the token's permissions and obtain any required organization approval. See [GitHub account setup](#prepare-a-github-account-for-the-ai-agent). A 403 alone does not establish the cause |
+| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, Branvil, and Slack settings under **Setup → Verification** |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (every start of the services uses those settings) |
 | A command execution failed | Open the session on the **Diagnostics** screen and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
-| AI CLI turns do not start, or an alert says this device cannot run them | Open **Setup → Agent execution environment** and check **Status on this device** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon / Windows Hypervisor Platform / KVM), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and credentials must be saved for the tool on this machine (use the login command shown on the screen). Saved credentials do not guarantee successful authentication. While the environment is building, work is deferred, not failed |
+| AI CLI turns do not start, or an alert says this device cannot run them | Open **Setup → Agent execution environment** and check **Status on this device** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and credentials must be saved for the tool on this machine (use the login command shown on the screen). Saved credentials do not guarantee successful authentication. While the environment is building, work is deferred, not failed |
 | AI CLI authentication fails despite saved credentials | In **Setup → Agent execution environment**, copy the login command shown for the tool, run it in a terminal, and wait for the automatic status update (every 10 seconds while the screen is open). Press **Refresh display** to reread saved state. Use **Check again**, when available, to retry usage retrieval. The command uses the managed CLI's absolute path. **Credentials saved** only confirms that a file exists (for Claude Code and Grok Build, that the login sealed under this machine's keychain opens; these logins never enter a turn's microVM, and an earlier plain-file login is not read, so log in once more after updating and delete the old files — see [the details](docs/native_agent_runtime.en.md#logins-kept-outside-the-microvm)). An authentication failure is shared by all members using that tool on this device; completing login or a later successful turn clears it. Network errors and rate limits do not change this authentication result, and a past failure does not block retries |
 
 When an AI CLI usage refresh fails, the top notification area and the tool's settings row show the same problem. The row includes the last-check time. **Check again** bypasses the usage cache for that tool, and **Error details** opens the corresponding diagnostics session. A successful usage refresh clears the notification and the row's warning. The notification does not by itself mean credentials have expired; network errors and unavailable usage panels also prevent retrieval. **Refresh display** rereads saved state without probing the tools. On the Activity screen, each tool is read on its own and shared by every member using it, so a slow tool never delays another. The last successful reading stays visible with its time while a newer one is fetched; if that fetch fails, the reading is marked as the previous value and no longer drives the rate-limit badge, and the tool is retried after 30 seconds instead of the usual 5 minutes.

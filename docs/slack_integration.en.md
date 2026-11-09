@@ -18,7 +18,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 
 A member watches the channels you configure. When a message meets the mention and participation conditions, the chat judgment engine decides whether to start the response agent. It can complete with a reaction or no action; otherwise, the response agent reads the thread context and its own roles, performs the required work, and responds in Slack.
 
-**Doing the requested work**: when the message explicitly asks for an operation in another domain such as GitHub (for example, "please handle the review comments on this PR"), the member carries it out. The member's working directory has no repository checkout, so it identifies the target repository from the message and thread context and prepares a working branch with `guildbotics member git prepare` before working. If the target is ambiguous, it asks in the thread and completes with `asking`.
+**Doing the requested work**: when the message explicitly asks for an operation in another domain such as Branvil (for example, "please handle the review comments on this PR"), the member carries it out. The member's working directory has no repository checkout, so it identifies the target repository from the message and thread context and prepares a working branch with `guildbotics member git prepare` before working. If the target is ambiguous, it asks in the thread and completes with `asking`.
 
 **How it responds in Slack**: with or without work to do, it always closes out the thread in one of these ways.
 

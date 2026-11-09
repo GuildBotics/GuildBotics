@@ -17,7 +17,7 @@ CI で画像を artifact にする場合は、撮影を明示的に有効化し�
 `GUILDBOTICS_SCREENSHOT_DIR=test-results/visual` とし、そのディレクトリを収集します。
 既存の Desktop E2E workflow は撮影を有効化せず、desktop-quality も画像を生成しません。
 
-GuildBotics の画面（React + TypeScript）です。Vite でビルドした `desktop/dist` を、GuildBotics のサーバー（`python -m guildbotics.app_api`）がブラウザへ配ります（`guildbotics/app_api/ui.py`）。サーバーの導入・起動・更新は、リポジトリの [README](../README.ja.md#インストール) を参照してください。
+GuildBotics の画面（React + TypeScript）です。Vite でビルドした `desktop/dist` を、GuildBotics のサーバー（`guildbotics server start`）がブラウザへ配ります（`crates/gb-server/src/ui.rs`）。サーバーの導入・起動・更新は、リポジトリの [README](../README.ja.md#インストール) を参照してください。
 
 - 必要なもの: [uv](https://docs.astral.sh/uv/)（Python 環境）、Node.js 24 以上（CI は 24）
 - アーキテクチャ上の位置づけ（Local API 境界）は [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) を参照
@@ -36,22 +36,16 @@ npx vite build
 
 ## 開発モード起動
 
-Python のサーバーで、画面とバックエンドを別々に動かします。リポジトリルートから実行します（Rust のサーバーで Branvil と一緒に動かすときは `scripts/dev.sh`）。
+本番とは別のデータディレクトリを指定して、リポジトリのルートからRustのサーバーを起動します。
 
-```bash
-# Local API backend のみ（既定: http://127.0.0.1:8765）
-scripts/desktop-dev-backend.sh
-
-# ブラウザ preview 用 frontend（backend は別途起動しておく）
-scripts/desktop-dev-frontend.sh
+```sh
+scripts/dev.sh --data-dir /absolute/path/to/dev-data --no-open
 ```
 
-backend は `127.0.0.1` の固定ポートで待ち受けます。ポートは `GUILDBOTICS_SERVER_PORT`（既定 8765）で決まり、backend・CLI・Vite dev server（`/api` の転送先）がすべて同じ変数を読みます。OS のサービスで動いているサーバーと同じマシンで開発版を動かすときは、開発版のポートを変えます。
+既定の開発用ポートはGuildBoticsが8866、Branvilが7879です。画面だけを編集しながら確認する場合は、別のターミナルでViteの画面を起動します。
 
-```bash
-GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-backend.sh
-
-GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
+```sh
+GUILDBOTICS_SERVER_PORT=8866 scripts/desktop-dev-frontend.sh
 ```
 
 ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420`）が画面を配り、`/api`（`/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
@@ -100,15 +94,11 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
 
 前提:
 
-- リポジトリルートで Python 依存を解決済みであること（harness が `uv run python -m guildbotics.app_api` を起動するため）。
-
-  ```bash
-  uv sync --extra test --extra dev
-  ```
+- リポジトリのルートで `npm ci` を実行し、`rust-toolchain.toml` のRustを用意します。テストは `gb-server` の `browser-test-server` をビルドして、実HTTP APIと使い捨てのメモリ内キーチェーンを起動します。
 
 - 初回のみ chromium を取得する。
 
@@ -134,19 +124,13 @@ npm run e2e
 | `e2e/members.spec.ts`     | ② member 追加 → `identity.yml`（identity root）と `member.yml`（workspace）の実永続                                                                                                                                                                                                            |
 | `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                                                                                                                                |
 | `e2e/decisions.spec.ts`   | チャット判定の共通 brain 割り当て → 保存 → reload 後も復元                                                                                                                                                                                                                                     |
-| `e2e/environment.spec.ts` | ⑪ 実 microVM でコマンドを実行: 自力作成 → source 保存 → 画像の貼り付け（隔離環境の綴りのパス）→ 実行 → `/events` で成功と出力が届く。`.sh` の step は貼り付けたファイルを読み、出力を握ったままのプロセスを残してもコマンドは終わる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ走る |
 | `e2e/failure.spec.ts`     | ⑥ 画面を開いたまま backend が止まる → 「届かない」通知 → 再起動 → retry で復帰                                                                                                                                                                                                                                              |
 
 補足:
 
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
 - 各スタックの backend は temp workspace / temp HOME で動きます。harness は temp HOME のエージェント隔離環境の runtime 置き場（`~/.guildbotics/data/msb`）にただのファイルを置き、その端末を「runtime を置けない端末」にします。製品はこの状態を fail-closed に扱うので、service を start しても snapshot の build（container image の取得）は始まらず、`brain: agent` の journey（⑤のトラブルシューティングAI）は turn の開始前に端末の拒否として失敗します。加えて harness は AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に置き、その呼び出しログが空のままであることで実バイナリが一度も起動していないことを spec が確認します。
-- コマンドはすべて隔離環境の中で動くので、コマンドを実際に実行する ⑪ だけは、隔離環境を持てる端末で、ready なワークスペースを指定して走らせます。harness は `environment` スタックの temp HOME の runtime 置き場をその端末の runtime へ、temp workspace の snapshot をそのワークスペースの ready な snapshot へリンクし、宣言（`intelligences/agent_environment.yml`）を複製します。build はしません。Windows では隔離環境が OS の一時ディレクトリの中をマウントできないため、このスタックの temp workspace / temp HOME は `~/.guildbotics-e2e` に置き、次の実行の開始時に消します（リンク先はたどりません）。指定しなければスタックを起動せず、journey は理由つきで skip します（CI はこの形）。
-
-  ```bash
-  cd desktop
-  GUILDBOTICS_E2E_ENVIRONMENT_FROM=/path/to/workspace npm run e2e
-  ```
+- このE2EはmicroVMを起動せず、コマンド開始前の拒否までを確認します。microVM内の実行は利用者の承認を得て実機の検証手順で扱います。
 
 - E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイル（`desktop/**`、`guildbotics/**`、`pyproject.toml`、`uv.lock`、workflow 自体）を変更する pull request、手動実行、nightly で実行します。workflow はすべての pull request で起動し、関連ファイルの変更が無ければ Playwright を省略します。required check は常に報告される `Desktop E2E gate` だけで、E2E が不要なら成功、必要なら head/base の両方が成功した場合だけ成功します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 各スタックの backend のポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。backend は `127.0.0.1` だけで待ち受けます。

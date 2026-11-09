@@ -143,7 +143,7 @@ schedules:
 
 ## How Scheduling Works Internally
 
-How the scheduler behaves (from `guildbotics/drivers/task_scheduler.py` and `guildbotics/entities/task.py`):
+How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `crates/gb-server/src/schedule.rs`):
 
 **Architecture**:
 

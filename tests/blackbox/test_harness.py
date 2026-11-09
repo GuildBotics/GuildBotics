@@ -170,8 +170,6 @@ def test_failed_start_reaps_the_server(tmp_path, monkeypatch):
         "time.sleep(60)\n",
         encoding="utf-8",
     )
-    if os.name == "nt":
-        pytest.skip("SIGTERM teardown contract uses POSIX process groups")
     monkeypatch.setenv(
         "GUILDBOTICS_BLACKBOX_SERVER", shlex.join([sys.executable, str(launcher)])
     )
@@ -187,7 +185,6 @@ def test_failed_start_reaps_the_server(tmp_path, monkeypatch):
         os.kill(int((tmp_path / "pid").read_text()), 0)
 
 
-@pytest.mark.windows
 def test_environment_adoption_and_cleanup_leave_the_source_intact(tmp_path, symlinks):
     source = tmp_path / "source"
     source_home = tmp_path / "device-home"

@@ -11,30 +11,63 @@
 - 画面・CLI・API が利用者に返すエラーや案内は `guildbotics/templates/locales/` のキーで出す
   （Rust は `crates/gb-server/src/i18n.rs`、Python は `guildbotics.utils.i18n_tool.t()`）。固定文を書かない。
 
-## 現在の実装と境界
+## 開発用の起動
 
-Python は guest の入口 `guildbotics.guest.entry` とコマンド実行・共有型を持つ。
-Python の host・CLI・HTTP サーバーは削除済み。host の実装と知見は凍結ブランチ
-`origin/python-host`（`fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0`）の
-`git show origin/python-host:<path>` で読む（当時のガイドは AGENTS.md）。
-Rust の host は `crates/*` の Cargo workspace。Python は3.15、Rustは
-`rust-toolchain.toml` に固定した版を使い、CI imageの版と合わせる。
-共有は `commands`・`intelligences`・`runtime`・`loader`・`entities`・`utils`。
-共有はguestの実装をimportせず、全共有パッケージはguestから使われる。
-`lint-imports` と `tests/guildbotics/test_package_map.py` で検査する。
-`templates/` はRustも読むデータなので保持する。
+```sh
+scripts/dev.sh --data-dir /absolute/path/to/dev-data
+```
 
-wire の正本は `intelligences/agent_runtime/wire.py`。変更時は
-`uv run --no-sync python scripts/generate-wire-schema.py` で生成し `--check` で確認する。
-Rust の `gb-wire` はこのschemaから型を生成する。詳細は [wire](wire/README.md)。
-member の手順は [参照カタログ](guildbotics/templates/member/reference.md)、
-provider/CLI名の検査データは同じディレクトリの catalog.json。
-CLIの実物との照合は #92 で戻す。
-snapshotの固定値・requirementsは `guildbotics/templates/environment/`、
-AI CLIの固定版は `guildbotics/intelligences/cli_agents.py`。
-変更時は `.agents/skills/update-dependencies/SKILL.md` に従う。
+開発用のデータとポート（GuildBotics 8866、Branvil 7879）で両方の画面を開く。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
 
-## 開発時の基本コマンド
+## 実装と責務境界
+
+| 変更するもの | 入口 |
+| --- | --- |
+| `guildbotics` の引数、端末での入出力、CLI・スキル導入 | `crates/guildbotics/src/main.rs`、`install_cli.rs`。CLIからサーバーを呼ぶ処理は `gb-server/src/client/` |
+| API、画面のデータ、手動実行、巡回・定期実行・チャット | `gb-server/src/api.rs`、`dispatcher.rs`、`execution.rs`、`ticket_selector/`、`native_scheduler.rs` |
+| コマンド、設定の優先順、チーム、brainスロット | `gb-config/src/commands.rs`、`catalog.rs`、`team.rs`、`resolved_guest.rs` |
+| microVM、アクセス契約、認証情報の中継、スナップショット | `gb-environment/src/contract.rs`、`runtime.rs`、`broker.rs`、`gateway.rs`、`recipe.rs` |
+| メンバーの操作、サービスの契約、実装の選択 | `gb-member`、`gb-ports`、`gb-integrations/src/factory.rs` |
+| 設定保存、ワークスペースとidentity、共有書き込み、記録 | `gb-setup`、`gb-config/src/repository.rs`、`gb-workspace`、`gb-base/src/shared_writes.rs`、`gb-observability` |
+| コマンドの実行、プロンプト、AI CLIのアダプター | `guildbotics/guest/entry.py`、`guildbotics/commands/`、`guildbotics/intelligences/` |
+
+表のcrateは `crates/` 配下にある。Rustの依存は各crateの `Cargo.toml`、Pythonの区分は `pyproject.toml` の `[tool.importlinter]` を読む。記録のcrateは操作や画面を知らず、画面はproviderの応答を解釈しない。APIで画面向けの値を整え、データの判断は操作側へ置く。依存や公開範囲を広げる前に、既存の下位層の型や関数で表せるか確認する。
+
+### コマンドと隔離環境
+
+- Rust hostがコマンドの解決・宣言、チームとメンバー、スロット、許可範囲を決める。Python guestは受け取った `ResolvedGuest` の表で子コマンドを解決し、実行順・テンプレート・`Context.pipe`・`shared_state` を扱う。優先順やアクセス判定を二重に実装しない。設定と同梱テンプレートはデータとして両側から参照する。
+- hostは1つのコマンドにmicroVMを1つ起動し、`guildbotics.guest.entry` に要求を渡す。子コマンドとAI CLI turnもその中で動く。返答は標準出力の最後の1行、コマンドのログは標準エラー。wireの正本は `guildbotics/intelligences/agent_runtime/wire.py`。変更時は `uv run --no-sync python scripts/generate-wire-schema.py` で生成し、`--check` で確認する。Rustの `gb-wire` が生成済みschemaを使う。[wireの仕様](wire/README.md) を参照する。
+- guestのホームは `/opt/guildbotics/home`（`GUEST_HOME`）。hostのパスは元の絶対パスに1回だけマウントする。hostのホーム配下の許可先は、受け渡しフォルダも含め、guestのホームに同名のリンクを作る。入れ子の許可先は一番外側だけリンクする。`guest_path()` は `/opt/guildbotics` または `/run/guildbotics` と重なるhostパスを拒否する。利用者には実体のパス（`realpath`）を伝える。
+- hostの環境変数をguestへ継承しない。時刻と言語は `TZ` と `LANGUAGE` で渡す。実トークンやAPIキーはhostで保持し、許可した要求だけをメンバー窓口や認証ゲートウェイで中継する。1コマンドにつき一度に1 turn。終了時に貸し出しを取り消す。
+- Pythonの共有パッケージは `commands` → `intelligences` → `runtime` → `loader` → `entities` → `utils` の順で依存する。共有はguestをimportせず、全共有パッケージはguestの入口から使われる。`lint-imports` と `tests/guildbotics/test_package_map.py` で、名前で読み込むbrainと同梱コマンドも確かめる。
+- AI CLIの固定版は `guildbotics/intelligences/cli_agents.py`、Node.jsとスナップショットの固定値は `guildbotics/templates/environment/recipe.json`。Rustは生成したカタログとrecipeを読む。更新は [update-dependencies](.agents/skills/update-dependencies/SKILL.md) に従う。
+
+### メンバー・provider・実行
+
+- `gb-ports` の契約でコードホスト、チケット、チャットを扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。任意機能に対応しないときはunsupportedを返す。空の成功は実際に0件の場合だけに使う。
+- providerの選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。契約テストではprovider間で同じ操作を確かめる。参照providerの `local` は実サービス固有のIDや名前空間をまねない。
+- チケットの候補選択と実行前後の処理はticket selectorを通す。チャットは発生時刻を時間窓、`position` を順序に使う。返信や外部書き込みの前に依頼元スレッドの新着を確認する。実行が止まったときは作業の出どころに記録する。接続できないサービスで見送った予定は消化せず、連続失敗に数えない。
+- 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。PRの完了判定は現在のheadのreadinessを使う。
+- メンバーの手順の正本は [参照カタログ](guildbotics/templates/member/reference.md)。workflowの封筒、起動元ごとの情報、手順の本文を分ける。複数のプロンプトが同じ規則を使うときは共通の層に置く。
+
+### 保存・秘密・記録
+
+- 共有ファイルの更新は `gb-base/src/shared_writes.rs` の書き込み境界を通す。読み取り・変更・保存、rename、削除を同じプロセス間lockの中で行う。identityとworkspaceの両方に触る場合はidentityが先、共有lockと機能ごとのlockでは共有が先。端末固有の `local/` は共有の対象外。
+- 設定の比較・書き込み・応答revisionの取得は `gb-config/src/repository.rs` で1つに扱う。設定以外へrevisionを広げない。書き込み経路のテストはURLの接頭辞でなく、何を書き換えるかで分類する。
+- GuildBoticsの秘密の値は `local/secrets.enc.json` に暗号化して保存し、鍵はOSキーチェーンに置く。`config/secrets.yml` はキー名の索引。メンバーの資格情報はidentityに置き、秘密名のプレフィックスが別ワークスペースのIDとも衝突しないよう確認する。壊れた索引を空として扱わない。
+- 共有記録には端末固有の値を入れない。値を持たせずに済む項目は型で防ぎ、記録のマスクとサイズ制限は共通の処理で行う。診断の文脈を捨てるためにエラー全体を隠さない。
+
+### Branvil
+
+- `branvil` crateはGuildBoticsのcrateに依存しない。データの入口は同じサービスの公開API（`api::DataApi` と認証後の `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
+- 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`admin upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。Branvilの `secrets/` はOSキーチェーンを使うGuildBoticsの運用とは別で、データディレクトリに保持する。実データやtokenの中身を参照しない。
+- HTTP契約を変えたら [API文書](crates/branvil/docs/api.md) とRustの組み込みproviderを合わせ、`scripts/branvil-integration.sh` で公開APIとの結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
+- loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
+- 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `packages/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。
+
+## 開発時の基本コマンド（CI準拠）
+
+Pythonは `.python-version` の3.15、Rustは `rust-toolchain.toml` の固定版を使う。CIの開発イメージも同じ版にそろえる。Rustのテストには `cargo install --locked cargo-nextest` でnextestを用意する。BranvilのGit lockはプロセス内に1つなので、テストごとにプロセスを分ける。通常の `cargo test` はスレッド数を1にしても同じプロセスを使う。
 
 ```bash
 uv sync --extra dev --extra test
@@ -58,8 +91,10 @@ Rustの入口へ向ける形で残す。サーバーには `cargo build --locked
 同じ example 内の製品クライアントを使い、実行ファイル hash の照合を保持する。
 その他の CLI 操作は `GUILDBOTICS_BLACKBOX_CLI` の製品バイナリを直接使う。サーバー単独の黒箱テストも CI で実行する。
 desktop journey は Rust HTTP API と一時 vault で実行する。golden の本番コピー比較は
-CI に含めず、ワークフローで実行する。隔離環境の journey と画面の目視は #108 の範囲。
+CI に含めず、ワークフローで実行する。隔離環境を含むjourneyと画面の目視は利用者の立ち会いで行う。
 Branvilの画面E2Eは継続する。
+
+CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test hub_server` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `BRANVIL_REAL_EXECUTOR=1` の任意実行。
 
 ## 品質とテスト
 
@@ -84,7 +119,7 @@ desktop TypeScript 開発時の品質確認:
 - 重複コード抑止は `npm run duplicates` (`jscpd`) を使う。重複検出を避けるためだけの不自然な分割ではなく、UI とロジックの責務が自然に分かれる形へ整理する
 - 生成物を frontend 品質チェックへ巻き込まない。対象は `desktop/src` と frontend 設定ファイルを基本とする
 - 実ブラウザ + 実 backend を貫く critical user journey（setup→作成 / scheduler start-stop / command 実行+ストリーム / diagnostics / backend down→retry）を変更したら、`desktop/e2e/*.spec.ts` の該当 Playwright journey を更新する。E2E は `npm run quality` / push CI には含めず、ローカルの `npm run e2e` または専用の `Desktop E2E` workflow で実行する（command 実行+ストリームは隔離環境を持てる端末で `GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ走る）
-- E2E に振る舞いパターンを総当たりで持ち込まない。分岐網羅は Vitest の unit / component（mock 境界）に置き、Playwright は jsdom では検証できない実ブラウザ + 実ワイヤ契約（`client.ts ↔ FastAPI ↔ EventBus`）+ 実ファイル書き込みに絞る
+- E2E に振る舞いパターンを総当たりで持ち込まない。分岐網羅は Vitest の unit / component（mock 境界）に置き、Playwright は jsdom では検証できない実ブラウザ + 実ワイヤ契約（`client.ts ↔ Rust HTTP API ↔ events`）+ 実ファイル書き込みに絞る
 
 ## テスト実装の考え方
 
@@ -107,7 +142,7 @@ desktop TypeScript 開発時の品質確認:
 変更種別ごとの必須確認:
 
 - 純粋関数、入力変換、validation、parser、serializer を変更したら、正常系・境界値・不正入力の unit test を追加・更新する
-- API endpoint、`AppRuntime`、setup service、config 書き込みを変更したら、service unit test と FastAPI `TestClient` integration test の両方を検討する
+- API endpoint、実行境界、setup、設定書き込みを変更したら、処理単体のテストとRust HTTP APIの結合テスト の両方を検討する
 - scheduler / event listener / websocket / lifecycle を変更したら、状態遷移、二重起動防止、停止、timeout、event/log publish を検証する
 - command runner / command spec / command discovery を変更したら、`Context.pipe`、`shared_state`、person-specific fallback、localized file precedence、child command failure を検証する
 - desktop の API client を変更したら、URL、method、header、body、query parameter、error response、websocket status を検証する
@@ -145,5 +180,5 @@ desktop TypeScript 開発時の品質確認:
 
 ## 参照優先度
 
-実装とテストを先に読む。hostの凍結点、wire/recordsのREADME、チケットの順で補う。
+実装とテストを先に読む。旧Python hostの知見を確認する場合は `git show origin/python-host:AGENTS.md` を使う。
 未実装の計画はリポジトリに残さずチケットで管理する。

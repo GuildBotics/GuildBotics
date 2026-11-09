@@ -27,7 +27,7 @@ service may be down; see `README.md`, "Several machines").
 "contract" means GuildBotics' port contract tests
 (`tests/guildbotics/integrations/contracts/`) for `branvil`, which run against
 `BranvilDouble`, a Python double of this API; "smoke" means the operation is
-driven against a real `branvil serve` by `scripts/branvil-integration.sh`, which
+driven against a real `guildbotics branvil serve` by `scripts/branvil-integration.sh`, which
 walks three paths (tickets and their relations, a push with a pull request and
 its merge, checks deciding readiness; see "Checking with GuildBotics" in the
 README); "provider unit tests on the double" are GuildBotics'

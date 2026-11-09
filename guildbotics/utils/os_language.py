@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import ctypes
-import locale
 import os
 import re
 import subprocess
 import sys
-from typing import Any
 
 from langcodes import Language, LanguageTagError
 
@@ -18,7 +15,7 @@ _LANGUAGE_TAG = re.compile(r"[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*")
 def os_ui_language() -> Language | None:
     """Read the operating system's UI language afresh.
 
-    macOS and Windows keep it in their own settings; elsewhere it is the first
+    macOS keeps it in its own settings; elsewhere it is the first
     of the gettext variables that names one, so an agent environment reads the
     ``LANGUAGE`` its host tells it.
 
@@ -28,8 +25,6 @@ def os_ui_language() -> Language | None:
     """
     if sys.platform == "darwin":
         tag = _macos_ui_language_tag()
-    elif sys.platform == "win32":
-        tag = _windows_ui_language_tag()
     else:
         tag = _posix_ui_language_tag()
     return ui_language(tag)
@@ -68,18 +63,6 @@ def _macos_ui_language_tag() -> str | None:
         if _LANGUAGE_TAG.fullmatch(candidate):
             return candidate
     return None
-
-
-def _windows_ui_language_tag() -> str | None:
-    try:
-        windll: Any = getattr(ctypes, "windll", None)
-        if windll is None:
-            return None
-        get_language = windll.kernel32.GetUserDefaultUILanguage
-        get_language.restype = ctypes.c_ushort
-        return locale.windows_locale.get(int(get_language()))
-    except AttributeError, OSError:
-        return None
 
 
 def _posix_ui_language_tag() -> str | None:

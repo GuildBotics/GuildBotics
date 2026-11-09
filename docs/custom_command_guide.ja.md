@@ -343,7 +343,7 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` と `branvil` で、未設定・未対応のサービスは明示的にエラーになります。Branvil は、リポジトリの上流の GitHub の Dependabot アラートを、Branvil が GitHub の読み取りに使うアカウントで読んで返すので、そのアカウントに同じ権限が要ります（[Branvil 連携ガイド](branvil_integration.ja.md#上流が-github-のリポジトリ)）。上流の無いリポジトリは未対応として拒否されます。GitHub では、メンバーの認証情報（GitHub App または fine-grained PAT）に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存の App はインストール先で追加権限を承認し、既存の PAT はトークンの権限を編集して、organization が要求する承認を済ませてください。手順は [GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)を参照してください。
+コマンドは `services.code_hosting_service` で選んだBranvilを使い、隔離環境で読み取り専用で動きます。LLMは呼び出しません。Branvilが上流のGitHubからDependabotアラートを読むので、上流の設定と読み取り権限が必要です。上流のないリポジトリでは未対応として失敗します。[Branvil連携ガイド](branvil_integration.ja.md#上流が-github-のリポジトリ)
 
 `output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では未提供の任意項目を省略し、修正版の報告がない場合だけ明示します。見出しには取得する状態と、各アラートの ID・パッケージ・重要度を表示します。一覧には概要を、個別表示には他の項目の後ろに引用ブロックで説明の全文を表示します。対象は依存ライブラリの脆弱性です。
 
@@ -384,7 +384,7 @@ guildbotics run repository/pr_checks --person alice url=https://github.com/org/r
 
 readiness は host サービス自身の通信を使うため、内部の compare 応答には参照ページ用の受信上限を適用しません。返すページの上限は維持し、JSON のエスケープと付帯情報を除いた残りを失敗ログで分け合います。短くしたログは `truncated=true` と `tail_limit_bytes` で分かります。GitHub の権限エラーは必要な権限名を示し、HTTP が成功でも GraphQL の権限不足・レート制限はエラーとして案内します。
 
-共通のサービスは `runtime/code_hosting_service.py` と `runtime/ticket_service.py` に、リソースの一覧と各リソースの項目の形は `runtime/resources.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います（コマンドの環境ではチケットを読めますが、書き込みとボードの操作はできません）。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
+サービス操作の契約は `crates/gb-ports` にあり、`crates/gb-integrations` がproviderを選びます。メンバーの資格情報はhostに保持します。
 
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。
@@ -516,7 +516,6 @@ template_engine: jinja2
 brain: none
 ---
 {% for task in task_list.tasks %}
-- [ ] {{ task.title }} (priority: {{ task.priority }})
 {% endfor %}
 ```
 
@@ -524,11 +523,6 @@ brain: none
 
 ```shell
 $ guildbotics run coverage
-- [ ] utils/fileio.py の単体テストを追加 (priority: 1)
-- [ ] capabilities/member_git.py の動作とエラー処理のテストを追加 (priority: 2)
-- [ ] drivers/command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
-- [ ] utils/import_utils.py のインポート処理とエッジケースのテストを追加 (priority: 4)
-- [ ] intelligences/functions.py のビジネスロジックと外部呼び出しのモックテストを追加 (priority: 5)
 ```
 
 ### 5.3. print コマンド
@@ -621,7 +615,7 @@ commands:
 ## 6. シェルスクリプトの利用
 シェルスクリプトは、上記のように script キーを使って直接記述する方法の他に、外部のシェルスクリプトファイルとして記述してコマンドとして呼び出すことが可能です。
 
-シェルスクリプトは、Windows を含めホストの OS によらず、隔離環境の Linux の上で動きます。実行権限があり shebang（`#!`）で始まるスクリプトはそれ自体を実行し（shebang に従います）、それ以外のスクリプトは `bash` で実行します（Windows のホストからマウントしたファイルは常に実行権限を持ちます）。
+シェルスクリプトは隔離環境のLinuxで動きます。実行権限があり shebang（`#!`）で始まるスクリプトはそれ自体を実行し（shebang に従います）、それ以外のスクリプトは `bash` で実行します。
 
 例えば、`current-time.sh` というファイルを作成し、次のように記述します。
 
@@ -986,7 +980,7 @@ effort:
 
 ## 10. チャットの新着を確認してから公開する
 
-チャットワークフローでは、返信・リアクション・Git push・GitHubへの書き込みの直前に、元のスレッドの新着を確認します。
+チャットワークフローでは、返信・リアクション・Git push・Branvilへの書き込みの直前に、元のスレッドの新着を確認します。
 
 ```bash
 guildbotics member chat updates --person alice
@@ -994,4 +988,4 @@ guildbotics member chat updates --person alice
 
 このコマンドはSlack APIを呼ばず、永続化されたイベントキューを読みます。`new_messages` は、この実行の入力または前回の確認以降に届いたメッセージを返します。全件を読んで作業や返信内容を再検討し、確定操作の直前に再確認してください。`up_to_date` なら操作を進められます。`catching_up` は、ほかの書き込みが終わるのを待っている受信メッセージの保存待ちです。数秒待って再確認し、この状態だけを理由に公開や `blocked` 完了を行わないでください。`unavailable` は受信状態を確認できないことを意味します。公開操作を見送り、そのturn内に復旧しなければ `blocked` で完了します。
 
-書き込みコマンド側でも、確認漏れや確認後の新着があれば操作を拒否します。GitHubや別チャンネルへの書き込みでも、確認対象は依頼元のチャットスレッドです。確認したメッセージのIDを実行に記録します。追加の新着は、その配信後に返信・投稿・リアクション・GitHubへの書き込み・Gitの公開操作が記録された場合だけ done/asking 完了時に処理済みにします。blockedやno-opだけで終わった実行の新着は、次の実行に向けてキューに残します。最終確認の後に届くメッセージまで防ぐものではありません。
+書き込みコマンド側でも、確認漏れや確認後の新着があれば操作を拒否します。Branvilや別チャンネルへの書き込みでも、確認対象は依頼元のチャットスレッドです。確認したメッセージのIDを実行に記録します。追加の新着は、その配信後に返信・投稿・リアクション・Branvilへの書き込み・Gitの公開操作が記録された場合だけ done/asking 完了時に処理済みにします。blockedやno-opだけで終わった実行の新着は、次の実行に向けてキューに残します。最終確認の後に届くメッセージまで防ぐものではありません。

@@ -8,11 +8,10 @@ GitHub. The chat stays whatever the
 project chooses (Slack, for example).
 
 This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
-the exact `branvil` commands, are in the Branvil README.
+the exact `guildbotics branvil` commands, are in the [Branvil README](../crates/branvil/README.md).
 
 Ticket mention selection uses the `mentions` lists Branvil returns on bodies
 and comments. Branvil resolves names against its members when a body is saved.
-Install the matching Branvil (storage schema 22) before this provider.
 Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
 unanswered mentions outside the member's assignment, without scanning every
 ticket's comments. These runs respond on the ticket and leave its lane and
@@ -32,9 +31,9 @@ checks it awaits settle.
 ```text
 Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ OpenSSH (OS user service)    │
-│   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
-│ GuildBotics                  │            │                              │
+│ guildbotics server start     │            │ OpenSSH (OS user service)    │
+│   http://127.0.0.1:7878       │◀── SSH ────│   http://127.0.0.1:7878       │
+│ GuildBotics and Branvil      │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
@@ -90,7 +89,7 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 Following the Branvil README:
 
 1. Run Branvil on the Hub. Set up SSH forwarding on other machines as below.
-   `branvil init` creates Branvil's owner, the one person who uses it: the
+   `guildbotics branvil init` creates Branvil's owner, the one person who uses it: the
    GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
@@ -184,7 +183,7 @@ On the Hub's screens, under **Setup → Integrations**:
 2. Check the **Base URL** next to **Connect to Branvil** (`http://127.0.0.1:7878` unless
    changed), then press **Connect to Branvil**. The browser opens Branvil's consent screen: *Allow
    GuildBotics to manage Branvil?* Choose **Allow**. (When the browser has no Branvil
-   session yet, the page says to run `branvil open` on this machine; it comes back to the
+   session yet, the page says to run `guildbotics branvil open` on this machine; it comes back to the
    consent screen once you have entered.) The screen then shows *Connected to Branvil as
    its owner*. The connection, with its base URL, is the same in every workspace:
    another workspace that chooses Branvil is connected already.
@@ -192,7 +191,7 @@ On the Hub's screens, under **Setup → Integrations**:
    to its repositories and take tickets from its board; reads are not limited.
 
 Branvil issues GuildBotics an owner token labelled `app:GuildBotics`. GuildBotics keeps
-it in the OS keychain as `BRANVIL_ADMIN_TOKEN`, in the identities' store that every
+it in the encrypted identity store as `BRANVIL_ADMIN_TOKEN`, in the identities' store that every
 workspace shares, and the base URL beside it in
 `~/.guildbotics/identity/.guildbotics/config/connections/branvil.yml`. It uses the token only in
 its own process on the machine (the setup screens and the checks): no member, command, or
@@ -212,8 +211,7 @@ Under **Setup → Members → Branvil**:
 
 - An AI member is a Branvil agent: **Create a new agent** (named after the member's ID)
   or **Choose an existing agent**. Saving the member creates the agent unless one was
-  chosen, issues its token (labelled `guildbotics`), and keeps the token in the OS
-  keychain as `{PERSON_ID}_BRANVIL_TOKEN` (its ID as `{PERSON_ID}_BRANVIL_TOKEN_ID`). The
+  chosen, issues its token (labelled `guildbotics`), and keeps the token in the encrypted identity store as `{PERSON_ID}_BRANVIL_TOKEN` (its ID as `{PERSON_ID}_BRANVIL_TOKEN_ID`). The
   token it replaces is revoked once the save is done; when the save is refused, the token
   issued for it is revoked instead and the one held before keeps working. No token is ever
   shown or typed. The token is also the member's git password: git authenticates with
@@ -222,9 +220,6 @@ Under **Setup → Members → Branvil**:
   agent's; **Issue a new token when saved** replaces it.
 - The human member is Branvil's owner: its Branvil name is filled in with the owner's
   when the member is saved.
-- The member's **GitHub** tab is shown too. When an AI member has a GitHub account there
-  (a machine user's token, or a GitHub App), every save hands it to Branvil, which
-  publishes the member's pull requests as that account (below).
 - The member's avatar is Branvil's picture of its agent (or of the owner, for the human
   member): GuildBotics hands it over on every save and whenever the avatar is uploaded or
   imported. It is set in GuildBotics only.
@@ -302,7 +297,7 @@ agent's token and drops every configured helper.
 
 ## How members work with it
 
-The ticket workflow and the pull request patrol behave as they do with GitHub:
+The ticket workflow and pull request patrol read the Branvil board and conversations:
 
 - A ticket has at most one assignee: the agent that works on it. Assigning another
   member replaces the assignee, so two members never take up the same ticket.
@@ -342,10 +337,8 @@ things:
 - Members work in Branvil exactly as above. Nothing reaches GitHub while they do.
 - When a pull request is done, the owner publishes it from Branvil's GUI instead of
   merging: Branvil pushes the branch and opens a pull request on GitHub with the final
-  title and body, **as the author's GitHub account**. Give each AI member its bot
-  account on the member's **GitHub** tab in GuildBotics; GuildBotics hands it to Branvil.
-  One of these bot accounts also reads GitHub for Branvil, so the human member's own
-  GitHub token is not needed.
+  title and body as the author's GitHub account. Configure each account in
+  Branvil's member settings. [Upstream setup](../crates/branvil/README.md#upstream-github)
 - GitHub's checks of the published head appear among the pull request's checks
   (`github/<name>`) with their logs, so a failure on GitHub (Windows, for example) keeps
   the pull request from being ready, and the member fixes it in Branvil; later pushes

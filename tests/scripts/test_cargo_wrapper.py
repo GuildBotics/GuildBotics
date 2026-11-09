@@ -78,8 +78,6 @@ else:
     sys.exit(int(os.environ.get("CARGO_EXIT", "0")))
 """
 
-pytestmark = pytest.mark.usefixtures("shell_commands")
-
 
 class Cargo:
     """Run the wrapper as a project's ``cargo`` and read what the real one did."""

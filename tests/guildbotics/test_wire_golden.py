@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -20,11 +17,9 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
 )
 from guildbotics.intelligences.agent_runtime.wire import (
-    CommandRequest,
     HostCallError,
     admits,
 )
-from guildbotics.runtime.member_invocation import GuestResult
 
 GOLDEN = Path(__file__).resolve().parents[2] / "wire" / "golden"
 
@@ -141,9 +136,7 @@ def _jsonl(text):
 
 
 @pytest.mark.asyncio
-async def test_worktree_producer_and_host_consumers(
-    tmp_path, monkeypatch, posix_permissions
-):
+async def test_worktree_producer_and_host_consumers(tmp_path, monkeypatch):
     from guildbotics.guest import worktree_copy
 
     case = _load("worktree")

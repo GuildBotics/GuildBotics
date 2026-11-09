@@ -143,7 +143,7 @@ schedules:
 
 ## スケジューラの内部動作
 
-スケジューラの動作（`guildbotics/drivers/task_scheduler.py` および `guildbotics/entities/task.py` より）:
+スケジューラの動作（`crates/gb-server/src/native_scheduler.rs` および `crates/gb-server/src/schedule.rs` より）:
 
 **アーキテクチャ**:
 

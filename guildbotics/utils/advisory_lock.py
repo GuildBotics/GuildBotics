@@ -1,15 +1,15 @@
-"""Small cross-platform advisory file-lock primitives."""
+"""Small advisory file-lock primitives."""
 
 from __future__ import annotations
 
-import errno
+import fcntl
 import os
 import threading
 import time
 from collections.abc import Callable, Hashable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
@@ -17,20 +17,6 @@ from guildbotics.utils.fileio import (
     get_workspace_root,
     resolve_from_existing_ancestor,
 )
-
-_WINDOWS = os.name == "nt"
-_windows_locking: Any
-_posix_locking: Any
-if _WINDOWS:
-    import msvcrt
-
-    _windows_locking = msvcrt
-    _posix_locking = None
-else:
-    import fcntl
-
-    _windows_locking = None
-    _posix_locking = fcntl
 
 
 def open_lock_file(path: Path) -> IO[str]:
@@ -40,27 +26,8 @@ def open_lock_file(path: Path) -> IO[str]:
 
 
 def lock_file_nonblocking(handle: IO[str]) -> None:
-    """Take the advisory lock on ``handle`` without waiting.
-
-    Acquiring writes nothing. Windows locks the byte range rather than the
-    file, and it accepts a range past the end, so an empty lock file locks the
-    same way a populated one does. Creating that byte here instead would make
-    two holders reaching a new lock file race to write it, and the loser would
-    be refused -- once on the failed flush, and again when the buffer it still
-    held reached the close.
-    """
-    if not _WINDOWS:
-        _posix_locking.flock(
-            handle.fileno(), _posix_locking.LOCK_EX | _posix_locking.LOCK_NB
-        )
-        return
-    handle.seek(0)
-    try:
-        _windows_locking.locking(handle.fileno(), _windows_locking.LK_NBLCK, 1)
-    except OSError as exc:
-        if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-            raise BlockingIOError(exc.errno, exc.strerror) from exc
-        raise
+    """Take the advisory lock without waiting or writing to the file."""
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 class LockTimeoutError(TimeoutError):
@@ -207,21 +174,17 @@ def workspace_reentrant_lock(
 
 
 def unlock_file(handle: IO[str]) -> None:
-    if not _WINDOWS:
-        _posix_locking.flock(handle.fileno(), _posix_locking.LOCK_UN)
-        return
-    handle.seek(0)
-    _windows_locking.locking(handle.fileno(), _windows_locking.LK_UNLCK, 1)
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def read_lock_data(handle: IO[str]) -> str:
-    """Read data stored after the byte reserved for Windows locking."""
+    """Read data stored after the lock record's leading byte."""
     handle.seek(1)
     return handle.read()
 
 
 def write_lock_data(handle: IO[str], value: str) -> None:
-    """Replace data while preserving the leading byte used for locking."""
+    """Replace data while preserving the lock record's leading byte."""
     handle.seek(0)
     handle.write(" ")
     handle.write(value)

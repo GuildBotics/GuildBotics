@@ -8,11 +8,10 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 （Slack など）のままです。
 
 このガイドは、GuildBotics が Branvil に求めるものを説明します。Branvil のインストールと起動、
-`branvil` コマンドの正確な使い方は Branvil の README を参照してください。
+`guildbotics branvil` の使い方は [BranvilのREADME](../crates/branvil/README.md) を参照してください。
 
 チケットのメンション判定には、Branvil が本文とコメントに返す `mentions` を使います。
-名前は Branvil のメンバーとして本文の保存時に解決されます。対応する Branvil（保存形式22）を
-先に導入してください。
+名前は Branvil のメンバーとして本文の保存時に解決されます。
 巡回は `GET /workspaces/{workspace}/tickets?mentions=me` も読み、全チケットのコメントを
 個別に取得せず、担当外の未応答メンションを探します。この作業はチケットへのコメントで応答し、
 レーンと担当を変えません。他のメンバーだけを宛先にしたコメントでは担当者を起こさず、
@@ -29,9 +28,9 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 ```text
 Hub のマシン                                ほかのマシン
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ OpenSSH (OS user service)    │
-│   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
-│ GuildBotics                  │            │                              │
+│ guildbotics server start     │            │ OpenSSH (OS user service)    │
+│   http://127.0.0.1:7878       │◀── SSH ────│   http://127.0.0.1:7878       │
+│ GuildBoticsとBranvil         │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
@@ -78,7 +77,7 @@ Branvil がすでに受け取ったかもしれない要求は送り直さない
 Branvil の README に従って、次を行います。
 
 1. Hub で Branvil を動かす。ほかのマシンでは、下記の SSH 転送を設定する。
-   `branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
+   `guildbotics branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
    GuildBotics の人間のメンバーです。オーナーは何でもでき、マージし、Branvil の GUI を使います。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
    Branvil の GUI で作る。ワークスペース（`acme`）はリポジトリをまとめ、ボードを 1 つ持ちます。
@@ -171,7 +170,7 @@ Hub の画面の **設定 → 連携** から:
 2. **Branvil に接続** の横の **ベース URL**（変更しなければ `http://127.0.0.1:7878`）を
    確かめてから、**Branvil に接続** を押す。ブラウザで Branvil の同意画面（「GuildBotics に Branvil の管理を
    許可しますか?」）が開くので、**許可** を選ぶ。（ブラウザにまだ Branvil のセッションがなければ、
-   このマシンで `branvil open` を実行するよう案内が出ます。入ると同意画面に戻ります。）画面に
+   このマシンで `guildbotics branvil open` を実行するよう案内が出ます。入ると同意画面に戻ります。）画面に
    「Branvil にオーナーとして接続しています」と出ます。接続とそのベース URL はすべての
    ワークスペースで共通なので、Branvil を選んだほかのワークスペースもすでに接続しています。
 3. メンバーが作業する **ワークスペース** を選ぶか、その場で作る。メンバーはその
@@ -179,7 +178,7 @@ Hub の画面の **設定 → 連携** から:
 
 Branvil は GuildBotics に `app:GuildBotics` というラベルのオーナーのトークンを発行します。
 GuildBotics はこれを `BRANVIL_ADMIN_TOKEN` として、すべてのワークスペースで共有する
-アイデンティティのストア（OS キーチェーン）に保存し、ベース URL をその横の
+アイデンティティの暗号化ストアに保存し、ベース URL をその横の
 `~/.guildbotics/identity/.guildbotics/config/connections/branvil.yml` に保存します。
 トークンはそのマシンの自分自身のプロセス（設定画面と検証）でだけ使い、メンバー・コマンド・
 隔離環境には渡しません。取り消すには、Branvil の **設定 → メンバー → オーナー → トークン** で
@@ -197,7 +196,7 @@ GuildBotics はこれを `BRANVIL_ADMIN_TOKEN` として、すべてのワーク
 - AI メンバーは Branvil のエージェントです。**新しいエージェントを作る**（メンバーの ID の
   名前）か **既存のエージェントを選ぶ** を選びます。メンバーを保存すると、選んでいなければ
   エージェントを作り、トークン（ラベル `guildbotics`）を発行して、
-  OS キーチェーンに `{PERSON_ID}_BRANVIL_TOKEN`（その ID を `{PERSON_ID}_BRANVIL_TOKEN_ID`）として
+  アイデンティティの暗号化ストアに `{PERSON_ID}_BRANVIL_TOKEN`（その ID を `{PERSON_ID}_BRANVIL_TOKEN_ID`）として
   保存します。置き換えた前のトークンは、保存が終わってから取り消します。保存できなかったときは、
   そのために発行したトークンを取り消し、前のトークンをそのまま使います。トークンを表示したり入力したり
   することはありません。トークンはメンバーの git のパスワードにもなり、git はエージェントの名前と
@@ -206,9 +205,6 @@ GuildBotics はこれを `BRANVIL_ADMIN_TOKEN` として、すべてのワーク
   トークンをそのまま使います。**保存するときにトークンを再発行する** で置き換えられます。
 - 人間のメンバーは Branvil のオーナーです。保存したときに、Branvil の名前にオーナーの名前が
   入ります。
-- メンバーの **GitHub** タブも表示されます。AI メンバーにそこで GitHub のアカウント
-  （マシンユーザーのトークンか GitHub App）があれば、保存のたびに Branvil に渡します。Branvil は
-  そのアカウントとしてメンバーの pull request を出します（下記）。
 - メンバーのアイコンは、Branvil ではそのエージェント（人間のメンバーならオーナー）の画像に
   なります。保存のたびと、アイコンをアップロードまたは取り込んだときに、GuildBotics が渡します。
   設定するのは GuildBotics だけです。
@@ -286,7 +282,7 @@ GuildBotics はメンバーの git にエージェントのトークンを渡し
 
 ## メンバーの動き
 
-チケットのワークフローと pull request の巡回は、GitHub と同じように動きます。
+チケットのワークフローとpull requestの巡回は、Branvilのボードと会話を確認します。
 
 - チケットの担当者は 1 人まで（そのチケットに取り組むエージェント）です。別のメンバーに割り当てると
   担当者が入れ替わるので、2 人のメンバーが同じチケットを取り上げることはありません。
@@ -323,10 +319,8 @@ Branvil のリポジトリは、GitHub のリポジトリに追従できます�
 - メンバーは上と同じように Branvil で作業します。その間、GitHub には何も出ません。
 - pull request ができあがったら、オーナーは Branvil の GUI でマージの代わりに GitHub に出します。
   Branvil はブランチを push し、最終的なタイトルと本文で、**作成者の GitHub アカウントとして**
-  GitHub に pull request を開きます。そのため、AI メンバーごとの bot アカウントを、GuildBotics の
-  メンバーの **GitHub** タブに設定してください。GuildBotics がそれを Branvil に渡します。GitHub の
-  読み取りにも、これらの bot アカウントのどれか 1 つを使うので、人のメンバー自身の GitHub
-  トークンは要りません。
+  GitHub にpull requestを開きます。対応するGitHubアカウントはBranvilのメンバー設定で
+  登録します。[上流の設定](../crates/branvil/README.md#upstream-github)
 - 出した head に対する GitHub のチェックは、pull request のチェックに `github/<name>` として
   ログ付きで並びます。GitHub で（Windows などで）失敗すると pull request は ready にならず、
   メンバーは Branvil で直します。その後の push は自動で GitHub に届きます。

@@ -152,8 +152,6 @@ elif tool == "guildbotics":
         sys.exit(int(env.get("DEV_TEST_BROWSER_EXIT", "0")))
 """
 
-pytestmark = pytest.mark.usefixtures("shell_commands")
-
 
 class Launcher:
     """A copy of the repository with fake tools, and the launcher runs in it."""

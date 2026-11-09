@@ -78,7 +78,7 @@ service / account の属性だけを JSON で列挙する。これは値の一�
 
 ## テスト用 fixture
 
-実キーチェーンに触れず Python の移行処理から合成値の fixture を再生成する。
+凍結点のチェックアウトで、実キーチェーンに触れずに合成値のfixtureを再生成する。
 
 ```sh
 uv run --no-sync python -m tests.guildbotics.environment.test_secret_migration

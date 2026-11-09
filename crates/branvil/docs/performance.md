@@ -11,17 +11,17 @@ the [GUI](#gui), and the [CI runner and its executor](#ci-executor);
 ## How to run
 
 The load tool is `examples/bench.rs` (not part of the service binary). It
-starts `branvil serve` itself, seeds through the HTTP API and Git Smart HTTP
+starts the standalone Branvil test binary, seeds through the HTTP API and Git Smart HTTP
 only (never by writing redb), and measures copies (APFS clones) of the seeded
 data, so every run starts from the same state.
 
 ```sh
-cargo build --release
+cargo build --release -p branvil
 B=/some/empty/dir
-cargo run --release --example bench -- seed    --work $B   # 10,000 tickets, 2,000 PRs, 50,000 comments (all sizes are options)
-cargo run --release --example bench -- run     --work $B --cache-mib 32 --concurrency 1,8,32 --requests 200
-cargo run --release --example bench -- startup --work $B --repeat 5
-cargo run --release --example bench -- git     --work $B
+cargo run --release -p branvil --example bench -- seed    --work $B   # 10,000 tickets, 2,000 PRs, 50,000 comments (all sizes are options)
+cargo run --release -p branvil --example bench -- run     --work $B --cache-mib 32 --concurrency 1,8,32 --requests 200
+cargo run --release -p branvil --example bench -- startup --work $B --repeat 5
+cargo run --release -p branvil --example bench -- git     --work $B
 ```
 
 Results go to `$B/results-*.json` and a Markdown summary to stdout. The Git
@@ -256,7 +256,7 @@ Time to a rendered board, `web/e2e/perf.spec.ts` in Google Chrome
 tracing off), board `acme/board-0` of the fixture (now the board of workspace
 `acme-0`, `BRANVIL_E2E_WORKSPACE`): 1,695 open cards (the
 board's default view), fetched in 17 pages. The spec enters the GUI with a
-`branvil open --print` link and counts from the board page's own navigation.
+`guildbotics branvil open --print` link and counts from the board page's own navigation.
 Besides the first painted frame it reports *busy until*: a timer on the page
 notes every stretch over 50 ms in which it could not run, and the run waits
 until there was none for 2 s, so work the browser does after that frame
@@ -389,11 +389,11 @@ What one machine running this fixture carried, from the sections above:
 
 | Part | Memory | Other |
 | --- | --- | --- |
-| `branvil serve` | 29 MiB idle; 97–120 MiB peak under 32 concurrent clients | 130–180 durable writes/s; CPU 139 s for a 104 s full run, Git children included |
+| `guildbotics branvil serve` | 29 MiB idle; 97–120 MiB peak under 32 concurrent clients | 130–180 durable writes/s; CPU 139 s for a 104 s full run, Git children included |
 | Git (service side) | child processes per request, not measured separately | 8 command slots; PR reads 6–12 ms each, 30–60 ms at 32 clients |
 | Data on disk | 110 MiB redb + 20.5 MiB repositories + 7.8 MiB CI files | |
 | GUI (browser) | 22–23 MB JS heap for a 1,695-card board | 0.45–0.62 s to the first painted, idle board of that size |
-| `branvil runner` | 20 MiB (debug build, [CI executor](#ci-executor)) | |
+| `guildbotics branvil runner` | 20 MiB (debug build, [CI executor](#ci-executor)) | |
 | One running CI job | ~170 MiB (VM process + `msb run`) for a 512 MiB guest running a shell | 0.24–0.33 s sandbox startup |
 
 So with one CI job running, the executor needs more memory than the service
@@ -418,7 +418,7 @@ itself touches (up to the memory every job gets, `ci.executor.max_memory_mib`).
 ## CI executor
 
 What one job costs on the runner's machine: microsandbox microVMs started by
-`branvil runner` through `msb run` (msb 0.6.17).
+`guildbotics branvil runner` through `msb run` (msb 0.6.17).
 
 Conditions:
 
@@ -439,7 +439,7 @@ Results of seven runs on 2026-10-14:
 | Sandbox startup, since the runner reads the job's log file (`docs/ci.md`) | 251, 251, 302 ms | spawn → the script's first line, read every 50 ms (so up to 50 ms late) |
 | Peak RSS of the VM process (`msb sandbox`) | 119.0–120.0 MiB (121 856–122 912 KiB) | guest memory is 512 MiB; RSS is what the host committed |
 | Peak RSS of the attached `msb run` process | 43.6–49.2 MiB (44 688–50 384 KiB) | one per running job |
-| Peak RSS of `branvil runner` (debug build) | 20.1–20.3 MiB (20 576–20 752 KiB) | while it serves the jobs |
+| Peak RSS of `guildbotics branvil runner` (debug build) | 20.1–20.3 MiB (20 576–20 752 KiB) | while it serves the jobs |
 | Three jobs end to end (runner process start → all three completed) | 6.0–6.5 s | includes the 5 s timeout of the third job |
 
 So one running job costs about 170 MiB of host memory (VM process plus its

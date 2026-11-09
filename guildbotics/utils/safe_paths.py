@@ -16,10 +16,8 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import IO, Any
+from typing import IO
 
-# These APIs exist only on POSIX; callers select this branch before using them.
-_POSIX: Any = os
 MAX_HOST_LINKS = 40
 
 
@@ -68,14 +66,6 @@ def normalize_host_path(path: Path) -> Path:
     path = path.expanduser().absolute()
     if ".." in path.parts or "\x00" in str(path):
         raise UnsafePathError(t("safe_paths.invalid", path=path))
-    if os.name == "nt" and (
-        not path.drive.endswith(":")
-        or any(
-            ":" in component or component.endswith((".", " "))
-            for component in path.parts[1:]
-        )
-    ):
-        raise UnsafePathError(t("safe_paths.invalid", path=path))
     return _host_alias(path)
 
 
@@ -118,10 +108,7 @@ def resolve_host_links(
         leaf = not pending
         try:
             info = candidate.lstat()
-            linked = stat.S_ISLNK(info.st_mode) or bool(
-                getattr(info, "st_file_attributes", 0)
-                & stat.FILE_ATTRIBUTE_REPARSE_POINT
-            )
+            linked = stat.S_ISLNK(info.st_mode)
             if not linked:
                 if not leaf and not stat.S_ISDIR(info.st_mode):
                     raise NotADirectoryError(str(candidate))
@@ -135,10 +122,6 @@ def resolve_host_links(
             if on_link is not None:
                 on_link(candidate, leaf)
             target = os.readlink(candidate)
-            if os.name == "nt" and target.startswith("\\\\?\\"):
-                target = target[4:]
-                if not Path(target).drive.endswith(":"):
-                    raise UnsafePathError(t("safe_paths.invalid", path=target))
             destination = Path(target)
             if not destination.is_absolute():
                 destination = candidate.parent / destination
@@ -212,17 +195,9 @@ def inspect_host_path(
     """
     path = normalize_host_path(path)
     try:
-        if os.name == "nt":
-            from guildbotics.utils.safe_paths_windows import inspect_windows_path
-
-            identities, absent = inspect_windows_path(
-                path, create, directory, link_as_missing=link_as_missing
-            )
-            case_sensitive = False
-        else:
-            identities, absent, case_sensitive = _inspect_posix(
-                path, create, directory, link_as_missing=link_as_missing
-            )
+        identities, absent, case_sensitive = _inspect_posix(
+            path, create, directory, link_as_missing=link_as_missing
+        )
     except PermissionError as exc:
         raise HostPathPermissionError(path) from exc
     except OSError as exc:
@@ -246,10 +221,10 @@ def _inspect_posix(
     descriptors: list[int] = []
     identities: list[tuple[int, int]] = []
     parts = path.parts[1:]
-    flags = os.O_RDONLY | _POSIX.O_NOFOLLOW | _POSIX.O_NONBLOCK
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     checked = Path(path.anchor)
     try:
-        parent = os.open(path.anchor, flags | _POSIX.O_DIRECTORY)
+        parent = os.open(path.anchor, flags | os.O_DIRECTORY)
         descriptors.append(parent)
         identities.append(_identity(os.fstat(parent)))
         for index, part in enumerate(parts):
@@ -276,9 +251,9 @@ def _inspect_posix(
                         return (*identities, identity), (), True
                 handle = os.open(
                     part,
-                    (os.O_RDWR | os.O_CREAT | _POSIX.O_NOFOLLOW | _POSIX.O_NONBLOCK)
+                    (os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK)
                     if leaf_file
-                    else flags | (_POSIX.O_DIRECTORY if is_directory else 0),
+                    else flags | (os.O_DIRECTORY if is_directory else 0),
                     0o600,
                     dir_fd=parent,
                 )
@@ -287,7 +262,7 @@ def _inspect_posix(
                     # Darwin reports the opened volume's case rules. Elsewhere
                     # absent protected names are compared conservatively.
                     sensitive = (
-                        _POSIX.fpathconf(parent, 11) if sys.platform == "darwin" else 0
+                        os.fpathconf(parent, 11) if sys.platform == "darwin" else 0
                     )
                     if sensitive < 0:
                         raise OSError(
@@ -296,7 +271,7 @@ def _inspect_posix(
                     return tuple(identities), parts[index:], bool(sensitive)
                 with suppress(FileExistsError):
                     os.mkdir(part, mode=0o700, dir_fd=parent)
-                handle = os.open(part, flags | _POSIX.O_DIRECTORY, dir_fd=parent)
+                handle = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
             descriptors.append(handle)
             info = os.fstat(handle)
             if not (
@@ -330,8 +305,6 @@ def host_path_contains(ancestor: Path, target: PathFacts) -> bool:
     """
     ancestor = normalize_host_path(ancestor)
     target = inspect_host_path(target.path, missing=True)
-    if os.name == "nt":
-        return inspect_host_path(ancestor, missing=True).contains(target)
     try:
         identities, absent, sensitive = _inspect_posix(
             ancestor, False, True, ancestor_of=target
@@ -355,14 +328,6 @@ def read_host_file(path: Path) -> bytes:
 def consume_host_file(path: Path, consume: Callable[[bytes], None]) -> None:
     """Stream an opened regular leaf while its no-follow ancestry is held."""
     path = normalize_host_path(path)
-    if os.name == "nt":
-        from guildbotics.utils.safe_paths_windows import consume_windows_file
-
-        try:
-            consume_windows_file(path, consume)
-        except PermissionError as exc:
-            raise HostPathPermissionError(path) from exc
-        return
 
     def read(handle: int) -> None:
         while chunk := os.read(handle, 65536):
@@ -379,13 +344,6 @@ def consume_host_file(path: Path, consume: Callable[[bytes], None]) -> None:
 def open_host_file(path: Path) -> IO[str]:
     """Open/create a regular file relative to checked parents, never a link."""
     path = normalize_host_path(path)
-    if os.name == "nt":
-        from guildbotics.utils.safe_paths_windows import open_windows_file
-
-        try:
-            return open_windows_file(path)
-        except PermissionError as exc:
-            raise HostPathPermissionError(path) from exc
     descriptors: list[int] = []
     try:
         _inspect_posix(
@@ -406,32 +364,21 @@ def open_host_file(path: Path) -> IO[str]:
     return os.fdopen(descriptors[0], "r+", encoding="utf-8")
 
 
-def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> None:
+def visit_host_directory(path: Path, action: Callable[[int], None]) -> None:
     """Keep checked ancestors open while acting on a private directory.
 
-    POSIX actions receive a directory descriptor for relative operations.
-    Windows keeps non-delete-shared handles open, preventing ancestor swaps.
+    Actions receive a directory descriptor for relative operations.
     """
     path = normalize_host_path(path)
-    if os.name == "nt":
-        from guildbotics.utils.safe_paths_windows import inspect_windows_path
 
-        try:
-            _, absent = inspect_windows_path(
-                path, False, True, lambda _: action(None), stable=True
-            )
-        except PermissionError as exc:
-            raise HostPathPermissionError(path) from exc
-    else:
+    def consume(fd: int) -> None:
+        os.fchmod(fd, 0o700)
+        action(fd)
 
-        def consume(fd: int) -> None:
-            _POSIX.fchmod(fd, 0o700)
-            action(fd)
-
-        try:
-            _, absent, _ = _inspect_posix(path, False, True, consume)
-        except PermissionError as exc:
-            raise HostPathPermissionError(path) from exc
+    try:
+        _, absent, _ = _inspect_posix(path, False, True, consume)
+    except PermissionError as exc:
+        raise HostPathPermissionError(path) from exc
     if absent:
         raise UnsafePathError(t("safe_paths.missing", path=path))
 
@@ -439,7 +386,7 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
 def visit_host_tree(
     root: Path,
     relative: PurePosixPath,
-    action: Callable[[int | None], None],
+    action: Callable[[int], None],
     *,
     create: bool,
 ) -> bool:
@@ -448,9 +395,8 @@ def visit_host_tree(
 
     Unlike :func:`visit_host_directory`, this is for a directory of the
     user's own: what it makes (when ``create``) takes the default
-    permissions, and nothing is made private. POSIX actions receive a
-    directory descriptor for relative operations; Windows keeps
-    non-delete-shared handles open instead.
+    permissions, and nothing is made private. Actions receive a directory
+    descriptor for relative operations.
 
     Returns:
         Whether the directory was there to act in; without ``create``, a
@@ -460,22 +406,9 @@ def visit_host_tree(
     target = root.joinpath(*relative.parts)
     acted: list[None] = []
 
-    def act(fd: int | None) -> None:
+    def act(fd: int) -> None:
         action(fd)
         acted.append(None)
-
-    if os.name == "nt":
-        from guildbotics.utils.safe_paths_windows import inspect_windows_path
-
-        try:
-            _, absent = inspect_windows_path(
-                target, create, True, lambda _: act(None), stable=True
-            )
-        except PermissionError as exc:
-            raise HostPathPermissionError(target) from exc
-        if len(absent) > len(relative.parts):
-            raise UnsafePathError(t("safe_paths.missing", path=root))
-        return bool(acted)
 
     def descend(parent: int) -> None:
         handles: list[int] = []
@@ -487,7 +420,7 @@ def visit_host_tree(
                 try:
                     parent = os.open(
                         part,
-                        os.O_RDONLY | _POSIX.O_NOFOLLOW | _POSIX.O_DIRECTORY,
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
                         dir_fd=parent,
                     )
                 except FileNotFoundError:
@@ -516,21 +449,18 @@ def visit_host_tree(
 def host_directory_case_sensitive(path: Path) -> bool:
     """Whether the file system holding the directory tells names apart by
     case. Darwin is asked of the directory itself, as it answers per volume;
-    Windows never does; elsewhere there is no portable question, and the
-    volume is taken to (a case-insensitive one mounted on Linux is not told).
+    other platforms are assumed to distinguish case.
 
     Raises:
         OSError: When Darwin's volume does not answer.
     """
-    if os.name == "nt":
-        return False
     if sys.platform != "darwin":
         return True
     answers: list[int] = []
     visit_host_tree(
         path,
         PurePosixPath(),
-        lambda fd: answers.append(_POSIX.fpathconf(fd, 11)),
+        lambda fd: answers.append(os.fpathconf(fd, 11)),
         create=False,
     )
     if answers[0] < 0:

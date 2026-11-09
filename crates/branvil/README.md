@@ -4,22 +4,13 @@ Branvil is a lightweight local code hosting service for GuildBotics: Git
 repositories over Smart HTTP in workspaces, each workspace with one kanban
 board for the tickets of its repositories, pull requests with reviews and a
 serial landing queue, and a CI that runs each job in a microVM. It is one Rust
-process that keeps metadata in redb and Git data in bare repositories, and
-listens on loopback only; CI jobs run in a separate `branvil runner` process.
+service that keeps metadata in redb and Git data in bare repositories, and
+listens on loopback only; CI jobs run in a separate `guildbotics branvil runner` process.
 
-Status: the service core (Git hosting, workspaces, tickets and boards, pull requests,
-reviews, merge, recovery), CI (pipelines, queue, runner, microVM executor),
-following an upstream on GitHub and publishing pull requests to it,
-and backup/restore are implemented and tested. The GuildBotics `branvil`
-provider lives in the same repository
-(`guildbotics/integrations/branvil/`), which checks it against a
-real service (see "Checking with GuildBotics"). See
-[`docs/architecture.md`](docs/architecture.md) for what exists.
-
-This crate of the GuildBotics repository is a snapshot of the Branvil
-repository's `main` at commit `5f2728a840be25f3c54c82b92ee1c064be754949`. On the
-macOS Hub, [the integrated LaunchAgent](../../docs/hub-server.md) runs Branvil
-in the same process as GuildBotics.
+GuildBotics embeds the `branvil` crate and uses its public data API through
+`crates/gb-integrations`. The [macOS Hub LaunchAgent](../../docs/hub-server.md)
+runs both services in one process. See [Architecture](docs/architecture.md)
+for the service boundaries.
 
 ## Important Notice (Disclaimer)
 
@@ -30,34 +21,30 @@ in the same process as GuildBotics.
 
 ## Requirements
 
-- Rust 1.90 or later (developed with 1.96, edition 2024)
-- Git 2.38 or later on `PATH` (the service runs `git http-backend`,
-  `update-ref`, `merge-tree --write-tree`, `diff`, …, and the CI runner checks
-  the source out with it; developed with 2.54)
-
-Verified on macOS 26 (arm64). Linux and Windows are not verified.
-
-For CI: the microsandbox runtime `msb` 0.6.17 (with its `libkrunfw`) and a
-hypervisor (macOS on Apple Silicon: built in; Linux: KVM; Windows: Windows
-Hypervisor Platform, preview). GuildBotics deploys this runtime, and the runner
-uses that copy; see [`docs/ci.md`](docs/ci.md).
+The Hub runs on Apple Silicon macOS. CI runs on Linux. Use the Rust toolchain
+pinned in the repository and Git 2.38 or later. CI's microVM runtime and
+hardware requirements are in [CI](docs/ci.md). Other machines, including
+Windows clients, connect to the Hub through OpenSSH.
 
 ## Build
 
+From the GuildBotics repository root, build both screens and the executable:
+
 ```sh
-cargo build --release
+npm ci && npm run build --workspaces
+cargo build --locked -p guildbotics
+target/debug/guildbotics install
 ```
 
-The binary is `target/release/branvil` in the Cargo workspace's root. The browser GUI from `web/dist` is
-embedded when it exists at build time; without it the service runs and answers
-web pages with a "GUI is not built" notice.
+Use `guildbotics branvil` for the Branvil subcommands. To run both services
+at login and update them together, follow the [Hub guide](../../docs/hub-server.md).
 
 ## First run
 
 ```sh
 # Data directory, configuration (branvil.toml), and the owner: the one person
 # who uses Branvil. The owner's token goes to ./data/secrets/owner.token.
-branvil init --data-dir ./data --owner alice
+guildbotics branvil init --data-dir ./data --owner alice
 
 # Start the service. Ctrl-C stops it: open GUI event streams end at once,
 # other requests get 5 seconds to finish, and the stop waits for the
@@ -66,31 +53,31 @@ branvil init --data-dir ./data --owner alice
 # at once and is safe: the next start waits for the Git left behind. SIGTERM
 # does the same once the running CI jobs have finished (docs/ci.md,
 # "Stopping the service").
-branvil serve --data-dir ./data
+guildbotics branvil serve --data-dir ./data
 
 # Open the GUI in the browser; there is no sign-in screen.
-branvil open --data-dir ./data
+guildbotics branvil open --data-dir ./data
 ```
 
 Without `--data-dir` (or `BRANVIL_DATA_DIR`), the data directory is the OS
 convention for `branvil` (macOS: `~/Library/Application Support/branvil`). The
 configuration file is `<data dir>/branvil.toml` unless `--config` names
-another. `branvil init` writes `listen = "127.0.0.1:7878"` and
+another. `guildbotics branvil init` writes `listen = "127.0.0.1:7878"` and
 `base_url = "http://127.0.0.1:7878"`; `--listen` and `--base-url` change them.
 The base URL is permanent: every URL Branvil returns (tickets, pull requests,
 clone URLs) is built from it, so keep it the same on every machine and over
 time.
 
-`branvil serve` prints `branvil listening on http://127.0.0.1:7878 (base URL …)`
+`guildbotics branvil serve` prints `branvil listening on http://127.0.0.1:7878 (base URL …)`
 once it accepts requests. It refuses non-loopback listen addresses.
 
 Branvil has one human, the owner; everyone else is an agent (GuildBotics'
 AI members) or a CI runner, each with its own token. Whoever can run commands
 as the Hub machine's OS user is the owner: the owner's token is the `0600` file
 `<data dir>/secrets/owner.token`, and the CLI on the Hub uses it by default.
-`branvil open` asks the service for a single-use link (valid for 60 seconds)
+`guildbotics branvil open` asks the service for a single-use link (valid for 60 seconds)
 and opens it with the system's browser; the GUI exchanges it for a session
-cookie that lasts 30 days (`limits.session_hours`). `branvil open --print`
+cookie that lasts 30 days (`limits.session_hours`). `guildbotics branvil open --print`
 prints the link instead (for a headless Hub, or a Hub shared with other OS
 users: the command line of the browser launcher is visible in `ps`). On other
 machines, a local app such as GuildBotics Desktop gets an owner token of its
@@ -111,10 +98,10 @@ owner's token file of the data directory.
 ```sh
 export BRANVIL_DATA_DIR=./data
 
-branvil workspace create acme
-branvil repo create acme/demo --label bug --label feature
-branvil member create aiko --kind agent
-branvil member token aiko          # prints aiko's token once
+guildbotics branvil workspace create acme
+guildbotics branvil repo create acme/demo --label bug --label feature
+guildbotics branvil member create aiko --kind agent
+guildbotics branvil member token aiko          # prints aiko's token once
 ```
 
 A workspace holds repositories (`acme/demo`: the workspace and a name) and
@@ -281,7 +268,7 @@ Use an OS credential store and a separate token for each machine:
 3. On the Hub, with Branvil running, issue a token for this machine:
 
    ```sh
-   branvil member token alice --label mini-win-git --data-dir /path/to/branvil-data
+   guildbotics branvil member token alice --label mini-win-git --data-dir /path/to/branvil-data
    ```
 
    Replace `alice` with the owner's member name, the label with a unique
@@ -557,10 +544,10 @@ never pull; which version of a tag runs is the one the cache holds, so pulling
 or loading the tag again moves the jobs to its new version):
 
 ```sh
-branvil runner register runner1                                # on the Hub: prints runner1's token once
-branvil runner pull docker.io/library/alpine:3.22
-branvil runner doctor                                          # msb found? executor ready?
-BRANVIL_TOKEN=<runner token> branvil runner                    # runs until stopped
+guildbotics branvil runner register runner1                                # on the Hub: prints runner1's token once
+guildbotics branvil runner pull docker.io/library/alpine:3.22
+guildbotics branvil runner doctor                                          # msb found? executor ready?
+BRANVIL_TOKEN=<runner token> guildbotics branvil runner                    # runs until stopped
 ```
 
 Or let the service start and supervise one: under Settings → CI in the GUI
@@ -620,8 +607,8 @@ outside see. Branvil never pushes the default branch; it follows it.
    requests you author yourself):
 
    ```sh
-   branvil member account aiko --app-id 123456 --installation-id 7890123 --private-key-file aiko-app.private-key.pem
-   KEN_GITHUB_TOKEN=... branvil member account ken --token-env KEN_GITHUB_TOKEN
+   guildbotics branvil member account aiko --app-id 123456 --installation-id 7890123 --private-key-file aiko-app.private-key.pem
+   KEN_GITHUB_TOKEN=... guildbotics branvil member account ken --token-env KEN_GITHUB_TOKEN
    ```
 
    Settings → Members → a member → Accounts on code hosts does the same.
@@ -630,8 +617,8 @@ outside see. Branvil never pushes the default branch; it follows it.
    with GitHub's default branch; an existing one must be the same or behind:
 
    ```sh
-   branvil repo create acme/demo
-   branvil repo upstream acme/demo --repository acme/demo
+   guildbotics branvil repo create acme/demo
+   guildbotics branvil repo upstream acme/demo --repository acme/demo
    ```
 
    The repository settings show whose account reads it; `--reader <member>`
@@ -689,7 +676,7 @@ checks_registration_secs = 60
 Notes:
 
 - Conversation, reviews, threads, tickets, and boards stay in Branvil; back
-  them up with `branvil backup`.
+  them up with `guildbotics branvil backup`.
 - A ticket names the GitHub issue it stands for in its "GitHub issue" field
   (`upstream_issue` in the API); without it nothing about the ticket is written
   on GitHub.
@@ -706,9 +693,9 @@ Notes:
 ## Backups
 
 ```sh
-branvil backup --to /srv/backups/branvil-2026-10-14     # on the Hub, service running
-branvil restore --from /srv/backups/branvil-2026-10-14 --data-dir /srv/branvil-restored
-branvil admin check --data-dir /srv/branvil-restored
+guildbotics branvil backup --to /srv/backups/branvil-2026-10-14     # on the Hub, service running
+guildbotics branvil restore --from /srv/backups/branvil-2026-10-14 --data-dir /srv/branvil-restored
+guildbotics branvil admin check --data-dir /srv/branvil-restored
 ```
 
 A backup holds the database, every repository (as a Git bundle), CI logs and
@@ -724,15 +711,15 @@ See [`docs/backup-restore.md`](docs/backup-restore.md).
 With the service stopped:
 
 ```sh
-branvil admin check --data-dir ./data     # redb structure + every index against the records
-branvil admin reindex --data-dir ./data   # rebuild every index from the records
-branvil admin upgrade --data-dir ./data   # after updating Branvil, when the service says so
+guildbotics branvil admin check --data-dir ./data     # redb structure + every index against the records
+guildbotics branvil admin reindex --data-dir ./data   # rebuild every index from the records
+guildbotics branvil admin upgrade --data-dir ./data   # after updating Branvil, when the service says so
 ```
 
 A build whose stored format changed refuses the data directory of the version
-before it until `branvil admin upgrade` upgrades it; take a backup first. An
-upgraded database is then refused by `branvil serve` until
-`branvil admin check` passes. See "Upgrading" in
+before it until `guildbotics branvil admin upgrade` upgrades it; take a backup first. An
+upgraded database is then refused by `guildbotics branvil serve` until
+`guildbotics branvil admin check` passes. See "Upgrading" in
 [`docs/backup-restore.md`](docs/backup-restore.md).
 
 Logging goes to stderr; `BRANVIL_LOG` takes a `tracing` filter
@@ -771,7 +758,7 @@ and streams Vitest output into the job log. Measurements and interpretation
 are in
 [`docs/performance.md`](docs/performance.md#web-tests).
 
-The integration tests start real `branvil serve` processes on free loopback
+The integration tests start real `guildbotics branvil serve` processes on free loopback
 ports and drive them with real Git clients isolated from the user's Git
 configuration and credential helpers. They are one test crate,
 [`tests/main.rs`](tests/main.rs), with a module per file:
@@ -795,40 +782,17 @@ result as `github/clippy-macos` (see "Upstream (GitHub)").
 
 ### Checking with GuildBotics
 
-GuildBotics' `branvil` provider is this API's main client. Its port contracts
-(`tests/guildbotics/integrations/contracts/` of the repository) run against a
-Python double of the API; the repository's `scripts/branvil-integration.sh`
-checks that the production provider and a real `branvil serve` still work
-together:
+From the repository root, run the integration check against a disposable
+Branvil service:
 
 ```sh
-# from the repository's root, environment synced (uv sync --extra test --extra dev)
 scripts/branvil-integration.sh
 ```
 
-It builds the debug binary, and walks
-three paths, each against its own service (temporary data directory, free
-loopback port, members and credentials of its own) through the provider that
-GuildBotics' factory makes:
-
-- tickets: created, changed, and read back with their assignee and lane;
-  a parent and a ticket it is blocked by read back from both sides and are
-  taken back; a ready ticket blocked by an open one is no patrol candidate and
-  cannot be moved in progress until its blocker is closed;
-- Git, pull request, and merge: a push with the provider's clone URL and
-  credential, a pull request that closes a ticket, and, after the owner's
-  merge, the pull request merged and the ticket closed in the done lane;
-- checks: a pull request is not ready while its head's job is pending, is
-  ready once that commit's job succeeds, and is not ready again when its head
-  moves on.
-
-Only the owner's setup and merge and the runner's claim and finish call the
-API directly; every result is read through the provider. It needs no microVM,
-browser, or running service, and touches nothing of this machine's GuildBotics
-or Branvil ([`integration/branvil/test_smoke.py`](https://github.com/GuildBotics/GuildBotics/blob/python-host/integration/branvil/test_smoke.py)).
-
-The Python provider and its `branvil-integration` job were removed in #122.
-The source above is frozen; the Rust provider integration is restored in #88.
+The check covers tickets and dependencies, Git push and the pull request that
+closes a ticket, and CI readiness when a job completes or the head moves. It
+uses the Rust provider and the public Branvil data API. It needs no existing
+service, real credentials, browser, or microVM. The same check runs in CI.
 
 ## Documents
 
