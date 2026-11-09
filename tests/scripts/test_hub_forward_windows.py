@@ -90,6 +90,15 @@ function Register-ScheduledTask {
 }
 function Start-ScheduledTask { param($TaskName) $global:HFcalls += 'start' }
 function Get-ScheduledTaskInfo { param($TaskName) $global:HFcalls += 'status'; [pscustomobject]@{LastTaskResult=0} }
+function Get-NetTCPConnection {
+    param($State, $ErrorAction)
+    [pscustomobject]@{LocalAddress='127.0.0.1'; LocalPort=12345}
+    [pscustomobject]@{LocalAddress='192.0.2.1'; LocalPort=23456}
+}
+function Get-Loop {
+    $encoded = [regex]::Match($global:HFregistration.Action.Argument, '-EncodedCommand (\S+)$').Groups[1].Value
+    [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+}
 function Get-Command { param($Name, $CommandType) [pscustomobject]@{Source=$env:HF_SSH} }
 function Start-Sleep {
     param($Seconds)
@@ -107,6 +116,7 @@ def run_powershell(tmp_path, body):
     stub.write_text(
         "ConvertTo-Json -InputObject @($args) -Compress | "
         "Add-Content -LiteralPath $env:HF_LOG -Encoding UTF8\n"
+        '1..8 | ForEach-Object { Write-Error "Permission denied $_" -ErrorAction Continue }\n'
         "exit 255\n",
         encoding="utf-8-sig",
     )
@@ -123,6 +133,7 @@ def run_powershell(tmp_path, body):
         env={
             **os.environ,
             "LOCALAPPDATA": str(tmp_path / "local space 東京"),
+            "USERPROFILE": str(tmp_path / "profile space ' 東京"),
             "HF_SCRIPT": str(SCRIPT),
             "HF_SSH": str(stub),
             "HF_LOG": str(tmp_path / "ssh.jsonl"),
@@ -139,24 +150,22 @@ def test_install_update_status_remove_and_retry(tmp_path):
     result = run_powershell(
         tmp_path,
         r"""
-function Get-Loop {
-    $encoded = [regex]::Match($global:HFregistration.Action.Argument, '-EncodedCommand (\S+)$').Groups[1].Value
-    [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
-}
 & $env:HF_SCRIPT -Action install -Hub 'user@hub' -Port '12345,23456,12345' | Out-Null
 $initial = $global:HFregistration
 & $env:HF_SCRIPT -Action install -Hub 'user@hub' -Port '12345,23456' | Out-Null
 if ($initial.Action.Argument -ne $global:HFregistration.Action.Argument) { throw 'not idempotent' }
 $global:HFiterations = 0
 try { . ([scriptblock]::Create((Get-Loop))) } catch { if ($_.Exception.Message -ne 'end-loop') { throw } }
+$status = & $env:HF_SCRIPT -Action status
+$statusText = $status | Out-String -Width 200
 & $env:HF_SCRIPT -Action install -Hub 'other-hub' -Port 34567 | Out-Null
 $updated = Get-Loop
-& $env:HF_SCRIPT -Action status | Out-Null
+$freshStatus = & $env:HF_SCRIPT -Action status
 & $env:HF_SCRIPT -Action uninstall
 & $env:HF_SCRIPT -Action uninstall
 # A file the task read could be hidden from it (a packaged app's AppData).
 $written = Test-Path -LiteralPath $env:LOCALAPPDATA
-@{initial=$initial; updated=$updated; calls=$global:HFcalls; written=$written} |
+@{initial=$initial; updated=$updated; calls=$global:HFcalls; written=$written; status=$status; statusText=$statusText; freshStatus=$freshStatus} |
     ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
 """,
     )
@@ -185,6 +194,7 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
         "register",
         "start",
         *replace,
+        "status",
         *replace,
         "status",
         "stop",
@@ -192,6 +202,22 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
         *kills,
     ]
     assert not result["written"]
+    status = result["status"]
+    assert status["State"] == "Running"
+    assert status["Ports"].splitlines() == [
+        "12345: Listening=True",
+        "23456: Listening=False",
+    ]
+    assert status["LastSshExitCode"] == 255
+    assert status["LastSshEndedAt"]
+    assert status["LastSshStderr"].splitlines() == [
+        f"Permission denied {i}" for i in range(4, 9)
+    ]
+    assert "Permission denied 8" in result["statusText"]
+    assert "23456: Listening=False" in result["statusText"]
+    assert status["DiagnosticPath"].endswith("last-exit.json")
+    assert result["freshStatus"]["LastSshEndedAt"] is None
+    assert result["freshStatus"]["Ports"] == "34567: Listening=False"
     assert "23456" not in result["updated"]
     assert "34567" in result["updated"]
     lines = (tmp_path / "ssh.jsonl").read_text(encoding="utf-8-sig").splitlines()
@@ -223,6 +249,31 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
         "user@hub",
     ]
     assert [json.loads(line) for line in lines] == [expected_args, expected_args]
+
+
+def test_native_stderr_is_retained_without_stopping_retries(tmp_path):
+    result = run_powershell(
+        tmp_path,
+        r"""
+$native = Join-Path $PSScriptRoot 'ssh native.cmd'
+@('@echo off', 'for /L %%i in (1,1,8) do echo Permission denied %%i 1>&2', 'exit /b 255') |
+    Set-Content -LiteralPath $native -Encoding ASCII
+$env:HF_SSH = $native
+& $env:HF_SCRIPT -Action install -Hub hub -Port 12345 | Out-Null
+$global:HFiterations = 0
+try { . ([scriptblock]::Create((Get-Loop))) } catch { if ($_.Exception.Message -ne 'end-loop') { throw } }
+$status = & $env:HF_SCRIPT -Action status
+@{status=$status; iterations=$global:HFiterations} | ConvertTo-Json -Depth 10 |
+    Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
+""",
+    )
+    assert result["iterations"] == 2
+    exit_record = result["status"]
+    assert exit_record["LastSshExitCode"] == 255
+    assert exit_record["LastSshEndedAt"]
+    assert [line.strip() for line in exit_record["LastSshStderr"].splitlines()] == [
+        f"Permission denied {i}" for i in range(4, 9)
+    ]
 
 
 @pytest.mark.parametrize(
