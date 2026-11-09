@@ -2,7 +2,6 @@
 // Each stack has an ephemeral vault and AI CLI tripwires. Its microVM runtime
 // is blocked, except the "environment" stack's, which borrows this device's.
 
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
   chmodSync,
@@ -20,6 +19,7 @@ import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { start, stop } from "./child.mjs";
 import { environmentValue, withEnvironment, withoutEnvironment } from "./environment.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -222,7 +222,7 @@ let shuttingDown = false;
 // own stdout, that it holds the port, and only then is the owner token at
 // `ownerTokenPath` this server's own, safe to send to whatever listens there.
 async function startBackend() {
-  const child = spawn(
+  const server = start(
     resolve(
       repoRoot,
       "target/debug/examples/browser-test-server" + (process.platform === "win32" ? ".exe" : ""),
@@ -234,19 +234,21 @@ async function startBackend() {
       stdio: ["ignore", "pipe", "inherit"],
     },
   );
-  backend = child;
-  child.on("exit", (code) => {
-    if (backend === child && !shuttingDown) {
-      console.error(`${tag} backend exited early with code ${code ?? "null"}`);
+  backend = server;
+  server.ended.then((reason) => {
+    if (backend === server && !shuttingDown) {
+      console.error(`${tag} backend ended early: ${reason}`);
       shutdown(1);
     }
   });
   const notice = `GUILDBOTICS_APP_API_PORT=${backendPort}`;
   await new Promise((resolve, reject) => {
-    createInterface({ input: child.stdout }).on("line", (line) =>
+    createInterface({ input: server.child.stdout }).on("line", (line) =>
       line === notice ? resolve() : console.log(line),
     );
-    child.on("exit", () => reject(new Error(`${tag} backend exited before it held the port`)));
+    server.ended.then((reason) =>
+      reject(new Error(`${tag} backend ended before it held the port: ${reason}`)),
+    );
   });
   await waitForHealth();
   console.log(`${tag} backend healthy at ${baseUrl} (workspace=${workspaceDir})`);
@@ -254,13 +256,10 @@ async function startBackend() {
 
 // Stop the backend as the spec asks, without taking the stack down with it.
 async function stopBackend() {
-  const child = backend;
+  const server = backend;
   backend = undefined;
-  if (child && child.exitCode === null) {
-    await new Promise((resolve) => {
-      child.on("exit", resolve);
-      child.kill("SIGTERM");
-    });
+  if (server) {
+    await stop(server);
   }
   console.log(`${tag} backend stopped`);
 }
@@ -287,9 +286,8 @@ function shutdown(code) {
       setTimeout(() => process.exit(code), 200);
     }
   };
-  if (backend && backend.exitCode === null) {
-    backend.on("exit", finish);
-    backend.kill("SIGTERM");
+  if (backend) {
+    stop(backend).then(finish);
   } else {
     finish();
   }

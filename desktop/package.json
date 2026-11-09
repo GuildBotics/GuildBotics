@@ -12,9 +12,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "duplicates": "jscpd --config jscpd.config.json src ../packages/ui/src",
-    "test": "vitest run && npm run test:e2e-preflight",
+    "test": "vitest run && npm run test:e2e-harness",
     "test:watch": "vitest",
-    "test:e2e-preflight": "node --test e2e/preflight.test.mjs",
+    "test:e2e-harness": "node --test e2e/preflight.test.mjs e2e/child.test.mjs",
     "e2e": "node e2e/preflight.mjs && cargo build --locked -p gb-server --example browser-test-server && vite build && playwright test",
     "e2e:install": "playwright install chromium",
     "quality": "npm run quality --workspace @guildbotics/ui && npm run format:check && npm run lint && npm run typecheck && npm run duplicates && npm run test"
