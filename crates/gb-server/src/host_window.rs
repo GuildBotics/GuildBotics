@@ -290,7 +290,6 @@ impl Gateway {
         parameters.use_authority_key_identifier_extension = true;
         lifetime(&mut parameters);
         let certificate = parameters.signed_by(&key, &rcgen::Issuer::new(ca, ca_key))?;
-        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
         let config = tokio_rustls::rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(

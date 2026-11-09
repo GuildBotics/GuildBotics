@@ -1118,3 +1118,21 @@ fn transport_unavailable_uses_the_shared_retry_predicate() {
         assert!(!failure.port().is_unavailable());
     }
 }
+
+#[tokio::test]
+async fn socket_task_panic_is_visible_as_termination() {
+    // Empty sockets panic during connect, before the connection becomes live.
+    let listener = SlackListener::with_socket(
+        "synthetic".into(),
+        BASE_URL.into(),
+        MockHttp::with(vec![json!({"ok":true,"url":"wss://synthetic"})]),
+        Arc::new(MockSockets::default()),
+        Arc::new(|| {}),
+        Arc::new(|_| {}),
+    );
+    assert!(!listener.terminated());
+    listener.start().await.unwrap();
+    until(|| listener.terminated()).await;
+    assert!(!listener.connected());
+    listener.stop().await.unwrap();
+}

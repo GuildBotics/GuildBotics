@@ -96,6 +96,7 @@ impl Socket for WebSocket {
 }
 struct State {
     connected: AtomicBool,
+    terminated: AtomicBool,
     auth_failed: AtomicBool,
     queue: Mutex<Vec<ChatEvent>>,
     activity: Arc<dyn Fn() + Send + Sync>,
@@ -166,6 +167,7 @@ impl SlackListener {
         Self {
             state: Arc::new(State {
                 connected: AtomicBool::new(false),
+                terminated: AtomicBool::new(false),
                 auth_failed: AtomicBool::new(false),
                 queue: Mutex::new(Vec::new()),
                 activity,
@@ -186,10 +188,14 @@ impl SlackListener {
 struct Connected(Arc<State>);
 impl Drop for Connected {
     fn drop(&mut self) {
+        self.0.terminated.store(true, Ordering::Release);
         self.0.connected(false);
     }
 }
 impl EventListener for SlackListener {
+    fn terminated(&self) -> bool {
+        self.state.terminated.load(Ordering::Acquire) && !self.auth_failed()
+    }
     fn connected(&self) -> bool {
         self.state.connected.load(Ordering::Acquire)
     }
@@ -211,6 +217,7 @@ impl EventListener for SlackListener {
                 self.sockets.clone(),
             );
             let member = self.member.clone();
+            state.terminated.store(false, Ordering::Release);
             let task = tokio::spawn(async move {
                 let _guard = Connected(state.clone());
                 loop {

@@ -361,6 +361,8 @@ async fn unavailable_tokens_disconnected_bodies_and_ended_turns_never_reach_the_
 }
 #[tokio::test]
 async fn tls_gateways_trust_only_their_own_certificate_names_and_lease() {
+    // The library test harness does not run the executable startup.
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
     let upstream = Upstream::start().await;
     let first = Gateway::start_tls(
         upstream.state.policy.clone(),

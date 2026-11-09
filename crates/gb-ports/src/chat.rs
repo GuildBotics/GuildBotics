@@ -227,6 +227,10 @@ pub trait ChatService: Send + Sync {
 
 /// One provider connection; queued events survive reconnects and stop/start.
 pub trait EventListener: Send + Sync {
+    /// The reception task exited; disconnection during retries is not termination.
+    fn terminated(&self) -> bool {
+        false
+    }
     fn connected(&self) -> bool;
     fn auth_failed(&self) -> bool;
     fn start(&self) -> ServiceFuture<'_, ()>;

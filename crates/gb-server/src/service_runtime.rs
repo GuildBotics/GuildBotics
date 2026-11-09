@@ -539,15 +539,13 @@ impl Worker for NativeWorker {
                         let failed = self.reception_failed.clone();
                         let service = self.service.get().cloned();
                         let run_id = self.service_instance_id.clone();
-                        self.receivers.spawn(async move {
-                            if group.run(stop).await.is_err() {
-                                failed.store(true, std::sync::atomic::Ordering::SeqCst);
-                                if let Some(service) = service {
-                                    service.reception_failed(&run_id).await;
-                                }
-                                tracing::error!("chat receiver stopped");
-                            }
-                        });
+                        self.receivers.spawn(supervise_reception(
+                            async move { group.run(stop.clone()).await },
+                            self.stop_reception.clone(),
+                            failed,
+                            service,
+                            run_id,
+                        ));
                     }
                 })
                 .await;
@@ -574,10 +572,112 @@ impl Worker for NativeWorker {
     }
 }
 
+/// Observe both failures returned by the receiver and unwinding panics.
+async fn supervise_reception(
+    reception: impl std::future::Future<Output = anyhow::Result<()>>,
+    stop: CancellationToken,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+    service: Option<crate::service::Service>,
+    run_id: String,
+) {
+    use futures_util::FutureExt;
+    let result = std::panic::AssertUnwindSafe(reception).catch_unwind().await;
+    if !matches!(result, Ok(Ok(()))) || !stop.is_cancelled() {
+        failed.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(service) = service {
+            service.reception_failed(&run_id).await;
+        }
+        tracing::error!("chat receiver stopped unexpectedly");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    struct Receiving;
+    impl Worker for Receiving {
+        fn listener_count(&self) -> usize {
+            1
+        }
+        fn cycle<'a>(&'a self, _: &'a str, _: &'a Settings) -> Pending<'a, Outcome> {
+            Box::pin(std::future::pending())
+        }
+        fn worker_failed(&self, _: &str, _: u8) {}
+    }
+
+    #[tokio::test]
+    async fn receiver_termination_updates_service_events_and_alerts() {
+        for mode in ["panic", "error", "early_return", "stop"] {
+            let root = tempfile::tempdir().unwrap();
+            let service = crate::service::Service::default();
+            let bus = Arc::new(crate::events::EventBus::default());
+            let store = gb_observability::Diagnostics::open(root.path());
+            store.start_system_session("receiver-test").unwrap();
+            bus.record_in(Some(store.clone()));
+            service.attach_events(bus.clone());
+            service
+                .start(
+                    root.path(),
+                    root.path(),
+                    vec!["alice".into()],
+                    Settings::default(),
+                    Arc::new(Receiving),
+                )
+                .await
+                .unwrap();
+            let run_id = bus.snapshot()[0]["attributes"]["service_run_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let stop = CancellationToken::new();
+            if mode == "stop" {
+                stop.cancel();
+            }
+            let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            supervise_reception(
+                async {
+                    match mode {
+                        "panic" => panic!("synthetic receiver panic"),
+                        "error" => anyhow::bail!("synthetic failure"),
+                        _ => Ok(()),
+                    }
+                },
+                stop,
+                failed.clone(),
+                Some(service.clone()),
+                run_id,
+            )
+            .await;
+            let events = service.events_status().await;
+            assert_eq!(
+                events["state"],
+                if mode == "stop" { "running" } else { "failed" }
+            );
+            assert_eq!(
+                failed.load(std::sync::atomic::Ordering::SeqCst),
+                mode != "stop"
+            );
+            assert_eq!(bus.snapshot().last().unwrap()["payload"], events);
+            let alerts = gb_observability::health::SystemAlerts::list(
+                &store,
+                &serde_json::json!({"events": events}),
+                &[],
+                None,
+            );
+            let alerts = alerts["alerts"].as_array().unwrap();
+            if mode == "stop" {
+                assert!(alerts.is_empty());
+            } else {
+                assert!(alerts.iter().any(|a| a["id"] == "runtime:events"
+                    && a["code"] == "events_failed"
+                    && a["severity"] == "critical"));
+                assert_eq!(events["running"], false);
+                assert!(events["error"].as_str().is_some_and(|s| !s.is_empty()));
+            }
+            service.stop(true).await;
+        }
+    }
     #[tokio::test]
     async fn startup_failure_is_recorded_and_never_started_events_are_empty() {
         let controller = Controller::default();

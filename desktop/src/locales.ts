@@ -88,6 +88,7 @@ export const resources = {
           command_failed: "{{command}} failed for {{person}}.",
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
+          events_failed: "Chat reception stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
           agent_environment_unavailable: "{{machine}} cannot run AI CLI turns: {{reason}}",
           agent_environment_tool_unavailable: "Check this AI CLI tool: {{reason}}",
@@ -1496,6 +1497,7 @@ export const resources = {
           command_failed: "{{person}} の {{command}} が失敗しました。",
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
+          events_failed: "想定外エラーによりチャットの受信が停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
           agent_environment_unavailable:
             "{{machine}} では AI CLI の turn を実行できません: {{reason}}",

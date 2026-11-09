@@ -706,3 +706,17 @@ fn test_cli_authentication_command_failure_does_not_leave_an_execution_alert() {
     assert_eq!(a[0]["id"], "agent-environment:tool:codex");
     assert!(f.list().is_empty());
 }
+
+#[test]
+fn reception_failure_alert_survives_stop_and_clears_on_restart() {
+    let f = Fixture::new();
+    f.record(event("events.failed"));
+    let alerts = f.list();
+    let alert = alerts.iter().find(|a| a["id"] == "runtime:events").unwrap();
+    assert_eq!(alert["code"], "events_failed");
+    assert_eq!(alert["severity"], "critical");
+    f.record(event("events.stopped"));
+    assert!(f.list().iter().any(|a| a["id"] == "runtime:events"));
+    f.record(event("events.running"));
+    assert!(!f.list().iter().any(|a| a["id"] == "runtime:events"));
+}

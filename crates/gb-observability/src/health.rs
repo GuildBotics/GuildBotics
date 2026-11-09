@@ -142,6 +142,7 @@ impl SystemAlerts {
         this.dismissed.retain(|k| {
             !(k.starts_with("agent-environment:")
                 || k == "runtime:scheduler" && runtime["scheduler"]["state"] != "failed"
+                || k == "runtime:events" && runtime["events"]["state"] != "failed"
                 || k.starts_with(&chat) && !failed.contains(k))
         });
         let mut visible = this.alerts.clone();
@@ -183,16 +184,18 @@ impl SystemAlerts {
                 )
             });
         }
-        if runtime["scheduler"]["state"] == "failed"
-            && !this.dismissed.contains("runtime:scheduler")
-        {
-            let s = &runtime["scheduler"];
-            visible
-                .entry("runtime:scheduler".into())
-                .or_insert_with(|| {
+        for target in ["scheduler", "events"] {
+            let key = format!("runtime:{target}");
+            if runtime[target]["state"] == "failed" && !this.dismissed.contains(&key) {
+                let s = &runtime[target];
+                visible.entry(key.clone()).or_insert_with(|| {
                     alert(
-                        "runtime:scheduler",
-                        "scheduler_failed",
+                        &key,
+                        if target == "events" {
+                            "events_failed"
+                        } else {
+                            "scheduler_failed"
+                        },
                         "critical",
                         s["stopped_at"]
                             .as_str()
@@ -207,6 +210,7 @@ impl SystemAlerts {
                         json!(["service", "diagnostics"]),
                     )
                 });
+            }
         }
         for key in failed {
             if !this.dismissed.contains(&key) {
@@ -485,6 +489,24 @@ impl SystemAlerts {
                 let key = format!("credential:{}:{person}", text(payload, "provider"));
                 self.alerts.remove(&key);
                 self.dismissed.remove(&key);
+            }
+            "events.failed" => {
+                self.open(
+                    "runtime:events".into(),
+                    "events_failed",
+                    "critical",
+                    r,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    json!(["service", "diagnostics"]),
+                );
+            }
+            "events.running" => {
+                self.alerts.remove("runtime:events");
+                self.dismissed.remove("runtime:events");
             }
             "scheduler.worker.failed" | "scheduler.failed" => {
                 let worker = r["type"] == "scheduler.worker.failed";

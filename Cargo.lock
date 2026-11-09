@@ -2372,6 +2372,7 @@ dependencies = [
  "gb-server",
  "loopback-auth",
  "reqwest",
+ "rustls",
  "serde_json",
  "sha2 0.11.1",
  "tar",
