@@ -621,6 +621,23 @@ def test_agent_facing_layers_do_not_name_a_provider():
     assert named == []
 
 
+def test_member_cli_help_does_not_name_a_provider():
+    grammar = json.loads(
+        Path("guildbotics/templates/member/grammar.json").read_text(encoding="utf-8")
+    )
+    # "local time" describes timestamps, not the reference service provider.
+    named = [
+        (command, word)
+        for command, entry in grammar.items()
+        for item in (entry, *entry["options"])
+        for word in re.findall(
+            r"[a-z]+", item.get("help", "").lower().replace("local time", "")
+        )
+        if word in PROVIDERS
+    ]
+    assert named == []
+
+
 def test_agent_facing_layers_name_only_member_commands_that_exist():
     """A command a layer tells the agent to run is one the member CLI has."""
 

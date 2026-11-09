@@ -696,7 +696,7 @@ Usage: guildbotics member git prepare [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
   --issue-url <VALUE> [default: ]  Ticket URL to prepare a workspace for.
   --pr-url <VALUE> [default: ]  PR URL whose head branch to check out.
-  --repo <VALUE> [default: ]  Repository path (owner/repo on GitHub): with --branch, or with --issue-url for a ticket that belongs to no repository.
+  --repo <VALUE> [default: ]  Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url for a ticket that belongs to no repository.
   --branch <VALUE> [default: ]  Branch to create or check out (with --repo).
   --format <json|markdown> [default: json]  Output format.
   --help  Print help
@@ -951,7 +951,7 @@ Open a PR, or return the existing open PR for the same head and base branches. -
 
 Usage: guildbotics member pr create [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
-  --repo <VALUE>  Target repository path (owner/repo on GitHub). [required]
+  --repo <VALUE>  Target repository path (for example, owner/repo; follow the service's path format). [required]
   --head <VALUE>  Head branch containing the changes. [required]
   --base <VALUE> [default: ]  Base branch for the pull request. Defaults to the repository default branch.
   --title <VALUE>  Pull request title. [required]
@@ -1194,7 +1194,7 @@ Open a follow-up ticket a human asked for, in the tracker a ticket's read names 
 
 Usage: guildbotics member ticket create [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
-  --tracker <VALUE>  Where the ticket is kept: a repository path (owner/repo) on GitHub. [required]
+  --tracker <VALUE>  Where the ticket is kept: a repository path (for example, owner/repo; follow the service's path format). [required]
   --title <VALUE>  Ticket title. [required]
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
   --content-stdin  Read the command's entire free-form content from standard input.
