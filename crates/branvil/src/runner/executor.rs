@@ -926,7 +926,7 @@ fn tail(bytes: &[u8], n: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     #[test]
     fn the_embedding_host_supplies_its_runtime_explicitly() {
         use super::{HOST_RUNTIME, set_runtime_binary};
@@ -982,7 +982,7 @@ mod tests {
     /// descriptor of it open for writing here could pass into a process that
     /// another test forks meanwhile, and running the script would then fail
     /// with "text file busy".
-    fn write_script(path: &Path, body: &str) {
+    pub(in crate::runner) fn write_script(path: &Path, body: &str) {
         #[cfg(unix)]
         {
             use std::io::Write;

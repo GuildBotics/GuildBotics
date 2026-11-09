@@ -464,7 +464,6 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
             settings.work_dir.display()
         );
     }
-    let executor = settings.microsandbox(&name);
     let runner = Runner::new(
         api,
         settings.work_dir.clone(),
@@ -476,7 +475,9 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
         settings.url,
         settings.work_dir.display()
     );
-    Arc::new(runner).serve(Arc::new(executor)).await
+    Arc::new(runner)
+        .serve(move || Arc::new(settings.microsandbox(&name)))
+        .await
 }
 
 pub struct Runner {
@@ -534,9 +535,9 @@ impl Runner {
     /// removing its microVM) before it returns.
     pub async fn serve<E: Executor + 'static>(
         self: Arc<Self>,
-        executor: Arc<E>,
+        executor: impl Fn() -> Arc<E> + Send,
     ) -> anyhow::Result<()> {
-        executor.sweep().await;
+        executor().sweep().await;
         let _ = std::fs::remove_dir_all(self.work_dir.join("jobs"));
         let mut running = tokio::task::JoinSet::new();
         let mut backoff = 1;
@@ -544,6 +545,9 @@ impl Runner {
             let limits = self.limits();
             let mut wait = Duration::from_secs(2);
             if running.len() < limits.max_jobs as usize {
+                // Resolve the runtime again for each claim, including after an
+                // unavailable runtime is installed while this runner is alive.
+                let executor = executor();
                 match self.claim(&*executor).await {
                     Ok(Some((claim, health))) => {
                         backoff = 1;
@@ -1475,6 +1479,104 @@ mod tests {
             .unwrap()
     }
 
+    /// The same runner must recover on the next attempt after msb arrives.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_runtime_installed_after_startup_runs_the_next_job() {
+        // Isolate the resolver's fallback paths without changing this process's
+        // environment or depending on an msb installed in the developer's home.
+        const CHILD: &str = "BRANVIL_TEST_LATE_RUNTIME_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("HOME", home.path())
+                .env("USERPROFILE", home.path())
+                .output()
+                .await
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        let s =
+            service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"echo ok\"]\n")
+                .await;
+        let msb = s.dir.path().join("msb");
+        let home = s.dir.path().join("msb-home");
+        let settings = Settings {
+            url: s.url.clone(),
+            token: Some(s.runner_token.clone()),
+            work_dir: s.dir.path().join("runner"),
+            executor: ExecutorConfig::default(),
+            config: None,
+            msb_path: Some(msb.clone()),
+            msb_home: home.clone(),
+        };
+        let serving = tokio::spawn(run(settings));
+        let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+        let settled = |sha: String| {
+            let s = &s;
+            async move {
+                tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        let result = result_of(s, &sha).await;
+                        if result.conclusion.is_some() {
+                            return result;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("the attempt finished")
+            }
+        };
+        let first = settled(sha).await;
+        assert_eq!(first.conclusion.as_deref(), Some("startup_failure"));
+        assert!(first.details.as_deref().unwrap().contains("not found"));
+        // Install atomically, as the embedding host does. No VM is started.
+        let staged = s.dir.path().join("msb-staged");
+        executor::tests::write_script(
+            &staged,
+            r#"#!/bin/sh
+case "$1" in
+--version) echo 'msb 0.6.17' ;;
+doctor|remove) exit 0 ;;
+volume) echo '[]' ;;
+image) printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}' ;;
+run)
+  prev=''
+  for arg in "$@"; do
+    if [ "$prev" = '--mount-dir' ]; then
+      case "$arg" in *:/.branvil-log:*) printf '\036branvil:started\nok\n' > "${arg%%:/.branvil-log:*}/out" ;; esac
+    fi
+    prev="$arg"
+  done
+  touch "$MSB_HOME/ran" ;;
+*) exit 1 ;;
+esac
+"#,
+        );
+        std::fs::rename(staged, &msb).unwrap();
+        let next_sha = empty_main(&s, "runtime installed").await;
+        let next = settled(next_sha).await;
+        assert_eq!(next.conclusion.as_deref(), Some("success"), "{next:?}");
+        assert!(home.join("ran").is_file(), "msb ran the next job");
+        assert!(!serving.is_finished(), "the same runner is still serving");
+        s.revoke_runner_token().await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), serving)
+                .await
+                .expect("the runner stops")
+                .unwrap()
+                .is_err()
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn reuse_skips_source_and_vm_but_digest_changes_and_retry_execute() {
         let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
@@ -1907,8 +2009,8 @@ mod tests {
             Some((config.clone(), dir.path().to_path_buf())),
             ExecutorConfig::default(),
         );
-        let fake = Fake::new();
-        let serving = tokio::spawn(Arc::new(runner).serve(Arc::new(fake)));
+        let fake = Arc::new(Fake::new());
+        let serving = tokio::spawn(Arc::new(runner).serve(move || fake.clone()));
         let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
         // The checks once `done` holds of them (by name: status, attempt).
         let settle = |done: fn(&[(String, String, u64)]) -> bool| {
@@ -2017,7 +2119,10 @@ mod tests {
             },
         );
         let fake = Arc::new(Fake::new());
-        let serving = tokio::spawn(Arc::new(runner).serve(fake.clone()));
+        let serving = tokio::spawn(Arc::new(runner).serve({
+            let fake = fake.clone();
+            move || fake.clone()
+        }));
         // `in_progress` means claimed, not that the executor has started.
         tokio::time::timeout(Duration::from_secs(10), async {
             while fake.waiting.load(Ordering::SeqCst) != 2 {
@@ -2076,7 +2181,10 @@ mod tests {
             },
         ));
         let fake = Arc::new(Fake::new());
-        let serving = tokio::spawn(runner.clone().serve(fake.clone()));
+        let serving = tokio::spawn(runner.clone().serve({
+            let fake = fake.clone();
+            move || fake.clone()
+        }));
         let mut held = Vec::new();
         for _ in 0..3 {
             held.push(
