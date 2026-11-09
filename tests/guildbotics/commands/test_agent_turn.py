@@ -3,6 +3,7 @@
 import json
 import pytest
 from guildbotics.commands.agent_turn import run_agent_turn, CompletionRetryExhausted
+from guildbotics.intelligences.agent_runtime.wire import Evidence
 
 
 class Ledger:
@@ -35,7 +36,10 @@ async def test_retries_completion_with_fresh_evidence_and_continuation():
 
     async def invoke(context, parameters):
         seen.append((context, json.loads(parameters["previous_attempt_evidence"])))
-        ledger.items.append({"evidence_type": "pr_comment", "id": len(seen)})
+        ledger.items.append(Evidence(type="chat_batch", payload={}, recorded_at="t"))
+        ledger.items.append(
+            Evidence(type="pr_comment", payload={"id": len(seen)}, recorded_at="t")
+        )
         ledger.complete = len(seen) == 2
         return "reply"
 
@@ -47,7 +51,9 @@ async def test_retries_completion_with_fresh_evidence_and_continuation():
     assert result == "reply"
     assert ledger.completed == [2] and ledger.missing == [1]
     assert seen[0][1] == []
-    assert seen[1][1] == [{"evidence_type": "pr_comment", "id": 1}]
+    assert seen[1][1] == [
+        {"type": "pr_comment", "payload": {"id": 1}, "recorded_at": "t"}
+    ]
     assert seen[1][0]["resume_policy"] == "auto"
     assert seen[1][0]["attempt"] == 2
     assert seen[1][0]["continuation_input"]

@@ -6,6 +6,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
+from guildbotics.intelligences.agent_runtime.wire import Evidence
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.utils.i18n_tool import t
 
@@ -27,7 +28,7 @@ class RunLedger(Protocol):
     def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
 
-    def evidence(self) -> list[dict[str, Any]]:
+    def evidence(self) -> list[Evidence]:
         """Return the evidence the run has recorded so far."""
 
     def record_completed(self, attempt: int) -> None:
@@ -125,9 +126,7 @@ def _answers_chat_event(context: Mapping[str, Any]) -> bool:
 def _turn_parameters(ledger: RunLedger, context: Mapping[str, Any]) -> dict[str, str]:
     if not _answers_chat_event(context):
         return {}
-    evidence = [
-        item for item in ledger.evidence() if item["evidence_type"] != "chat_batch"
-    ]
+    evidence = [item for item in ledger.evidence() if item["type"] != "chat_batch"]
     return {
         "previous_attempt_evidence": json.dumps(
             evidence, ensure_ascii=False, sort_keys=True

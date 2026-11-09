@@ -8,6 +8,7 @@ const ROOTS: &[&str] = &[
     "ResolvedGuest",
     "Entry",
     "HostTurn",
+    "EvidenceResult",
     "CommandFacts",
     "CommandRequest",
     "CommandReply",

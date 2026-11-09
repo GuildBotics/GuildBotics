@@ -25,7 +25,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import SpanContext
 from guildbotics.utils.fileio import RESOLVED_GUEST_ENV as RESOLVED_GUEST_ENV
@@ -268,6 +267,14 @@ class EndTurnResult(TypedDict):
     refusal: str
 
 
+class Evidence(TypedDict):
+    """One piece of evidence a run has recorded, as its run record keeps it."""
+
+    type: str
+    payload: dict[str, Any]
+    recorded_at: str
+
+
 #: The workspace's own state a command may let its AI CLI turns inspect:
 #: ``diagnostics`` is the recorded runs, ``config`` the workspace
 #: configuration and the packaged templates it falls back to.
@@ -444,20 +451,6 @@ class AcquireInferenceArguments(BaseModel):
     model_name: str
 
 
-class AgnoArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    person_id: str
-
-    call: AgnoCall
-
-
-class JevArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    call: JevCall
-
-
 HOST_ARGUMENTS = {
     "decision_evaluated": DecisionEvaluatedArguments,
     "acquire_inference": AcquireInferenceArguments,
@@ -473,6 +466,4 @@ HOST_ARGUMENTS = {
     "record": RecordArguments,
     "required_io": RequiredIoArguments,
     "member": MemberArguments,
-    "agno": AgnoArguments,
-    "jev": JevArguments,
 }
