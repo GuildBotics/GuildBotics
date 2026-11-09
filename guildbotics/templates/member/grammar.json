@@ -803,7 +803,7 @@
       {
         "spelling": "--repo",
         "default": "",
-        "help": "Repository path (owner/repo on GitHub): with --branch, or with --issue-url for a ticket that belongs to no repository."
+        "help": "Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url for a ticket that belongs to no repository."
       },
       {
         "spelling": "--branch",
@@ -982,7 +982,7 @@
       {
         "spelling": "--tracker",
         "required": true,
-        "help": "Where the ticket is kept: a repository path (owner/repo) on GitHub."
+        "help": "Where the ticket is kept: a repository path (for example, owner/repo; follow the service's path format)."
       },
       {
         "spelling": "--title",
@@ -1151,7 +1151,7 @@
       {
         "spelling": "--repo",
         "required": true,
-        "help": "Target repository path (owner/repo on GitHub)."
+        "help": "Target repository path (for example, owner/repo; follow the service's path format)."
       },
       {
         "spelling": "--head",
