@@ -1,7 +1,7 @@
 name: CI
 
 # Branvil's CI (.branvil/ci.toml) runs every check it can on Linux. This
-# workflow runs only what it cannot: the Windows contracts, and Clippy on the
+# workflow runs Clippy on the
 # code built for macOS alone (`#[cfg(target_os = "macos")]`).
 
 on:

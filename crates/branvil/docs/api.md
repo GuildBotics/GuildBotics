@@ -107,9 +107,9 @@ repository, and upstream events, including changes in another repository.
 ### Authentication
 
 - Members are the owner (the one person who uses Branvil, created by
-  `branvil init`), agents, and CI runners.
+  `guildbotics branvil init`), agents, and CI runners.
 - API clients send `Authorization: Bearer <token>`. A token belongs to one
-  member and is shown once when it is issued (`branvil member token`), stored
+  member and is shown once when it is issued (`guildbotics branvil member token`), stored
   only as a SHA-256 hash. The owner's token is kept in
   `<data dir>/secrets/owner.token` for the CLI on the Hub machine. A local app
   gets an owner token of its own through the consent screen ("Local apps"),
@@ -126,7 +126,7 @@ repository, and upstream events, including changes in another repository.
   protected branch that does not exist yet (the first import into an empty
   repository) by the owner. An agent creates tags; only the owner moves or
   deletes one.
-- The GUI has no sign-in screen. `branvil open` asks for a single-use entry
+- The GUI has no sign-in screen. `guildbotics branvil open` asks for a single-use entry
   link (`POST /api/v1/session/links`), and the GUI exchanges its code with
   `POST /api/v1/session` for the owner's `branvil_session_<port>` cookie
   (HttpOnly, SameSite=Strict; named by the base URL's port, so two services
@@ -202,7 +202,7 @@ bad token.
   The code is 32 random bytes, works once, and expires after 60 seconds; only
   its hash is kept, in memory, so a restart invalidates unused codes. It travels
   in the URL fragment, so it is in no request line, log, or `Referer`.
-  `branvil open` calls this and opens the URL (`--print` prints it). The
+  `guildbotics branvil open` calls this and opens the URL (`--print` prints it). The
   response is never replayed for an `Idempotency-Key`.
 - `POST /api/v1/session` `{"code"}` (no authentication; the `Host` and `Origin`
   checks apply) → `{"me": {...member}, "csrf": "..."}` and a `Set-Cookie` of a
@@ -229,7 +229,7 @@ URL gets an owner token of its own, without the owner copying
 2. With the owner's GUI session the page asks "Allow <client> to manage
    Branvil?". Deny sends the browser to `redirect_uri` with
    `error=access_denied&state=<s>` added to its query. Without a session the
-   page says to run `branvil open` on the Hub machine; it remembers its own
+   page says to run `guildbotics branvil open` on the Hub machine; it remembers its own
    address in the browser for 10 minutes, and `/-/enter` returns there
    instead of the board.
 3. Allow calls `POST /api/v1/apps/authorizations` and sends the browser to its
@@ -1165,8 +1165,8 @@ is not the full sha of a commit of the repository.
 
 ## Runner API (`/api/v1/runner`, runner token)
 
-Used by `branvil runner` only. A runner token is a member token of a member of
-kind `runner` (created by `branvil runner register`); any other member gets
+Used by `guildbotics branvil runner` only. A runner token is a member token of a member of
+kind `runner` (created by `guildbotics branvil runner register`); any other member gets
 `403 forbidden`. The lease of a claimed attempt is sent in the JSON body
 (`heartbeat`, `finish`) or in the `X-Branvil-Lease` header (`source`, `log`,
 `artifacts`), never in the URL.
@@ -1468,7 +1468,7 @@ runner's (`[ci.microsandbox] home`).
 - `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the backup's manifest (see
   `docs/backup-restore.md`). The directory is on the service's machine, must not exist or be
   empty (`409 conflict` otherwise), and must be outside the data directory (`400 invalid`).
-  `branvil backup --to <dir>` calls it.
+  `guildbotics branvil backup --to <dir>` calls it.
 
 ### Diagnostics
 

@@ -5,12 +5,6 @@ description: Update GuildBotics' dependencies unattended - raise the pinned AI C
 
 # Updating the dependencies: AI CLI tools, their Node.js, and dependency alerts
 
-Until the Rust switch in #97, perform production updates in the production
-checkout using its own copy of these instructions. On main, the snapshot
-constants and dependency export are preserved under
-`guildbotics/templates/environment/`; the recipe and validation procedures
-will be rewritten in #87, #95, and #96.
-
 Invoke with `$update-dependencies` or "依存を更新して" for both parts, or name
 one part ("AI CLIツールを更新して", "依存アラートを解消して") to do only that. Check the official releases and the open
 dependency alerts, update the pins and the locks, run the non-device quality
@@ -22,9 +16,11 @@ merge.
 GuildBotics pins its provisioned tools in `CliAgentProvision` in
 `guildbotics/intelligences/cli_agents.py`, and the Node.js that Codex, Claude
 Code and Copilot run on in `node_version` and `node_sha256` in
-`guildbotics/templates/environment/recipe.json`; the snapshot installs that Node.js over
-the base image's. Its own libraries are locked in `uv.lock` (exported to
-`guildbotics/templates/environment/requirements.txt` for the snapshot) and
+`guildbotics/templates/environment/recipe.json`. The Rust snapshot recipe in
+`crates/gb-environment/src/recipe.rs` reads that file and
+`guildbotics/templates/environment/cli_provision.json`. The snapshot installs
+the pinned Node.js over the base image's version. Its own libraries are locked in `uv.lock` (exported to
+`guildbotics/templates/environment/requirements.txt` for the snapshot), `Cargo.lock`, and
 `package-lock.json`, and the code
 host reports the vulnerable ones as dependency alerts. This workflow updates
 the pins and the locks; it does not establish that the new releases work on a
@@ -66,8 +62,8 @@ real device.
   (`guildbotics/templates/environment/requirements.txt` is not a source but the lock's
   export), and the base images (`image` in `guildbotics/templates/environment/recipe.json` and the
   Dockerfile's `FROM`). The tools and their Node.js are installed inside the
-  snapshot by npm or an install script, never through the repository's
-  dependency management or a base image; the libraries change only through
+  snapshot by npm or an install script. They are independent of the repository's
+  dependency management and the base image. Libraries change through
   their manifests and locks.
 
 ## 1. Isolate the update and find the latest versions
@@ -121,6 +117,14 @@ current `DOWNLOAD_BASE_URL` from the installer.
 
 ## 2. Update what depends on the version
 
+After changing a pin in `CliAgentProvision`, regenerate the catalog that the
+Rust recipe consumes and check it against the Python declarations:
+
+```sh
+uv run --no-sync python scripts/generate-environment-catalog.py
+uv run --no-sync python scripts/generate-environment-catalog.py --check
+```
+
 Find every mention with these two searches. Together they cover the full
 version, the minor-only form (`Codex 0.153`), descriptions measured on a past
 version, and the documented baselines:
@@ -128,17 +132,18 @@ version, and the documented baselines:
 ```bash
 # A tool name next to a version, anywhere in the repository
 git grep -nIiE '(codex|claude[- ]code|grok( build)?|copilot( cli)?|antigravity( cli)?|agy)[^0-9(=_]{0,24}[ @/]v?[0-9]+\.[0-9]+(\.[0-9]+)?([^0-9a-z]|$)' \
-  -- . ':!tests/guildbotics/environment/test_snapshot.py' ':!.agents/skills/update-dependencies'
+  -- . ':!.agents/skills/update-dependencies'
 # Every full version, and every version-named fixture, in the files that describe the tools
 git grep -nIE '(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)|_[0-9]+_[0-9]+_[0-9]+\.json' \
   -- guildbotics/intelligences/cli_agents.py guildbotics/guest \
+     guildbotics/templates/environment crates/gb-environment \
      guildbotics/templates/intelligences/cli_agents tests/guildbotics/guest \
      'docs/native_agent_runtime.*.md' | grep -v 'node:'
 ```
 
-`test_snapshot.py` uses `9.9.9` as a made-up pin, the `node:` lines name a
-base image, and this skill quotes versions as examples; nothing else they print
-is noise.
+The catalog contains generated copies of the pins. The `node:` lines name a
+base image. Treat test fixtures and historical observations according to what
+each hit claims.
 
 Treat each hit by what it claims:
 
@@ -211,6 +216,7 @@ version to exactly its target:
 | `manifest_path` | Raise it with |
 | --- | --- |
 | `uv.lock`, `guildbotics/templates/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
+| `Cargo.lock` | `cargo update -p <package>@<locked_version> --precise <target>` for each affected locked version. If the registry cannot be written, point `CARGO_HOME` to a writable directory. |
 | `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 
 ```bash
@@ -221,9 +227,9 @@ uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
 
 This is the export `tests/test_environment_requirements.py` checks.
 
-Then read every version of the package the lock now holds (`uv tree --frozen
---universal --package <package>`, `npm ls <package> --all`, or the lock
-entries) and compare each with the one it replaced. An alert is resolved only
+Then read every version of the package the lock now holds (`cargo tree -i <package>@<version>` for each version in
+`Cargo.lock`, `uv tree --frozen --universal --package <package>`,
+`npm ls <package> --all`, or the lock entries) and compare each with the one it replaced. An alert is resolved only
 when each locked version it matched is now at or above that version's target
 and in the same major as before
 (for a `0.x` version, the same minor): moving to another major is a human
@@ -238,8 +244,10 @@ Leave an alert open and report why when:
 - it has no `patched_version`;
 - its final locked version is not resolved as above: the target is in
   another major, the packages that require it do not admit it, a direct
-  dependency's range in `pyproject.toml` or `package.json` has an upper bound
+  dependency's range in `Cargo.toml`, `pyproject.toml` or `package.json` has an upper bound
   that excludes it, or the tool picked a version in another major;
+- the patched Rust dependency needs a newer compiler than the applicable
+  `rust-version` in `Cargo.toml`; changing the compiler requirement is a human decision;
 - reaching it needs changes beyond the manifests and locks, or the non-device
   checks fail with it;
 - its `manifest_path` is not one of the above.
@@ -268,11 +276,24 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_device'
 ```
 
-When the Node.js pin or `uv.lock` changed, also run the snapshot's tests:
+When a tool pin, Node.js pin, or `uv.lock` changes, check the Rust snapshot
+recipe without building a real snapshot:
 
 ```bash
-uv run --no-sync python -m pytest tests/guildbotics/environment/test_snapshot.py tests/test_environment_requirements.py -m 'not real_device'
+cargo nextest run --locked -p gb-environment --test snapshot
+uv run --no-sync python -m pytest tests/test_environment_requirements.py tests/scripts/test_environment_catalog.py
 ```
+
+When `Cargo.lock` changes, run the workspace checks:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo nextest run --locked --workspace
+```
+
+nextest runs each test in its own process, which Branvil's process-wide Git
+lock requires.
 
 When `uv.lock` changed, also run `uv run --no-sync lint-imports` and the whole
 suite, `uv run --no-sync python -m pytest tests/ -n auto -m 'not real_device'`:

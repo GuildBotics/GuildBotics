@@ -401,9 +401,7 @@ def test_changes_are_what_differs_from_the_copy(tmp_path: Path) -> None:
     ]
 
 
-def test_an_executable_bit_alone_is_a_change(
-    tmp_path: Path, posix_permissions: None
-) -> None:
+def test_an_executable_bit_alone_is_a_change(tmp_path: Path) -> None:
     source = _tree(tmp_path / "source", {"run.sh": "#!/bin/sh\n"})
     destination = tmp_path / "copy"
     copied = _copied(source, destination)

@@ -18,7 +18,7 @@
 
 メンバーは、設定で指定したチャネルを監視します。受信したメッセージがメンション・参加条件を満たすと、チャット判断エンジンが対応エージェントの起動要否を判定します。リアクションや行動なしで完了できる場合はそのまま処理し、それ以外は対応エージェントが thread の文脈と自身の role を読み、必要な作業と Slack への応答を行います。
 
-**依頼された作業の実行**: メッセージが GitHub などの操作を明示的に指示している場合（例:「この PR のレビューコメントに対応して」）、メンバーはその作業を実行します。メンバーの作業ディレクトリにはリポジトリの checkout がないため、対象リポジトリをメッセージと thread 文脈から特定し、`guildbotics member git prepare` で作業ブランチを準備してから作業します。対象が曖昧な場合は thread で質問し、`asking` として完了します。
+**依頼された作業の実行**: メッセージが Branvil などの操作を明示的に指示している場合（例:「この PR のレビューコメントに対応して」）、メンバーはその作業を実行します。メンバーの作業ディレクトリにはリポジトリの checkout がないため、対象リポジトリをメッセージと thread 文脈から特定し、`guildbotics member git prepare` で作業ブランチを準備してから作業します。対象が曖昧な場合は thread で質問し、`asking` として完了します。
 
 **Slack への応答形式**: 作業の有無にかかわらず、最後に以下のいずれかで thread へ対応します。
 
@@ -121,7 +121,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 定期投稿は **巡回** タブの **定期実行コマンド** として設定します（→ [定期投稿](#定期投稿)）。
 
-トークンはメンバーの認証情報として OS キーチェーンに保存され、すべてのワークスペースで共通です。Slack User ID はすべてのワークスペースで共通のメンバーの `identity.yml` に、チャンネルはワークスペースの `team/members/<person_id>/member.yml` に保存されます。保存形式と、GUI では設定できない項目は [メンバー設定リファレンス](#メンバー設定リファレンス)を参照してください。
+トークンはメンバーの認証情報としてアイデンティティの暗号化ストアに保存され、すべてのワークスペースで共通です。Slack User ID はすべてのワークスペースで共通のメンバーの `identity.yml` に、チャンネルはワークスペースの `team/members/<person_id>/member.yml` に保存されます。保存形式と、GUI では設定できない項目は [メンバー設定リファレンス](#メンバー設定リファレンス)を参照してください。
 
 ## チャット判断エンジン
 
@@ -185,7 +185,7 @@ services:
     # base_url: https://slack.com/api   # プロキシ経由で Slack に届く場合だけ
 ```
 
-画面で保存したチャンネルと定期実行は、ワークスペースの `team/members/<person_id>/member.yml` に次の形で書き出されます。GUI を使わないサーバーでは、このファイルを直接編集します。
+画面で保存したチャンネルと定期実行は、ワークスペースの `team/members/<person_id>/member.yml` に次の形で書き出されます。ファイルを直接編集する場合は、次の形式を使います。
 
 ```yaml
 # team/members/alice/member.yml
@@ -214,7 +214,7 @@ task_schedules:
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - すべてのワークスペースで共通のメンバーのアイデンティティ（`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`）の `profile.character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します。人間のメンバーの Slack User ID は、同じファイルの `account_info.slack_user_id` です
 
-Bot Token と App-Level Token はどちらのファイルにも保存されません。メンバーの認証情報として、すべてのワークスペースで共有するアイデンティティのストア（`guildbotics secrets --identities`）に保存し、OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
+Bot Token と App-Level Token はどちらのファイルにも保存されません。メンバーの認証情報として、すべてのワークスペースで共有するアイデンティティのストア（`guildbotics secrets --identities`）から読み取るか、環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
 
 ## 手動での投稿・リアクション
 

@@ -59,10 +59,3 @@ def test_macos_without_a_readable_setting_is_none(
     monkeypatch.setattr(os_language.subprocess, "run", run)
 
     assert os_language.os_ui_language() is None
-
-
-def test_windows_without_its_api_is_none(monkeypatch, fake_platform) -> None:
-    fake_platform(os_language, "win32")
-    monkeypatch.delattr(os_language.ctypes, "windll", raising=False)
-
-    assert os_language.os_ui_language() is None

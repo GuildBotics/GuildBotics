@@ -11,8 +11,8 @@ import pytest
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.runtime.context import Context
 from guildbotics.intelligences.functions import to_text
+from guildbotics.runtime.context import Context
 from tests.conftest import coverage_suspended
 from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
@@ -237,7 +237,6 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_builtin_command_in_pipeline_identify_item_args_passed(
     tmp_path, monkeypatch
 ):
@@ -264,7 +263,6 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
@@ -300,7 +298,6 @@ async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     # Reference script by logical name without extension
@@ -473,7 +470,6 @@ async def test_print_command_basic(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
     """docs 5.3: `print` supports Jinja and previous outputs."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -507,7 +503,6 @@ async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatch):
     """docs 6: reference external script via `command: <name>`."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -583,59 +578,20 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
     assert "ID: yuki" in out
 
 
+@pytest.mark.parametrize("language", ["en", "ja"])
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
-async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
-    """docs 5.2: schema + response_class in subcommands runs and stores named result.
-
-    We simulate coverage output instead of running pytest to keep tests fast and deterministic.
-    The inline `prompt` steps carry `response_class` values, and although our DummyBrain does
-    not perform structured parsing, command execution and shared state updates should succeed.
-    """
+async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch, language):
+    """Run the published schema example with deterministic model results."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
 
-    _write(
-        tmp_path / "commands/coverage.md",
-        """
-        ---
-        schema: |
-            class Ranking:
-                package: str
-                detail: str
-                line_rate: float
-                reason: str
-
-            class Rankings:
-                items: list[Ranking]
-
-            class Task:
-                title: str
-                description: str
-                priority: int
-
-            class TaskList:
-                tasks: list[Task]
-        commands:
-          - script: |
-              cat > coverage.xml <<'XML'
-              <coverage line-rate="0.76"></coverage>
-              XML
-              cat coverage.xml |grep line-rate
-          - prompt: |
-              この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。
-            response_class: Rankings
-          - name: task_list
-            prompt: |
-              この分析情報に基づいて、優先度が高い順に、TaskList形式のJSONで、すぐに着手可能なテスト実装タスク定義を最大5つまで提案してください。
-            response_class: TaskList
-        template_engine: jinja2
-        brain: none
-        ---
-        {% for task in task_list.tasks %}
-        - [ ] {{ task.title }} (priority: {{ task.priority }})
-        {% endfor %}
-        """,
-    )
+    guide = (
+        Path(__file__).resolve().parents[3]
+        / "docs"
+        / f"custom_command_guide.{language}.md"
+    ).read_text(encoding="utf-8")
+    section = guide.split("### 5.2.", 1)[1].split("### 5.3.", 1)[0]
+    example = section.split("```markdown\n", 1)[1].split("```", 1)[0]
+    _write(tmp_path / "commands/coverage.md", example)
 
     ctx = _make_context("")
 
@@ -746,7 +702,6 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("shell_commands")
 async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(

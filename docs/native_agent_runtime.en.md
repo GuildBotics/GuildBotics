@@ -66,17 +66,14 @@ a provider can or cannot enforce: a setting the environment cannot honour on
 this device (no runtime, no snapshot, no login) stops the agent from
 starting, and is never widened.
 
-The environment's runtime is [microsandbox](https://microsandbox.dev/) (a
-libkrun microVM). GuildBotics ships it and, the first time it is needed,
-places it under `~/.guildbotics/data/msb` and points the SDK at that path
-(`MSB_HOME` / `MSB_PATH`): nothing is downloaded, and nothing outside
-GuildBotics decides which runtime runs. The hardware virtualization it
-needs is Apple Silicon on macOS, the Windows Hypervisor Platform on Windows
-11, and KVM on Linux. On Windows the runtime listens on a socket that
-Windows Defender Firewall asks about, so a rule for the fixed path is
-created once with an elevation prompt. Inside the environment a Windows host
-path appears with its drive letter as the top-level directory (`C:\work`
-is `/c/work`); the working directory is bound under the same convention.
+The environment runs on [microsandbox](https://microsandbox.dev/). On first use,
+GuildBotics places the runtime from the executable under
+`~/.guildbotics/data/msb`. The Hub uses Apple Silicon. Linux CI needs KVM.
+
+Host directories mount once at their absolute host paths. The guest home is
+`/opt/guildbotics/home`. Grants under the host home have links at the same
+relative names in the guest home. Only the outermost grant gets a link when
+grants nest. Give users the real path to a file.
 
 What the environment holds -- the base image, the provider CLIs GuildBotics
 installs at pinned versions with the Node.js they run on, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
@@ -163,10 +160,10 @@ the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
-On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into the isolated environment ([microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)). If any directory mounted for a command is there -- the working directory of a writable command, a filesystem grant, the workspace itself, or GuildBotics' data under the home directory -- the command is refused at startup with the path and the reason. Move the directory outside the OS temporary directory and try again.
+
 
 Every host mount source is opened one path component at a time without following
-symbolic links or Windows reparse points, before GuildBotics reads or creates
+symbolic links, before GuildBotics reads or creates
 anything there. Use the real directory path. On macOS, only the fixed OS aliases
 `/tmp`, `/var`, and `/etc` are saved as `/private/...`. The checked name is passed
 unchanged to microsandbox; it is checked again immediately before startup.
@@ -194,7 +191,7 @@ locations can still be unregistered. Malformed grants allow workspace selection
 for editing, but commands remain refused until repaired.
 Status
 polling retries an unavailable input store and clears its dedicated alert after recovery.
-Member IDs accept lowercase letters, digits, `_` and `-`, excluding Windows reserved names.
+Member IDs accept lowercase ASCII letters, digits, `_` and `-`. The names `con`, `prn`, `aux`, `nul`, `com1` through `com9`, and `lpt1` through `lpt9` are reserved.
 Invalid stored configurations show their filename and can be edited or removed from the
 workspace in setup, while runtime loading remains refused until repair. A member ID cannot
 be changed. Existing directory names such as `Alice`, `alice.bak`, names with internal
@@ -302,7 +299,7 @@ opening it.
   is kept in GuildBotics' own storage (`~/.guildbotics/data/command_inputs`),
   bound read-only at the same path into the runs the screens start, and removed
   when the server's session ends, at its restart. The path the screen puts in
-  the input field for such a file is spelled as the environment names it (`/c/...` on Windows, never `C:\...`), so the agent
+  the input field for such a file is spelled as the environment names it, so the agent
   opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that protect directories from sharing, in
@@ -514,20 +511,11 @@ Real-device verification is optional for a pin update and is not part of the
 unattended update workflow. When a human requests it during PR review, use
 the [verify-ai-cli-tools skill](../.agents/skills/verify-ai-cli-tools/SKILL.md)
 to record the results on that PR after execution-specific approval and with
-the human watching. Run the tests on a device with a snapshot, with
-`GUILDBOTICS_CONTRACT_PROBE=1`, `GUILDBOTICS_CONFIG_DIR` at a workspace with the snapshot,
-and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret tests.
-
-- `tests/guildbotics/environment/test_provider_contracts.py`: the
-  connection contracts. With the production stand-in and settings, which requests reach the
-  gateway, that the stand-in is carried nowhere else, and how a refresh is made.
-- `tests/guildbotics/environment/test_credential_boundary.py`: the
-  protection boundary. No real value in any file or process of a turn's microVM; none in an
-  answer, even from an upstream that echoes the real token; none written to the writable
-  layer or logs on the disk while an environment that holds the login runs (what a power cut
-  leaves); nothing of an environment left after a cancel, a timeout, or the GuildBotics
-  process being killed; and none in the snapshot. That each check works is shown every time
-  by its finding a mark planted where it looks.
+the human watching. The connection tests in
+`crates/gb-server/src/tool_login/tests/real_device/provider_contracts.rs` use
+synthetic credentials and loopback recorders. That test group and
+`crates/gb-environment/src/runtime/real_device.rs` also check credential
+handling and cleanup. Use the skill to select and run a test.
 
 - **Where it is kept**: `guildbotics environment login claude` runs with the state root
   (`~/.claude`) in the microVM's memory (tmpfs). The `.credentials.json` the login leaves
@@ -541,7 +529,7 @@ and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret test
   a stand-in minted for the turn and whose expiry is far away. The file is built from the
   non-secret fields the catalog names (`scopes`, `subscriptionType`, `rateLimitTier`) alone,
   so neither the refresh token nor any credential a later version adds to the file is in it. Claude Code is pointed at a gateway in the GuildBotics process
-  (`auth_gateway.py`) through `ANTHROPIC_BASE_URL`, and the turn's network policy opens
+  (`gb-environment/src/gateway.rs`) through `ANTHROPIC_BASE_URL`, and the turn's network policy opens
   only the gateway's host port. Anthropic's domains are not open to the turn (the stand-in
   authenticates nothing there anyway). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set.
 - **The gateway** forwards only `POST /v1/messages` and `POST /v1/messages/count_tokens`
@@ -645,13 +633,7 @@ and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret test
   `rm ~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`,
   `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`,
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, and
-  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`; Windows:
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`,
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`,
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\copilot\.copilot\config.json`,
-  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\copilot\turns`,
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`, and
-  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`).
+  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`).
   GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
   the sessions (`sessions/`, `projects/`, `session-state/`, `antigravity-cli/conversations/`, and the like) and the cache alone. Copies in past backups cannot be erased.
 - **Recovery**: when the state says the keychain is locked, unlock it; when it says the
@@ -732,11 +714,11 @@ each member command; that git starts with the facts of the host every
 environment gets and the member's name, and with none of the turn's variables,
 the broker's token, or a login stand-in.
 
-The member's GitHub token is used only on the host, by a bare repository of the
+The member's Branvil token is used only on the host, by a bare repository of the
 host's own per repository of the code host under
 `<workspace>/.guildbotics/local/member_git/<person_id>/` that no environment
 mounts, toward the URL the host derives. `prepare` places a clone at the
-repository's whole path (`clones/<person_id>/<owner>/<repo>` on GitHub), so
+repository's whole path (`clones/<person_id>/<owner>/<repo>` on Branvil), so
 repositories of one name in two namespaces -- a fork and its upstream among
 them -- have a clone each, and records which repository the clone pushes to;
 a clone `prepare` did not check out is not pushed.

@@ -34,7 +34,7 @@ scripts/hub-server.sh update
 ```
 
 1. `update` は更新するコミットから画面と実行ファイルを作ります。現在のサーバーは稼働を続けます。
-2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `branvil admin upgrade` と `branvil admin check` を実行します。
+2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドが起動する際、キーチェーンの確認が2回出ます。両方に回答してください。起動を確認できると、新ビルドからCLIとスキルを導入します。
 

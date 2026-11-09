@@ -18,7 +18,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 
 A member watches the channels you configure. When a message meets the mention and participation conditions, the chat judgment engine decides whether to start the response agent. It can complete with a reaction or no action; otherwise, the response agent reads the thread context and its own roles, performs the required work, and responds in Slack.
 
-**Doing the requested work**: when the message explicitly asks for an operation in another domain such as GitHub (for example, "please handle the review comments on this PR"), the member carries it out. The member's working directory has no repository checkout, so it identifies the target repository from the message and thread context and prepares a working branch with `guildbotics member git prepare` before working. If the target is ambiguous, it asks in the thread and completes with `asking`.
+**Doing the requested work**: when the message explicitly asks for an operation in another domain such as Branvil (for example, "please handle the review comments on this PR"), the member carries it out. The member's working directory has no repository checkout, so it identifies the target repository from the message and thread context and prepares a working branch with `guildbotics member git prepare` before working. If the target is ambiguous, it asks in the thread and completes with `asking`.
 
 **How it responds in Slack**: with or without work to do, it always closes out the thread in one of these ways.
 
@@ -121,7 +121,7 @@ The member's persona, which influences both what it says and whether it joins (c
 
 Scheduled posts are configured as **Scheduled commands** on the **Patrol** tab (→ [Scheduled Posts](#scheduled-posts)).
 
-Tokens are stored in the OS keychain with the member's credentials, shared by every workspace. The Slack User ID is stored in the member's `identity.yml`, the same in every workspace, and the channels in the workspace's `team/members/<person_id>/member.yml`. For the stored format and the settings that are not available in the GUI, see the [Member Settings Reference](#member-settings-reference).
+Tokens live in the encrypted identity store with the member's credentials, shared by every workspace. The Slack User ID is stored in the member's `identity.yml`, the same in every workspace, and the channels in the workspace's `team/members/<person_id>/member.yml`. For the stored format and the settings that are not available in the GUI, see the [Member Settings Reference](#member-settings-reference).
 
 ## Chat Judgment Engine
 
@@ -185,7 +185,7 @@ services:
     # base_url: https://slack.com/api   # only to reach Slack through a proxy
 ```
 
-The channels and schedules you save on the screens are written to the workspace's `team/members/<person_id>/member.yml` in the following form. On a server without the GUI, edit this file directly.
+The channels and schedules you save on the screens are written to the workspace's `team/members/<person_id>/member.yml` in the following form. To change these settings by hand, edit this file.
 
 ```yaml
 # team/members/alice/member.yml
@@ -214,7 +214,7 @@ Key points:
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
 - `profile.character` in the member's identity (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace) defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine. A human member's Slack User ID is `account_info.slack_user_id` in the same file
 
-The Bot Token and App-Level Token are not stored in either file. They are member credentials, kept in the identities' store that every workspace shares (`guildbotics secrets --identities`), and passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
+The Bot Token and App-Level Token are not stored in either file. They are member credentials, kept in the identities' store that every workspace shares (`guildbotics secrets --identities`), and read from that encrypted store or supplied through the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
 
 ## Posting and Reacting Manually
 

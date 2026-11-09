@@ -55,15 +55,9 @@ CLIは中で動き、それ以外を見ないので、OSやプロバイダによ
 隔離環境が用意できない場合（runtimeが無い、snapshotが無い、ログインしていない）は、より広い
 権限へ置き換えずにエージェントを起動しません。
 
-隔離環境のruntimeは[microsandbox](https://microsandbox.dev/)（libkrun系のmicroVM）で、
-GuildBoticsが同梱し、最初に必要になったときに`~/.guildbotics/data/msb`へ配置してSDKに
-そのパスを指させます（`MSB_HOME` / `MSB_PATH`）。ダウンロードはせず、GuildBotics以外が
-どのruntimeを動かすかを決めることはありません。必要なハードウェア仮想化はmacOSでApple
-Silicon、Windows 11でWindowsハイパーバイザー プラットフォーム、LinuxでKVMです。Windowsでは
-runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出すため、固定パスに対する
-規則を昇格の確認1回で作成します。Windowsのhostパスは環境の中では`C:\work`→`/c/work`の
-ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
-bindします）。
+隔離環境は[microsandbox](https://microsandbox.dev/)のmicroVMです。Rustの実行ファイルが持つruntimeを、初回に `~/.guildbotics/data/msb` へ配置します。HubはApple Siliconを使います。LinuxのCIにはKVMが必要です。
+
+hostのディレクトリは元の絶対パスに1回だけマウントします。guestのホームは `/opt/guildbotics/home` です。hostのホーム配下の許可先は、guestのホーム配下に同じ名前のリンクが作られます。許可先が入れ子の場合は一番外側だけリンクします。利用者へファイルを案内するときは実体のパスを使います。
 
 環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIとそれが動くNode.jsと、
 GuildBotics自身のPython環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
@@ -122,10 +116,10 @@ imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッシ
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics server start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
 
-Windows では、`%LOCALAPPDATA%\Temp` 以下のディレクトリを隔離環境にbindできません（[microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)）。書き込み可能なコマンドの作業ディレクトリ、ファイルシステムの許可先、ワークスペース自体、HOME以下のGuildBoticsのデータなど、コマンドがマウントするディレクトリがそこにある場合は、コマンド開始時に対象のパスと理由を表示して拒否します。一時ディレクトリの外へ移して再実行してください。
+
 
 hostのマウント元は、読み取りや作成の前に、パスの各要素をリンクを辿らずに開いて確認します。
-symbolic linkやWindowsのreparse pointを含むパスは拒否するため、実ディレクトリのパスを指定してください。
+シンボリックリンクを含むパスは拒否するため、実ディレクトリのパスを指定してください。
 macOSの固定OS aliasである`/tmp`、`/var`、`/etc`だけは、保存時に`/private/...`へ正規化します。
 確認した名前は起動直前にもう一度検査し、そのままmicrosandboxへ渡します。
 
@@ -147,7 +141,7 @@ macOSの固定OS aliasである`/tmp`、`/var`、`/etc`だけは、保存時に`
 grant設定が壊れていても、修復のために選択できます。設定が直るまでコマンドは実行できません。
 入力ファイル用フォルダを開けない場合は専用のエラーを表示します。状態の定期確認でも再試行し、成功するとエラーが消えます。
 画面からのアップロードは20MiBまでです。
-メンバーIDは小文字の英数字、`_`、`-`だけを使い、Windowsの予約名を拒否します。
+メンバーIDには小文字の英字、数字、`_`、`-`が使えます。予約名の `con`、`prn`、`aux`、`nul`、`com1`〜`com9`、`lpt1`〜`lpt9` は使えません。
 既存の設定が不正な場合はファイルの場所を表示し、設定画面で編集するか、ワークスペースから外せます。修復するまで、そのチームのコマンドは実行できません。メンバーIDは変更できません。
 `Alice`や`alice.bak`、途中に空白を含む名前、日本語などの名前の既存の設定も表示し、ワークスペースから外せます。
 区切り文字、ドライブ・ストリームの接尾辞、制御文字、末尾のドット・空白を含む名前は、表示されたファイルの場所を使って端末上で改名・削除してください。
@@ -219,7 +213,7 @@ grant設定が壊れていても、修復のために選択できます。設定
   bindはhostのパスへの1つだけで、アクセスもそこで決まります。画面から渡したファイル（貼り付け画像と、入力欄に落としてブラウザがコピーとしてアップロードしたファイル）は
   GuildBotics自身の保存先（`~/.guildbotics/data/command_inputs`）に置かれ、画面が始める実行に
   同じパスで読み取り専用にbindされ、サーバーのセッションの終わり（再起動）に消えます。画面がそのファイルについて入力欄に入れるパスは隔離環境の綴り
-  （Windowsでは`C:\...`ではなく`/c/...`）で、エージェントはそれをそのまま開けます。**この端末の設定**: 追加パス
+  で、エージェントはそれをそのまま開けます。**この端末の設定**: 追加パス
   （絶対パス可、存在が必要）と、共有から保護するディレクトリの`deny`。
   `local/cli_agent_filesystem_grants.yml`に置きます。認証情報のディレクトリ
   （`~/.ssh`、プロバイダ自身のディレクトリ）と登録済みワークスペースの状態も、同じマウント元の判定で
@@ -392,18 +386,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
 合成の秘密で実microVMを動かす任意実行のテストで確かめます。ゲートウェイや環境の組み立てを変えたときに
 実行します。固定版の更新では実機確認は任意で、無人の更新手順には含めません。PRレビュー中に人が依頼した
 場合は、[verify-ai-cli-toolsスキル](../.agents/skills/verify-ai-cli-tools/SKILL.md)を使い、実行ごとの承認と
-立ち会いのもとで確認し、そのPRに結果を記録します。テストはsnapshotのある端末で、
-`GUILDBOTICS_CONTRACT_PROBE=1`と、snapshotのあるワークスペースの`GUILDBOTICS_CONFIG_DIR`を付け、
-`-p no:xdist`で実行します。この合成の秘密を使うテストは、端末の外へ何も送りません。
-
-- `tests/guildbotics/environment/test_provider_contracts.py`：接続先の契約。
-  本番の置換用の値と設定で、どの要求がゲートウェイへ届き、置換用の値がほかのどこへも運ばれないか。
-  refreshの起こし方
-- `tests/guildbotics/environment/test_credential_boundary.py`：保護境界。
-  turnのmicroVMの全ファイルと全プロセスに実値が無いこと、実トークンを折り返すupstreamを相手にしても
-  応答に実値が無いこと、ログインを持つ環境の動作中にディスク上の書き込み層とログへ実値が書かれないこと
-  （電源断で残るもの）、cancel・timeout・GuildBoticsのprocessのkillで環境が残らないこと、snapshotに
-  混入しないこと。検査が働いていることは、同じ場所にわざと置いた印を見つけることで毎回確かめます
+立ち会いのもとで確認し、そのPRに結果を記録します。接続契約は `crates/gb-server/src/tool_login/tests/real_device/provider_contracts.rs` で、合成の資格情報とloopbackの記録先を使って確認します。貸し出しと破棄の検査は同じテスト群と `crates/gb-environment/src/runtime/real_device.rs` にあります。選ぶテストと実行手順は上のスキルを参照してください。
 
 - **保存場所**: `guildbotics environment login claude`は、state root（`~/.claude`）をmicroVMの
   メモリ（tmpfs）に置いて動きます。ログインが残した`.credentials.json`は、環境が動いている間に
@@ -417,7 +400,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   フィールド（`scopes`・`subscriptionType`・`rateLimitTier`）だけから組み立てます。refresh tokenや、
   将来のバージョンで認証ファイルに増えた未知の認証値は入りません。
   Claude Codeは`ANTHROPIC_BASE_URL`でGuildBoticsプロセス内のゲートウェイ
-  （`auth_gateway.py`）を指し、turnのnetwork policyはゲートウェイのhost portだけを開けます。
+  （`gb-environment/src/gateway.rs`）を指し、turnのnetwork policyはゲートウェイのhost portだけを開けます。
   Anthropicのドメインはturnからは開けません（置換用の値は直接送っても認証に使えません）。
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`を渡します。
 - **ゲートウェイ**: そのturnの置換用の値を持つ`POST /v1/messages`と
@@ -510,12 +493,6 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`、
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
   `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`。
-  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`、
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`、
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\copilot\.copilot\config.json`、
-  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\copilot\turns`、
-  `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`、
-  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`）。
   GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`・`session-state/`・`antigravity-cli/conversations/`など）や
   cacheは消さないでください。過去のバックアップに残った平文までは消せません。
 - **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
@@ -587,9 +564,9 @@ member modeの`member git prepare` / `commit` / `push` / `publish`は、cloneの
 すべての環境に渡すhostの事実とメンバーの名前だけで、turnの環境変数、brokerのtoken、ログインの
 置換用の値は渡しません。
 
-メンバーのGitHub tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
+メンバーのBranvil tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
 の下にコードホストのリポジトリごとに持つhost専用のbare repository（どの環境にもmountしません）から、
-hostが導出したURLへ送ります。`prepare`はcloneをリポジトリのパス全体の場所（GitHubなら
+hostが導出したURLへ送ります。`prepare`はcloneをリポジトリのパス全体の場所（Branvilなら
 `clones/<person_id>/<owner>/<repo>`）に置くので、名前空間が違う同名のリポジトリ（forkとupstreamも）は
 別々のcloneになります。`prepare`はcloneがどのリポジトリへpushするかを記録し、`prepare`でcheckout
 していないcloneはpushしません。

@@ -266,7 +266,7 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
         &hub.lines("calls"),
         &[
             "npm|ci",
-            "npm|run|build|--workspaces",
+            "npm|run|build|--workspace|desktop|--workspace|crates/branvil/web",
             "cargo|build|--release|--locked|-p|guildbotics|--target-dir|",
             "current|branvil|backup|",
             "current|branvil|restore|",

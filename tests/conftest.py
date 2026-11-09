@@ -3,18 +3,14 @@ import json
 import logging
 import os
 import socket
-import subprocess
 import sys
-import tempfile
 import threading
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
-from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.team import Person, Role
 from guildbotics.intelligences.agent_runtime.wire import (
@@ -37,7 +33,6 @@ _PHASE_DURATIONS: list[dict[str, object]] = []
 _NETWORK_AUDIT: list[tuple[str, str]] = []
 _REAL_DEVICE_ENABLED = pytest.StashKey[frozenset[str]]()
 _NETWORK_GUARD = pytest.StashKey["_NetworkGuard"]()
-_WINDOWS_BASETEMP = pytest.StashKey[Path]()
 REAL_DEVICE_OPT_INS = frozenset(
     {
         "GUILDBOTICS_CONTRACT_PROBE",
@@ -223,18 +218,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-def _configure_windows_basetemp(config: pytest.Config) -> None:
-    if hasattr(config, "workerinput"):
-        return
-    if sys.platform == "win32" and config.option.basetemp is None:
-        # %TEMP% is too long for Git-backed tests; pytest resolves basetemp to its real path.
-        root = Path.home() / "tmp"
-        root.mkdir(parents=True, exist_ok=True)
-        basetemp = Path(tempfile.mkdtemp(prefix="gb-", dir=root))
-        config.option.basetemp = str(basetemp)
-        config.stash[_WINDOWS_BASETEMP] = basetemp
-
-
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _PHASE_DURATION_OUTPUT
@@ -254,7 +237,6 @@ def pytest_configure(config: pytest.Config) -> None:
             raise pytest.UsageError("real_device tests must run without pytest-xdist")
     if hasattr(config, "workerinput"):
         return
-    _configure_windows_basetemp(config)
     value = config.getoption("phase_durations_json")
     _PHASE_DURATION_OUTPUT = Path(value) if value else None
     _PHASE_DURATIONS.clear()
@@ -267,17 +249,6 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
-    basetemp = config.stash.get(_WINDOWS_BASETEMP, None)
-    if basetemp is not None:
-        try:
-            rm_rf(basetemp)
-        except OSError as exc:
-            warnings.warn(
-                pytest.PytestWarning(
-                    f"Could not remove automatic Windows basetemp {basetemp}: {exc}"
-                ),
-                stacklevel=2,
-            )
     guard = config.stash.get(_NETWORK_GUARD, None)
     if guard is not None:
         guard.close()
@@ -573,8 +544,7 @@ def fake_platform(monkeypatch) -> Callable[[ModuleType, str], Any]:
     ``module.sys`` is the interpreter's own ``sys``, so setting ``platform`` on
     it fakes the platform for every import that happens while the test runs.
     A library imported for the first time in that window takes the branch for
-    a platform it is not on -- ``mcp.server.stdio`` imports ``fcntl`` on
-    Windows -- and whether the test passes then depends on which tests the
+    a platform it is not on, and whether the test passes then depends on which tests the
     same worker ran first. Only the module under test gets the view here; the
     returned view also takes any other ``sys`` attribute the test needs to set.
     """
@@ -588,25 +558,8 @@ def fake_platform(monkeypatch) -> Callable[[ModuleType, str], Any]:
 
 
 @pytest.fixture
-def posix_permissions() -> None:
-    """Skip on a device whose file system has no POSIX permission bits.
-
-    Windows keeps no owner/group/other bits, and ``chmod`` there only toggles
-    the read-only attribute, so an assertion on ``0o600`` describes the test's
-    own platform rather than the code under test.
-    """
-    if os.name == "nt":
-        pytest.skip("Windows has no POSIX permission bits.")
-
-
-@pytest.fixture
 def symlinks(tmp_path) -> None:
-    """Skip on a device where this session may not create a symbolic link.
-
-    Windows grants that privilege to an elevated session or to one running
-    with Developer Mode enabled, and CI runs elevated. A developer without it
-    would otherwise read a privilege error as a failure of the code.
-    """
+    """Skip on a device where this session may not create a symbolic link."""
     probe = tmp_path / "symlink-probe"
     try:
         probe.symlink_to(tmp_path)
@@ -620,7 +573,7 @@ def weasyprint_libraries() -> None:
     """Skip where WeasyPrint's GTK libraries are not installed on the device.
 
     They are native rather than Python, so the dependency resolver cannot
-    supply them: Windows and a bare Linux both need them installed separately.
+    supply them: a bare Linux needs them installed separately.
     A device without them gets the ``CommandError`` its own test covers, and
     only a device with them can render anything.
     """
@@ -630,38 +583,6 @@ def weasyprint_libraries() -> None:
         importlib.import_module("weasyprint")
     except (ImportError, OSError) as exc:
         pytest.skip(f"WeasyPrint's native libraries are not available: {exc}")
-
-
-@pytest.fixture
-def shell_commands() -> None:
-    """Skip on a device that cannot run a ``.sh`` command as its environment does.
-
-    A command runs in its isolated environment, which is Linux, and a ``.sh``
-    command there runs itself or ``bash``. Windows can do neither: every file
-    passes ``os.access(..., os.X_OK)``, ``CreateProcess`` refuses a script, and
-    ``bash`` there may be the WSL launcher.
-    """
-    if os.name == "nt":
-        pytest.skip("A .sh command runs in the Linux environment, not on Windows.")
-
-
-@pytest.fixture(scope="session")
-def posix_sh() -> str:
-    """A POSIX ``sh`` for what stands in for a command's isolated environment.
-
-    Windows has none on PATH, but Git for Windows ships one under the root of
-    its installation, which ``git --exec-path`` (``<root>/mingw64/libexec/
-    git-core``) leads to; an installation without it (MinGit) skips.
-    """
-    if os.name != "nt":
-        return "sh"
-    exec_path = subprocess.run(
-        ["git", "--exec-path"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    sh = Path(exec_path).parents[2] / "bin" / "sh.exe"
-    if not sh.is_file():
-        pytest.skip(f"This Git installation ships no sh at {sh}.")
-    return str(sh)
 
 
 class FakeProject:

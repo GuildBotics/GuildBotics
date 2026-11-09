@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/hub-forward.sh"
-pytestmark = pytest.mark.usefixtures("shell_commands")
 
 STUB = """\
 import json, os, sys

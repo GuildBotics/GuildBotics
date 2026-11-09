@@ -16,8 +16,8 @@ from guildbotics.utils.child_process import ChildProcess
 def _runs_itself(path: Path) -> bool:
     """Return whether the script runs itself, so that its shebang is honored.
 
-    The execute bit alone does not say so: a file mounted from a Windows host
-    has every bit set, and a script without a shebang cannot be executed.
+    Check the shebang separately from the execute bit so executable text
+    without an interpreter line still runs through Bash.
     """
     if not os.access(str(path), os.X_OK):
         return False

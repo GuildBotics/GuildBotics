@@ -152,8 +152,6 @@ elif tool == "guildbotics":
         sys.exit(int(env.get("DEV_TEST_BROWSER_EXIT", "0")))
 """
 
-pytestmark = pytest.mark.usefixtures("shell_commands")
-
 
 class Launcher:
     """A copy of the repository with fake tools, and the launcher runs in it."""
@@ -410,7 +408,7 @@ def test_dependency_installation_tracks_the_workspace_lockfile(
     assert [call["args"] for call in launcher.events("npm")] == (
         [["ci"]] if installs else []
     ) + [
-        ["run", "build", "--workspaces"],
+        ["run", "build", "--workspace", "desktop", "--workspace", "crates/branvil/web"],
     ]
 
 

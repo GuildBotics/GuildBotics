@@ -140,7 +140,7 @@ build_head() {
     (
         cd "$source"
         npm ci
-        npm run build --workspaces
+        npm run build --workspace desktop --workspace crates/branvil/web
         cargo build --release --locked -p guildbotics --target-dir "$hub/target"
     )
     cp "$hub/target/release/guildbotics" "$source/guildbotics-bin.new"

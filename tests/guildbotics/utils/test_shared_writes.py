@@ -134,7 +134,6 @@ def test_write_shared_json_uses_stable_serialization(tmp_path: Path) -> None:
     assert dump_shared_json({"b": 2, "a": 1}) == text
 
 
-@pytest.mark.windows
 def test_a_write_replaces_the_file_it_wrote_before(tmp_path: Path) -> None:
     path = tmp_path / ".guildbotics/state/task-runs/one.json"
 

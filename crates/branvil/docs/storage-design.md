@@ -4,7 +4,7 @@ Branvil keeps metadata in one redb file (`<data>/branvil.redb`), Git objects in
 bare repositories (`<data>/repos/<path>.git`), and CI logs and artifacts in
 files under `<data>/ci/` (never in redb). Only the service process opens the database; the
 GUI, the GuildBotics provider, and the CLI go through the HTTP API (the offline
-`branvil init` / `branvil admin` commands open it only while the service is
+`guildbotics branvil init` / `guildbotics branvil admin` commands open it only while the service is
 stopped, and redb's file lock refuses a second opener).
 
 This document derives the tables from [`port-mapping.md`](port-mapping.md):
@@ -66,11 +66,11 @@ upgrade indexes the attachment ids the kept ticket bodies and comments refer
 to (`ix_attachment_refs`).
 
 A database of any other version is refused at open. The previous version is
-upgraded by `branvil admin upgrade` or `branvil restore` (`src/upgrade.rs`, the
+upgraded by `guildbotics branvil admin upgrade` or `guildbotics branvil restore` (`src/upgrade.rs`, the
 only code that reads previous shapes, replaced whenever the version rises).
 The upgrade keeps a copy of the database as it was and sets `meta["unchecked"]`
-in the transaction that applies it. `branvil serve` refuses a marked database
-until a passing `branvil admin check` removes the mark (`docs/backup-restore.md`,
+in the transaction that applies it. `guildbotics branvil serve` refuses a marked database
+until a passing `guildbotics branvil admin check` removes the mark (`docs/backup-restore.md`,
 "Upgrading"). A database without the mark is not marked: introducing this
 check did not change stored records or raise the version.
 
@@ -78,7 +78,7 @@ check did not change stored records or raise the version.
 
 | Table | Key | Value | Written by | Read by |
 | --- | --- | --- | --- | --- |
-| `meta` | `(name)` | schema version; `unchecked` while an upgrade has not passed `branvil admin check` (absent otherwise) | open, upgrade, `admin check` | open, `serve`, `admin upgrade` |
+| `meta` | `(name)` | schema version; `unchecked` while an upgrade has not passed `guildbotics branvil admin check` (absent otherwise) | open, upgrade, `admin check` | open, `serve`, `admin upgrade` |
 | `counters` | `(name)` | `u64` | ticket numbers `ticket:<repo>`, PR numbers `pull:<repo>`, `entry` sequence, per-repository landing order `landing:<repo>` | allocation in the same txn as the insert |
 | `members` | `(fold(name))` | member, kind (`owner`, `agent`, `runner`), accounts on upstream hosts (provider, login; the token is a file), reviewers of the pull requests it opens | owner API, `init`, automatic runner | auth, kind checks, upstream |
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
@@ -123,7 +123,7 @@ owning entries.
 Every index entry of a record comes from one function in `src/model.rs`
 (`ticket_index`, `pull_index`, …), used both when the record is written
 (`put_indexed` diffs the old and new entries in the same transaction) and by
-`branvil admin check` / `branvil admin reindex`. The two cannot drift apart.
+`guildbotics branvil admin check` / `guildbotics branvil admin reindex`. The two cannot drift apart.
 
 | Index | Key → value | Serves (port-mapping) |
 | --- | --- | --- |

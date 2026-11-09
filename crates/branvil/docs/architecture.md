@@ -1,7 +1,7 @@
 # Architecture
 
-Branvil is one Rust process (`branvil serve`) plus Git child processes, and a
-separate CI runner process (`branvil runner`) that executes jobs in microVMs. It
+The Rust host embeds Branvil. Branvil starts Git child processes and a
+separate CI runner process (`guildbotics branvil runner`) that executes jobs in microVMs. It
 listens on loopback only; other machines reach it through OpenSSH port forwarding
 managed by an OS service (see `README.md`). The authenticated data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
@@ -19,7 +19,7 @@ provider ────┼─ HTTP (axum) ─ domain ──┤
 branvil CLI ─┘        │                └─ git (bare repos, argv only)
 git client ── Smart HTTP ─ git http-backend ─ receive-pack ─ Branvil hooks ─┐
                                                                             └─ loopback callback ─ refs
-branvil runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      (no database, no repositories)
+guildbotics branvil runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      (no database, no repositories)
      └─ msb run ─ microVM per job (only its work and log directories mounted, no network)
 ```
 
@@ -42,12 +42,12 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | `invocation.rs` | how Branvil's commands are started again on the running executable (the hook scripts, the automatic runner): none before them on `branvil`, the prefix another executable installed (`guildbotics branvil`) |
 | `refs.rs` | the ref-change boundary: snapshot recording, journal, startup recovery, push policy |
 | `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (`[ci] runner = "auto"`) |
-| `runner/` | `branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
+| `runner/` | `guildbotics branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
 | `upstream/` | the upstream code host: the provider boundary (`host.rs`, `github.rs`), members' accounts, following the default branch, publishing pull requests, carrying changes both ways, the host's check runs (see below) |
 | `landing.rs` | persistent queues per repository/base, admission and departure, gate commits, gate checks, and failure comments |
 | `webhook.rs` | bounded webhook delivery shared by the service and offline CLI; never exposes the URL in errors |
 | `autoland.rs` | the task that advances every repository's landing queues, automatically merges or publishes with `auto_land`, and tells the webhook when automatic landing gates pass; independently sweeps CI failure notifications (`ci/notify.rs`) |
-| `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `branvil restore` (`docs/backup-restore.md`) |
+| `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `guildbotics branvil restore` (`docs/backup-restore.md`) |
 | `events.rs` | bounded broadcast for SSE and the landing task |
 | `http.rs` | router, Host/Origin guard, security headers, idempotency middleware, extractors, SSE, GUI files |
 | `references.rs` | Markdown reference syntax and prose ranges, shared by display and upstream rewriting |
@@ -107,10 +107,7 @@ or diffs, and then run one short write transaction.
   the next start too. Only then does startup remove the lock files a killed
   Git left in each repository (`git::remove_stale_locks`: its own, its refs'
   and reflogs', and gc's in `objects/info` and `objects/pack`): no Git that
-  could own one runs any more. On Windows the children do not inherit the
-  lock (it ends with the service): neither this boundary nor the removal
-  applies there, and a push whose receive-pack is still running when the
-  service stops may update its refs after the next start's recovery.
+  could own one runs any more.
 
 ## Ref changes and recovery
 
@@ -573,7 +570,7 @@ repository lock (in id order), copies the database as of one read transaction
 its own Git runner (Smart HTTP children may hold the shared Git permits while
 their post-receive waits for those locks). Then it releases the locks and
 copies CI logs and artifacts, tickets' attachments, and the configuration, and
-writes a manifest with checksums. `branvil restore` is offline. See `docs/backup-restore.md`.
+writes a manifest with checksums. `guildbotics branvil restore` is offline. See `docs/backup-restore.md`.
 
 ## Events
 
@@ -600,7 +597,7 @@ entry link:
    (`HttpOnly`, `SameSite=Strict`) and its CSRF value.
 
 `POST /api/v1/session/links` is the only way a GUI session starts, for every
-client present and future. On the Hub machine the client is `branvil open`.
+client present and future. On the Hub machine the client is `guildbotics branvil open`.
 Agents never enter the GUI; they use their own tokens with the API and Git.
 
 ### Local apps: an owner token through a consent screen
@@ -612,7 +609,7 @@ its own instead, through the consent screen (`docs/api.md`, "Local apps"):
 
 1. The app opens the browser at `{base}/-/authorize` with its name, a loopback
    `redirect_uri`, a `state`, and a PKCE `S256` challenge.
-2. The owner, in the GUI (entering first with `branvil open` when the browser
+2. The owner, in the GUI (entering first with `guildbotics branvil open` when the browser
    has no session; the page is returned to afterwards), allows it. Branvil
    makes a single-use 60-second code bound to the app's name, the
    `redirect_uri`, and the challenge (kept in memory as a hash, like entry-link
@@ -623,7 +620,7 @@ its own instead, through the consent screen (`docs/api.md`, "Local apps"):
 
 With that token the app uses the admin API (members, tokens, accounts,
 workspaces) and, to open the GUI, the entry-link endpoint above, exactly as
-`branvil open` does. Branvil knows nothing of the app beyond its display
+`guildbotics branvil open` does. Branvil knows nothing of the app beyond its display
 name; where the app keeps the token is its own matter. The owner revokes it
 under Settings → Members → owner → Tokens, like any token; replacing
 `owner.token` does not revoke it.
@@ -762,8 +759,6 @@ Desktop) set their look through `style` attributes), `X-Content-Type-Options: no
 
 ## Platforms
 
-Built and tested on macOS 26 (arm64) with Git 2.54; the CI executor is
-verified there with msb 0.6.17 (`docs/ci.md`). Linux and Windows are
-unverified. The hook scripts are POSIX `sh` scripts (Git for Windows runs hooks
-with its bundled `sh`, but this is untested), and the `secrets/` permissions
-are set only on Unix.
+The Hub runs on Apple Silicon macOS. CI runs on Linux. Both use POSIX
+`sh` for hooks and keep the data directory's `secrets/` permissions on Unix.
+See [CI prerequisites](ci.md#host-prerequisites).

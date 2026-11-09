@@ -9,7 +9,6 @@ import shlex
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -165,31 +164,20 @@ def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str
 
 def _stop(process: subprocess.Popen) -> None:
     """Reap the launcher and its process group, even after failed startup."""
-    if os.name == "nt":
-        if process.poll() is None:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
     finally:
-        if os.name != "nt":
-            # A wrapper may have exited while a descendant still holds pipes.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @contextmanager
@@ -228,7 +216,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
             stderr=log,
             text=True,
             encoding="utf-8",
-            start_new_session=os.name != "nt",
+            start_new_session=True,
         )
         lines: queue.Queue[str] = queue.Queue()
 

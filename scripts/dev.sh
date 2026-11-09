@@ -75,7 +75,7 @@ done
 if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules/.package-lock.json ]]; then
   npm ci
 fi
-npm run build --workspaces
+npm run build --workspace desktop --workspace crates/branvil/web
 # Through the development image's cargo, which cleans a target directory built
 # under other build conditions first (in the image, `cargo` is that wrapper).
 REAL_CARGO="${REAL_CARGO:-$(type -P cargo)}" docker/agent-environment/cargo-wrapper.sh \

@@ -338,7 +338,11 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-The command uses the workspace's `services.code_hosting_service`, runs read-only in the usual microVM, and makes no LLM call. Prepare the execution environment as for other commands. Currently the supported providers are `github` and `branvil`; missing or unsupported configuration fails explicitly. Branvil answers with the Dependabot alerts of the repository's upstream on GitHub, read with the account that reads GitHub for Branvil, so that account needs the same permission ([Branvil integration guide](branvil_integration.en.md#repositories-with-an-upstream-on-github)); a repository without an upstream is refused as unsupported. For GitHub, the member's credentials (GitHub App or fine-grained PAT) need **Dependabot alerts: Read-only** and access to the target repository. Approve added permissions for existing App installations; for an existing PAT, edit its permissions and complete any approval required by the organization. See [GitHub account setup](../README.md#prepare-a-github-account-for-the-ai-agent) for the steps.
+The command uses the Branvil code host selected in `services.code_hosting_service`.
+It runs read-only inside the microVM without making an LLM call. Branvil reads
+Dependabot alerts from the repository's GitHub upstream and needs read access
+there. A repository without an upstream reports that the operation is
+unsupported. See the [Branvil integration guide](branvil_integration.en.md).
 
 `output=json` returns JSON text with `{ "repo": "org/repo", "alerts": [...], "continuation": null }`, preserving empty lists and `null`. Each alert has a string `id`, URL, state, package, ecosystem, manifest path, severity, advisory `identifiers` (a list of `{ "type": "CVE", "value": "..." }`), summary, description, `affected_versions`, `patched_version`, and creation/update timestamps. Missing optional fields are `null`; missing identifiers are an empty list. Markdown omits missing optional fields and explicitly marks unreported patches. Its headings show the selected state and each alert’s ID, package, and severity. Lists show summaries; individual alerts show the full description after the metadata, inside a blockquote. This resource covers dependency vulnerabilities.
 
@@ -379,7 +383,7 @@ The inspections collect all pages, including additional comments in review threa
 
 Readiness uses the host service’s own requests, so an internal compare response is not subject to the resource-page receive limit. Its returned page remains bounded: failed logs share the space left after JSON-encoded metadata, including escaping. Reduced tails keep `truncated=true` and report their `tail_limit_bytes`. GitHub access failures name the required resource permissions; GraphQL permission and rate-limit errors are reported even when HTTP succeeds.
 
-`runtime/code_hosting_service.py` and `runtime/ticket_service.py` own the common services, and `runtime/resources.py` their resources and the shape of each one's items. The host integration factory selects the configured implementation; commands use the same interfaces through their member grant (a command's environment reads tickets but does not write them or reach the board). Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor (alerts) or `page` number (REST collections) is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
+Service contracts live in `crates/gb-ports`. The host selects providers in `crates/gb-integrations` and holds their credentials.
 
 ## 5. Using subcommands
 You can chain multiple subcommands to build a workflow.
@@ -496,10 +500,12 @@ schema: |
         tasks: list[Task]
 commands:
   - script: |
-      pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
-      cat coverage.xml |grep line-rate
+      printf '%s\n' \
+        'utils,guildbotics/utils/fileio.py,0.52' \
+        'commands,guildbotics/commands/runner.py,0.63' \
+        'intelligences,guildbotics/intelligences/functions.py,0.81'
   - prompt: |
-      This information is analyzed to output the top 3 packages with the highest priority for test implementation in JSON format as Rankings.
+      Each row lists a package, file, and line coverage rate. Rank the packages by lowest coverage and return Rankings.
     response_class: Rankings
   - name: task_list
     prompt: |
@@ -513,15 +519,14 @@ brain: none
 {% endfor %}
 ```
 
+The example supplies sample coverage for three files and renders the model’s tasks as a checklist.
+
 Invocation example:
 
 ```shell
 $ guildbotics run coverage
-- [ ] Add unit tests for utils/fileio.py (priority: 1)
-- [ ] Add tests for capabilities/member_git.py's operations and error handling (priority: 2)
-- [ ] Add integrated unit tests for drivers/command_runner.py and drivers/task_scheduler.py (priority: 3)
-- [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
-- [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)
+- [ ] Add unit tests for `guildbotics/utils/fileio.py` (priority: 1)
+- [ ] Test result propagation in `guildbotics/commands/runner.py` (priority: 2)
 ```
 
 ### 5.3. Print command
@@ -613,7 +618,7 @@ commands:
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
 
-Shell scripts run on the Linux of the isolated environment, whatever OS the host runs, Windows included: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash` (a file mounted from a Windows host is always executable).
+Shell scripts run on the Linux of the isolated environment, with these launch rules: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash`.
 
 For example, create `current-time.sh`:
 
@@ -977,7 +982,7 @@ Raw effective parameter values are never recorded, because `api_key`, headers, a
 ## 10. Checking chat updates before publication
 
 In a chat workflow, check the source thread immediately before replying, reacting,
-pushing commits, or writing to GitHub:
+pushing commits, or writing to Branvil:
 
 ```bash
 guildbotics member chat updates --person alice
@@ -991,8 +996,8 @@ while another writer finishes: wait a few seconds and retry, without publishing
 or completing as `blocked` solely for this state. `unavailable` means reception cannot be verified: defer external
 writes and complete as `blocked` if reception cannot recover within the turn.
 The write commands also reject missing checks and messages arriving after a check.
-The check uses the original chat thread even when publishing to GitHub or another
+The check uses the original chat thread even when publishing to Branvil or another
 channel. It records which messages were delivered. Additional messages are marked
-processed on done/asking only after a later chat reply, post, reaction, GitHub write, or Git publication. Blocked or
+processed on done/asking only after a later chat reply, post, reaction, Branvil write, or Git publication. Blocked or
 no-op-only runs leave those messages pending for the next run. A final check cannot
 exclude arrivals after the check.

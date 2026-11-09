@@ -14,7 +14,7 @@ covers it is named in brackets.
 
 ```
 other machine                                 Hub machine (Branvil's OS user)
-browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127.0.0.1:7878 ─ branvil serve
+browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127.0.0.1:7878 ─ guildbotics branvil serve
                               (OS service)                                        ├─ <data>/ (0700)
                                                                                   └─ git children
 ```
@@ -34,7 +34,7 @@ itself speaks plain HTTP on loopback only).
 
 ## Network exposure
 
-- `branvil serve` refuses a non-loopback listen address (`src/config.rs`,
+- `guildbotics branvil serve` refuses a non-loopback listen address (`src/config.rs`,
   `Config::load`) [unit `non_loopback_listen_is_refused`].
 - Other machines reach it through OpenSSH port forwarding managed by an OS
   service, outside Branvil. The setup in `README.md`, "Several machines", uses
@@ -73,14 +73,14 @@ itself speaks plain HTTP on loopback only).
   Token issuance ignores `Idempotency-Key`, so the token text is never kept in
   the idempotency table [same test, which scans the database file].
 - The owner's token is an ordinary token whose text is kept in
-  `<data>/secrets/owner.token` (`0600` in `0700`); `branvil init` writes it and
-  the CLI on the Hub machine reads it. At every start `branvil serve` checks
+  `<data>/secrets/owner.token` (`0600` in `0700`); `guildbotics branvil init` writes it and
+  the CLI on the Hub machine reads it. At every start `guildbotics branvil serve` checks
   that the file's token still authenticates the owner; when the file is
   missing or does not (a restored backup has no `secrets/`), it revokes the
   previous file token, deletes every GUI session, and writes a new token
   [`tests/security.rs` `a_new_owner_token_ends_every_session`,
   `tests/backup.rs`].
-- The GUI has no sign-in screen. `branvil open` (the owner's token) asks for an
+- The GUI has no sign-in screen. `guildbotics branvil open` (the owner's token) asks for an
   entry link `{base}/-/enter#<code>`: 32 random bytes, single use, 60 seconds,
   kept in memory as a SHA-256 only, so a restart invalidates unused codes. The
   code is in the URL fragment, which the browser sends in no request line,
@@ -331,7 +331,7 @@ user profile's ACL.
 - Only the title, the body, and lines for linked issues of the host are
   posted; conversation, reviews, threads, and Branvil URLs stay in Branvil.
   Tickets, pull requests, and boards are **not** backed up by the upstream; use
-  `branvil backup`.
+  `guildbotics branvil backup`.
 - An unreachable host or a refused token is recorded and retried at the next
   poll; it never holds up pushes, pull requests, reviews, or CI in Branvil.
 - Publishing starts the host's own CI for the pull request (for example GitHub
@@ -360,9 +360,9 @@ service log for the tokens].
   every session. Replacing the file does not revoke tokens the owner gave
   local apps (`app:` labels); revoke those in Settings → Members → owner →
   Tokens. Revoking a token takes effect at the next request.
-- **`branvil open` hands the URL to the OS through argv** (`open`, `xdg-open`,
+- **`guildbotics branvil open` hands the URL to the OS through argv** (`open`, `xdg-open`,
   or `rundll32`), so on a Hub shared with other OS users the code can be read
-  with `ps` during its 60 seconds. There, use `branvil open --print` and paste
+  with `ps` during its 60 seconds. There, use `guildbotics branvil open --print` and paste
   the link into the browser.
 - **A local app's name is what the app says.** The consent screen shows the
   `client` the request carries; allow only an app you just started yourself.
