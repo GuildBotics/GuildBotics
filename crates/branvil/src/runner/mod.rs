@@ -537,7 +537,8 @@ impl Runner {
         self: Arc<Self>,
         executor: impl Fn() -> Arc<E> + Send,
     ) -> anyhow::Result<()> {
-        executor().sweep().await;
+        let mut current = executor();
+        current.sweep().await;
         let _ = std::fs::remove_dir_all(self.work_dir.join("jobs"));
         let mut running = tokio::task::JoinSet::new();
         let mut backoff = 1;
@@ -545,13 +546,15 @@ impl Runner {
             let limits = self.limits();
             let mut wait = Duration::from_secs(2);
             if running.len() < limits.max_jobs as usize {
-                // Resolve the runtime again for each claim, including after an
-                // unavailable runtime is installed while this runner is alive.
-                let executor = executor();
-                match self.claim(&*executor).await {
+                // Keep the ready executor's health cache. Only resolve again
+                // when unavailable, so a runtime installed later can recover.
+                if !current.health().await.ready {
+                    current = executor();
+                }
+                match self.claim(&*current).await {
                     Ok(Some((claim, health))) => {
                         backoff = 1;
-                        let (runner, executor) = (self.clone(), executor.clone());
+                        let (runner, executor) = (self.clone(), current.clone());
                         running.spawn(async move {
                             runner.run(&*executor, &health, claim, &limits).await
                         });
@@ -1543,6 +1546,7 @@ mod tests {
         executor::tests::write_script(
             &staged,
             r#"#!/bin/sh
+echo "$1" >> "$0.calls"
 case "$1" in
 --version) echo 'msb 0.6.17' ;;
 doctor|remove) exit 0 ;;
@@ -1567,6 +1571,25 @@ esac
         assert_eq!(next.conclusion.as_deref(), Some("success"), "{next:?}");
         assert!(home.join("ran").is_file(), "msb ran the next job");
         assert!(!serving.is_finished(), "the same runner is still serving");
+        // Exercise both another job and several idle polls within the ready
+        // health TTL. Neither resolution nor doctor should run again.
+        let another_sha = empty_main(&s, "runtime still ready").await;
+        assert_eq!(
+            settled(another_sha).await.conclusion.as_deref(),
+            Some("success")
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
+        assert_eq!(
+            calls.lines().filter(|c| *c == "doctor").count(),
+            1,
+            "{calls}"
+        );
+        assert_eq!(
+            calls.lines().filter(|c| *c == "--version").count(),
+            1,
+            "{calls}"
+        );
         s.revoke_runner_token().await;
         assert!(
             tokio::time::timeout(Duration::from_secs(10), serving)
