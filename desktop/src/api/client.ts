@@ -246,6 +246,7 @@ export type SystemAlert = {
   id: string;
   code:
     | "credential"
+    | "credential_missing"
     | "credential_llm"
     | "credential_jev"
     | "command_failed"

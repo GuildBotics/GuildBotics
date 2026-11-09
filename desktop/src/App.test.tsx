@@ -487,6 +487,16 @@ describe("App", () => {
       );
     });
 
+    it("names a missing token and links to the affected member account", () => {
+      const alert = { ...credentialAlert("slack", "alice"), code: "credential_missing" as const };
+      expect(systemAlertMessage(t(), alert, "studio")).toBe(
+        t()("systemAlerts.codes.credential_missing", { provider: "slack", person: "alice" }),
+      );
+      expect(systemAlertSetupTarget(alert)).toBe(
+        "/setup?section=members&person_id=alice&tab=slack",
+      );
+    });
+
     it("links to the affected member's account with the provider", () => {
       expect(systemAlertSetupTarget(credentialAlert("github", "alice"))).toBe(
         "/setup?section=members&person_id=alice&tab=github",

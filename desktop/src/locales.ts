@@ -82,6 +82,8 @@ export const resources = {
           warning: "System warning",
         },
         codes: {
+          credential_missing:
+            "No {{provider}} token is configured for {{person}}. Add the token in the member settings and restart the service.",
           credential: "{{provider}} credentials for {{person}} could not be verified.",
           credential_llm: "The API key of the LLM provider {{command}} could not be verified.",
           credential_jev: "The Jev API key could not be verified.",
@@ -1494,6 +1496,8 @@ export const resources = {
           warning: "システム警告",
         },
         codes: {
+          credential_missing:
+            "{{person}} の {{provider}} トークンが設定されていません。メンバー設定でトークンを設定してサービスを再起動してください。",
           credential: "{{person}} の {{provider}} 資格情報を検証できませんでした。",
           credential_llm: "LLM provider {{command}} の API キーを検証できませんでした。",
           credential_jev: "Jev の API キーを検証できませんでした。",

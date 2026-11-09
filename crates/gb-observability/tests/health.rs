@@ -585,6 +585,40 @@ fn test_a_listener_refused_for_a_member_opens_its_credential_alert() {
     }
 }
 #[test]
+fn missing_chat_tokens_remain_visible_separately_and_reappear_after_recovery() {
+    for provider in ["slack", "local"] {
+        let f = Fixture::new();
+        let mut runtime = listening(provider, true);
+        runtime["events"]["events_missing_credential_persons"] = json!(["bob", "bob"]);
+        let key = format!("credential_missing:{provider}:bob");
+        let alerts = f.view(&runtime, &[], None);
+        assert_eq!(alerts.len(), 2);
+        let missing = alerts.iter().find(|a| a["id"] == key).unwrap();
+        assert_eq!(missing["code"], "credential_missing");
+        assert_eq!(missing["person_id"], "bob");
+        assert_eq!(missing["provider"], provider);
+        assert_eq!(missing["severity"], "warning");
+        assert_eq!(missing["actions"], json!(["setup"]));
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a["code"] == "credential" && a["person_id"] == "alice")
+        );
+        assert_eq!(f.view(&runtime, &[], Some(&key)).len(), 1);
+        assert_eq!(f.view(&runtime, &[], None).len(), 1);
+        assert!(f.view(&listening(provider, false), &[], None).is_empty());
+        assert_eq!(f.view(&runtime, &[], None).len(), 2);
+        runtime["events"]["events_auth_failed_persons"] = json!([]);
+        assert_eq!(f.view(&runtime, &[], None).len(), 1);
+        assert!(
+            f.view(&runtime, &[], None)
+                .iter()
+                .all(|a| a["code"] != "credential")
+        );
+    }
+}
+
+#[test]
 fn test_runtime_alert_dismissal_lasts_until_condition_resolves() {
     let f = Fixture::new();
     for chat in ["slack", "local"] {

@@ -413,7 +413,7 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
   if (KEY_ALERTS.has(alert.code)) {
     return `/setup?${new URLSearchParams({ section: "intelligence" }).toString()}`;
   }
-  if (alert.code !== "credential" || !alert.person_id) {
+  if (!["credential", "credential_missing"].includes(alert.code) || !alert.person_id) {
     return "/setup";
   }
   // The member's account with the provider whose credential failed.
