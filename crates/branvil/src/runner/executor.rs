@@ -140,6 +140,11 @@ pub struct ImageLock {
 
 pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
+    /// Whether runtime resolution failed and should be retried before a claim.
+    /// Health failures of an accepted runtime keep its existing cache.
+    fn needs_resolution(&self) -> bool {
+        false
+    }
     fn health(&self) -> impl Future<Output = Health> + Send;
     /// The configuration digest of the image the cache holds under the
     /// job's `image`, or `None` when it holds none (telling `log` when it
@@ -599,6 +604,10 @@ impl JobLog<'_> {
 }
 
 impl Executor for Microsandbox {
+    fn needs_resolution(&self) -> bool {
+        matches!(self.msb, Msb::Missing(_))
+    }
+
     fn name(&self) -> &'static str {
         "microsandbox"
     }
@@ -926,7 +935,7 @@ fn tail(bytes: &[u8], n: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     #[test]
     fn the_embedding_host_supplies_its_runtime_explicitly() {
         use super::{HOST_RUNTIME, set_runtime_binary};
@@ -982,7 +991,7 @@ mod tests {
     /// descriptor of it open for writing here could pass into a process that
     /// another test forks meanwhile, and running the script would then fail
     /// with "text file busy".
-    fn write_script(path: &Path, body: &str) {
+    pub(in crate::runner) fn write_script(path: &Path, body: &str) {
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -1248,6 +1257,10 @@ esac
             let ms = Microsandbox::new(Msb::Found(dir.join("msb")), dir.join("home"), "t");
             let h = ms.health().await;
             assert!(!h.ready);
+            assert!(
+                !ms.needs_resolution(),
+                "missing Git does not discard the executor"
+            );
             assert_eq!(
                 h.detail.as_deref(),
                 Some("git is not on the runner's PATH (the runner checks the source out with it)")
