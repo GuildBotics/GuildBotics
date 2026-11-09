@@ -115,6 +115,8 @@ export default defineConfig({
       wait: { stdout: new RegExp(`\\[e2e:${name}\\] ready`) },
       reuseExistingServer: false,
       timeout: 120_000,
+      // The harness stops its backend and removes its run directory.
+      gracefulShutdown: { signal: "SIGTERM" as const, timeout: 30_000 },
       stdout: "pipe" as const,
       stderr: "pipe" as const,
       env: {
