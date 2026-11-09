@@ -62,7 +62,7 @@ test("runs a command in the isolated environment and streams its result", async 
   const commandFile = join(ctx.configDir, "commands", "e2e-environment.md");
   expect(readFileSync(commandFile, "utf-8")).toBe(SOURCE);
 
-  // The pasted attachment is stored by the Local API in the exchange
+  // The pasted attachment is stored by the Local API in the session's input
   // directory, and its path enters the message as the environment spells it.
   const message = page.getByRole("textbox", { name: "Input text" });
   await message.evaluate((element) => {
@@ -76,7 +76,9 @@ test("runs a command in the isolated environment and streams its result", async 
       }),
     );
   });
-  await expect(message).toHaveValue(/GuildBotics\/tmp\/session-[^/]+\/[a-f0-9]+\.png$/);
+  await expect(message).toHaveValue(
+    /\/\.guildbotics\/data\/command_inputs\/session-[^/]+\/upload-[a-f0-9]+-clipboard\.png$/,
+  );
 
   const run = page.getByRole("button", { name: "Save and run" });
   await expect(run).toBeEnabled({ timeout: 30_000 });

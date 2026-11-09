@@ -1,23 +1,25 @@
 // Real Rust HTTP API and browser stacks with private temporary state.
-// Each stack has an ephemeral vault, a blocked microVM runtime and AI CLI
-// tripwires. Real environment adoption and visual review belong to #108.
+// Each stack has an ephemeral vault and AI CLI tripwires. Its microVM runtime
+// is blocked, except the "environment" stack's, which borrows this device's.
 
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { start, stop } from "./child.mjs";
 import { environmentValue, withEnvironment, withoutEnvironment } from "./environment.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -60,12 +62,24 @@ if (!/^[a-z][a-z0-9-]*$/.test(stackName)) {
   );
 }
 
-if (environmentSource) {
-  throw new Error("The isolated environment journey is handled in #108");
-}
 const runRoot = tmpdir();
-const workspaceDir = mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-ws-`));
-const homeDir = mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-home-`));
+// The runtime opens unix sockets under HOME/.guildbotics/data/msb, and macOS
+// caps their paths at 103 bytes: a stack that boots microVMs makes its run
+// directory, under a short path in the user's home, its HOME, as the server
+// blackbox tests do. It is removed on shutdown.
+const adoptedRoot = environmentSource ? adoptionRoot() : "";
+const workspaceDir = adoptedRoot
+  ? join(adoptedRoot, "workspace")
+  : mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-ws-`));
+const homeDir = adoptedRoot || mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-home-`));
+
+function adoptionRoot() {
+  const parent = join(homedir(), ".gbe");
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const root = mkdtempSync(parent + sep);
+  mkdirSync(join(root, "workspace"));
+  return root;
+}
 const configDir = join(workspaceDir, ".guildbotics", "config");
 const stackEnv = withEnvironment(process.env, {
   HOME: homeDir,
@@ -86,9 +100,22 @@ const ownerTokenPath = join(
 
 const cliAgentExecutables = ["codex", "claude", "gemini"];
 const runtimeHome = join(homeDir, ".guildbotics", "data", "msb");
-// Refuse before a runtime or an image can be placed or fetched.
 mkdirSync(dirname(runtimeHome), { recursive: true, mode: 0o700 });
-writeFileSync(runtimeHome, "", { mode: 0o600 });
+if (environmentSource) {
+  // Borrow the ready environment: the declaration is copied, and the snapshots
+  // and the runtime are linked, so no build or download starts.
+  const declaration = join(".guildbotics", "config", "intelligences", "agent_environment.yml");
+  mkdirSync(dirname(join(workspaceDir, declaration)), { recursive: true });
+  copyFileSync(join(environmentSource, declaration), join(workspaceDir, declaration));
+  const snapshots = join(".guildbotics", "local", "agent_environment", "snapshots");
+  mkdirSync(dirname(join(workspaceDir, snapshots)), { recursive: true });
+  symlinkSync(join(environmentSource, snapshots), join(workspaceDir, snapshots), "dir");
+  const deviceHome = process.env.GUILDBOTICS_HOME ?? join(homedir(), ".guildbotics");
+  symlinkSync(join(deviceHome, "data", "msb"), runtimeHome, "dir");
+} else {
+  // Refuse before a runtime or an image can be placed or fetched.
+  writeFileSync(runtimeHome, "", { mode: 0o600 });
+}
 
 // Shadow every AI CLI tool with a stub that records the call and fails at once,
 // and put the stub dir at the FRONT of the backend's PATH. No turn runs a
@@ -195,7 +222,7 @@ let shuttingDown = false;
 // own stdout, that it holds the port, and only then is the owner token at
 // `ownerTokenPath` this server's own, safe to send to whatever listens there.
 async function startBackend() {
-  const child = spawn(
+  const server = start(
     resolve(
       repoRoot,
       "target/debug/examples/browser-test-server" + (process.platform === "win32" ? ".exe" : ""),
@@ -207,19 +234,21 @@ async function startBackend() {
       stdio: ["ignore", "pipe", "inherit"],
     },
   );
-  backend = child;
-  child.on("exit", (code) => {
-    if (backend === child && !shuttingDown) {
-      console.error(`${tag} backend exited early with code ${code ?? "null"}`);
+  backend = server;
+  server.ended.then((reason) => {
+    if (backend === server && !shuttingDown) {
+      console.error(`${tag} backend ended early: ${reason}`);
       shutdown(1);
     }
   });
   const notice = `GUILDBOTICS_APP_API_PORT=${backendPort}`;
   await new Promise((resolve, reject) => {
-    createInterface({ input: child.stdout }).on("line", (line) =>
+    createInterface({ input: server.child.stdout }).on("line", (line) =>
       line === notice ? resolve() : console.log(line),
     );
-    child.on("exit", () => reject(new Error(`${tag} backend exited before it held the port`)));
+    server.ended.then((reason) =>
+      reject(new Error(`${tag} backend ended before it held the port: ${reason}`)),
+    );
   });
   await waitForHealth();
   console.log(`${tag} backend healthy at ${baseUrl} (workspace=${workspaceDir})`);
@@ -227,13 +256,10 @@ async function startBackend() {
 
 // Stop the backend as the spec asks, without taking the stack down with it.
 async function stopBackend() {
-  const child = backend;
+  const server = backend;
   backend = undefined;
-  if (child && child.exitCode === null) {
-    await new Promise((resolve) => {
-      child.on("exit", resolve);
-      child.kill("SIGTERM");
-    });
+  if (server) {
+    await stop(server);
   }
   console.log(`${tag} backend stopped`);
 }
@@ -250,11 +276,20 @@ function shutdown(code) {
   if (controlServer) {
     controlServer.close();
   }
-  if (backend && backend.exitCode === null) {
-    backend.kill("SIGTERM");
-  }
-  if (typeof code === "number") {
-    setTimeout(() => process.exit(code), 200);
+  // The run directory goes once the backend, whose microVMs use it, is gone.
+  // Removing it removes the links themselves, never what they point at.
+  const finish = () => {
+    if (adoptedRoot) {
+      rmSync(adoptedRoot, { recursive: true, force: true });
+    }
+    if (typeof code === "number") {
+      setTimeout(() => process.exit(code), 200);
+    }
+  };
+  if (backend) {
+    stop(backend).then(finish);
+  } else {
+    finish();
   }
 }
 
