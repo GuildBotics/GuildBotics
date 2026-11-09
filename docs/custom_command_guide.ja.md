@@ -503,10 +503,12 @@ schema: |
         tasks: list[Task]
 commands:
   - script: |
-      pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
-      cat coverage.xml |grep line-rate
+      printf '%s\n' \
+        'utils,guildbotics/utils/fileio.py,0.52' \
+        'commands,guildbotics/commands/runner.py,0.63' \
+        'intelligences,guildbotics/intelligences/functions.py,0.81'
   - prompt: |
-      この情報を解析して、テスト実装の対応優先度が高いパッケージのトップ3についてRankings形式のJSONとして出力してください。
+      各行はパッケージ、ファイル、行カバレッジの順です。カバレッジが低い順に並べ、Rankings形式で返してください。
     response_class: Rankings
   - name: task_list
     prompt: |
@@ -516,13 +518,18 @@ template_engine: jinja2
 brain: none
 ---
 {% for task in task_list.tasks %}
+- [ ] {{ task.title }} (priority: {{ task.priority }})
 {% endfor %}
 ```
+
+この例では3ファイル分のサンプルのカバレッジを渡し、モデルが返したタスクをチェックリストにします。
 
 呼び出し例:
 
 ```shell
 $ guildbotics run coverage
+- [ ] `guildbotics/utils/fileio.py` の単体テストを追加する (priority: 1)
+- [ ] `guildbotics/commands/runner.py` の結果の受け渡しをテストする (priority: 2)
 ```
 
 ### 5.3. print コマンド

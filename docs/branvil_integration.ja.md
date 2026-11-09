@@ -29,7 +29,7 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 Hub のマシン                                ほかのマシン
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
 │ guildbotics server start     │            │ OpenSSH (OS user service)    │
-│   http://127.0.0.1:7878       │◀── SSH ────│   http://127.0.0.1:7878       │
+│   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
 │ GuildBoticsとBranvil         │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
@@ -74,11 +74,11 @@ Branvil がすでに受け取ったかもしれない要求は送り直さない
 
 ## Branvil を準備する
 
-Branvil の README に従って、次を行います。
+Hubで[GuildBoticsのインストール手順](../README.ja.md#インストール)に従って、次を行います。
 
-1. Hub で Branvil を動かす。ほかのマシンでは、下記の SSH 転送を設定する。
-   `guildbotics branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
-   GuildBotics の人間のメンバーです。オーナーは何でもでき、マージし、Branvil の GUI を使います。
+1. サーバーの起動前に `BRANVIL_DATA_DIR` を設定し、`guildbotics branvil init` を実行します。
+   このコマンドは、Branvilの画面を使ってマージを行う人のアカウントを作ります。
+   ほかのマシンでは下記のSSH転送を設定します。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
    Branvil の GUI で作る。ワークスペース（`acme`）はリポジトリをまとめ、ボードを 1 つ持ちます。
    チケットはリポジトリが持ち、マージで閉じられるのは pull request と同じリポジトリの

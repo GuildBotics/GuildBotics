@@ -11,7 +11,7 @@ There are two ways to work with the same member:
 
 Both ways drive the same member — same identity, same memory. What you teach while working together is kept as memory and carries over to the work you delegate.
 
-You configure, run, and monitor GuildBotics in its screens, which the GuildBotics server on your machine serves to a browser. Configuration is stored as plain text files inside the workspace, so you can move it to a server without a GUI and operate it with the `guildbotics` CLI alone (→ [Run on a Server](#run-on-a-server)).
+You configure, run, and monitor GuildBotics in its screens, which the GuildBotics server on your machine serves to a browser. Workspace configuration is stored in text files. To move it to another Hub, see [Run on a Server](#run-on-a-server).
 
 ---
 
@@ -63,9 +63,13 @@ Build the screens and the executable from the Hub checkout. To try the setup fro
 ```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspaces
+npm ci && npm run build --workspace desktop --workspace crates/branvil/web
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
+# To include Branvil, run these two lines before starting the server.
+# export BRANVIL_DATA_DIR="$HOME/branvil-data"
+# "$HOME/.guildbotics/bin/guildbotics" branvil init --data-dir "$BRANVIL_DATA_DIR"
+
 "$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
@@ -73,7 +77,7 @@ In another terminal, run `"$HOME/.guildbotics/bin/guildbotics" open` to open the
 
 `install` places the executable in `~/.guildbotics/bin/guildbotics` and copies the bundled skill into the user directories of the AI CLI tools it finds. It preserves edited skills and user-owned commands. Add `~/.local/bin` to `PATH` to use the link there.
 
-To include Branvil, initialize it with `guildbotics branvil init --data-dir <absolute-path>` and set `BRANVIL_DATA_DIR` to that path before starting the server. Once running, open it with `guildbotics open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
+For a first-time Branvil setup, run the two optional lines above. If you already have Branvil data, set `BRANVIL_DATA_DIR` to its absolute path before starting. In the terminal where you open Branvil, set the same `BRANVIL_DATA_DIR` and run `"$HOME/.guildbotics/bin/guildbotics" open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
 
 ### Initial Setup
 
@@ -91,7 +95,7 @@ Open the screens with `guildbotics open` on the Hub. The browser opens on **Proj
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
 - `.guildbotics/local/debug.env`: device-local, non-secret debug settings (log level)
-- `.guildbotics/config/secrets.yml`: index of key names stored in the OS keychain (never the values)
+- `.guildbotics/config/secrets.yml`: key names in the encrypted store. The index contains no values.
 - `.guildbotics/config/team/project.yml`: project definition
 - `.guildbotics/config/intelligences/`: LLM and AI CLI tool settings
 
@@ -255,7 +259,7 @@ The patrol interval and the number of consecutive failures that stops a worker a
 
 Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
 
-These settings are stored in the workspace's `team/members/<person_id>/member.yml`. On a server without the GUI, edit that file directly.
+These settings are stored in the workspace's `team/members/<person_id>/member.yml`. To change these settings by hand, edit that file.
 
 ```yaml
 is_active: true
@@ -367,7 +371,7 @@ guildbotics secrets --workspace /path/to/workspace list
 
 ### Run on a Server
 
-All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to another Hub and operate with the CLI alone.
+To move a workspace and its members to another Hub, transfer the configuration and credentials separately.
 
 1. Set up a checkout on the target machine as in [Installation](#installation)
 2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine

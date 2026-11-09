@@ -30,7 +30,7 @@ Service-wide settings live on the **Service** screen.
 
 These are saved in the workspace's `.guildbotics/local/service.yml` on the machine running the service, and every start uses them: from any screen, from `guildbotics service start`, or by the server as it starts.
 
-The per-member settings above are stored in the workspace's `team/members/<person_id>/member.yml` (the member's participation in that workspace) as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file directly on a server without the GUI.
+The per-member settings above are stored in the workspace's `team/members/<person_id>/member.yml` (the member's participation in that workspace) as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file by hand.
 
 ## Patrol Commands
 

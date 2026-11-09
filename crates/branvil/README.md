@@ -31,12 +31,14 @@ Windows clients, connect to the Hub through OpenSSH.
 From the GuildBotics repository root, build both screens and the executable:
 
 ```sh
-npm ci && npm run build --workspaces
+npm ci && npm run build --workspace desktop --workspace crates/branvil/web
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
 ```
 
-Use `guildbotics branvil` for the Branvil subcommands. To run both services
+Add `~/.local/bin` to `PATH` or use the installed executable at
+`~/.guildbotics/bin/guildbotics`. Use `guildbotics branvil` for the Branvil
+subcommands. To run both services
 at login and update them together, follow the [Hub guide](../../docs/hub-server.md).
 
 ## First run

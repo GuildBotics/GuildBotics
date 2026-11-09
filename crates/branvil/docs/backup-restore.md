@@ -161,9 +161,10 @@ it, and no other. `guildbotics branvil serve` and `guildbotics branvil admin che
 database of the previous version with a message that names the upgrade:
 
 ```sh
-guildbotics branvil backup --to /srv/backups/branvil-before-upgrade   # with the old build, service running
+guildbotics branvil backup --data-dir /srv/branvil --to /srv/backups/branvil-before-upgrade   # with the old build, service running
 # stop the service, install the new build
 guildbotics branvil admin upgrade --data-dir /srv/branvil
+guildbotics branvil admin check --data-dir /srv/branvil
 guildbotics branvil serve --data-dir /srv/branvil
 ```
 

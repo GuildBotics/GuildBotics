@@ -8,7 +8,9 @@ description: Follow README.md or README.ja.md against the Rust app and CLI in an
 Start an unseeded browser test stack and follow the README a new user would
 read. Deliver a discrepancy report. Use the README as written, including its
 order, examples, and control labels. A step that needs correction to work is
-a finding. Leave product files and the README untouched.
+a finding. Leave product files and the README untouched. A section argument
+such as `quick-start`, `slack`, or a heading limits which steps to report.
+Without an argument, walk the whole README.
 
 ## Start the test stack
 
@@ -22,26 +24,53 @@ npm run build --workspace desktop
 cargo build --locked -p gb-server --example browser-test-server
 cargo build --locked -p guildbotics
 cd desktop
-GUILDBOTICS_E2E_STACK=readme \
+NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+GUILDBOTICS_E2E_STACK="readme-$(node -p 'require("node:crypto").randomUUID()')" \
 GUILDBOTICS_E2E_BACKEND_PORT=8768 \
-GUILDBOTICS_E2E_FRONTEND_PORT=1423 \
+GUILDBOTICS_E2E_SEED=0 \
+GUILDBOTICS_E2E_ADOPT_ENVIRONMENT= \
+GUILDBOTICS_E2E_CONTROL_PORT=0 \
 node e2e/start-stack.mjs
 ```
 
-Check that those ports are free before starting. Leave seeding and environment
-adoption disabled. Open `http://127.0.0.1:1423` after the stack prints its
-context path. Use its `homeDir`, `workspaceDir` and backend port for CLI
-steps. Read only those fields. Run the built CLI with `HOME` and
-`USERPROFILE` set to that home, `GUILDBOTICS_HOME` set to its
-`.guildbotics` directory, and `GUILDBOTICS_SERVER_PORT` set to the test
-port. Clear inherited workspace, config, identity, Branvil and credential
-overrides. For steps using the member command transport, invoke the example
-binary with `member …` so its executable hash matches the server's.
+Check that port 8768 is free before starting, or choose another free port.
+Wait for the stack to print `ready`. Use the context path printed by this
+run to request a one-time entry link from its own loopback server. Pass the
+port chosen above as the second argument:
 
-Read the initial display language without changing it. Use the README in that
-language, reread it from the start, and number each verifiable claim. Select
-controls by their accessible name and choose options after opening the
-dropdown. Scroll the workspace region if controls are below the fold.
+```sh
+NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+node --input-type=module - /absolute/path/to/guildbotics-e2e/readme-UUID.json 8768 <<'JS'
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const { homeDir, backendPort } = JSON.parse(readFileSync(process.argv[2], "utf8"));
+if (backendPort !== Number(process.argv[3])) throw new Error("Unexpected stack port");
+const token = readFileSync(
+  join(homeDir, ".guildbotics", "data", "server", String(backendPort), "owner.token"),
+  "utf8",
+).trim();
+const response = await fetch(`http://127.0.0.1:${backendPort}/api/session/links`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  body: "{}",
+  redirect: "error",
+});
+if (!response.ok) throw new Error(`Entry link failed: HTTP ${response.status}`);
+console.log((await response.json()).url);
+JS
+```
+
+Open the returned link in a fresh browser session. Keep the link and the
+owner token out of the report. The test server serves both the API and the
+screens on that port. Check `guildbotics open` against its source and CLI
+reference because the product command can fall back to the OS keychain.
+
+Read the initial display language without changing it. Pick the README in
+that language even when a section argument was supplied. Read the selected
+steps in order and number each verifiable claim. Select controls by their
+accessible name and choose options after opening the dropdown. Scroll the
+workspace region if controls are below the fold.
 
 ## Verify each step
 
@@ -63,7 +92,11 @@ actually show, and a verdict of match, mismatch, unverified, or out of scope.
   scopes and saved settings with the Rust setup providers. Use disposable
   loopback Branvil data for any end-to-end Branvil checks. Do not contact a
   live Branvil, GitHub or Slack instance, open consent pages for a real
-  account, or supply real tokens. Report which setup paths remain unverified.
+  account, or supply real tokens. To exercise Slack's local rejection, enter
+  obviously fake values **without** the `xoxb-` and `xapp-` prefixes. Check
+  that the screen reports a wrong token type for both. Values with the correct
+  prefixes make the verifier attempt Slack API calls. Report external
+  verification as out of scope.
 - **Service.** Check the three source toggles, patrol interval,
   consecutive-failure limit, logs, and Activity. In the offline stack,
   verify start/stop only with a temporary workspace and no connected
@@ -74,18 +107,31 @@ actually show, and a verdict of match, mismatch, unverified, or out of scope.
   A routine starts immediately. Stop while it is in flight, then inspect
   cancellation in Diagnostics or the run records. Report force-stop as
   unverified if the run could not be made to enter that state.
-- **Operations.** Use the temporary stack for safe workspace and server
-  reads and the in-memory vault for synthetic secrets. Compare other defaults,
-  paths and CLI options with source and the CLI reference. OS keychain
-  writes, AI CLI login, provider inference, LaunchAgent registration and
-  real-account integrations require separate verification. List every
-  applicable out-of-scope step.
+- **Operations.** Run only `workspace status`, `workspace current`, and
+  `workspace use` from the product CLI. From the repository root, replace
+  `stack_home` with the context's `homeDir` and use the stack port:
+
+  ```sh
+  stack_home=/absolute/path/to/temporary/stack-home
+  env -i PATH="$PATH" HOME="$stack_home" USERPROFILE="$stack_home" \
+    GUILDBOTICS_HOME="$stack_home/.guildbotics" GUILDBOTICS_SERVER_PORT=8768 \
+    target/debug/guildbotics workspace status
+  ```
+
+  Give `workspace use` only the context's `workspaceDir`. Use the UI to
+  check synthetic secret storage in the test server's in-memory vault.
+  Review other commands against the CLI reference and source, including
+  commands that can access the OS keychain in the CLI process such as
+  `secrets`, `connect`, `open`, `git-credential`, `run` and
+  `environment status`. The temporary HOME does not isolate that keychain.
+  List these CLI operations, AI CLI login, provider inference, LaunchAgent
+  registration and real-account integrations as out of scope.
 
 ## Clean up and report
 
 Send SIGTERM to the stack process started by this run and wait for it. The
-harness stops its backend and frontend and removes its context file. Verify
-that ports 8768 and 1423 are free. If a child remains, identify it by this
+harness stops its test server and removes its context file. Verify
+that the chosen port is free. If a child remains, identify it by this
 stack's PID and port before stopping it. Delete any scratch export containing
 synthetic secrets. Use `git status --short` to verify that the checkout has
 only its original changes.

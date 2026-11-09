@@ -32,7 +32,7 @@ checks it awaits settle.
 Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
 │ guildbotics server start     │            │ OpenSSH (OS user service)    │
-│   http://127.0.0.1:7878       │◀── SSH ────│   http://127.0.0.1:7878       │
+│   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
 │ GuildBotics and Branvil      │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
@@ -86,11 +86,11 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 ## Prepare Branvil
 
-Following the Branvil README:
+Follow the [GuildBotics installation steps](../README.md#installation) on the Hub:
 
-1. Run Branvil on the Hub. Set up SSH forwarding on other machines as below.
-   `guildbotics branvil init` creates Branvil's owner, the one person who uses it: the
-   GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
+1. Set `BRANVIL_DATA_DIR` and initialize Branvil with `guildbotics branvil init` before starting the server.
+   This creates the owner, the human member who uses Branvil's GUI and merges pull
+   requests. Set up SSH forwarding on the other machines as described below.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
    a repository holds its tickets; a merge closes only tickets of the pull request's

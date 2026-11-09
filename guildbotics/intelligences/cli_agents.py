@@ -42,11 +42,9 @@ ANTIGRAVITY_USAGE_COMMAND = ("agy", "-p", "/usage", "--output-format", "json")
 def _names_a_place_inside(value: str) -> bool:
     """Whether ``value`` stays inside the directory it is relative to.
 
-    The catalog spells these the way the guest does, in POSIX, but the very
-    same strings are joined onto host paths, where Windows reads ``\\`` as a
-    separator and ``C:`` as a drive. So a name is checked the stricter of the
-    two ways: a backslash, a drive, a leading separator or a ``..`` is not a
-    name inside the directory, it is a way out of it.
+    Catalog paths use POSIX relative syntax. Reject backslashes, drive
+    prefixes and parent traversal so the same entry denotes a path inside
+    the tool's directory wherever it is read.
     """
     name = value.rstrip("/")
     path = PureWindowsPath(name)

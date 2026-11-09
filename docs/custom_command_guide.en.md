@@ -500,10 +500,12 @@ schema: |
         tasks: list[Task]
 commands:
   - script: |
-      pytest tests/ --cov=guildbotics --cov-report=xml >/dev/null 2>&1
-      cat coverage.xml |grep line-rate
+      printf '%s\n' \
+        'utils,guildbotics/utils/fileio.py,0.52' \
+        'commands,guildbotics/commands/runner.py,0.63' \
+        'intelligences,guildbotics/intelligences/functions.py,0.81'
   - prompt: |
-      This information is analyzed to output the top 3 packages with the highest priority for test implementation in JSON format as Rankings.
+      Each row lists a package, file, and line coverage rate. Rank the packages by lowest coverage and return Rankings.
     response_class: Rankings
   - name: task_list
     prompt: |
@@ -517,15 +519,14 @@ brain: none
 {% endfor %}
 ```
 
+The example supplies sample coverage for three files and renders the model’s tasks as a checklist.
+
 Invocation example:
 
 ```shell
 $ guildbotics run coverage
-- [ ] Add unit tests for utils/fileio.py (priority: 1)
-- [ ] Add tests for capabilities/member_git.py's operations and error handling (priority: 2)
-- [ ] Add integrated unit tests for drivers/command_runner.py and drivers/task_scheduler.py (priority: 3)
-- [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
-- [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)
+- [ ] Add unit tests for `guildbotics/utils/fileio.py` (priority: 1)
+- [ ] Test result propagation in `guildbotics/commands/runner.py` (priority: 2)
 ```
 
 ### 5.3. Print command
@@ -617,7 +618,7 @@ commands:
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
 
-Shell scripts run on the Linux of the isolated environment, with these launch rules: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash` (a file mounted from a Windows host is always executable).
+Shell scripts run on the Linux of the isolated environment, with these launch rules: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash`.
 
 For example, create `current-time.sh`:
 

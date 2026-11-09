@@ -11,7 +11,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 どちらの働き方でも同じメンバー（同じ名義、同じ記憶）が働きます。一緒に作業しながら教えたことは記憶として残り、任せたときの作業にも引き継がれます。
 
-設定・実行・監視は、手元の GuildBotics のサーバーがブラウザへ配る画面で行います。設定はワークスペース内のプレーンテキストファイルに保存されるため、そのまま GUI の無いサーバーへ移して `guildbotics` CLI だけで運用することもできます（→ [サーバーで運用する](#サーバーで運用する)）。
+設定・実行・監視は、手元の GuildBotics のサーバーがブラウザへ配る画面で行います。ワークスペースの設定はテキストファイルに保存されます。別のHubへ移すときは、[サーバーで運用する](#サーバーで運用する)の手順を使います。
 
 ---
 
@@ -62,9 +62,13 @@ Hubのチェックアウトから画面と実行ファイルを作ります。�
 ```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspaces
+npm ci && npm run build --workspace desktop --workspace crates/branvil/web
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
+# Branvilを使う場合は、サーバーを起動する前に次の2行を実行します。
+# export BRANVIL_DATA_DIR="$HOME/branvil-data"
+# "$HOME/.guildbotics/bin/guildbotics" branvil init --data-dir "$BRANVIL_DATA_DIR"
+
 "$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
@@ -72,7 +76,7 @@ target/debug/guildbotics install
 
 `install` はビルド済みの実行ファイルを `~/.guildbotics/bin/guildbotics` に置き、利用可能なAI CLIのユーザー領域に同梱スキルを配置します。ユーザーが編集したスキルと既存のコマンドは保持します。`~/.local/bin/guildbotics` のリンクを使うには `~/.local/bin` を `PATH` に加えます。
 
-Branvilを使う場合は `guildbotics branvil init --data-dir <絶対パス>` で用意し、`BRANVIL_DATA_DIR` をそのパスに設定して起動します。稼働中は `guildbotics open --branvil` で画面を開けます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
+Branvilを初めて使うときは、上のコメント付きの2行を実行します。既存のデータを使う場合は、`BRANVIL_DATA_DIR` にその絶対パスを設定します。別のターミナルでBranvilの画面を開くときも、同じ `BRANVIL_DATA_DIR` を設定して `"$HOME/.guildbotics/bin/guildbotics" open --branvil` を実行します。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
 
 ### 初期セットアップ
 
@@ -254,7 +258,7 @@ Slack App を手動で作成する場合の手順（必要な scope の一覧）
 
 サービスが実行するコマンドは、**サービス実行** 画面から開始しても、CLI から開始しても、サーバーの起動時に開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。定期実行の `.sh` や AI CLI のターンが相対パスで書き出したファイルはここに出ます。
 
-設定内容はワークスペースの `team/members/<person_id>/member.yml` に保存されます。GUI を使わないサーバーでは、このファイルを直接編集します。
+設定内容はワークスペースの `team/members/<person_id>/member.yml` に保存されます。設定ファイルを直接編集する場合は、このファイルを使います。
 
 ```yaml
 is_active: true
@@ -367,7 +371,7 @@ guildbotics secrets --workspace /path/to/workspace list
 
 ### サーバーで運用する
 
-非シークレットの設定はすべてワークスペース内のプレーンテキストファイルに保存されるため、一度セットアップすれば 別のHubへ移して CLI だけで運用できます。
+ワークスペースとメンバーを別のHubへ移すときは、設定ファイルと認証情報をそれぞれ移します。
 
 1. 移行先で [インストール](#インストール) のとおりチェックアウトを用意します
 2. ワークスペースフォルダと `~/.guildbotics/identity/`（メンバーのアイデンティティ）を移行先へコピーします

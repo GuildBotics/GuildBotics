@@ -94,7 +94,7 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
 
 前提:
 

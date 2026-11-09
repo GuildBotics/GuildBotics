@@ -191,7 +191,7 @@ locations can still be unregistered. Malformed grants allow workspace selection
 for editing, but commands remain refused until repaired.
 Status
 polling retries an unavailable input store and clears its dedicated alert after recovery.
-Member IDs accept lowercase letters, digits, `_` and `-`.
+Member IDs accept lowercase ASCII letters, digits, `_` and `-`. The names `con`, `prn`, `aux`, `nul`, `com1` through `com9`, and `lpt1` through `lpt9` are reserved.
 Invalid stored configurations show their filename and can be edited or removed from the
 workspace in setup, while runtime loading remains refused until repair. A member ID cannot
 be changed. Existing directory names such as `Alice`, `alice.bak`, names with internal
