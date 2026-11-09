@@ -4,6 +4,8 @@
 
 GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, Branvil / Slack account, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
 
+Branvil is the code host and board bundled with GuildBotics. It keeps repositories, pull requests, CI, and tickets on the Hub and gives each AI member its own account. You can use it in place of GitHub, or have it follow a GitHub repository and send only finished pull requests to GitHub (→ [Branvil integration guide](docs/branvil_integration.en.md)).
+
 There are two ways to work with the same member:
 
 - **Work together** — invoke the member in your Claude Code or Codex session and pair-program in the repository you currently have open (→ [Work Together with a Member](#work-together-with-a-member))
