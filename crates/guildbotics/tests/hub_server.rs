@@ -142,6 +142,14 @@ fn in_order(haystack: &str, needles: &[&str]) {
     }
 }
 
+fn assert_startup_guidance(out: &Output) {
+    let output = text(out);
+    assert!(output.contains("Keychain access"));
+    assert!(output.contains("Documents folder access"));
+    assert!(output.contains("docs/hub-server.md"));
+    assert!(!output.contains("two Keychain prompts"));
+}
+
 #[test]
 fn install_runs_one_server_at_login_and_installs_the_cli() {
     let hub = Hub::new();
@@ -179,6 +187,7 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
     );
     assert!(hub.lines("actions").contains("old|install\n"));
     assert!(text(&out).contains(log.to_str().unwrap()));
+    assert_startup_guidance(&out);
     assert_eq!(
         fs::read_to_string(hub.installed_build().parent().unwrap().join("build-id")).unwrap(),
         "old"
@@ -280,7 +289,7 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "current|install",
         ],
     );
-    assert!(text(&out).contains("two Keychain prompts"));
+    assert_startup_guidance(&out);
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(plist.contains("<key>ExitTimeOut</key><integer>92</integer>"));
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
