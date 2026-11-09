@@ -33,6 +33,8 @@ pub(crate) const INDEX_EVENT_TYPES: &[&str] = &[
     "verify.completed",
     "span.finished",
     "span.failed",
+    "events.failed",
+    "events.running",
     "scheduler.failed",
     "scheduler.running",
     "scheduler.worker.failed",
