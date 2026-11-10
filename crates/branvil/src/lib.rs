@@ -402,3 +402,11 @@ fn serve_config() -> anyhow::Result<config::Config> {
 fn data_config(data: &DataArgs) -> Option<config::Config> {
     config::Config::load(data.config.as_deref(), data.data_dir.as_deref(), None, None).ok()
 }
+
+/// The HTTP route inventory, independent of the embedding host.
+pub use http::route_inventory;
+
+/// Exact hook paths whose shared-secret authentication replaces Host/Origin checks.
+pub fn hook_paths() -> impl Iterator<Item = &'static str> {
+    http::HOOK_ROUTES.iter().map(|route| route.path)
+}

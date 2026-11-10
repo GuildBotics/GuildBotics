@@ -10,7 +10,6 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
 use serde::{Deserialize, Serialize};
 
 use super::config::RunnerMode;
@@ -344,14 +343,13 @@ fn archive_references(path: &std::path::Path) -> std::io::Result<Vec<String>> {
     Ok(found)
 }
 
-pub fn routes() -> Router<Shared> {
-    Router::new()
-        .route("/admin/ci", get(get_settings))
-        .route("/admin/ci/runner", put(put_runner))
-        .route("/admin/ci/limits", put(put_limits))
-        .route("/admin/ci/images/pull", post(pull))
-        .route("/admin/ci/images/load", post(load))
-}
+loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/admin/ci", (get, get_settings, OwnerSession)),
+    ("/admin/ci/runner", (put, put_runner, OwnerSession)),
+    ("/admin/ci/limits", (put, put_limits, OwnerSession)),
+    ("/admin/ci/images/pull", (post, pull, OwnerSession)),
+    ("/admin/ci/images/load", (post, load, OwnerSession)),
+);
 
 #[cfg(test)]
 mod tests {

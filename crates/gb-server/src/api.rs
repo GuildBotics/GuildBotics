@@ -11,7 +11,7 @@ use axum::extract::{FromRequest, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Json, Router};
 use loopback_auth::Refusal;
 use serde::Deserialize;
@@ -304,10 +304,14 @@ pub(crate) fn invalid(headers: &HeaderMap, reason: &str) -> ApiError {
 // Register routes and expose the very same routing table to boundary tests.
 // New API endpoints belong here, including ones outside /config.
 macro_rules! routes {
-    ($builder:ident, $table:ident, $(($method:ident, $path:literal, $handler:path $(, $limit:expr)?)),* $(,)?) => {
+    ($builder:ident, $table:ident, $classified:ident, $(($auth:ident, $method:ident, $path:expr, $handler:path $(, $limit:expr)?)),* $(,)?) => {
         fn $builder() -> Router<Shared> {
             Router::new()$(.route($path, $method($handler) $(.layer(axum::extract::DefaultBodyLimit::max($limit)))?))*
         }
+        #[cfg(test)]
+        const $classified: &[loopback_auth::Route] = &[$(loopback_auth::Route {
+            method: stringify!($method), path: $path, auth: loopback_auth::RouteAuth::$auth,
+        }),*];
         #[cfg(test)]
         const $table: &[(&str, &str)] = &[$((stringify!($method), $path)),*];
     };
@@ -315,260 +319,474 @@ macro_rules! routes {
 routes!(
     owner_routes,
     OWNER_ROUTES,
+    OWNER_CLASSIFIED,
     (
+        OwnerSession,
         post,
         "/config/providers/slack/app-registrations",
         crate::provider_api::slack::registration
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/slack/verify-tokens",
         crate::provider_api::slack::verify
     ),
     (
+        OwnerSession,
         post,
         "/config/members/{name}/avatar/{provider}",
         crate::provider_api::slack::avatar
     ),
-    (get, "/config/providers", crate::provider_api::providers),
     (
+        OwnerSession,
+        get,
+        "/config/providers",
+        crate::provider_api::providers
+    ),
+    (
+        OwnerSession,
         post,
         "/config/providers/branvil/connect",
         crate::provider_api::connect
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/branvil/connection",
         crate::provider_api::connection
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/branvil/workspaces",
         crate::provider_api::workspaces
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/branvil/workspaces/create",
         crate::provider_api::create_workspace
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/branvil/agents",
         crate::provider_api::agents
     ),
     (
+        OwnerSession,
         post,
         "/config/providers/branvil/entry",
         crate::provider_api::entry
     ),
-    (get, "/health", health),
-    (get, "/activity/history", crate::activity::history),
-    (post, "/shutdown", crate::server::shutdown),
-    (get, "/scheduler/status", crate::service_runtime::status),
-    (post, "/scheduler/start", crate::service_runtime::start),
-    (post, "/scheduler/stop", crate::service_runtime::stop),
-    (post, "/chat/receive-state/reset", crate::activity::reset),
-    (get, "/service/settings", crate::service_settings::get),
-    (patch, "/service/settings", crate::service_settings::patch),
-    (post, "/apps/authorizations", authorize_app),
-    (get, "/session", session),
-    (post, "/commands/run", crate::commands::run),
-    (post, "/member/run", crate::member::execute, 4 << 20),
-    (post, "/member/plan", crate::member::describe, 4 << 20),
+    (OwnerSession, get, "/health", health),
     (
+        OwnerSession,
+        get,
+        "/activity/history",
+        crate::activity::history
+    ),
+    (OwnerSession, post, "/shutdown", crate::server::shutdown),
+    (
+        OwnerSession,
+        get,
+        "/scheduler/status",
+        crate::service_runtime::status
+    ),
+    (
+        OwnerSession,
+        post,
+        "/scheduler/start",
+        crate::service_runtime::start
+    ),
+    (
+        OwnerSession,
+        post,
+        "/scheduler/stop",
+        crate::service_runtime::stop
+    ),
+    (
+        OwnerSession,
+        post,
+        "/chat/receive-state/reset",
+        crate::activity::reset
+    ),
+    (
+        OwnerSession,
+        get,
+        "/service/settings",
+        crate::service_settings::get
+    ),
+    (
+        OwnerSession,
+        patch,
+        "/service/settings",
+        crate::service_settings::patch
+    ),
+    (OwnerSession, post, "/apps/authorizations", authorize_app),
+    (Session, get, "/session", session),
+    (OwnerSession, post, "/commands/run", crate::commands::run),
+    (
+        OwnerSession,
+        post,
+        "/member/run",
+        crate::member::execute,
+        4 << 20
+    ),
+    (
+        OwnerSession,
+        post,
+        "/member/plan",
+        crate::member::describe,
+        4 << 20
+    ),
+    (
+        OwnerSession,
         post,
         "/member/git",
         crate::member::exchange,
         (1 << 30) + (4 << 20) + 1
     ),
     (
+        OwnerSession,
         post,
         "/commands/input-files",
         crate::input_files::upload,
         crate::input_files::REQUEST_LIMIT
     ),
     (
+        OwnerSession,
         post,
         "/intelligences/agent-environment/build",
         crate::environment::build_route
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/agent-environment",
         crate::environment::get
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/agent-environment/images",
         crate::environment::images
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/cli-agents/{agent}/usage",
         crate::environment::usage
     ),
-    (get, "/config/status", crate::screens::config_status),
-    (post, "/config/init", crate::config_api::init),
-    (post, "/workspace", crate::config_api::select_workspace),
-    (get, "/device/workspaces", crate::config_api::workspaces),
     (
+        OwnerSession,
+        get,
+        "/config/status",
+        crate::screens::config_status
+    ),
+    (OwnerSession, post, "/config/init", crate::config_api::init),
+    (
+        OwnerSession,
+        post,
+        "/workspace",
+        crate::config_api::select_workspace
+    ),
+    (
+        OwnerSession,
+        get,
+        "/device/workspaces",
+        crate::config_api::workspaces
+    ),
+    (
+        OwnerSession,
         delete,
         "/device/workspaces",
         crate::config_api::forget_workspace
     ),
-    (get, "/config/project", crate::config_api::read_project),
-    (get, "/config/intelligences", crate::intelligences::get),
-    (put, "/config/intelligences", crate::intelligences::put),
     (
+        OwnerSession,
+        get,
+        "/config/project",
+        crate::config_api::read_project
+    ),
+    (
+        OwnerSession,
+        get,
+        "/config/intelligences",
+        crate::intelligences::get
+    ),
+    (
+        OwnerSession,
+        put,
+        "/config/intelligences",
+        crate::intelligences::put
+    ),
+    (
+        OwnerSession,
         get,
         "/intelligences/model-providers",
         crate::intelligences::providers
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/grant-evaluation",
         crate::intelligences::preview
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/decisions/options",
         crate::intelligences::options
     ),
     (
+        OwnerSession,
         post,
         "/intelligences/decisions/credential",
         crate::intelligences::credential
     ),
-    (put, "/config/project", crate::config_api::save_project),
     (
+        OwnerSession,
+        put,
+        "/config/project",
+        crate::config_api::save_project
+    ),
+    (
+        OwnerSession,
         put,
         "/config/project/default-person",
         crate::config_api::default_person
     ),
-    (get, "/config/roles", crate::config_api::roles),
-    (post, "/config/members", crate::config_api::create_member),
+    (OwnerSession, get, "/config/roles", crate::config_api::roles),
     (
+        OwnerSession,
+        post,
+        "/config/members",
+        crate::config_api::create_member
+    ),
+    (
+        OwnerSession,
         get,
         "/config/members/{name}",
         crate::config_api::read_member
     ),
     (
+        OwnerSession,
         put,
         "/config/members/{name}",
         crate::config_api::save_member
     ),
     (
+        OwnerSession,
         delete,
         "/config/members/{name}",
         crate::config_api::remove_member
     ),
     (
+        OwnerSession,
         get,
         "/config/members/{name}/avatar",
         crate::config_api::avatar
     ),
     (
+        OwnerSession,
         post,
         "/config/members/{name}/avatar",
         crate::config_api::upload_avatar,
         gb_setup::AVATAR_LIMIT + (64 << 10)
     ),
-    (get, "/identities", crate::config_api::identities),
     (
+        OwnerSession,
+        get,
+        "/identities",
+        crate::config_api::identities
+    ),
+    (
+        OwnerSession,
         delete,
         "/identities/{name}",
         crate::config_api::delete_identity
     ),
     (
+        OwnerSession,
         get,
         "/transcripts/settings",
         crate::config_api::transcript_settings
     ),
     (
+        OwnerSession,
         put,
         "/transcripts/settings",
         crate::config_api::save_transcript_settings
     ),
-    (get, "/team", crate::screens::team),
-    (get, "/commands/options", crate::command_catalog::options),
-    (post, "/verify", crate::verify::verify),
-    (post, "/commands/author", crate::command_authoring::author),
+    (OwnerSession, get, "/team", crate::screens::team),
     (
+        OwnerSession,
+        get,
+        "/commands/options",
+        crate::command_catalog::options
+    ),
+    (OwnerSession, post, "/verify", crate::verify::verify),
+    (
+        OwnerSession,
+        post,
+        "/commands/author",
+        crate::command_authoring::author
+    ),
+    (
+        OwnerSession,
         get,
         "/commands/routine-options",
         crate::command_catalog::routine_options
     ),
     (
+        OwnerSession,
         get,
         "/commands/files/{id}/execution-status",
         crate::command_catalog::execution_status
     ),
-    (get, "/commands/files", crate::screens::files),
+    (OwnerSession, get, "/commands/files", crate::screens::files),
     (
+        OwnerSession,
         post,
         "/commands/files",
         crate::command_files_api::create,
         crate::command_files_api::FILE_REQUEST_LIMIT
     ),
     (
+        OwnerSession,
         put,
         "/commands/files/{id}",
         crate::command_files_api::update,
         crate::command_files_api::FILE_REQUEST_LIMIT
     ),
     (
+        OwnerSession,
         delete,
         "/commands/files/{id}",
         crate::command_files_api::delete
     ),
     (
+        OwnerSession,
         post,
         "/commands/author/apply",
         crate::command_files_api::apply,
         10 * crate::command_files_api::FILE_REQUEST_LIMIT
     ),
-    (get, "/commands/files/{id}", crate::screens::file),
-    (get, "/diagnostics/traces", crate::screens::traces),
     (
+        OwnerSession,
+        get,
+        "/commands/files/{id}",
+        crate::screens::file
+    ),
+    (
+        OwnerSession,
+        get,
+        "/diagnostics/traces",
+        crate::screens::traces
+    ),
+    (
+        OwnerSession,
         get,
         "/intelligences/cli-agents/last-turns",
         crate::health::turns
     ),
     (
+        OwnerSession,
         get,
         "/intelligences/inference-failures",
         crate::health::failures
     ),
-    (get, "/system-alerts", crate::health::alerts),
-    (post, "/system-alerts/dismiss", crate::health::dismiss),
-    (post, "/diagnostics/scenario", crate::diagnostics::scenario),
-    (get, "/diagnostics/global", crate::diagnostics::global),
+    (OwnerSession, get, "/system-alerts", crate::health::alerts),
     (
+        OwnerSession,
+        post,
+        "/system-alerts/dismiss",
+        crate::health::dismiss
+    ),
+    (
+        OwnerSession,
+        post,
+        "/diagnostics/scenario",
+        crate::diagnostics::scenario
+    ),
+    (
+        OwnerSession,
+        get,
+        "/diagnostics/global",
+        crate::diagnostics::global
+    ),
+    (
+        OwnerSession,
         post,
         "/diagnostics/troubleshoot",
         crate::diagnostics::troubleshoot
     ),
     (
+        OwnerSession,
         get,
         "/diagnostics/memory-events",
         crate::diagnostics::memory_events
     ),
-    (get, "/runtime/debug", crate::diagnostics::debug),
-    (put, "/runtime/debug", crate::diagnostics::update_debug),
-    (get, "/diagnostics/traces/{id}", crate::screens::trace),
+    (
+        OwnerSession,
+        get,
+        "/runtime/debug",
+        crate::diagnostics::debug
+    ),
+    (
+        OwnerSession,
+        put,
+        "/runtime/debug",
+        crate::diagnostics::update_debug
+    ),
+    (
+        OwnerSession,
+        get,
+        "/diagnostics/traces/{id}",
+        crate::screens::trace
+    ),
 );
 routes!(
     public_routes,
     PUBLIC_ROUTES,
+    PUBLIC_CLASSIFIED,
     // A client asks before trusting the port enough to send its token.
-    (post, "/local-api/proof", proof),
+    (Public, post, "/local-api/proof", proof),
     // The entry code is the credential; a browser holds nothing else yet.
-    (post, "/session", start_session),
-    (post, "/apps/token", app_token),
-    (get, "/events", crate::events::stream),
+    (Public, post, "/session", start_session),
+    (Public, post, "/apps/token", app_token),
+    (Session, get, "/events", crate::events::stream),
     // This route admits an application token as well as the owner.
-    (post, "/session/links", entry_link),
+    (OwnerOrConsent, post, "/session/links", entry_link),
 );
+
+routes!(
+    outer_routes,
+    OUTER_ROUTES,
+    OUTER_CLASSIFIED,
+    (Public, get, "/-/guildbotics", redirect_to_ui),
+    (
+        Public,
+        get,
+        crate::provider_api::CALLBACK_PATH,
+        crate::provider_api::connected
+    ),
+    (Public, any, "/-/guildbotics/{*path}", reserved_not_found),
+);
+async fn redirect_to_ui() -> axum::response::Redirect {
+    axum::response::Redirect::temporary("/-/guildbotics/")
+}
+async fn reserved_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+const ROOT_ROUTE: loopback_auth::Route = loopback_auth::Route {
+    method: "get",
+    path: "/",
+    auth: loopback_auth::RouteAuth::Public,
+};
 
 #[cfg(test)]
 pub fn router(api: Shared) -> Router {
@@ -579,42 +797,36 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
     let owners =
         owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     let anyone = public_routes();
+    let integrated = host.is_some();
     let host = host.unwrap_or_else(|| {
         Router::new().route(
-            "/",
+            ROOT_ROUTE.path,
             get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
         )
     });
-    Router::new()
-        .route(
-            "/-/guildbotics",
-            get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
-        )
+    outer_routes()
         .nest("/-/guildbotics/api", owners.merge(anyone))
-        .route(
-            crate::provider_api::CALLBACK_PATH,
-            get(crate::provider_api::connected),
-        )
         .merge(crate::ui::router(crate::ui::directory()))
-        .route(
-            "/-/guildbotics/{*path}",
-            axum::routing::any(|| async { StatusCode::NOT_FOUND }),
-        )
         .with_state(api.clone())
         .merge(host)
-        .layer(middleware::from_fn_with_state(api, guard))
+        .layer(middleware::from_fn_with_state((api, integrated), guard))
 }
 
 /// Refuses a request for another host or from another origin before
 /// anything runs for it, and gives every response the security headers.
-async fn guard(State(api): State<Shared>, req: Request, next: Next) -> Response {
+async fn guard(
+    State((api, integrated)): State<(Shared, bool)>,
+    req: Request,
+    next: Next,
+) -> Response {
     let websocket = req.uri().path() == "/-/guildbotics/api/events"
         && req.method() == axum::http::Method::GET
         && req
             .headers()
             .get(header::UPGRADE)
             .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
-    let checked = if websocket {
+    let hook = integrated && branvil::hook_paths().any(|path| path == req.uri().path());
+    let checked = if websocket || hook {
         Ok(())
     } else {
         loopback_auth::check_request(api.auth.base_url(), req.headers())
@@ -840,6 +1052,156 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn classified_routes_cover_the_combined_guard_and_reserved_namespace() {
+        assert_eq!(OUTER_ROUTES.len(), OUTER_CLASSIFIED.len());
+        use loopback_auth::{Route, RouteAuth};
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let host = Router::new().fallback(|| async { StatusCode::IM_A_TEAPOT });
+        let link = api.auth.entry_link("/");
+        let (cookie, _) = api
+            .auth
+            .start_session(link.url.split_once('#').unwrap().1)
+            .unwrap()
+            .unwrap();
+        let cookie = format!("{}={cookie}", api.auth.cookie);
+        let app = router_with_host(api, Some(host));
+        let mut routes: Vec<(String, Route)> = OWNER_CLASSIFIED
+            .iter()
+            .chain(PUBLIC_CLASSIFIED)
+            .map(|r| (format!("/-/guildbotics/api{}", r.path), *r))
+            .collect();
+        routes.extend(
+            OUTER_CLASSIFIED
+                .iter()
+                .chain(crate::ui::route_inventory().iter())
+                .map(|r| (r.path.to_owned(), *r)),
+        );
+        routes.push((ROOT_ROUTE.path.to_owned(), ROOT_ROUTE));
+        let branvil = branvil::route_inventory();
+        for (path, _) in &branvil {
+            assert!(!path.starts_with("/-/guildbotics"), "Branvil owns {path}");
+        }
+        routes.extend(branvil);
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for (path, route) in routes {
+            assert!(
+                seen.insert((route.method, path.clone())),
+                "duplicate {path}"
+            );
+            let path = variable.replace_all(&path, "missing");
+            let methods: &[&str] = match route.method {
+                "any" => &[
+                    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT",
+                ],
+                "get" => &["GET", "HEAD"],
+                method => &[method],
+            };
+            for method in methods {
+                for (host, origin, expected) in [
+                    (
+                        "evil.invalid",
+                        "http://127.0.0.1:8765",
+                        StatusCode::MISDIRECTED_REQUEST,
+                    ),
+                    (
+                        "127.0.0.1:8765",
+                        "http://evil.invalid",
+                        StatusCode::FORBIDDEN,
+                    ),
+                ] {
+                    let response = app
+                        .clone()
+                        .oneshot(
+                            axum::http::Request::builder()
+                                .method(method.to_uppercase().as_str())
+                                .uri(path.as_ref())
+                                .header("host", host)
+                                .header("origin", origin)
+                                .body(axum::body::Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let expected = if route.auth == RouteAuth::HookSecret {
+                        StatusCode::IM_A_TEAPOT
+                    } else {
+                        expected
+                    };
+                    assert_eq!(response.status(), expected, "{method} {path}: {route:?}");
+                }
+            }
+        }
+        for route in OWNER_CLASSIFIED
+            .iter()
+            .chain(PUBLIC_CLASSIFIED)
+            .filter(|r| {
+                matches!(r.auth, RouteAuth::OwnerSession | RouteAuth::OwnerOrConsent)
+                    && r.method != "get"
+            })
+        {
+            let path = format!(
+                "/-/guildbotics/api{}",
+                variable.replace_all(route.path, "missing")
+            );
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(route.method.to_uppercase().as_str())
+                        .uri(&path)
+                        .header("host", "127.0.0.1:8765")
+                        .header("cookie", &cookie)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{route:?}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["code"],
+                "csrf_mismatch"
+            );
+        }
+        // Even an otherwise public GUI fallback must not enter this namespace.
+        for (path, route) in branvil::route_inventory() {
+            let path = format!("/-/guildbotics{}", variable.replace_all(&path, "missing"));
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(
+                            if route.method == "any" {
+                                "GET".to_owned()
+                            } else {
+                                route.method.to_uppercase()
+                            }
+                            .as_str(),
+                        )
+                        .uri(&path)
+                        .header("host", "127.0.0.1:8765")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(crate::provider_api::CALLBACK_PATH, OUTER_CLASSIFIED[1].path);
+    }
+
     #[tokio::test]
     async fn old_routes_are_absent_and_root_redirects_under_the_guard() {
         use tower::ServiceExt;
