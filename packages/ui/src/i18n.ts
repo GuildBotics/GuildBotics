@@ -18,12 +18,12 @@ export function normalizeLanguage(value: string | null | undefined): AppLanguage
 
 export function createAppI18n({
   resources,
-  storageKey,
+  storageKey = "guildbotics.appLanguage",
   initialLanguage,
   flat = false,
 }: {
   resources: Resource;
-  storageKey: string;
+  storageKey?: string;
   initialLanguage?: AppLanguage;
   flat?: boolean;
 }) {
@@ -38,7 +38,6 @@ export function createAppI18n({
   }
 
   async function setAppLanguage(language: AppLanguage) {
-    localStorage.setItem(storageKey, language);
     await i18n.changeLanguage(language);
   }
 
@@ -48,6 +47,11 @@ export function createAppI18n({
     keySeparator: flat ? false : ".",
     fallbackLng: "en",
     interpolation: { escapeValue: false, ...(flat ? { prefix: "{", suffix: "}" } : {}) },
+  });
+  document.documentElement.lang = i18n.language;
+  i18n.on("languageChanged", (language) => {
+    localStorage.setItem(storageKey, language);
+    document.documentElement.lang = language;
   });
   return { i18n, getInitialAppLanguage, setAppLanguage };
 }

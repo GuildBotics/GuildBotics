@@ -47,7 +47,7 @@ type Stack = {
 const STACKS: Stack[] = [
   {
     name: "setup",
-    testMatch: /setup\.spec\.ts$/,
+    testMatch: /(setup|navigation)\.spec\.ts$/,
     backendPort: port("GUILDBOTICS_E2E_BACKEND_PORT", 8766),
   },
   {

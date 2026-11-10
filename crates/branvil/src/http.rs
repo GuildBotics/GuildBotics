@@ -179,11 +179,12 @@ async fn session_create(State(app): State<Shared>, J(input): J<Enter>) -> R {
 }
 
 async fn session_get(State(app): State<Shared>, headers: HeaderMap) -> R {
-    if app.browser_session.get().is_some() {
+    if let Some(host) = app.browser_session.get() {
         let (member, csrf) = auth::host_session(&app, &Method::GET, &headers).await?;
         return Ok(ok(members::SessionView {
             me: members::member_view(&member),
             csrf,
+            host_navigation: Some(host.navigation()),
         }));
     }
     let id = auth::session_cookie(&app, &headers).ok_or_else(AppError::unauthorized)?;

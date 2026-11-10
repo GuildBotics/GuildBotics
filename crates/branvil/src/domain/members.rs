@@ -359,6 +359,7 @@ pub async fn revoke_token(app: &App, caller: &Caller, name: String, id: String) 
 pub struct SessionView {
     pub me: MemberView,
     pub csrf: String,
+    pub host_navigation: Option<crate::browser_session::Navigation>,
 }
 
 #[derive(Serialize, Debug)]
@@ -424,6 +425,7 @@ pub async fn enter(app: &App, code: String) -> AppResult<(SessionView, String)> 
         SessionView {
             me: member_view(&member),
             csrf,
+            host_navigation: None,
         },
         id,
     ))
@@ -435,5 +437,6 @@ pub async fn current_session(app: &App, id: String) -> AppResult<SessionView> {
     Ok(SessionView {
         me: member_view(&member),
         csrf: session.csrf,
+        host_navigation: None,
     })
 }

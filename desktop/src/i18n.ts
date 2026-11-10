@@ -24,7 +24,6 @@ function mergeInto(target: Record<string, unknown>, source: Record<string, unkno
 
 export const { i18n, getInitialAppLanguage, setAppLanguage } = createAppI18n({
   resources,
-  storageKey: "guildbotics.appLanguage",
 });
 // The backend renders API error sentences in the language named on each
 // request, so the client's header follows this instance's language -- through

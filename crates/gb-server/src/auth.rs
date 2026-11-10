@@ -364,6 +364,12 @@ impl branvil::browser_session::BrowserSession for ServerAuth {
         let link = self.entry_link("/");
         (link.url, link.expires_at)
     }
+    fn navigation(&self) -> branvil::browser_session::Navigation {
+        branvil::browser_session::Navigation {
+            label: "GuildBotics".into(),
+            url: "/-/guildbotics/".into(),
+        }
+    }
     fn entry_path(&self) -> &str {
         "/-/guildbotics/-/enter?next=%2F"
     }

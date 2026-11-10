@@ -153,3 +153,25 @@ it("shows the removed relations URL as not found without redirecting", async () 
   expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
   expect(window.location.pathname).toBe("/acme/-/relations");
 });
+
+describe("embedding host navigation", () => {
+  it.each([null, { label: "Host screen", url: "/host/" }])("uses only the server supplied destination %j", async (navigation) => {
+    fakeApi({
+      "GET /api/v1/session": json(200, { ...SESSION, host_navigation: navigation }),
+      "GET /api/v1/workspaces": page([]),
+    });
+    renderApp("/");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    if (navigation) expect(within(nav).getByRole("link", { name: navigation.label })).toHaveAttribute("href", navigation.url);
+    else expect(within(nav).getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("persists the sidebar language in the shared preference", async () => {
+    setup(true);
+    renderApp("/");
+    await screen.findByRole("navigation", { name: "Main" });
+    await choose(userEvent.setup(), "Display language", "日本語");
+    expect(localStorage.getItem("guildbotics.appLanguage")).toBe("ja");
+    expect(screen.getByRole("navigation", { name: "メイン" })).toBeVisible();
+  });
+});

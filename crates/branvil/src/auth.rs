@@ -444,6 +444,12 @@ mod tests {
                     "expiry".into(),
                 )
             }
+            fn navigation(&self) -> crate::browser_session::Navigation {
+                crate::browser_session::Navigation {
+                    label: "Host".into(),
+                    url: "/host/".into(),
+                }
+            }
             fn entry_path(&self) -> &str {
                 "/host-entry"
             }

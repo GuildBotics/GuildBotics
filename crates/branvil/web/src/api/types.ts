@@ -36,6 +36,7 @@ export type AccountCredential = { token: string } | { app: { app_id: string; ins
 export const PROVIDERS = [{ name: "github", label: "GitHub" }] as const;
 
 export interface Session {
+  host_navigation?: { label: string; url: string } | null;
   me: Member;
   csrf: string;
 }

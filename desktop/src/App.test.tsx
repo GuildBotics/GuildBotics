@@ -176,7 +176,7 @@ describe("App", () => {
     });
     window.location.hash = "#/service";
     renderApp();
-    const entry = await screen.findByRole("button", { name: t()("setup.branvil.nav.label") });
+    const entry = await screen.findByRole("link", { name: t()("setup.branvil.nav.label") });
     expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(entry);
   });
   it("renders the shared workspace and input-store refusal once", async () => {
