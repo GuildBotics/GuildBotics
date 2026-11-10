@@ -3,7 +3,8 @@
 .SYNOPSIS
 Install, replace, inspect or remove a per-user OpenSSH forwarding task.
 .DESCRIPTION
-Connect with ssh first to accept the host key. Use an unencrypted key or the
+Use an SSH config alias or user@host as -Hub. Connect with ssh first to accept
+the host key. Use an unencrypted key or the
 Windows OpenSSH agent. SSH configuration and keys are never modified. The task
 runs at login, without a visible console, and retries ssh after 15 seconds.
 .EXAMPLE
@@ -25,14 +26,46 @@ $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskName = 'hub-forward-' + $identity.User.Value
 $shell = Join-Path $PSHOME 'powershell.exe'
+# Keep diagnostics outside AppData, which packaged apps may virtualize.
+$stateDir = Join-Path $env:USERPROFILE '.hub-forward'
+$exitPath = Join-Path $stateDir 'last-exit.json'
 
 if ($Action -eq 'status') {
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if (-not $task) { Write-Output 'Not installed'; return }
     $info = Get-ScheduledTaskInfo -TaskName $taskName
+    # Read the registered task, the authority for both old and new installs.
+    # Parse literals only; never execute the stored command during status.
+    $ports = @()
+    if ($task.Actions[0].Arguments -match '-EncodedCommand ([A-Za-z0-9+/=]+)$') {
+        $source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1]))
+        $tokens = $null; $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+        $ports = @($ast.FindAll({ param($node)
+            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                $node.Value -match '^127\.0\.0\.1:([1-9][0-9]{0,4}):127\.0\.0\.1:\1$'
+        }, $true) | ForEach-Object { [int]($_.Value.Split(':')[1]) } | Select-Object -Unique)
+    }
+    $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    $lastExit = if (Test-Path -LiteralPath $exitPath) {
+        Get-Content -LiteralPath $exitPath -Raw | ConvertFrom-Json
+    } else { $null }
     [pscustomobject]@{
         TaskName = $task.TaskName; State = $task.State
         LastRunTime = $info.LastRunTime; LastTaskResult = $info.LastTaskResult
+        Ports = if ($ports) { ($ports | ForEach-Object {
+            $p = $_
+            $listening = [bool]($listeners | Where-Object {
+                $_.LocalPort -eq $p -and $_.LocalAddress -in @('127.0.0.1', '0.0.0.0', '::')
+            })
+            "${p}: Listening=$listening"
+        }) -join [Environment]::NewLine } else { 'Unknown ports. Install the task again to inspect forwarding ports.' }
+        LastSshEndedAt = $lastExit.EndedAt; LastSshExitCode = $lastExit.ExitCode
+        LastSshStderr = $lastExit.Stderr -join [Environment]::NewLine
+        DiagnosticStatus = if ($lastExit) { 'Recorded' } else {
+            'No SSH exit recorded yet. Tasks installed with an earlier version must be installed again to record SSH exits.'
+        }
+        DiagnosticPath = $exitPath
     }
     return
 }
@@ -78,15 +111,42 @@ if ($existing) {
     }
 }
 if ($Action -eq 'uninstall') { return }
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+Remove-Item -LiteralPath $exitPath -Force -ErrorAction SilentlyContinue
 # Encode arguments as PowerShell literals, without evaluating any user text.
 function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
 $arguments = ($sshArgs | ForEach-Object { Quote-Literal $_ }) -join ', '
 $source = @"
 `$ErrorActionPreference = 'Stop'
 `$sshArgs = @($arguments)
+`$exitPath = $(Quote-Literal $exitPath)
 while (`$true) {
-    try { & $(Quote-Literal $ssh) @sshArgs }
-    catch { [Console]::Error.WriteLine(`$_.Exception.Message) }
+    `$tail = New-Object 'System.Collections.Generic.Queue[string]'
+    `$code = `$null
+    try {
+        # PowerShell 5.1 wraps native stderr in ErrorRecord objects. Continue
+        # lets ssh finish, retaining its exit code even when it writes stderr.
+        `$ErrorActionPreference = 'Continue'
+        & $(Quote-Literal $ssh) @sshArgs 2>&1 | ForEach-Object {
+            if (`$_ -is [System.Management.Automation.ErrorRecord]) {
+                `$line = `$_.ToString()
+                `$tail.Enqueue(`$line.Substring(0, [Math]::Min(2000, `$line.Length)))
+                if (`$tail.Count -gt 5) { `$null = `$tail.Dequeue() }
+            }
+        }
+        `$code = `$LASTEXITCODE
+    }
+    catch {
+        `$tail.Enqueue(`$_.Exception.Message)
+        if (`$tail.Count -gt 5) { `$null = `$tail.Dequeue() }
+    }
+    finally { `$ErrorActionPreference = 'Stop' }
+    # Replace one bounded record, so status never reads a partially written JSON.
+    [pscustomobject]@{
+        EndedAt = [DateTimeOffset]::Now.ToString('o'); ExitCode = `$code
+        Stderr = @(`$tail.ToArray())
+    } | ConvertTo-Json | Set-Content -LiteralPath (`$exitPath + '.tmp') -Encoding UTF8
+    Move-Item -LiteralPath (`$exitPath + '.tmp') -Destination `$exitPath -Force
     Start-Sleep -Seconds 15
 }
 "@
@@ -107,3 +167,5 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
     -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Write-Output 'Installed hub-forward. Use -Action status to inspect the task.'
+Write-Output 'Use an SSH config alias or user@host as -Hub. Connect with ssh first to accept the host key.'
+Write-Output 'After a few seconds, use -Action status and check that each port shows Listening=True.'
