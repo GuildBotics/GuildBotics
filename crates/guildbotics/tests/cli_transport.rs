@@ -584,6 +584,23 @@ fn startup_rejects_the_old_commands_and_service_configuration_flags() {
 }
 
 #[tokio::test]
+async fn hub_probe_names_the_source_tree_the_executable_was_built_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = peer_cli(dir.path(), &["server", "hub-probe", "--source"])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_eq!(
+        Path::new(String::from_utf8(output.stdout).unwrap().trim_end())
+            .canonicalize()
+            .unwrap(),
+        checkout.canonicalize().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

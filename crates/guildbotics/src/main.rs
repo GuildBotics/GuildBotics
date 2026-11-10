@@ -163,6 +163,9 @@ enum ServerCommand {
         ready: bool,
         #[arg(long, conflicts_with = "ready")]
         exit_timeout: bool,
+        /// Print the source tree this executable was built from.
+        #[arg(long, conflicts_with_all = ["ready", "exit_timeout"])]
+        source: bool,
     },
 }
 
@@ -251,9 +254,14 @@ fn main() -> ExitCode {
                 ServerCommand::HubProbe {
                     ready,
                     exit_timeout,
+                    source,
                 },
         } => {
-            if exit_timeout {
+            if source {
+                let package = gb_base::home::python_package();
+                println!("{}", package.parent().expect("the checkout").display());
+                ExitCode::SUCCESS
+            } else if exit_timeout {
                 println!("{}", service_cli::FORCED_STOP_TIMEOUT.as_secs());
                 ExitCode::SUCCESS
             } else {

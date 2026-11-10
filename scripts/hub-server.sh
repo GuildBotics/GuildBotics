@@ -39,9 +39,9 @@ log=$HOME/Library/Logs/guildbotics.log
 hub="$HOME/Library/Application Support/GuildBotics/Hub"
 builds=$hub/builds
 # launchd runs a signed copy of the active build at one fixed path, so macOS
-# keeps the Keychain and Documents folder access it granted to that path.
+# keeps the Documents folder access it granted to that path. The copy is the
+# only record of the active build: it names the source tree it was built from.
 current=$builds/current
-active=$builds/active
 pending=$builds/update-from
 signing=$hub/signing-identity
 backups=$hub/backups
@@ -55,7 +55,7 @@ mkdir "$lock" 2>/dev/null || fail "Another Hub operation holds $lock. See docs/h
 stage=setup
 finish() {
     if [ "$1" -ne 0 ]; then
-        running=$(readlink "$active" 2>/dev/null || true)
+        running=$(built_from "$current" 2>/dev/null || true)
         running=${running%/*}
         message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
         printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
@@ -118,9 +118,14 @@ start_agent() {
     return 1
 }
 point_current() {
-    cp "$1" "$lock/current" && mv -f "$lock/current" "$current" &&
-        ln -sf "$1" "$lock/active" && mv -f "$lock/active" "$active"
+    cp "$1" "$lock/current" && mv -f "$lock/current" "$current"
 }
+# A build is named by its revision directory; the executable reports that
+# directory by its physical path, which need not spell $builds.
+built_from() {
+    tree=$("$1" server hub-probe --source) && printf '%s/%s/guildbotics-bin\n' "$builds" "${tree##*/}"
+}
+team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
 admin_upgrade_and_check() {
     code=0
     "$1" branvil admin upgrade --data-dir "$2" || code=$?
@@ -148,7 +153,9 @@ build_head() {
         rm -rf "$source"
         mkdir "$source"
         git -C "$repo" archive --format=tar --output="$lock/source.tar" "$revision"
-        tar -xf "$lock/source.tar" -C "$source"
+        # Extract with the current time: Cargo rebuilds what is newer than its last
+        # build, and a commit's own time can be older than that.
+        tar -xmf "$lock/source.tar" -C "$source"
         rm -f "$lock/source.tar"
         (
             cd "$source"
@@ -161,6 +168,13 @@ build_head() {
     # Sign a reused build too, so that every build carries the recorded identity.
     stage=signing
     codesign --force -s "$identity" -i "$label" "$candidate.new"
+    # Keychain access survives a rebuild only for a signer with a Team ID, and
+    # only while that Team ID stays the same.
+    team=$(team_of "$candidate.new")
+    printf '%s\n' "$team" | grep -Eq '^[0-9A-Z]{10}$' ||
+        fail "\"$identity\" has no Team ID, so macOS would ask for Keychain access after every update. See docs/hub-server.md."
+    [ "$team" = "${running_team-$team}" ] ||
+        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, run $0 uninstall, then install again. See docs/hub-server.md."
     mv -f "$candidate.new" "$candidate"
 }
 backup_and_rehearse() {
@@ -274,7 +288,7 @@ case "$action" in
             installed || fail "Remove the existing $label LaunchAgent before installing the integrated server."
         fi
         build_head
-        if [ -L "$active" ] && [ "$(readlink "$active")" != "$candidate" ] && installed; then
+        if installed && [ -e "$current" ] && [ "$(built_from "$current")" != "$candidate" ]; then
             fail "A different build is installed. Run: $0 update"
         fi
         stage="checking the stopped server"
@@ -299,8 +313,9 @@ case "$action" in
         [ -f "$signing" ] ||
             fail "No signing identity is recorded. Run $0 uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY. See docs/hub-server.md."
         identity=$(cat "$signing")
+        running_team=$(team_of "$current")
         build_head
-        previous=$(readlink "$active")
+        previous=$(built_from "$current")
         if [ "$candidate" = "$previous" ]; then
             printf 'The Hub already uses %s.\n' "$revision"
             install_assets

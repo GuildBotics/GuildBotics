@@ -18,7 +18,7 @@ Hubは、ビルドした実行ファイルにオーナーのApple Developmentの
 
 `codesign` が初めてこの証明書の鍵を使うとき、「codesignがキーチェーンに含まれるキーへアクセスしようとしています」と確認が出ます。ログインのパスワードを入力して「常に許可」を選びます。
 
-Apple Developmentの証明書の有効期限は1年です。期限が切れると `update` は署名の前に止まります。Xcodeで同じApple IDの新しい証明書を作り、そのSHA-1を `~/Library/Application Support/GuildBotics/Hub/signing-identity` に書き込みます。次に新しいコミットへ `update` するときから、新しい証明書で署名します。署名の要件は証明書の名前とTeam IDで決まるので、同じApple IDの証明書であれば確認は出ません。
+Apple Developmentの証明書の有効期限は1年です。期限が切れると `update` は署名の前に止まります。Xcodeで同じApple IDの新しい証明書を作り、そのSHA-1を `~/Library/Application Support/GuildBotics/Hub/signing-identity` に書き込みます。次に新しいコミットへ `update` するときから、新しい証明書で署名します。署名の要件は証明書の名前とTeam IDで決まるので、同じApple IDの証明書であれば確認は出ません。別のチームの証明書に替えると確認が出るため、`update` は止まります。チームを替えるときは `uninstall` してから、新しい識別で `install` し直します。
 
 ## インストール
 
@@ -31,7 +31,7 @@ scripts/hub-server.sh status
 
 `install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスで両方のポートを待ち受けます。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合や署名に失敗した場合は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。画面は `http://127.0.0.1:8765/-/guildbotics/` で配り、`/` はこの場所へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。画面は `http://127.0.0.1:8765/-/guildbotics/` で配り、`/` はこの場所へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
 インストール後の最初の起動時、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。同じ識別で署名した更新では、これらの確認は出ません。
 
@@ -60,7 +60,7 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピー、`builds/active` は現行ビルドの実行ファイルへのリンク、`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -91,7 +91,7 @@ scripts/hub-server.sh recover
 
    ```sh
    git fetch origin main
-   change=$(git log --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)
+   change=$(git log --first-parent --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)
    git reset --keep "$change^"
    scripts/hub-server.sh update
    ```
