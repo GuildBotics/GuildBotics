@@ -82,6 +82,31 @@ scripts/hub-server.sh recover
 
 通常停止がBranvilのCIを待っている段階では、GuildBoticsのHTTPポートは閉じています。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。
 
+## 署名を入れる前のHubを移す
+
+`hub-update.json` の `manual_update_version` 1 の手作業です。署名の識別を記録していないHubでは、`update` が切り替えの前に止まります。
+
+1. [署名の識別を用意する](#署名の識別を用意する)の手順で識別を用意します。
+2. 退避と予行を通すため、この変更の直前のコミットまで、いつもの手動更新を行います。
+
+   ```sh
+   git fetch origin main
+   git merge --ff-only "$(git log --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)^"
+   scripts/hub-server.sh update
+   ```
+
+3. この変更を含むコミットへ進め、LaunchAgentの登録を解除してから、識別を指定してインストールし直します。最初の起動で出るキーチェーンと「書類」フォルダの確認には、[インストール](#インストール)のとおりに答えます。
+
+   ```sh
+   git merge --ff-only FETCH_HEAD
+   scripts/hub-server.sh uninstall
+   export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
+   export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
+   scripts/hub-server.sh install
+   ```
+
+   `GUILDBOTICS_HOME` や `GUILDBOTICS_SERVER_PORT` を変えていた場合は、それも同じ値を設定します。
+
 ## 自動更新用の内部コマンド
 
 以下はシェルの更新ループ向けの隠しコマンドです。成功時の標準出力は1行の JSON、実行エラーは終了コード1です。状態の判定結果は終了コード0で返します。実データを変更せず、通知だけは外部の webhook へ送信します。
