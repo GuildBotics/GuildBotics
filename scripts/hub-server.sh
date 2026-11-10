@@ -8,7 +8,8 @@ usage() {
 Usage: scripts/hub-server.sh install | update | restart | status | recover | uninstall
 
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
-           Set BRANVIL_DATA_DIR to the absolute path of the initialized data.
+           Set BRANVIL_DATA_DIR to the absolute path of the initialized data,
+           and GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity.
 update     Build HEAD, back up Branvil, rehearse the upgrade, and switch builds.
 restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
@@ -37,8 +38,13 @@ plist=$HOME/Library/LaunchAgents/$label.plist
 log=$HOME/Library/Logs/guildbotics.log
 hub="$HOME/Library/Application Support/GuildBotics/Hub"
 builds=$hub/builds
+# launchd runs a signed copy of the active build at one fixed path, so macOS
+# keeps the Documents folder access it granted to that path. The copy is the
+# only record of the active build: it names the source tree it was built from.
 current=$builds/current
+# During an update, the copy that ran before it: what a rollback restores.
 pending=$builds/update-from
+signing=$hub/signing-identity
 backups=$hub/backups
 
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
@@ -50,9 +56,9 @@ mkdir "$lock" 2>/dev/null || fail "Another Hub operation holds $lock. See docs/h
 stage=setup
 finish() {
     if [ "$1" -ne 0 ]; then
-        active=$(readlink "$current" 2>/dev/null || true)
-        active=${active%/*}
-        message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${active##*/}, requested revision: ${revision:-unknown})."
+        running=$(built_from "$current" 2>/dev/null || true)
+        running=${running%/*}
+        message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
         printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
     fi
     rm -rf "$lock"
@@ -113,8 +119,14 @@ start_agent() {
     return 1
 }
 point_current() {
-    ln -sf "$1" "$lock/current" && mv -f "$lock/current" "$current"
+    cp "$1" "$lock/current" && mv -f "$lock/current" "$current"
 }
+# A build is named by its revision directory; the executable reports that
+# directory by its physical path, which need not spell $builds.
+built_from() {
+    tree=$("$1" server hub-probe --source) && printf '%s/%s/guildbotics-bin\n' "$builds" "${tree##*/}"
+}
+team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
 admin_upgrade_and_check() {
     code=0
     "$1" branvil admin upgrade --data-dir "$2" || code=$?
@@ -125,26 +137,46 @@ admin_upgrade_and_check() {
 }
 
 build_head() {
+    stage="checking the signing identity"
+    # Match the whole SHA-1 or the whole quoted name of a valid identity.
+    security find-identity -v -p codesigning |
+        awk -v id="$identity" '$2 == id || index($0, "\"" id "\"") { found = 1 } END { exit !found }' ||
+        fail "\"$identity\" is not a valid code signing identity in the Keychain. See docs/hub-server.md."
     stage=build
     revision=$(git -C "$repo" rev-parse --verify HEAD)
     source=$builds/$revision
     candidate=$source/guildbotics-bin
-    if [ -x "$candidate" ]; then return; fi
-    # The binary uses templates and the Desktop build in its source tree.
-    # Keep this exact source at its build path even as the Hub checkout advances.
-    rm -rf "$source"
-    mkdir "$source"
-    git -C "$repo" archive --format=tar --output="$lock/source.tar" "$revision"
-    tar -xf "$lock/source.tar" -C "$source"
-    rm -f "$lock/source.tar"
-    (
-        cd "$source"
-        npm ci
-        npm run build --workspace desktop --workspace crates/branvil/web
-        cargo build --release --locked -p guildbotics --target-dir "$hub/target"
-    )
-    cp "$hub/target/release/guildbotics" "$source/guildbotics-bin.new"
-    mv -f "$source/guildbotics-bin.new" "$candidate"
+    if [ -x "$candidate" ]; then
+        cp "$candidate" "$candidate.new"
+    else
+        # The binary uses templates and the Desktop build in its source tree.
+        # Keep this exact source at its build path even as the Hub checkout advances.
+        rm -rf "$source"
+        mkdir "$source"
+        git -C "$repo" archive --format=tar --output="$lock/source.tar" "$revision"
+        # Extract with the current time: Cargo rebuilds what is newer than its last
+        # build, and a commit's own time can be older than that.
+        tar -xmf "$lock/source.tar" -C "$source"
+        rm -f "$lock/source.tar"
+        (
+            cd "$source"
+            npm ci
+            npm run build --workspace desktop --workspace crates/branvil/web
+            cargo build --release --locked -p guildbotics --target-dir "$hub/target"
+        )
+        cp "$hub/target/release/guildbotics" "$candidate.new"
+    fi
+    # Sign a reused build too, so that every build carries the recorded identity.
+    stage=signing
+    codesign --force -s "$identity" -i "$label" "$candidate.new"
+    # Keychain access survives a rebuild only for a signer with a Team ID, and
+    # only while that Team ID stays the same.
+    team=$(team_of "$candidate.new")
+    printf '%s\n' "$team" | grep -Eq '^[0-9A-Z]{10}$' ||
+        fail "\"$identity\" has no Team ID, so macOS would ask for Keychain access after every update. See docs/hub-server.md."
+    [ "$team" = "${running_team-$team}" ] ||
+        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, run $0 uninstall, then install again. See docs/hub-server.md."
+    mv -f "$candidate.new" "$candidate"
 }
 backup_and_rehearse() {
     stage=backup
@@ -215,14 +247,13 @@ complete_activation() {
     rm -f "$pending" && install_assets
 }
 rollback() {
-    previous=$(cat "$pending") || return
     # The start failed before its authenticated readiness was observed.
     if loaded; then launchctl bootout "$target" || return; fi
-    assert_stopped "$previous" || return
-    point_current "$previous" || return
+    assert_stopped "$pending" || return
+    point_current "$pending" || return
     # The previous build may refuse the upgraded schema. Leave the data in
     # place and stay stopped for the operator to decide how to restore it.
-    if ! "$previous" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
+    if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
         printf 'The previous build cannot check the live data. See docs/hub-server.md before restarting.\n' >&2
         return 1
     fi
@@ -245,7 +276,10 @@ case "$action" in
             *) fail "Set BRANVIL_DATA_DIR to the absolute path of the initialized Branvil data." ;;
         esac
         case "$GUILDBOTICS_HOME" in /*) ;; *) fail "GUILDBOTICS_HOME must be an absolute path." ;; esac
-        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_SERVER_PORT:-}" in
+        identity=${GUILDBOTICS_HUB_SIGNING_IDENTITY:-}
+        [ -n "$identity" ] ||
+            fail "Set GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity. See docs/hub-server.md."
+        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_SERVER_PORT:-}$identity" in
             *'
 '*) fail "Paths and environment settings must not contain line breaks." ;;
         esac
@@ -254,7 +288,7 @@ case "$action" in
             installed || fail "Remove the existing $label LaunchAgent before installing the integrated server."
         fi
         build_head
-        if [ -L "$current" ] && [ "$(readlink "$current")" != "$candidate" ] && installed; then
+        if installed && [ -e "$current" ] && [ "$(built_from "$current")" != "$candidate" ]; then
             fail "A different build is installed. Run: $0 update"
         fi
         stage="checking the stopped server"
@@ -263,6 +297,7 @@ case "$action" in
         if loaded; then launchctl bootout "$target"; fi
         stage="installing the agent"
         point_current "$candidate"
+        printf '%s\n' "$identity" >"$signing"
         printf 'Allow Keychain access and Documents folder access if macOS asks. See docs/hub-server.md for details.\n'
         if ! start_agent; then
             if loaded; then launchctl bootout "$target"; fi
@@ -275,21 +310,25 @@ case "$action" in
         stage="checking the running server"
         agent_ready ||
             fail "Start the installed LaunchAgent before updating. Run: $0 restart"
+        [ -f "$signing" ] ||
+            fail "No signing identity is recorded. Run $0 uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY. See docs/hub-server.md."
+        identity=$(cat "$signing")
+        running_team=$(team_of "$current")
         build_head
-        previous=$(readlink "$current")
+        previous=$(built_from "$current")
         if [ "$candidate" = "$previous" ]; then
             printf 'The Hub already uses %s.\n' "$revision"
             install_assets
             exit 0
         fi
+        # Copy while the server still runs; current stays until the switch.
+        cp "$current" "$lock/update-from"
         backup_and_rehearse
         stage="stopping the previous build"
         stop_agent
-        assert_stopped "$previous"
-        printf '%s\n' "$previous" >"$lock/update-from"
+        assert_stopped "$current"
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
-        printf 'Allow Keychain access and Documents folder access if macOS asks. See docs/hub-server.md for details.\n'
         if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&
             point_current "$candidate" && start_agent; then
             complete_activation

@@ -943,7 +943,7 @@ backup includes.
 `desktop/` is a React (Mantine, TanStack Query) frontend that the server serves to a
 browser; the repository is a monorepo on purpose. The server runs from a checkout on the
 Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
-[`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs the locally built Rust executable with Branvil in the same process.
+[`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs a signed copy of the locally built Rust executable, at one fixed path so that macOS keeps the access it granted, with Branvil in the same process.
 
 - **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api` (REST,
   and the `/-/guildbotics/api/events` WebSocket) and the screens themselves (the Vite build of

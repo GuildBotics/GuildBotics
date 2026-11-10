@@ -13,7 +13,26 @@ case "$name" in
     cargo)
         while [ "$1" != --target-dir ]; do shift; done
         mkdir -p "$2/release"
-        cp "$0" "$2/release/guildbotics"
+        # A build is this stub marked with the commit's build-id and, like Cargo's
+        # CARGO_MANIFEST_DIR, the physical path of its source tree.
+        { cat "$0"; printf '# build: %s\n# source: %s\n' "$(cat build-id)" "$(pwd -P)"; } >"$2/release/guildbotics"
+        chmod +x "$2/release/guildbotics"
+        ;;
+    security) cat "$FAKE_ROOT/identities" ;;
+    codesign)
+        if [ "$1" = -dv ]; then
+            # Like codesign, name no team for a file that is not signed at all.
+            team=$(sed -n 's/^# team: //p' "$2")
+            if [ -n "$team" ]; then printf 'TeamIdentifier=%s\n' "$team" >&2; fi
+            exit 0
+        fi
+        [ ! -f "$FAKE_ROOT/fail-sign" ] || exit 1
+        if [ -f "$FAKE_ROOT/no-team" ]; then team="not set"
+        else team=$(cat "$FAKE_ROOT/team" 2>/dev/null || printf FIXTURE123); fi
+        # A new signature replaces the previous one.
+        { grep -v '^# \(signed\|team\): ' "$6"; printf '# signed: %s %s\n# team: %s\n' "$3" "$5" "$team"; } >"$6.signed"
+        chmod +x "$6.signed"
+        mv -f "$6.signed" "$6"
         ;;
     plutil)
         if [ "$1" = -lint ]; then exit 0; fi
@@ -48,8 +67,8 @@ case "$name" in
             bootstrap)
                 touch "$FAKE_ROOT/loaded"
                 bin=$(plutil -extract ProgramArguments.0 raw -o - "$3")
-                build=$(cat "$(dirname "$(readlink "$bin")")/build-id")
-                if [ "$build" = new ] && [ -f "$FAKE_ROOT/fail-start" ]; then
+                build=$(sed -n 's/^# build: //p' "$bin")
+                if [ "$build" = "$(cat "$FAKE_ROOT/fail-start" 2>/dev/null)" ]; then
                     touch "$FAKE_ROOT/start-failed"
                 else
                     printf '42\n' >"$FAKE_ROOT/job-pid"
@@ -63,15 +82,17 @@ case "$name" in
             *) exit 2 ;;
         esac
         ;;
-    current|guildbotics-bin)
-        bin=$0
-        if [ -L "$bin" ]; then bin=$(readlink "$bin"); fi
-        build=$(cat "$(dirname "$bin")/build-id")
+    current|guildbotics-bin|update-from)
+        build=$(sed -n 's/^# build: //p' "$0")
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
         case "$1:${2:-}" in
             server:hub-probe)
+                if [ "${3:-}" = --source ]; then
+                    sed -n 's/^# source: //p' "$0"
+                    exit 0
+                fi
                 if [ "${3:-}" = --exit-timeout ]; then
                     if [ "$build" = new ]; then printf '92\n'; else printf '91\n'; fi
                     exit 0
@@ -108,7 +129,7 @@ case "$name" in
                         ;;
                     check:*)
                         [ ! -f "$FAKE_ROOT/holder" ] &&
-                        { [ "$build" = new ] || [ ! -f "$FAKE_ROOT/new-schema" ]; }
+                        { [ "$build" != old ] || [ ! -f "$FAKE_ROOT/new-schema" ]; }
                         ;;
                     *) exit 2 ;;
                 esac

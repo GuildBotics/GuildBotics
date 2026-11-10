@@ -10,6 +10,9 @@ use std::{
 
 const SCRIPT: &str = include_str!("../../../scripts/hub-server.sh");
 const TOOLS: &str = include_str!("fixtures/hub-tools.sh");
+const IDENTITY: &str = "0123ABCD";
+const IDENTITIES: &str =
+    "  1) 0123ABCD \"Apple Development: Fixture (TEAM)\"\n     1 valid identities found\n";
 
 struct Hub {
     temp: tempfile::TempDir,
@@ -22,18 +25,35 @@ impl Hub {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        let home = root.join("home with spaces");
+        // HOME reaches the real directory through a link, as a path may on macOS.
+        let home = root.join("home link");
         let repo = root.join("checkout");
         let tools = root.join("tools");
-        for directory in [&home, &repo.join("scripts"), &tools, &root.join("branvil")] {
+        for directory in [
+            &root.join("home with spaces"),
+            &repo.join("scripts"),
+            &tools,
+            &root.join("branvil"),
+        ] {
             fs::create_dir_all(directory).unwrap();
         }
+        symlink(root.join("home with spaces"), &home).unwrap();
         fs::write(repo.join("scripts/hub-server.sh"), SCRIPT).unwrap();
         fs::write(root.join("os"), "Darwin\n").unwrap();
+        fs::write(root.join("identities"), IDENTITIES).unwrap();
         let stub = tools.join("stub");
         fs::write(&stub, TOOLS).unwrap();
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-        for name in ["uname", "id", "launchctl", "npm", "cargo", "plutil"] {
+        for name in [
+            "uname",
+            "id",
+            "launchctl",
+            "npm",
+            "cargo",
+            "plutil",
+            "security",
+            "codesign",
+        ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
         let path = format!("{}:/usr/bin:/bin", tools.display());
@@ -76,7 +96,10 @@ impl Hub {
             .env("GIT_AUTHOR_NAME", "Fixture")
             .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
             .env("GIT_COMMITTER_NAME", "Fixture")
-            .env("GIT_COMMITTER_EMAIL", "fixture@example.test");
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+            // Older than any build, so extracted sources must not keep this time.
+            .env("GIT_AUTHOR_DATE", "2001-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2001-01-01T00:00:00Z");
         command
     }
 
@@ -91,15 +114,25 @@ impl Hub {
         self.git(&["commit", "-qm", name]);
     }
 
+    /// Runs `action` as the owner does: install is given the signing identity.
     fn run(&self, action: &str, port: Option<&str>, success: bool) -> Output {
+        let mut env = vec![];
+        if let Some(port) = port {
+            env.push(("GUILDBOTICS_SERVER_PORT", port));
+        }
+        if action == "install" {
+            env.push(("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY));
+        }
+        self.run_with(action, &env, success)
+    }
+
+    fn run_with(&self, action: &str, env: &[(&str, &str)], success: bool) -> Output {
         for file in ["calls", "actions"] {
             fs::write(self.root().join(file), "").unwrap();
         }
-        let mut command = self.command("sh");
-        if let Some(port) = port {
-            command.env("GUILDBOTICS_SERVER_PORT", port);
-        }
-        let result = command
+        let result = self
+            .command("sh")
+            .envs(env.iter().copied())
             .args(["scripts/hub-server.sh", action])
             .output()
             .unwrap();
@@ -115,8 +148,44 @@ impl Hub {
         fs::write(self.root().join(name), "").unwrap();
     }
 
+    /// Makes launchd's start of `build` fail.
+    fn fail_start(&self, build: &str) {
+        fs::write(self.root().join("fail-start"), build).unwrap();
+    }
+
+    /// The build the running copy names as its source.
     fn installed_build(&self) -> PathBuf {
-        fs::read_link(self.builds().join("current")).unwrap()
+        let program = fs::read_to_string(self.builds().join("current")).unwrap();
+        let source = program
+            .lines()
+            .find_map(|line| line.strip_prefix("# source: "))
+            .unwrap();
+        Path::new(source).join("guildbotics-bin")
+    }
+
+    /// The executable launchd runs: a copy of the active build signed by `identity`.
+    fn assert_runs_signed_by(&self, build: &str, identity: &str) {
+        let current = self.builds().join("current");
+        assert!(!current.is_symlink());
+        let program = fs::read_to_string(current).unwrap();
+        assert!(
+            program.contains(&format!("# build: {build}\n")),
+            "{program}"
+        );
+        assert!(program.contains(&format!("# signed: {identity} local.guildbotics\n")));
+    }
+
+    fn assert_runs_signed(&self, build: &str) {
+        self.assert_runs_signed_by(build, IDENTITY);
+    }
+
+    /// The update stopped before switching: the old build still runs.
+    fn assert_still_runs_old(&self, old: &Path) {
+        assert_eq!(self.installed_build(), old);
+        self.assert_runs_signed("old");
+        assert_eq!(self.lines("holder"), "42\n");
+        assert!(!self.lines("calls").contains("current|server|stop"));
+        assert!(!self.builds().join("update-from").exists());
     }
 
     fn install(&self) {
@@ -147,7 +216,6 @@ fn assert_startup_guidance(out: &Output) {
     assert!(output.contains("Keychain access"));
     assert!(output.contains("Documents folder access"));
     assert!(output.contains("docs/hub-server.md"));
-    assert!(!output.contains("two Keychain prompts"));
 }
 
 #[test]
@@ -185,6 +253,15 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
             "launchctl|bootstrap|gui/1234|",
         ],
     );
+    in_order(
+        &hub.lines("calls"),
+        &[
+            "security|find-identity|-v|-p|codesigning",
+            "npm|ci",
+            &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
+            "launchctl|bootstrap|",
+        ],
+    );
     assert!(hub.lines("actions").contains("old|install\n"));
     assert!(text(&out).contains(log.to_str().unwrap()));
     assert_startup_guidance(&out);
@@ -192,6 +269,26 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
         fs::read_to_string(hub.installed_build().parent().unwrap().join("build-id")).unwrap(),
         "old"
     );
+    hub.assert_runs_signed("old");
+    // Cargo rebuilds a source tree only when it is newer than the last build.
+    let extracted = fs::metadata(hub.installed_build().parent().unwrap().join("build-id"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert!(extracted > std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    assert_eq!(
+        fs::read_to_string(hub.builds().parent().unwrap().join("signing-identity")).unwrap(),
+        format!("{IDENTITY}\n")
+    );
+}
+
+#[test]
+fn install_needs_a_signing_identity_before_building() {
+    let hub = Hub::new();
+    let out = hub.run_with("install", &[], false);
+    assert!(text(&out).contains("GUILDBOTICS_HUB_SIGNING_IDENTITY"));
+    assert!(!hub.lines("calls").contains("npm|"));
+    assert!(!hub.plist().exists());
 }
 
 #[test]
@@ -224,7 +321,18 @@ fn reinstall_replaces_only_a_stopped_agent() {
     assert!(!hub.lines("calls").contains("launchctl|bootout"));
     fs::remove_file(hub.root().join("holder")).unwrap();
     fs::remove_file(hub.root().join("job-pid")).unwrap();
-    hub.install();
+    // The reused build is signed again with the identity given now.
+    let renewed = "Apple Development: Renewed (TEAM)";
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"{renewed}\"\n{IDENTITIES}"),
+    )
+    .unwrap();
+    hub.run_with(
+        "install",
+        &[("GUILDBOTICS_HUB_SIGNING_IDENTITY", renewed)],
+        true,
+    );
     in_order(
         &hub.lines("calls"),
         &[
@@ -233,6 +341,22 @@ fn reinstall_replaces_only_a_stopped_agent() {
             "launchctl|bootstrap|",
         ],
     );
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_runs_signed_by("old", renewed);
+}
+
+#[test]
+fn install_leaves_a_different_installed_build_to_update() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    fs::remove_file(hub.root().join("holder")).unwrap();
+    fs::remove_file(hub.root().join("job-pid")).unwrap();
+    hub.commit("new");
+    let out = hub.run("install", None, false);
+    assert!(text(&out).contains("A different build is installed. Run:"));
+    assert_eq!(hub.installed_build(), old);
+    assert!(!hub.lines("calls").contains("launchctl|bootstrap"));
 }
 
 #[test]
@@ -289,7 +413,18 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "current|install",
         ],
     );
-    assert_startup_guidance(&out);
+    // The identity install recorded signs the new build; macOS does not ask again.
+    in_order(
+        &hub.lines("calls"),
+        &[
+            "security|find-identity|",
+            "cargo|build|",
+            &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
+            "current|branvil|backup|",
+        ],
+    );
+    hub.assert_runs_signed("new");
+    assert!(!text(&out).contains("Keychain access"));
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(plist.contains("<key>ExitTimeOut</key><integer>92</integer>"));
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
@@ -319,22 +454,126 @@ fn rehearsal_failure_leaves_the_running_build_alone() {
 }
 
 #[test]
+fn an_identity_missing_from_the_keychain_stops_the_update_before_building() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    // Only another certificate is valid; its name merely contains the identity.
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"Apple Development: {IDENTITY} (TEAM)\"\n"),
+    )
+    .unwrap();
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("not a valid code signing identity"));
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
+fn a_signature_without_a_team_id_is_never_installed() {
+    let hub = Hub::new();
+    hub.mark("no-team");
+    let out = hub.run("install", None, false);
+    assert!(text(&out).contains("has no Team ID"));
+    assert!(!hub.plist().exists());
+    assert!(!hub.builds().join("current").exists());
+
+    fs::remove_file(hub.root().join("no-team")).unwrap();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("no-team");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("has no Team ID"));
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
+fn an_update_keeps_the_team_the_running_build_was_signed_for() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    fs::write(hub.root().join("team"), "OTHERTEAM1").unwrap();
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("the running build is signed for FIXTURE123"));
+    hub.assert_still_runs_old(&old);
+
+    // A running copy whose Team ID cannot be read is not taken as any team.
+    let current = hub.builds().join("current");
+    let unsigned = fs::read_to_string(&current)
+        .unwrap()
+        .replace("# team: FIXTURE123\n", "");
+    fs::write(&current, unsigned).unwrap();
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("the running build is signed for ."));
+    assert_eq!(hub.installed_build(), old);
+
+    // Changing teams takes a new install, which macOS asks about once.
+    hub.run("uninstall", None, true);
+    hub.install();
+    let program = fs::read_to_string(hub.builds().join("current")).unwrap();
+    assert!(program.contains("# build: new\n"));
+    assert!(program.contains("# team: OTHERTEAM1\n"));
+}
+
+#[test]
+fn a_failed_signing_stops_the_update_before_switching() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("fail-sign");
+    hub.run("update", None, false);
+    hub.assert_still_runs_old(&old);
+    let failure = fs::read_to_string(hub.builds().parent().unwrap().join("last-failure")).unwrap();
+    assert!(failure.contains("during signing"));
+}
+
+#[test]
+fn update_needs_the_identity_recorded_by_install() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    fs::remove_file(hub.builds().parent().unwrap().join("signing-identity")).unwrap();
+    hub.commit("new");
+    let out = hub.run("update", None, false);
+    assert!(
+        text(&out).contains("uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY")
+    );
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
 fn failed_start_returns_to_the_previous_compatible_build() {
     let hub = Hub::new();
     hub.install();
     let old = hub.installed_build();
     hub.commit("new");
-    hub.mark("fail-start");
+    hub.fail_start("new");
     let out = hub.run("update", None, false);
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(plist.contains("<key>ExitTimeOut</key><integer>91</integer>"));
     assert_eq!(hub.installed_build(), old);
+    hub.assert_runs_signed("old");
     assert_eq!(hub.lines("holder"), "42\n");
     assert!(text(&out).contains("The previous build is running again"));
     assert!(!hub.builds().join("update-from").exists());
+    // The old build was the last to start; the failure record then names it.
     assert!(
         hub.lines("actions")
-            .ends_with("old|server|hub-probe|--ready\n")
+            .ends_with("old|server|hub-probe|--ready\nold|server|hub-probe|--source\n")
+    );
+    assert!(
+        fs::read_to_string(hub.builds().parent().unwrap().join("last-failure"))
+            .unwrap()
+            .contains(&format!(
+                "active revision: {}",
+                old.parent().unwrap().file_name().unwrap().to_str().unwrap()
+            ))
     );
     assert!(!hub.lines("actions").contains("|install\n"));
 }
@@ -345,7 +584,7 @@ fn failed_start_with_an_incompatible_schema_stays_stopped_for_recovery() {
     hub.install();
     let old = hub.installed_build();
     hub.commit("new");
-    hub.mark("fail-start");
+    hub.fail_start("new");
     hub.mark("change-schema");
     let out = hub.run("update", None, false);
     assert_eq!(hub.installed_build(), old);
@@ -392,22 +631,61 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
 fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
     let hub = Hub::new();
     hub.install();
-    let old = hub.installed_build();
+    let running = fs::read(hub.builds().join("current")).unwrap();
     hub.commit("new");
     hub.mark("change-schema");
     hub.run("update", None, true);
     let new = hub.installed_build();
-    fs::write(
-        hub.builds().join("update-from"),
-        format!("{}\n", old.display()),
-    )
-    .unwrap();
+    // Stopped after the switch: the copy that ran before is still kept.
+    let pending = hub.builds().join("update-from");
+    fs::write(&pending, running).unwrap();
+    fs::set_permissions(&pending, fs::Permissions::from_mode(0o755)).unwrap();
 
     hub.run("recover", None, true);
     assert_eq!(hub.installed_build(), new);
     assert!(!hub.builds().join("update-from").exists());
     assert!(!hub.lines("actions").contains("server|stop"));
     assert!(hub.lines("actions").contains("new|install"));
+
+    // A later failed update returns to the build that ran, which reads the data.
+    hub.commit("newer");
+    hub.fail_start("newer");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The previous build is running again"));
+    assert_eq!(hub.installed_build(), new);
+    assert_eq!(hub.lines("holder"), "42\n");
+}
+
+#[test]
+fn a_rollback_restores_the_copy_that_ran_whatever_happened_to_its_build() {
+    let hub = Hub::new();
+    hub.install();
+    // A refused reinstall for another team signs the stored build again.
+    let other = "Apple Development: Other (TEAM)";
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"{other}\"\n{IDENTITIES}"),
+    )
+    .unwrap();
+    fs::write(hub.root().join("team"), "OTHERTEAM1").unwrap();
+    let out = hub.run_with(
+        "install",
+        &[("GUILDBOTICS_HUB_SIGNING_IDENTITY", other)],
+        false,
+    );
+    assert!(text(&out).contains("A GuildBotics server is running"));
+    fs::remove_file(hub.root().join("team")).unwrap();
+
+    hub.commit("new");
+    hub.fail_start("new");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The previous build is running again"));
+    hub.assert_runs_signed("old");
+    assert!(
+        fs::read_to_string(hub.builds().join("current"))
+            .unwrap()
+            .contains("# team: FIXTURE123\n")
+    );
 }
 
 #[test]
@@ -417,7 +695,7 @@ fn a_candidate_that_becomes_ready_as_launchd_reports_an_exit_stays_running() {
     let old = hub.installed_build();
     hub.commit("new");
     hub.mark("change-schema");
-    hub.mark("fail-start");
+    hub.fail_start("new");
     hub.mark("ready-after-exit");
     hub.run("update", None, true);
     assert_ne!(hub.installed_build(), old);
