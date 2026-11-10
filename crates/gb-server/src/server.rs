@@ -312,8 +312,16 @@ impl Server {
                 }
             })
         });
+        // Publish the embedded provider as one workspace transition. HTTP stays
+        // available, but no operation may capture the old selection meanwhile.
+        let preparing = if prepare.is_some() {
+            Some(self.api.switching.clone().write_owned().await)
+        } else {
+            None
+        };
         let startup_api = self.api.clone();
         let mut startup = tokio::spawn(async move {
+            let _preparing = preparing;
             let Some(prepare) = prepare else {
                 return Ok(None);
             };
@@ -632,10 +640,11 @@ mod tests {
             "fixture".into(),
             root.path().into(),
         ));
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let server = Server {
             lock: ServerLock::hold(root.path(), port).unwrap(),
             listener,
-            api,
+            api: api.clone(),
             start_services: false,
         };
         let (finish, prepared) = tokio::sync::oneshot::channel();
@@ -669,6 +678,25 @@ mod tests {
                 "{path}"
             );
         }
+        assert!(
+            api.admit().is_none(),
+            "preparation must exclude every admitted operation"
+        );
+        assert!(
+            api.switching.clone().try_write_owned().is_err(),
+            "preparation must exclude workspace replacement"
+        );
+        let start = http
+            .post(format!(
+                "http://127.0.0.1:{port}/-/guildbotics/api/scheduler/start"
+            ))
+            .bearer_auth(token.trim())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(start.status(), reqwest::StatusCode::CONFLICT);
+        let body: serde_json::Value = start.json().await.unwrap();
+        assert_eq!(body["code"], "command_workspace_changing");
         let response = http
             .get(format!("http://127.0.0.1:{port}/-/guildbotics/unknown"))
             .send()
@@ -677,6 +705,10 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
         finish.send(()).unwrap();
         let (_, result) = serving.await.unwrap();
+        assert!(
+            api.admit().is_some(),
+            "failed preparation must release admission"
+        );
         assert_eq!(
             result.unwrap_err().to_string(),
             "fixture preparation failed"

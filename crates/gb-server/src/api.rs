@@ -586,6 +586,10 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
         )
     });
     Router::new()
+        .route(
+            "/-/guildbotics",
+            get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
+        )
         .nest("/-/guildbotics/api", owners.merge(anyone))
         .route(
             crate::provider_api::CALLBACK_PATH,
@@ -892,6 +896,39 @@ mod tests {
             assert_eq!(response.status(), status);
             assert!(response.headers().contains_key("content-security-policy"));
             if status == StatusCode::TEMPORARY_REDIRECT {
+                assert_eq!(response.headers()["location"], "/-/guildbotics/");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn guildbotics_entry_redirect_precedes_the_host_fallback() {
+        use super::*;
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let app = router_with_host(api, Some(Router::new().fallback(|| async { "host GUI" })));
+        for path in ["/-/guildbotics", "/other"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::get(path)
+                        .header("host", "127.0.0.1:7878")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if path == "/other" {
+                assert_eq!(response.status(), StatusCode::OK);
+            } else {
+                assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
                 assert_eq!(response.headers()["location"], "/-/guildbotics/");
             }
         }

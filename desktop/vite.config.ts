@@ -5,7 +5,7 @@ import { defineConfig, type HttpProxy } from "vite";
 
 // The backend `vite dev` stands in front of: the pages come from Vite (with
 // HMR) and every `/-/guildbotics/api` request, the event stream included, from the backend.
-const BACKEND = `http://127.0.0.1:${process.env.GUILDBOTICS_SERVER_PORT ?? 8765}`;
+const BACKEND = `http://127.0.0.1:${process.env.GUILDBOTICS_SERVER_PORT ?? 7878}`;
 
 export default defineConfig({
   base: "/-/guildbotics/",

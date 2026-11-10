@@ -11,5 +11,5 @@ if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules
 fi
 
 # Vite serves the pages and proxies `/-/guildbotics/api` to the backend at
-# GUILDBOTICS_SERVER_PORT (8765 unless set; `desktop/vite.config.ts`).
+# GUILDBOTICS_SERVER_PORT (7878 unless set; `desktop/vite.config.ts`).
 exec npm run dev --workspace desktop
