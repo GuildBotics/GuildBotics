@@ -58,6 +58,9 @@ pub struct App {
     /// Requests that carry the same `Idempotency-Key` of the same member run
     /// one at a time; other keys do not wait for them.
     pub idempotency: KeyedLocks,
+    /// One change of a member's account on a host at a time
+    /// (`upstream::ops`).
+    pub accounts: KeyedLocks,
     /// When a token's `last_used_at` was last written (to write it at most
     /// once a minute).
     pub token_touched: Mutex<HashMap<String, std::time::Instant>>,
@@ -174,6 +177,7 @@ impl App {
             file_deletions: Default::default(),
             me: me.clone(),
             idempotency: KeyedLocks::default(),
+            accounts: KeyedLocks::default(),
             token_touched: Mutex::new(HashMap::new()),
             entry_codes: Mutex::default(),
             app_codes: Mutex::default(),

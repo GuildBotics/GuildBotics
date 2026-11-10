@@ -224,24 +224,6 @@ impl Layout {
     }
 }
 
-/// Writes a `0600` file: a new file, then renamed over the old one.
-pub fn write_secret(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = path.with_extension("tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut f = options.open(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    std::fs::rename(&tmp, path)
-}
-
 #[cfg(unix)]
 pub fn restrict(path: &Path, dir: bool) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;

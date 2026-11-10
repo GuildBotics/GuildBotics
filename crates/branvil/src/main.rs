@@ -5,7 +5,7 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = branvil::askpass_main() {
         return code;
     }
-    // Its secrets: the file and key the environment names (`vault::Sealed`).
+    // Its secrets: the directory and key the environment names (`vault::Sealed`).
     branvil::main(
         branvil::Invocation::standalone(),
         std::sync::Arc::new(branvil::vault::Sealed::from_env()),

@@ -280,11 +280,13 @@ user profile's ACL.
   the OS keychain, under `branvil_account_<provider>_<hash>` and
   `branvil_webhook_<hash>` (the hash of the data directory's path, and of the
   member; a GuildBotics member's secret is named in capitals, so these are
-  never one). The `branvil` executable keeps them in the file `BRANVIL_VAULT`
-  names, sealed with the key in `BRANVIL_VAULT_KEY`, and keeps none without
-  them. When the vault cannot keep or open a value (no key, a locked keychain,
-  a damaged file), setting it is refused and every use reports why, the way a
-  missing credential is reported; nothing falls back to a plain file
+  never one). The `branvil` executable keeps them in the directory
+  `BRANVIL_VAULT` names, one file per name sealed with the key in
+  `BRANVIL_VAULT_KEY` and bound to that name, and keeps none without
+  them. A vault that cannot keep a value (no key, a locked keychain, a damaged
+  identity store) refuses to set it, and one that cannot open a value (a damaged
+  file, another key) reports why at every use, the way a missing credential is
+  reported; nothing falls back to a plain file
   [`tests/upstream.rs`
   `accounts_are_checked_with_the_host_and_their_tokens_never_returned`,
   `an_app_account_is_checked_with_an_installation_token_and_replaces_a_token_account`,

@@ -195,7 +195,7 @@ mod tests {
         let config = Config::load(None, Some(path), None, None).unwrap();
         config.layout().create().unwrap();
         let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
-        // A file, so a restart (a new app) keeps the webhook.
+        // On disk, so a restart (a new app) keeps the webhook.
         let vault = crate::vault::Sealed::new(&path.join("vault"), &[7; 32]).unwrap();
         App::new(
             config,

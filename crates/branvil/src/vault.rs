@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
-use serde::{Deserialize, Serialize};
 
-use crate::util::{b64, fold, hex, random_bytes, sha256, unb64};
+use crate::util::{fold, hex, random_bytes, sha256, unb64};
 
 /// A store of named secrets. Names are `[a-z0-9_]`, at most 64 bytes, and
 /// tell one data directory's secrets from another's (`Secrets`). Errors say
@@ -43,118 +42,135 @@ impl Vault for Memory {
     }
 }
 
-/// The file `Sealed::from_env` keeps values in.
+/// The directory `Sealed::from_env` keeps values in.
 pub const VAULT_ENV: &str = "BRANVIL_VAULT";
 /// Its AES-256-GCM key: 32 bytes, base64url without padding.
 pub const VAULT_KEY_ENV: &str = "BRANVIL_VAULT_KEY";
-const AAD: &[u8] = b"branvil.vault.v1";
 
-/// The `branvil` executable's vault: one file of every value, sealed with a
-/// key that is not on disk. Without them it keeps nothing.
-pub struct Sealed {
-    file: Result<(PathBuf, LessSafeKey), String>,
-    /// Reads and writes of the file, one at a time.
-    lock: Mutex<()>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SealedFile {
-    nonce: String,
-    ciphertext: String,
-}
+/// The `branvil` executable's vault: a directory with one file per name, each
+/// sealed with a key that is not on disk and bound to its name. A write
+/// replaces one file whole, so services sharing the directory never lose
+/// each other's values. Without the directory or the key it keeps nothing.
+pub struct Sealed(Result<(PathBuf, LessSafeKey), String>);
 
 impl Sealed {
-    pub fn new(path: &Path, key: &[u8]) -> anyhow::Result<Self> {
+    pub fn new(dir: &Path, key: &[u8]) -> anyhow::Result<Self> {
         let key = UnboundKey::new(&AES_256_GCM, key)
             .map_err(|_| anyhow::anyhow!("{VAULT_KEY_ENV} must be 32 bytes"))?;
-        Ok(Self {
-            file: Ok((path.to_path_buf(), LessSafeKey::new(key))),
-            lock: Mutex::default(),
-        })
+        Ok(Self(Ok((dir.to_path_buf(), LessSafeKey::new(key)))))
     }
 
     /// The vault `BRANVIL_VAULT` and `BRANVIL_VAULT_KEY` name, or one that
     /// refuses every use, saying which is missing.
     pub fn from_env() -> Self {
+        Self::from_env_with(
+            std::env::var_os(VAULT_ENV),
+            std::env::var(VAULT_KEY_ENV).ok(),
+        )
+    }
+
+    fn from_env_with(dir: Option<std::ffi::OsString>, key: Option<String>) -> Self {
         let named = || -> Result<Self, String> {
-            let path = std::env::var_os(VAULT_ENV)
+            let dir = dir
                 .filter(|p| !p.is_empty())
-                .ok_or_else(|| format!("{VAULT_ENV} names no vault file"))?;
-            let key = std::env::var(VAULT_KEY_ENV)
-                .ok()
+                .ok_or_else(|| format!("{VAULT_ENV} names no vault directory"))?;
+            let key = key
                 .and_then(|k| unb64(k.trim()))
                 .ok_or_else(|| format!("{VAULT_KEY_ENV} holds no base64url key"))?;
-            Self::new(Path::new(&path), &key).map_err(|e| e.to_string())
+            Self::new(Path::new(&dir), &key).map_err(|e| e.to_string())
         };
-        named().unwrap_or_else(|why| Self {
-            file: Err(format!("this service has no vault: {why}")),
-            lock: Mutex::default(),
-        })
+        named().unwrap_or_else(|why| Self(Err(format!("this service has no vault: {why}"))))
     }
 
-    fn file(&self) -> anyhow::Result<&(PathBuf, LessSafeKey)> {
-        self.file.as_ref().map_err(|why| anyhow::anyhow!("{why}"))
+    /// The file of `name`, and the key.
+    fn entry(&self, name: &str) -> anyhow::Result<(PathBuf, &LessSafeKey)> {
+        let (dir, key) = self.0.as_ref().map_err(|why| anyhow::anyhow!("{why}"))?;
+        anyhow::ensure!(
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_'),
+            "not a vault name"
+        );
+        Ok((dir.join(name), key))
     }
+}
 
-    fn read(&self) -> anyhow::Result<BTreeMap<String, String>> {
-        let (path, key) = self.file()?;
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-            Err(_) => anyhow::bail!("the vault file cannot be read"),
-        };
-        let sealed: SealedFile =
-            serde_json::from_slice(&bytes).context("the vault file is malformed")?;
-        let nonce = unb64(&sealed.nonce)
-            .and_then(|n| <[u8; NONCE_LEN]>::try_from(n).ok())
-            .context("the vault file is malformed")?;
-        let mut data = unb64(&sealed.ciphertext).context("the vault file is malformed")?;
-        let plain = key
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::from(AAD),
-                &mut data,
-            )
-            .map_err(|_| anyhow::anyhow!("the vault file does not open with {VAULT_KEY_ENV}"))?;
-        serde_json::from_slice(plain).context("the vault file is malformed")
-    }
-
-    fn update(&self, apply: impl FnOnce(&mut BTreeMap<String, String>)) -> anyhow::Result<()> {
-        let _held = self.lock.lock().unwrap();
-        let mut values = self.read()?;
-        apply(&mut values);
-        let (path, key) = self.file()?;
-        let nonce = random_bytes::<NONCE_LEN>();
-        let mut data = serde_json::to_vec(&values)?;
-        key.seal_in_place_append_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::from(AAD),
-            &mut data,
-        )
-        .map_err(|_| anyhow::anyhow!("the vault cannot seal"))?;
-        let sealed = serde_json::to_vec(&SealedFile {
-            nonce: b64(&nonce),
-            ciphertext: b64(&data),
-        })?;
-        crate::config::write_secret(path, &sealed).context("the vault file cannot be written")
-    }
+fn aad(name: &str) -> Vec<u8> {
+    [b"branvil.vault.v1\0".as_slice(), name.as_bytes()].concat()
 }
 
 impl Vault for Sealed {
     fn get(&self, name: &str) -> anyhow::Result<Option<String>> {
-        let _held = self.lock.lock().unwrap();
-        Ok(self.read()?.remove(name))
+        let (path, key) = self.entry(name)?;
+        let mut data = match std::fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => anyhow::bail!("the vault file cannot be read"),
+        };
+        anyhow::ensure!(
+            data.len() >= NONCE_LEN + AES_256_GCM.tag_len(),
+            "the vault file is malformed"
+        );
+        let mut nonce = [0; NONCE_LEN];
+        nonce.copy_from_slice(&data[..NONCE_LEN]);
+        let plain = key
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad(name)),
+                &mut data[NONCE_LEN..],
+            )
+            .map_err(|_| anyhow::anyhow!("the vault file does not open with {VAULT_KEY_ENV}"))?;
+        String::from_utf8(plain.to_vec())
+            .map(Some)
+            .map_err(|_| anyhow::anyhow!("the vault file is malformed"))
     }
+
     fn set(&self, name: &str, value: &str) -> anyhow::Result<()> {
-        self.update(|values| {
-            values.insert(name.into(), value.into());
-        })
+        use std::io::Write;
+        let (path, key) = self.entry(name)?;
+        let nonce = random_bytes::<NONCE_LEN>();
+        let mut data = value.as_bytes().to_vec();
+        key.seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad(name)),
+            &mut data,
+        )
+        .map_err(|_| anyhow::anyhow!("the vault cannot seal"))?;
+        let dir = path.parent().expect("a vault file has its directory");
+        let mut made = std::fs::DirBuilder::new();
+        made.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
+        made.create(dir)
+            .context("the vault directory cannot be made")?;
+        // A name of its own: never the file it replaces, nor another writer's.
+        let temporary = dir.join(format!(".{name}.{}.tmp", hex(&random_bytes::<8>())));
+        let written = (|| {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&temporary)?;
+            file.write_all(&nonce)?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, &path)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        written.context("the vault file cannot be written")
     }
+
     fn delete(&self, name: &str) -> anyhow::Result<()> {
-        self.update(|values| {
-            values.remove(name);
-        })
+        let (path, _) = self.entry(name)?;
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).context("the vault file cannot be removed")
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -163,7 +179,8 @@ impl Vault for Sealed {
 #[derive(Clone)]
 pub struct Secrets {
     vault: Arc<dyn Vault>,
-    place: String,
+    /// The data directory's path, as the OS spells it.
+    place: Vec<u8>,
 }
 
 impl Secrets {
@@ -173,17 +190,17 @@ impl Secrets {
         let dir = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
         Self {
             vault,
-            place: dir.to_string_lossy().into_owned(),
+            place: dir.into_os_string().into_encoded_bytes(),
         }
     }
 
     fn name(&self, kind: &str, parts: &[&str]) -> String {
         let mut text = self.place.clone();
         for part in parts {
-            text.push('\0');
-            text.push_str(part);
+            text.push(0);
+            text.extend_from_slice(part.as_bytes());
         }
-        format!("{kind}_{}", &hex(&sha256(text.as_bytes()))[..32])
+        format!("{kind}_{}", &hex(&sha256(&text))[..32])
     }
 
     /// A member's credential on a host.
@@ -225,6 +242,18 @@ impl Secrets {
 mod tests {
     use super::*;
 
+    /// Every file under `dir`, read.
+    fn contents(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let path = e.unwrap().path();
+                let bytes = std::fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect()
+    }
+
     #[test]
     fn a_sealed_vault_keeps_values_only_as_ciphertext_and_refuses_what_it_cannot_open() {
         let dir = tempfile::tempdir().unwrap();
@@ -235,35 +264,79 @@ mod tests {
         vault
             .set("webhook_x", "https://hooks.example/secret-1")
             .unwrap();
-        vault.set("account_github_y", "secret-2").unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
-        let again = Sealed::new(&path, &key).unwrap();
-        assert_eq!(
-            again.get("webhook_x").unwrap().as_deref(),
-            Some("https://hooks.example/secret-1")
-        );
-        again.delete("webhook_x").unwrap();
-        assert_eq!(again.get("webhook_x").unwrap(), None);
+        // Services on the same directory (other processes), writing at once:
+        // neither loses what the other keeps.
+        let other_service = Sealed::new(&path, &key).unwrap();
+        std::thread::scope(|scope| {
+            for (vault, side) in [(&vault, "a"), (&other_service, "b")] {
+                scope.spawn(move || {
+                    for i in 0..40 {
+                        vault
+                            .set(&format!("account_{side}_{i}"), "secret-n")
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        for side in ["a", "b"] {
+            for i in 0..40 {
+                let name = format!("account_{side}_{i}");
+                assert_eq!(vault.get(&name).unwrap().as_deref(), Some("secret-n"));
+            }
+        }
+        other_service.set("account_github_y", "secret-2").unwrap();
+        vault.set("account_github_z", "secret-3").unwrap();
+        for (name, value) in [
+            ("webhook_x", "https://hooks.example/secret-1"),
+            ("account_github_y", "secret-2"),
+            ("account_github_z", "secret-3"),
+        ] {
+            assert_eq!(other_service.get(name).unwrap().as_deref(), Some(value));
+        }
+        for (file, bytes) in contents(&path) {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains("secret"),
+                "{file:?}"
+            );
+        }
+        vault.delete("webhook_x").unwrap();
+        assert_eq!(vault.get("webhook_x").unwrap(), None);
+        vault.delete("webhook_x").unwrap();
 
-        // Another key, a corrupted file, or no key at all: refused, saying why.
+        // A value moved to another name, another key, or a damaged file:
+        // refused, saying why, and nothing else changes.
+        std::fs::copy(path.join("account_github_y"), path.join("webhook_x")).unwrap();
+        let error = vault.get("webhook_x").unwrap_err().to_string();
+        assert!(error.contains("does not open"), "{error}");
         let other = Sealed::new(&path, &random_bytes::<32>()).unwrap();
         let error = other.get("account_github_y").unwrap_err().to_string();
         assert!(error.contains("does not open"), "{error}");
-        assert!(other.set("account_github_y", "secret-3").is_err());
-        assert!(!String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains("secret"));
-        std::fs::write(&path, b"{\"nonce\":").unwrap();
-        let error = again.get("account_github_y").unwrap_err().to_string();
+        std::fs::write(path.join("account_github_z"), b"short").unwrap();
+        let error = vault.get("account_github_z").unwrap_err().to_string();
         assert!(error.contains("malformed"), "{error}");
-        assert!(again.set("account_github_y", "secret-4").is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"{\"nonce\":");
-        let none = Sealed {
-            file: Err("this service has no vault: BRANVIL_VAULT names no vault file".into()),
-            lock: Mutex::default(),
-        };
+        // Only `[a-z0-9_]` names: none is a path, nor a writer's temporary
+        // file (`.<name>.<random>.tmp`), nor the file it replaces.
+        for name in ["../escape", "Upper", "webhook_x.tmp", ".webhook_x"] {
+            assert!(vault.get(name).is_err() && vault.set(name, "secret-4").is_err());
+        }
+        let none = Sealed::from_env_with(None, None);
         let error = none.set("webhook_x", "secret-5").unwrap_err().to_string();
         assert!(error.contains("no vault"), "{error}");
         assert!(Sealed::new(&path, &[0; 16]).is_err());
+
+        // A write that cannot finish leaves the value it would replace.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp_named = dir.path().join("vault.tmp");
+            let vault = Sealed::new(&tmp_named, &key).unwrap();
+            vault.set("webhook_x", "secret-6").unwrap();
+            std::fs::set_permissions(&tmp_named, std::fs::Permissions::from_mode(0o500)).unwrap();
+            assert!(vault.set("webhook_x", "secret-7").is_err());
+            std::fs::set_permissions(&tmp_named, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(vault.get("webhook_x").unwrap().as_deref(), Some("secret-6"));
+            assert_eq!(contents(&tmp_named).len(), 1, "no temporary file is left");
+        }
     }
 
     #[test]
@@ -310,6 +383,20 @@ mod tests {
             );
         }
         assert!(names[0].starts_with("account_github_"));
+        // Paths that differ only in bytes that are not UTF-8 stay apart.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let at = |byte: u8| {
+                let path = dir.path().join(std::ffi::OsStr::from_bytes(&[b'd', byte]));
+                Secrets::new(vault.clone(), &path)
+            };
+            assert_ne!(at(0x80).webhook(), at(0x81).webhook());
+            assert_ne!(
+                at(0x80).account("aiko", "github"),
+                at(0x81).account("aiko", "github")
+            );
+        }
         assert!(names[4].starts_with("webhook_"));
     }
 }

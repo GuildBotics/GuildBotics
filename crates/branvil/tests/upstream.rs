@@ -467,14 +467,15 @@ async fn a_pull_request_is_published_as_its_author_and_follows_the_host_to_the_m
         (StatusCode::CONFLICT, &json!("upstream_refused"))
     );
     gh.set(|st| st.refusal = None);
-    let kept = std::fs::read(&s.vault).unwrap();
-    std::fs::remove_file(&s.vault).unwrap();
+    let alice = s.vault_file(|n| n.account("alice", "github"));
+    let aside = alice.with_file_name("aside");
+    std::fs::rename(&alice, &aside).unwrap();
     let (st, v) = s.get(&log_path, &w.aiko).await;
     assert_eq!(
         (st, &v["error"]["code"]),
         (StatusCode::CONFLICT, &json!("no_account"))
     );
-    std::fs::write(&s.vault, kept).unwrap();
+    std::fs::rename(&aside, &alice).unwrap();
     assert!(
         gh.requests("GET", "/logs")
             .iter()
@@ -1589,10 +1590,14 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     let account = "/members/aiko/accounts/github";
     let webhook = json!({"url": "https://hooks.example.test/services/T0/hook-5e1a"});
 
-    // A vault file the key does not open: reads report it as a missing
-    // credential does, and writes refuse without touching anything.
-    std::fs::write(&w.server.vault, b"{\"nonce\":\"x\",\"ciphertext\":\"y\"}").unwrap();
-    // The service starts all the same: only what needs a secret stops.
+    // Vault files the key does not open: reads report it as a missing
+    // credential does, and the service starts all the same.
+    for file in [
+        w.server.vault_file(|n| n.account("alice", "github")),
+        w.server.vault_file(|n| n.webhook()),
+    ] {
+        std::fs::write(file, b"twelve bytes and some more").unwrap();
+    }
     w.restart(&[]);
     let s = &w.server;
     let (st, v) = s.put(&upstream, &w.owner, setting.clone()).await;
@@ -1603,24 +1608,12 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     let message = v["error"]["message"].as_str().unwrap();
     assert!(message.contains("cannot be read"), "{message}");
     assert!(message.contains("vault file"), "{message}");
-    let (st, v) = s.put(account, &w.owner, json!({"token": AIKO_TOKEN})).await;
-    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("cannot be kept"),
-        "{v}"
-    );
-    let (st, v) = s.put("/admin/webhook", &w.owner, webhook.clone()).await;
-    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
     let view = s.ok("/admin/webhook", &w.owner).await;
     assert_eq!(view["set"], false, "{view}");
     assert!(
         view["problem"].as_str().unwrap().contains("vault file"),
         "{view}"
     );
-    assert!(!s.vault_shows(AIKO_TOKEN) && !s.vault_shows("hook-5e1a"));
     assert_eq!(s.secret_files(), ["owner.token"]);
 
     // No key at all: the same, saying so.
@@ -1638,12 +1631,22 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
             .contains("BRANVIL_VAULT_KEY"),
         "{v}"
     );
+    let (st, v) = s.put(account, &w.owner, json!({"token": AIKO_TOKEN})).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be kept"),
+        "{v}"
+    );
     let (st, v) = s.put("/admin/webhook", &w.owner, webhook).await;
     assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
     assert!(
         v["error"]["message"].as_str().unwrap().contains("no vault"),
         "{v}"
     );
+    assert!(!s.vault_shows(AIKO_TOKEN) && !s.vault_shows("hook-5e1a"));
     assert_eq!(s.secret_files(), ["owner.token"]);
 }
 
@@ -2054,14 +2057,15 @@ async fn a_failed_read_of_dependency_alerts_is_never_an_empty_list() {
     assert_eq!(s.ok(&list, &w.aiko).await["items"][0]["id"], "1");
 
     // The reader's credential is not on this machine: nobody else's is used.
-    let kept = std::fs::read(&s.vault).unwrap();
-    std::fs::remove_file(&s.vault).unwrap();
+    let alice = s.vault_file(|n| n.account("alice", "github"));
+    let aside = alice.with_file_name("aside");
+    std::fs::rename(&alice, &aside).unwrap();
     let before = gh.requests("GET", "/dependabot/alerts").len();
     let (st, v) = s.get(&list, &w.aiko).await;
     failed(st, &v, "no_account");
     assert_eq!(st, StatusCode::CONFLICT);
     assert_eq!(gh.requests("GET", "/dependabot/alerts").len(), before);
-    std::fs::write(&s.vault, kept).unwrap();
+    std::fs::rename(&aside, &alice).unwrap();
 
     // No upstream: nothing to read alerts of.
     let (st, _) = s

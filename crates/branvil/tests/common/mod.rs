@@ -25,8 +25,8 @@ pub struct Server {
     lines: std::sync::mpsc::Receiver<String>,
     pub url: String,
     pub data: PathBuf,
-    /// The sealed file of the service's secrets (`BRANVIL_VAULT`), outside
-    /// its data directory.
+    /// The directory of the service's sealed secrets (`BRANVIL_VAULT`),
+    /// outside its data directory.
     pub vault: PathBuf,
     pub http: reqwest::Client,
 }
@@ -169,9 +169,20 @@ impl Server {
         files
     }
 
-    /// Whether the vault's file holds `value` in plain text.
+    /// The vault's file of the name `name` gives.
+    pub fn vault_file(&self, name: impl FnOnce(&branvil::vault::Secrets) -> String) -> PathBuf {
+        self.vault.join(self.in_vault(name).1)
+    }
+
+    /// Whether a file of the vault holds `value` in plain text.
     pub fn vault_shows(&self, value: &str) -> bool {
-        String::from_utf8_lossy(&std::fs::read(&self.vault).unwrap_or_default()).contains(value)
+        std::fs::read_dir(&self.vault)
+            .into_iter()
+            .flatten()
+            .any(|e| {
+                let bytes = std::fs::read(e.unwrap().path()).unwrap_or_default();
+                String::from_utf8_lossy(&bytes).contains(value)
+            })
     }
 
     /// Stops the service as Ctrl-C does (no wait for CI jobs; the repository

@@ -225,40 +225,60 @@ pub async fn set_account(
             Some(400..500) => AppError::invalid(e.message),
             _ => AppError::unavailable(e.message),
         })?;
-    super::write_credential(app, &member.name, host.name(), &credential).await?;
-    let (n, p, kind) = (
-        member.name.clone(),
-        host.name().to_string(),
-        credential.kind(),
-    );
-    let (m, repos) = app
-        .store
-        .write(move |w| {
-            let mut m = member_by_name(w, &n)?;
-            m.accounts.retain(|a| a.provider != p);
-            m.accounts.push(Account {
-                provider: p.clone(),
-                login,
-                kind,
-                set_at: util::now(),
-            });
-            w.put(store::MEMBERS, &Member::key(&m.name), &m)?;
-            // The repositories on that host, whose pull requests by the member
-            // can now be published.
-            let repos: Vec<String> = w
-                .prefix_all::<Repo>(store::REPOS, &[])?
-                .into_iter()
-                .filter(|r| r.upstream.as_ref().is_some_and(|u| u.provider == p))
-                .map(|r| r.path)
-                .collect();
-            Ok((m, repos))
-        })
-        .await?;
-    for path in repos {
-        app.events.publish("repo", &path, "");
-    }
+    let m = keep_account(app, &member.name, host.name(), &credential, login).await?;
     app.upstream.wake();
     Ok(member_view(&m))
+}
+
+/// One change of a member's account on a host at a time, its credential in
+/// the vault and its record together, so they agree whatever runs at once.
+fn account_lock(name: &str, provider: &str) -> Vec<u8> {
+    format!("{}\0{provider}", util::fold(name)).into_bytes()
+}
+
+/// Keeps the credential, then records the account: to its end, even when
+/// the request closes (`App::finish`), so the lock covers both writes.
+async fn keep_account(
+    app: &App,
+    name: &str,
+    provider: &str,
+    credential: &Credential,
+    login: String,
+) -> AppResult<Member> {
+    let (name, provider, credential) = (name.to_string(), provider.to_string(), credential.clone());
+    app.finish(move |app| async move {
+        let _held = app.accounts.lock(&account_lock(&name, &provider)).await;
+        super::write_credential(&app, &name, &provider, &credential).await?;
+        let (n, p, kind) = (name, provider, credential.kind());
+        let (m, repos) = app
+            .store
+            .write(move |w| {
+                let mut m = member_by_name(w, &n)?;
+                m.accounts.retain(|a| a.provider != p);
+                m.accounts.push(Account {
+                    provider: p.clone(),
+                    login,
+                    kind,
+                    set_at: util::now(),
+                });
+                w.put(store::MEMBERS, &Member::key(&m.name), &m)?;
+                // The repositories on that host, whose pull requests by the
+                // member can now be published.
+                let repos: Vec<String> = w
+                    .prefix_all::<Repo>(store::REPOS, &[])?
+                    .into_iter()
+                    .filter(|r| r.upstream.as_ref().is_some_and(|u| u.provider == p))
+                    .map(|r| r.path)
+                    .collect();
+                Ok((m, repos))
+            })
+            .await?;
+        for path in repos {
+            app.events.publish("repo", &path, "");
+        }
+        Ok(m)
+    })
+    .await
 }
 
 pub async fn delete_account(
@@ -271,37 +291,48 @@ pub async fn delete_account(
     let host = app.upstream.hosts.get(provider)?;
     let n = name.to_string();
     let member = app.store.read(move |r| member_by_name(r, &n)).await?;
-    // Before the record changes: a removed account leaves no credential behind.
-    super::remove_credential(app, &member.name, host.name()).await?;
-    let (n, p) = (member.name, host.name().to_string());
-    let (m, repos) = app
-        .store
-        .write(move |w| {
-            let mut m = member_by_name(w, &n)?;
-            m.accounts.retain(|a| a.provider != p);
-            w.put(store::MEMBERS, &Member::key(&m.name), &m)?;
-            // The upstreams this account read get another reader, picked.
-            let mut changed: Vec<String> = Vec::new();
-            for mut r in w.prefix_all::<Repo>(store::REPOS, &[])? {
-                let Some(u) = &mut r.upstream else { continue };
-                if u.provider != p || u.reader.member != m.name {
-                    continue;
-                }
-                u.reader = Reader {
-                    member: super::pick_reader(w, &p)?.unwrap_or_default(),
-                    chosen: false,
-                };
-                r.revision += 1;
-                w.put(store::REPOS, &Repo::key(&r.id), &r)?;
-                changed.push(r.path.clone());
-            }
-            Ok((m, changed))
-        })
-        .await?;
-    for path in repos {
-        app.events.publish("repo", &path, "");
-    }
+    let m = drop_account(app, &member.name, host.name()).await?;
     Ok(member_view(&m))
+}
+
+/// Removes the credential, then the account's record: a removed account
+/// leaves no credential behind. To its end, like `keep_account`.
+async fn drop_account(app: &App, name: &str, provider: &str) -> AppResult<Member> {
+    let (name, provider) = (name.to_string(), provider.to_string());
+    app.finish(move |app| async move {
+        let _held = app.accounts.lock(&account_lock(&name, &provider)).await;
+        super::remove_credential(&app, &name, &provider).await?;
+        let (n, p) = (name, provider);
+        let (m, repos) = app
+            .store
+            .write(move |w| {
+                let mut m = member_by_name(w, &n)?;
+                m.accounts.retain(|a| a.provider != p);
+                w.put(store::MEMBERS, &Member::key(&m.name), &m)?;
+                // The upstreams this account read get another reader, picked.
+                let mut changed: Vec<String> = Vec::new();
+                for mut r in w.prefix_all::<Repo>(store::REPOS, &[])? {
+                    let Some(u) = &mut r.upstream else { continue };
+                    if u.provider != p || u.reader.member != m.name {
+                        continue;
+                    }
+                    u.reader = Reader {
+                        member: super::pick_reader(w, &p)?.unwrap_or_default(),
+                        chosen: false,
+                    };
+                    r.revision += 1;
+                    w.put(store::REPOS, &Repo::key(&r.id), &r)?;
+                    changed.push(r.path.clone());
+                }
+                Ok((m, changed))
+            })
+            .await?;
+        for path in repos {
+            app.events.publish("repo", &path, "");
+        }
+        Ok(m)
+    })
+    .await
 }
 
 // ---------------------------------------------------------------- publishing
@@ -695,4 +726,89 @@ pub async fn dependency_alert(
     host.dependency_alert(who, &setting.repository, id)
         .await
         .map_err(host_failure)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::{Memory, Vault};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    /// A vault whose first `set` keeps the value, says so, and then waits to
+    /// be released: a change caught between the vault and the record.
+    struct Held {
+        values: Memory,
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl Vault for Held {
+        fn get(&self, name: &str) -> anyhow::Result<Option<String>> {
+            self.values.get(name)
+        }
+        fn set(&self, name: &str, value: &str) -> anyhow::Result<()> {
+            self.values.set(name, value)?;
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+            Ok(())
+        }
+        fn delete(&self, name: &str) -> anyhow::Result<()> {
+            self.values.delete(name)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_removal_during_a_setting_leaves_the_vault_and_the_record_agreeing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Config::load(None, Some(dir.path()), None, None).unwrap();
+        config.layout().create().unwrap();
+        let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
+        store
+            .write_sync(|w| {
+                crate::domain::members::insert_member(
+                    w,
+                    &crate::domain::members::NewMember {
+                        name: "aiko".into(),
+                        display_name: None,
+                        kind: MemberKind::Agent,
+                    },
+                )
+            })
+            .unwrap();
+        let (entered, was_entered) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let vault = Arc::new(Held {
+            values: Memory::default(),
+            entered: Mutex::new(Some(entered)),
+            release: Mutex::new(released),
+        });
+        let url = "http://127.0.0.1:7878".to_string();
+        let app = App::new(config, url.clone(), store, vault.clone(), url);
+        let secrets = app.secrets.clone();
+
+        let keeping = tokio::spawn({
+            let app = app.clone();
+            async move {
+                let credential = Credential::Token("token-1".into());
+                keep_account(&app, "aiko", "github", &credential, "aiko-bot".into()).await
+            }
+        });
+        tokio::task::spawn_blocking(move || was_entered.recv().unwrap())
+            .await
+            .unwrap();
+        let dropping = tokio::spawn({
+            let app = app.clone();
+            async move { drop_account(&app, "aiko", "github").await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!dropping.is_finished(), "the removal waits for the setting");
+        release.send(()).unwrap();
+        keeping.await.unwrap().unwrap();
+        dropping.await.unwrap().unwrap();
+
+        let member = app.store.read(|r| member_by_name(r, "aiko")).await.unwrap();
+        assert!(member.accounts.is_empty());
+        assert_eq!(vault.get(&secrets.account("aiko", "github")).unwrap(), None);
+    }
 }
