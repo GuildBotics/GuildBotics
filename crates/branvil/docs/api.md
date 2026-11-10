@@ -7,6 +7,21 @@ GuildBotics (`tests/guildbotics/integrations/contracts/providers.py`) and the
 integration tests in this repository both follow it. When the service changes
 an endpoint, this file changes in the same commit.
 
+## Integrated browser sessions
+
+When embedded in GuildBotics, the host supplies `browser_session::BrowserSession`
+to `prepare_embedded`. `GET /api/v1/session` resolves the host's live owner cookie
+to Branvil's owner member and returns the host CSRF value. Writes still send
+`x-branvil-csrf`. Only the port-specific `guildbotics_session_<port>` cookie is
+accepted; old Branvil cookies are not accepted in this mode. Bearer tokens retain
+Branvil's existing member permissions.
+
+`POST /api/v1/session/links` returns a single-use GuildBotics entry link with
+`next=/`; the fragment is exchanged at `POST /-/guildbotics/api/session`.
+`POST /api/v1/session` is not registered in integrated mode (405).
+`GET /-/enter` redirects to the common `/-/guildbotics/-/enter` guidance.
+The standalone server retains the session endpoints described below.
+
 ## Conventions
 
 - Base URL: the configured `base_url`, `http://127.0.0.1:7878` by default. Every

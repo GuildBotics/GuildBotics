@@ -372,6 +372,10 @@ pub struct EntryLink {
 /// request line, log, or Referer; only its hash is kept, in memory.
 pub fn entry_link(app: &App, caller: &Caller) -> AppResult<EntryLink> {
     caller.require_owner()?;
+    if let Some(host) = app.browser_session.get() {
+        let (url, expires_at) = host.entry_link();
+        return Ok(EntryLink { url, expires_at });
+    }
     let code = app
         .entry_codes
         .lock()

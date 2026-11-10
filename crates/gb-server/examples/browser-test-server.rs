@@ -33,11 +33,43 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
     let server = gb_server::Server::start_with_keychain(Arc::new(Vault::default())).await?;
-    let (_, result) = server
-        .serve(
-            async { tokio::signal::ctrl_c().await.unwrap() },
-            std::future::pending(),
-        )
-        .await;
+    let embedded = if std::env::var_os("GUILDBOTICS_BROWSER_TEST_BRANVIL").is_some() {
+        let invocation = branvil::Invocation::under(&["branvil"]);
+        let vault: Arc<dyn branvil::vault::Vault> = Arc::new(branvil::vault::Memory::default());
+        let init_vault = vault.clone();
+        let initialized = tokio::task::spawn_blocking(move || {
+            branvil::main(
+                invocation,
+                init_vault,
+                ["branvil", "init"].map(std::ffi::OsString::from),
+            )
+        })
+        .await?;
+        anyhow::ensure!(
+            initialized == std::process::ExitCode::SUCCESS,
+            "test Branvil init failed"
+        );
+        let base = server.base_url();
+        let session = server.browser_session();
+        Some(async move { branvil::prepare_embedded(invocation, vault, &base, session).await })
+    } else {
+        None
+    };
+    let (_, result) = if let Some(embedded) = embedded {
+        server
+            .serve_embedded(
+                async { tokio::signal::ctrl_c().await.unwrap() },
+                std::future::pending(),
+                embedded,
+            )
+            .await
+    } else {
+        server
+            .serve(
+                async { tokio::signal::ctrl_c().await.unwrap() },
+                std::future::pending(),
+            )
+            .await
+    };
     result
 }

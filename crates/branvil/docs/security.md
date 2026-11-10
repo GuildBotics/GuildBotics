@@ -63,6 +63,22 @@ itself speaks plain HTTP on loopback only).
 - A request with an `Origin` must have exactly `scheme://Host`; `null` and
   other origins are `403` [`tests/security.rs`].
 
+## Integrated browser authentication
+
+The integrated server delegates browser session validation to GuildBotics via
+`browser_session::BrowserSession`; Branvil does not depend on a GuildBotics crate.
+The authority is `server/<port>/auth.json`, with the port-specific
+`guildbotics_session_<port>` cookie and its fixed 30-day expiry. Branvil still
+reads `x-branvil-csrf` on writes and returns that same CSRF value from its session
+endpoint. A valid host session maps only to Branvil's owner. Bearer credentials
+continue to identify their original Branvil members, and invalid Bearer values
+never fall back to a browser session. Old Branvil cookies and code exchange at
+`POST /api/v1/session` are refused in integrated mode. Both consent screens use
+the shared session. Host/Origin checks still apply to all routes.
+
+The remainder of the session lifecycle description below applies to standalone
+`guildbotics branvil serve`.
+
 ## Members, tokens, sessions
 
 - A token is `bvt_<id>_<secret>` with 32 random bytes of secret. Only the

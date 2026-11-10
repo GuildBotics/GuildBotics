@@ -193,3 +193,59 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // An integer must not arrive quoted; a provider would reject that.
   expect(modelYaml).not.toContain("'4096'");
 });
+
+test("one entry opens both screens, APIs and consent pages", async ({ page, context }) => {
+  await expect.poll(async () => (await page.request.get("/api/v1/session")).status()).toBe(200);
+  const result = await page.evaluate(async () => {
+    const gb = await fetch("/-/guildbotics/api/session").then((r) => r.json());
+    const bvResponse = await fetch("/api/v1/session");
+    const bv = await bvResponse.json();
+    const write = (csrf: string) =>
+      fetch("/api/v1/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-branvil-csrf": csrf },
+        body: JSON.stringify({ name: "shared-session" }),
+      });
+    return {
+      gb,
+      bv,
+      status: bvResponse.status,
+      refused: (await write("wrong")).status,
+      created: (await write(bv.csrf)).status,
+    };
+  });
+  expect(result.status).toBe(200);
+  expect(result.bv.me.kind).toBe("owner");
+  expect(result.bv.csrf).toBe(result.gb.csrf);
+  expect(result.refused).toBe(403);
+  expect(result.created).toBe(201);
+  const link = await page.evaluate(async () => {
+    const session = await fetch("/api/v1/session").then((r) => r.json());
+    return fetch("/api/v1/session/links", {
+      method: "POST",
+      headers: { "x-branvil-csrf": session.csrf },
+    }).then((r) => r.json());
+  });
+  expect(new URL(link.url).pathname).toBe("/-/guildbotics/-/enter");
+  await context.clearCookies();
+  await page.goto(link.url);
+  await page.waitForURL((address) => address.pathname === "/");
+  await page.goto("/shared-session/-/board");
+  await expect(page.getByRole("heading", { name: /^(Task board|タスクボード)$/ })).toBeVisible();
+  const query = new URLSearchParams({
+    client: "test-app",
+    redirect_uri: "http://127.0.0.1:12345/callback",
+    state: "fixture",
+    code_challenge: "a".repeat(43),
+    code_challenge_method: "S256",
+  });
+  for (const path of ["/-/authorize", "/-/guildbotics/-/authorize"]) {
+    await page.goto(`${path}?${query}`);
+    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
+  }
+  await page.goto("/-/guildbotics/");
+  expect((await page.request.get("/-/guildbotics/api/session")).status()).toBe(200);
+  expect(
+    (await page.request.post("/api/v1/session", { data: { code: "old-code" } })).status(),
+  ).toBe(405);
+});

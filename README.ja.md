@@ -613,3 +613,9 @@ AI CLI の利用レート取得に失敗すると、画面上部と設定の対�
 - `AGNO_DEBUG`: Agno エンジンの追加デバッグ出力 (`true`/`false`)
 
 transcript の詳細度（`standard` / `full`）と保持日数は、**診断** 画面から設定し、`.guildbotics/config/transcripts.yml` に保存されます。
+
+統合サーバーでは、GuildBotics と Branvil の入口とブラウザセッションを共用します。
+`guildbotics open`、`guildbotics open --branvil`、`guildbotics branvil open` は
+`/-/guildbotics/-/enter` の入口リンクを表示し、入った後の画面だけが異なります。
+更新後は新しいリンクで一度入り直してください。単体の `guildbotics branvil serve` は
+従来の Branvil セッションを使います。

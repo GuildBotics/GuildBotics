@@ -14,6 +14,7 @@ use crate::model::Repo;
 use crate::store::{self, Rd, Store};
 
 pub struct App {
+    pub browser_session: std::sync::OnceLock<Arc<dyn crate::browser_session::BrowserSession>>,
     pub config: Config,
     /// In-process requests drain before repository operations close.
     pub api_requests: Arc<tokio::sync::RwLock<bool>>,
@@ -156,6 +157,7 @@ impl App {
             config.file.clone(),
         );
         Arc::new_cyclic(|me| Self {
+            browser_session: Default::default(),
             api_requests: Arc::new(tokio::sync::RwLock::new(true)),
             base_url,
             layout,

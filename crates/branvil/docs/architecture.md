@@ -7,7 +7,8 @@ managed by an OS service (see `README.md`). The authenticated data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
 `api::DataApi` directly in the service process. Both call the same domain
 operations, with the same member permissions, locks, events and CI triggers.
-`prepare_embedded` takes the host origin and returns an `Embedded` service with
+`prepare_embedded` takes the host origin, vault and `browser_session::BrowserSession`
+authenticator and returns an `Embedded` service with
 its router, `DataApi`, and shutdown methods. It never binds. The host installs a
 503 fallback until Git locking, hook installation and ref recovery finish,
 then mounts that router behind its own routes on one listener (7878 by default).

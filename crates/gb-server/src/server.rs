@@ -275,6 +275,11 @@ impl Server {
         self.api.auth.base_url().to_string()
     }
 
+    /// Share browser authentication without retaining the server or its data API.
+    pub fn browser_session(&self) -> Arc<dyn branvil::browser_session::BrowserSession> {
+        self.api.auth.clone()
+    }
+
     /// Keep the shared listener alive through work and CI drain.
     pub async fn serve_embedded(
         self,

@@ -615,3 +615,9 @@ When an AI CLI usage refresh fails, the top notification area and the tool's set
 - `AGNO_DEBUG`: extra debug output from the Agno engine (`true`/`false`)
 
 Transcript detail (`standard` / `full`) and retention days are configured from the **Diagnostics** screen and stored in `.guildbotics/config/transcripts.yml`.
+
+The integrated server uses one browser entry and session for GuildBotics and Branvil.
+`guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
+issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
+After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
+retains its own Branvil sessions.

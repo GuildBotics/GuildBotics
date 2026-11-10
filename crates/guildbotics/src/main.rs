@@ -87,7 +87,7 @@ enum Command {
     /// Connect this machine's CLI through the server's consent screen
     Connect,
     /// Open the GuildBotics screens in the browser. The browser enters with a
-    /// single-use link that expires after 60 seconds
+    /// shared single-use link that expires after 60 seconds. The session also opens Branvil
     Open {
         /// Print the link instead of opening it, to paste into a browser on
         /// another machine
@@ -409,10 +409,11 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
         return Ok(0);
     }
     let base_url = server.base_url();
+    let session = server.browser_session();
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let (_held, served) = server
         .serve_embedded(stop, cancel, async move {
-            branvil::prepare_embedded(BRANVIL, vault, &base_url).await
+            branvil::prepare_embedded(BRANVIL, vault, &base_url, session).await
         })
         .await;
     served?;

@@ -179,6 +179,13 @@ async fn session_create(State(app): State<Shared>, J(input): J<Enter>) -> R {
 }
 
 async fn session_get(State(app): State<Shared>, headers: HeaderMap) -> R {
+    if app.browser_session.get().is_some() {
+        let (member, csrf) = auth::host_session(&app, &Method::GET, &headers).await?;
+        return Ok(ok(members::SessionView {
+            me: members::member_view(&member),
+            csrf,
+        }));
+    }
     let id = auth::session_cookie(&app, &headers).ok_or_else(AppError::unauthorized)?;
     Ok(ok(members::current_session(&app, id).await?))
 }
@@ -1031,9 +1038,14 @@ async fn hook_post_receive(
 #[allow_missing = true]
 struct Gui;
 
-async fn gui(method: Method, uri: axum::http::Uri) -> Response {
+async fn gui(State(app): State<Shared>, method: Method, uri: axum::http::Uri) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return AppError::not_found("No such endpoint.").into_response();
+    }
+    if uri.path() == "/-/enter"
+        && let Some(host) = app.browser_session.get()
+    {
+        return axum::response::Redirect::to(host.entry_path()).into_response();
     }
     let path = uri.path().trim_start_matches('/');
     if path.starts_with("api/") || path.starts_with("git/") || path.starts_with("-/hooks/") {
@@ -1235,10 +1247,14 @@ async fn idempotency(State(app): State<Shared>, req: Request, next: Next) -> Res
     Response::from_parts(rparts, Body::from(rbytes))
 }
 
+loopback_auth::classified_routes!(fn entry_routes() -> Router<Shared>, ENTRY_ROUTES,
+    ("/session", (post, session_create, Public)),
+);
+
 loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROUTES,
     ("/health", (get, health, Public)),
     ("/me", (get, me, MemberSession)),
-    ("/session", (post, session_create, Public), (get, session_get, Session)),
+    ("/session", (get, session_get, Session)),
     ("/session/links", (post, session_link, OwnerSession)),
     ("/members", (get, members_list, OwnerSession), (post, members_create, OwnerSession)),
     ("/members/{name}", (get, member_get, MemberSession), (patch, member_patch, OwnerSession)),
@@ -1317,6 +1333,7 @@ pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
     let mut routes = Vec::new();
     for table in [
         API_ROUTES,
+        ENTRY_ROUTES,
         crate::ci::api::ROUTES,
         crate::ci::admin::ROUTES,
         crate::upstream::http::ROUTES,
@@ -1336,9 +1353,21 @@ pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
     routes
 }
 
+/// The integrated server has no Branvil entry-code exchange route.
+pub fn embedded_route_inventory() -> Vec<(String, loopback_auth::Route)> {
+    route_inventory()
+        .into_iter()
+        .filter(|(path, route)| !(path == "/api/v1/session" && route.method == "post"))
+        .collect()
+}
+
 pub fn router(app: Shared) -> Router {
     let body_limit = app.config.limits.api_body_max_kib << 10;
-    let api = api_routes()
+    let mut api = api_routes();
+    if app.browser_session.get().is_none() {
+        api = api.merge(entry_routes());
+    }
+    let api = api
         .merge(crate::ci::api::routes())
         .merge(crate::ci::admin::routes())
         .merge(crate::upstream::http::routes())
