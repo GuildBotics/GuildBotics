@@ -128,22 +128,34 @@ impl SystemAlerts {
                 this.apply(&r);
             }
         }
-        let chat = format!(
-            "credential:{}:",
-            text(&runtime["events"], "events_chat_provider")
-        );
-        let failed: BTreeSet<_> = runtime["events"]["events_auth_failed_persons"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(|p| format!("{chat}{p}"))
-            .collect();
+        let provider = text(&runtime["events"], "events_chat_provider");
+        let mut chat_alerts = BTreeMap::new();
+        let mut prefixes = vec![];
+        for (field, code, severity) in [
+            ("events_auth_failed_persons", "credential", "critical"),
+            (
+                "events_missing_credential_persons",
+                "credential_missing",
+                "warning",
+            ),
+        ] {
+            let prefix = format!("{code}:{provider}:");
+            for person in runtime["events"][field]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                chat_alerts.insert(format!("{prefix}{person}"), (person, code, severity));
+            }
+            prefixes.push(prefix);
+        }
         this.dismissed.retain(|k| {
             !(k.starts_with("agent-environment:")
                 || k == "runtime:scheduler" && runtime["scheduler"]["state"] != "failed"
                 || k == "runtime:events" && runtime["events"]["state"] != "failed"
-                || k.starts_with(&chat) && !failed.contains(k))
+                || prefixes.iter().any(|prefix| k.starts_with(prefix))
+                    && !chat_alerts.contains_key(k))
         });
         let mut visible = this.alerts.clone();
         for problem in problems {
@@ -212,22 +224,25 @@ impl SystemAlerts {
                 });
             }
         }
-        for key in failed {
+        for (key, (person, code, severity)) in chat_alerts {
             if !this.dismissed.contains(&key) {
-                let person = key.strip_prefix(&chat).unwrap();
                 visible.entry(key.clone()).or_insert_with(|| {
                     alert(
                         &key,
-                        "credential",
-                        "critical",
+                        code,
+                        severity,
                         text(&runtime["events"], "started_at"),
                         person,
                         "",
-                        text(&runtime["events"], "events_chat_provider"),
+                        provider,
                         "",
                         "",
                         "",
-                        json!(["diagnostics", "setup"]),
+                        if code == "credential_missing" {
+                            json!(["setup"])
+                        } else {
+                            json!(["diagnostics", "setup"])
+                        },
                     )
                 });
             }

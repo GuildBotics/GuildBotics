@@ -413,7 +413,7 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
   if (KEY_ALERTS.has(alert.code)) {
     return `/setup?${new URLSearchParams({ section: "intelligence" }).toString()}`;
   }
-  if (alert.code !== "credential" || !alert.person_id) {
+  if (!["credential", "credential_missing"].includes(alert.code) || !alert.person_id) {
     return "/setup";
   }
   // The member's account with the provider whose credential failed.
@@ -2762,6 +2762,14 @@ function ServiceRuntimeSection({
           <FragmentRow key={label} label={label} value={value || t("overview.unknown")} />
         ))}
       </dl>
+      {(unit?.events_missing_credential_count ?? 0) > 0 ? (
+        <Alert color="warning" title={t("overview.eventsCard.missingCredentialTitle")}>
+          {t("overview.eventsCard.missingCredentialBody", {
+            persons:
+              (unit?.events_missing_credential_persons ?? []).join(", ") || t("overview.unknown"),
+          })}
+        </Alert>
+      ) : null}
       {(unit?.events_auth_failed_count ?? 0) > 0 ? (
         <Alert color="danger" title={t("overview.eventsCard.authFailedTitle")}>
           {t("overview.eventsCard.authFailedBody", {

@@ -82,6 +82,8 @@ export const resources = {
           warning: "System warning",
         },
         codes: {
+          credential_missing:
+            "No {{provider}} token is configured for {{person}}. Add the token in the member settings and restart the service.",
           credential: "{{provider}} credentials for {{person}} could not be verified.",
           credential_llm: "The API key of the LLM provider {{command}} could not be verified.",
           credential_jev: "The Jev API key could not be verified.",
@@ -1235,6 +1237,9 @@ export const resources = {
           workerValue: "{{workers}}",
           processed: "Received events",
           processedValue: "received {{drained}} / failures {{failures}}",
+          missingCredentialTitle: "Chat token missing",
+          missingCredentialBody:
+            "No chat token is configured for: {{persons}}. Add their tokens and restart the service to receive events.",
           authFailedTitle: "Chat authentication failed",
           authFailedBody:
             "The chat rejected the credentials of: {{persons}}. These members cannot receive events until their credentials are fixed and the service is restarted.",
@@ -1493,6 +1498,8 @@ export const resources = {
           warning: "システム警告",
         },
         codes: {
+          credential_missing:
+            "{{person}} の {{provider}} トークンが設定されていません。メンバー設定でトークンを設定してサービスを再起動してください。",
           credential: "{{person}} の {{provider}} 資格情報を検証できませんでした。",
           credential_llm: "LLM provider {{command}} の API キーを検証できませんでした。",
           credential_jev: "Jev の API キーを検証できませんでした。",
@@ -2645,6 +2652,9 @@ export const resources = {
           workerValue: "{{workers}}",
           processed: "受信イベント",
           processedValue: "受信 {{drained}} / 失敗 {{failures}}",
+          missingCredentialTitle: "チャットのトークンがありません",
+          missingCredentialBody:
+            "次のメンバーにチャットのトークンが設定されていません: {{persons}}。トークンを設定してサービスを再起動するとイベントを受信できます。",
           authFailedTitle: "チャットの認証に失敗しました",
           authFailedBody:
             "チャットが次のメンバーの資格情報を拒否しました: {{persons}}。これらのメンバーは資格情報を修正してサービスを再起動するまでイベントを受信できません。",

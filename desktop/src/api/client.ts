@@ -136,6 +136,8 @@ export type RuntimeUnitStatus = {
   events_drained_count: number | null;
   events_auth_failed_count: number | null;
   events_auth_failed_persons: string[];
+  events_missing_credential_count: number | null;
+  events_missing_credential_persons: string[];
   /** The provider of the listened chat, whose credentials failed. */
   events_chat_provider: string;
   member_routines: RuntimeMemberRoutine[];
@@ -244,6 +246,7 @@ export type SystemAlert = {
   id: string;
   code:
     | "credential"
+    | "credential_missing"
     | "credential_llm"
     | "credential_jev"
     | "command_failed"
