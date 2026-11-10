@@ -7,11 +7,19 @@ managed by an OS service (see `README.md`). The authenticated data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
 `api::DataApi` directly in the service process. Both call the same domain
 operations, with the same member permissions, locks, events and CI triggers.
-`api::Running` starts that service and exposes its shared data handle.
+`prepare_embedded` takes the host origin and returns an `Embedded` service with
+its router, `DataApi`, and shutdown methods. It never binds. The host installs a
+503 fallback until Git locking, hook installation and ref recovery finish,
+then mounts that router behind its own routes on one listener (7878 by default).
+The origin is used for public links, hook callbacks and runner supervision.
+`api::Running` remains a standalone test host using the configured `listen`.
 Authenticate each member through `DataApi::authenticate`; every operation
 checks the token again so revocation takes effect. Smart HTTP and Git hook
-callbacks continue to use loopback HTTP. Shut down through `Running::stop`
-before exiting the embedding process.
+callbacks continue to use loopback HTTP. On shutdown the host refuses new GuildBotics requests and waits for its work,
+while still serving Branvil (including Git pushes and runner reports). It calls
+`Embedded::drain`, closes events, stops the shared listener with a five-second
+request grace, then calls `Embedded::close` before releasing the machine lock.
+Forced shutdown can skip the CI wait. Standalone hosts use `Running::stop`.
 
 ```
 browser GUI ─┐                         ┌─ redb (branvil.redb)

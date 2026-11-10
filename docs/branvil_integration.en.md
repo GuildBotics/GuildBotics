@@ -102,9 +102,8 @@ Members and their tokens are not created in Branvil: GuildBotics does that.
 
 Run the bundled script from a checkout on each machine other than the Hub. It
 needs only OpenSSH and the OS service manager; Python and the GuildBotics CLI are
-not needed. No setup is needed on the Hub itself, beyond accepting your SSH key. The
-same service forwards the GuildBotics server's port (8765) for the
-[browser](../README.md#use-it-from-a-browser); pass every port it should forward.
+not needed. No setup is needed on the Hub itself, beyond accepting your SSH key. Both services share port 7878, including the GuildBotics
+[browser](../README.md#use-it-from-a-browser). Forward that one port.
 
 1. Stop any `branvil tunnel` you run manually or as a service.
 2. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
@@ -120,7 +119,7 @@ same service forwards the GuildBotics server's port (8765) for the
 macOS (launchd user agent) and Linux (systemd user service):
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765
+sh scripts/hub-forward.sh install --hub my-hub --port 7878
 sh scripts/hub-forward.sh status
 # Replace the entire port list by running install again with every desired port.
 sh scripts/hub-forward.sh uninstall
@@ -131,7 +130,7 @@ Without `--agent-socket` the service disables agent use and needs an unencrypted
 key. To use an agent, pass its **stable, absolute socket path**, for example:
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765 --agent-socket "$SSH_AUTH_SOCK"
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
 ```
 
 The script sets `SSH_AUTH_SOCK` in the service. If your agent uses a new socket
@@ -141,7 +140,7 @@ macOS uses the agent made available to launchd by the OS.
 Windows (Task Scheduler, Windows PowerShell 5.1; no administrator account needed):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878,8765"
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878"
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
 # Replace the entire port list by running install again with every desired port.
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
@@ -157,7 +156,7 @@ the task also ends its ssh. macOS stores the definition at
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service` (logs via
 `journalctl --user -u hub-forward.service`). The scripts do not change SSH config,
 keys or known_hosts. There is one service per user: install replaces its Hub and
-complete port list, with repeated `--port` on POSIX or `-Port "7878,8765"` in PowerShell.
+complete port list; the integrated server needs only `--port 7878` on POSIX or `-Port "7878"` in PowerShell.
 
 All forwards bind only `127.0.0.1` and target the same port on the Hub's
 `127.0.0.1`. A dropped connection is detected by SSH keepalives and restarted.

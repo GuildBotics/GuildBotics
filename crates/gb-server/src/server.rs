@@ -15,7 +15,7 @@ use crate::i18n;
 /// Names the port the server listens on.
 pub const PORT_ENV: &str = "GUILDBOTICS_SERVER_PORT";
 const LOCK: &str = "run/app-api.lock";
-const DEFAULT_PORT: u16 = 8765;
+const DEFAULT_PORT: u16 = 7878;
 /// The line on stdout that tells a launcher the server listens on the port.
 pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 
@@ -268,10 +268,76 @@ impl Server {
         stop: impl Future<Output = ()> + Send + 'static,
         cancel: impl Future<Output = ()> + Send + 'static,
     ) -> (Held, anyhow::Result<()>) {
+        self.serve_inner(stop, cancel, None).await
+    }
+
+    pub fn base_url(&self) -> String {
+        self.api.auth.base_url().to_string()
+    }
+
+    /// Keep the shared listener alive through work and CI drain.
+    pub async fn serve_embedded(
+        self,
+        stop: impl Future<Output = ()> + Send + 'static,
+        cancel: impl Future<Output = ()> + Send + 'static,
+        prepare: impl Future<Output = anyhow::Result<branvil::Embedded>> + Send + 'static,
+    ) -> (Held, anyhow::Result<()>) {
+        self.serve_inner(stop, cancel, Some(Box::pin(prepare)))
+            .await
+    }
+
+    async fn serve_inner(
+        self,
+        stop: impl Future<Output = ()> + Send + 'static,
+        cancel: impl Future<Output = ()> + Send + 'static,
+        prepare: Option<
+            std::pin::Pin<Box<dyn Future<Output = anyhow::Result<branvil::Embedded>> + Send>>,
+        >,
+    ) -> (Held, anyhow::Result<()>) {
+        use axum::{Router, http::StatusCode, middleware};
+        use tower::ServiceExt;
+        let accepting = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (ready_tx, ready_rx) = tokio::sync::watch::channel(prepare.is_none());
+        let host_router = Arc::new(std::sync::RwLock::new(None::<Router>));
+        let host = prepare.as_ref().map(|_| {
+            let host_router = host_router.clone();
+            Router::new().fallback(move |request: axum::extract::Request| {
+                let router = host_router.read().unwrap().clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    match router {
+                        Some(router) => router.oneshot(request).await.unwrap(),
+                        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    }
+                }
+            })
+        });
+        let startup_api = self.api.clone();
+        let mut startup = tokio::spawn(async move {
+            let Some(prepare) = prepare else {
+                return Ok(None);
+            };
+            let embedded = prepare.await?;
+            let data_api = embedded.data_api();
+            startup_api
+                .branvil
+                .set(data_api.clone())
+                .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
+            let workspace = startup_api.selected().workspace.clone();
+            startup_api.select(Selected::open(workspace, &startup_api, Some(data_api)));
+            *host_router.write().unwrap() = Some(embedded.router());
+            ready_tx.send_replace(true);
+            tracing::info!("Branvil ready on the shared listener");
+            Ok::<_, anyhow::Error>(Some(embedded))
+        });
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());
         let autostart_api = self.api.clone();
         let start_services = self.start_services;
+        let mut ready_rx = ready_rx;
         let autostart = tokio::spawn(async move {
+            if ready_rx.wait_for(|ready| *ready).await.is_err() {
+                return;
+            }
             // Waits out a switch, then starts the service of what is selected.
             let _admitted = autostart_api.switching.clone().read_owned().await;
             let selected = autostart_api.selected();
@@ -305,16 +371,67 @@ impl Server {
         let maintenance = tokio::spawn(crate::diagnostics::maintenance(self.api.clone()));
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let service_api = self.api.clone();
-        let served = axum::serve(self.listener, api::router(self.api))
-            .with_graceful_shutdown(async move {
-                tokio::select! {
-                    () = stop => {},
-                    () = stop_request.wait() => {},
+        let integrated = host.is_some();
+        let gate = accepting.clone();
+        let router = api::router_with_host(self.api, host).layer(middleware::from_fn(
+            move |request: axum::extract::Request, next: middleware::Next| {
+                let guildbotics =
+                    !integrated || request.uri().path().starts_with("/-/guildbotics/");
+                let refuse = guildbotics
+                    && request.uri().path() != "/-/guildbotics/api/shutdown"
+                    && !gate.load(std::sync::atomic::Ordering::Acquire);
+                async move {
+                    use axum::response::IntoResponse;
+                    if refuse {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    } else {
+                        next.run(request).await
+                    }
                 }
-                stop_autostart.abort();
-                service.selected().service.stop(false).await;
-            })
-            .await;
+            },
+        ));
+        let (network_stop, network_stopped) = tokio::sync::oneshot::channel();
+        let mut network = tokio::spawn(async move {
+            axum::serve(self.listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = network_stopped.await;
+                })
+                .await
+        });
+        tokio::pin!(stop);
+        let mut startup_consumed = false;
+        let mut embedded = None;
+        let mut failure = None;
+        tokio::select! {
+            () = &mut stop => {},
+            () = stop_request.wait() => {},
+            result = &mut startup => {
+                startup_consumed = true;
+                match result {
+                    Ok(Ok(service)) => embedded = service,
+                    Ok(Err(error)) => failure = Some(error),
+                    Err(error) => failure = Some(error.into()),
+                }
+                if failure.is_none() {
+                    tokio::select! {
+                        () = stop_request.wait() => {},
+                        () = &mut stop => {},
+                        result = &mut network => { failure = Some(anyhow::anyhow!("HTTP listener ended: {result:?}")); },
+                    }
+                }
+            },
+        }
+        accepting.store(false, std::sync::atomic::Ordering::Release);
+        stop_autostart.abort();
+        service.selected().service.stop(false).await;
+        if !startup_consumed {
+            if !startup.is_finished() {
+                startup.abort();
+            }
+            if let Ok(Ok(service)) = startup.await {
+                embedded = service;
+            }
+        }
         autostart.abort();
         let _ = autostart.await;
         maintenance.abort();
@@ -331,6 +448,28 @@ impl Server {
         gb_environment::worktree::drain_writebacks().await;
         gb_environment::snapshot::drain_builds().await;
         gb_environment::runtime::drain_vms().await;
+        if let Some(embedded) = embedded {
+            tokio::select! {
+                result = embedded.drain() => { if let Err(error) = result { failure = Some(error); } },
+                () = service_api.cancelled.cancelled() => {},
+            }
+            embedded.close_events();
+            let _ = network_stop.send(());
+            if !network.is_finished()
+                && tokio::time::timeout(std::time::Duration::from_secs(5), &mut network)
+                    .await
+                    .is_err()
+            {
+                network.abort();
+                let _ = network.await;
+            }
+            embedded.close().await;
+        } else {
+            let _ = network_stop.send(());
+            if !network.is_finished() {
+                let _ = network.await;
+            }
+        }
         cancelling.abort();
         let diagnostics = service_api
             .selected()
@@ -343,7 +482,7 @@ impl Server {
                 result => tracing::warn!("cannot finish system transcript: {result:?}"),
             }
         }
-        (Held(self.lock), served.map_err(Into::into))
+        (Held(self.lock), failure.map_or(Ok(()), Err))
     }
 }
 
@@ -442,6 +581,7 @@ mod tests {
 
     #[test]
     fn port_settings_allow_only_decimal_tcp_ports() {
+        assert_eq!(parse_port("").unwrap(), 7878);
         for (raw, expected) in [
             ("", DEFAULT_PORT),
             ("  ", DEFAULT_PORT),
@@ -478,6 +618,71 @@ mod tests {
         ServerLock::hold(data.path(), 8766).unwrap();
         assert_eq!(read_lock(&path), Some((std::process::id(), 8766)));
     }
+    #[tokio::test]
+    async fn embedded_routes_are_unavailable_until_preparation_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), port).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let server = Server {
+            lock: ServerLock::hold(root.path(), port).unwrap(),
+            listener,
+            api,
+            start_services: false,
+        };
+        let (finish, prepared) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(server.serve_embedded(
+            std::future::pending(),
+            std::future::pending(),
+            async {
+                prepared.await.unwrap();
+                anyhow::bail!("fixture preparation failed")
+            },
+        ));
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        for path in [
+            "/",
+            "/api/v1/health",
+            "/git/acme/demo.git/info/refs",
+            "/api/v1/runner/claim",
+        ] {
+            let response = http
+                .get(format!("http://127.0.0.1:{port}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                "{path}"
+            );
+        }
+        let response = http
+            .get(format!("http://127.0.0.1:{port}/-/guildbotics/unknown"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+        finish.send(()).unwrap();
+        let (_, result) = serving.await.unwrap();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "fixture preparation failed"
+        );
+    }
+
     #[tokio::test]
     async fn autostart_waits_for_service_without_blocking_http_readiness() {
         use tokio_util::sync::CancellationToken;

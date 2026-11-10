@@ -439,7 +439,7 @@ For a macOS Hub that runs GuildBotics and Branvil at login, follow the [Hub inst
 
 ### Use It from a Browser
 
-The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765/-/guildbotics/`, and you use them in a browser.
+The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:7878/-/guildbotics/`, and you use them in a browser.
 
 **On the machine where the server runs**:
 
@@ -477,7 +477,7 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
 
    `~/.guildbotics/bin/guildbotics` is the managed binary. Re-run `guildbotics install` from a newly built binary to update it.
 
-4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 8765` (and `--port 7878` as well when you use Branvil). For a single session, `ssh -L 8765:127.0.0.1:8765 <Hub>` also works.
+4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 7878`. For a single session, `ssh -L 7878:127.0.0.1:7878 <Hub>` also works.
 5. Print an entry link on the Hub and paste it into your browser:
 
    ```bash
@@ -493,7 +493,7 @@ What the screens do with files and folders:
 - A file dropped on a command's input, or an image pasted there, is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped). Uploaded files stay until the server restarts, and the manual runs started from the screens can read them
 - Settings labelled "this machine" (keeping it awake, the registered workspaces) are the Hub's
 
-**Port**: the server listens on the fixed port 8765. If another program uses that port, the server does not start. To use another port, set `GUILDBOTICS_SERVER_PORT` wherever the server and the CLI start; both read it (the service keeps the value it was installed with).
+**Port**: the server listens on the fixed port 7878. If another program uses that port, the server does not start. To use another port, set `GUILDBOTICS_SERVER_PORT` wherever the server and the CLI start; both read it (the service keeps the value it was installed with).
 
 ### Account-Related Environment Variables
 

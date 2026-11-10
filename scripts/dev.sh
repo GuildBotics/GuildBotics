@@ -17,8 +17,8 @@ ready.
   --no-open        Start the server without opening a browser.
   -h, --help       Show this help.
 
-GuildBotics listens on GUILDBOTICS_SERVER_PORT (default here: 8866), Branvil
-on the address it was set up with (127.0.0.1:7879 here). GUILDBOTICS_WORKSPACE_ROOT
+Both services listen on GUILDBOTICS_SERVER_PORT (default here: 8866). Existing
+Branvil data is reused; its standalone listen/base_url settings are ignored. GUILDBOTICS_WORKSPACE_ROOT
 selects the workspace, which the server then records its runs in. The
 device's runtime, which the Python version placed, is linked under home/data
 for the commands to run in. Restart to pick up code changes.
@@ -91,7 +91,7 @@ if [[ -d "$runtime" && ! -e "$GUILDBOTICS_HOME/data/msb" && ! -L "$GUILDBOTICS_H
 fi
 
 if [[ ! -f "$BRANVIL_DATA_DIR/branvil.redb" ]]; then
-  "$binary" branvil init --data-dir "$BRANVIL_DATA_DIR" --owner "$owner" --listen 127.0.0.1:7879
+  "$binary" branvil init --data-dir "$BRANVIL_DATA_DIR" --owner "$owner" --listen "127.0.0.1:$GUILDBOTICS_SERVER_PORT"
 fi
 
 mkdir -p "$data_dir"
@@ -107,7 +107,7 @@ log="$data_dir/server.log"
 # where it does not, a server that stopped opens no screen.
 open_screens() {
   local deadline=$((SECONDS + 60))
-  until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'listening on http' "$log"; do
+  until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'Branvil ready on the shared listener' "$log"; do
     # Ended, even before whoever started the launcher reaps it.
     case "$(ps -o stat= -p "$server" 2>/dev/null)" in ""|Z*) return 0 ;; esac
     if (( SECONDS >= deadline )); then

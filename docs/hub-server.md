@@ -31,7 +31,7 @@ scripts/hub-server.sh status
 
 `install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスで両方のポートを待ち受けます。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。画面は `http://127.0.0.1:8765/-/guildbotics/` で配り、`/` はこの場所へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
 インストール後の最初の起動時、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。同じ識別で署名した更新では、これらの確認は出ません。
 
@@ -124,3 +124,41 @@ scripts/hub-server.sh recover
 - `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin は Branvil の clone URL（`{base}/git/{repo}.git`）の形で、設定済み base URL と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先は設定済み Hub に固定し、プロキシやリダイレクトを使いません。トークンは `BRANVIL_DATA_DIR` の `secrets/owner.token` から直接読み、引数や環境変数では受け取りません。
 - `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
 - `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。
+
+## ポートを 7878 にまとめる版への切り替え
+
+この版の `manual_update_version` は 2。自動更新は手作業が必要として止まる。
+実機への適用は #177 で行う。既存のチケット・PR・Git remote の 7878 の URL は変えない。
+入口リンクとブラウザのセッションは GuildBotics と Branvil で別々のままである。
+
+### Hub
+
+1. 稼働中の作業が終わるのを待ち、保存した設定で `sh scripts/hub-server.sh update` を実行する。
+   LaunchAgent に `GUILDBOTICS_SERVER_PORT=8765` を設定していた場合は、その指定を外すか
+   7878 に変更して `sh scripts/hub-server.sh install` で登録し直す。CLI 側も同じ値にする。
+2. `guildbotics open` で `http://127.0.0.1:7878/-/guildbotics/` に入り直す。
+   8765 のセッションは移せない。言語などブラウザの origin ごとの設定も選び直す。
+3. `connections/branvil.yml` の `base_url` が共通の URL と一致することを確認する。
+   既定の 7878 なら変更不要。独自ポートなら GuildBotics の接続設定も同じ URL にする。
+   統合サーバーと `guildbotics branvil` のクライアントは `GUILDBOTICS_SERVER_PORT` を使い、
+   Branvil の `listen` は単体の `guildbotics branvil serve` だけで使う。
+4. 新しい接続を確認後、古い `~/.guildbotics/data/server/8765/` を削除する。
+   キーチェーンアクセスで service `guildbotics-server`、account `127.0.0.1:8765` の
+   古い同意トークンを削除する。別の項目や新しい 7878 の記録は削除しない。
+
+### Hub 以外のマシン
+
+1. 既存の転送サービスを、完全なポート一覧として 7878 だけを指定して入れ直す。
+   POSIX は `sh scripts/hub-forward.sh install --hub my-hub --port 7878`。
+   Windows は `powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878"`。
+   `my-hub` は実際の SSH 設定の別名に置き換える。
+2. ブラウザで `guildbotics open` の新しい入口を開く。`guildbotics connect` を使っていた
+   マシンでは同じコマンドで同意を取り直す。古い 8765 の同意トークンと記録を上記と同様に削除する。
+3. GuildBotics と Branvil の画面、チケット URL、Git fetch / push を確認する。
+   8765 の転送では GuildBotics の画面を開けない。
+
+### 開発用データ
+
+`scripts/dev.sh` は両方を 8866（変更時は `GUILDBOTICS_SERVER_PORT`）で起動する。
+既存の開発用 Branvil のデータはそのまま使う。`branvil.toml` の 7879 の `listen` や
+`base_url` は統合サーバーでは使わない。開発ワークスペースの Branvil 接続設定も共通 URL に変更する。

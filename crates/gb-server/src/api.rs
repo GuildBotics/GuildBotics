@@ -27,9 +27,7 @@ use crate::i18n;
 const LANGUAGE_HEADER: &str = "x-guildbotics-language";
 
 /// The screens' policy: scripts only from the server itself.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; \
-form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+use loopback_auth::CSP;
 
 /// What every request of the server shares.
 pub struct Api {
@@ -572,23 +570,35 @@ routes!(
     (post, "/session/links", entry_link),
 );
 
+#[cfg(test)]
 pub fn router(api: Shared) -> Router {
+    router_with_host(api, None)
+}
+
+pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
     let owners =
         owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     let anyone = public_routes();
-    Router::new()
-        .route(
+    let host = host.unwrap_or_else(|| {
+        Router::new().route(
             "/",
             get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
         )
+    });
+    Router::new()
         .nest("/-/guildbotics/api", owners.merge(anyone))
         .route(
             crate::provider_api::CALLBACK_PATH,
             get(crate::provider_api::connected),
         )
         .merge(crate::ui::router(crate::ui::directory()))
-        .layer(middleware::from_fn_with_state(api.clone(), guard))
-        .with_state(api)
+        .route(
+            "/-/guildbotics/{*path}",
+            axum::routing::any(|| async { StatusCode::NOT_FOUND }),
+        )
+        .with_state(api.clone())
+        .merge(host)
+        .layer(middleware::from_fn_with_state(api, guard))
 }
 
 /// Refuses a request for another host or from another origin before

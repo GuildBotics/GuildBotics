@@ -1076,7 +1076,7 @@ async fn gui(method: Method, uri: axum::http::Uri) -> Response {
 // Inline styles are allowed for the GUI's component library (Mantine), which
 // sets each component's look through `style` attributes, as GuildBotics
 // Desktop does; scripts stay limited to the GUI's own files.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+use loopback_auth::CSP;
 
 /// Host and Origin checks (DNS-rebinding protection) and security headers.
 async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response {

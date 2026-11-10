@@ -131,8 +131,8 @@ impl Server {
                 .stderr
                 .recv_timeout(Duration::from_secs(30))
                 .expect("Branvil says where it listens");
-            if let Some((_, rest)) = line.split_once("listening on ") {
-                return rest.split_whitespace().next().unwrap().to_string();
+            if line.contains("Branvil ready on the shared listener") {
+                return self.url("");
             }
         }
     }
@@ -1003,9 +1003,19 @@ fn branvil_runs_in_the_server_and_its_hooks_run_on_this_executable() {
             "127.0.0.1:0",
         ],
     ));
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    std::fs::write(
+        data.join("branvil.toml"),
+        format!(
+            "listen = '{}'\nbase_url = 'http://127.0.0.1:1'\n",
+            occupied.local_addr().unwrap()
+        ),
+    )
+    .unwrap();
     let token = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
     let server = Server::start(dir.path());
     let url = server.branvil_url();
+    assert_eq!(url, server.url(""));
 
     for args in [
         ["branvil", "workspace", "create", "acme"],
@@ -1069,7 +1079,13 @@ fn open_can_print_a_branvil_entry_link() {
     let data = set_up_branvil(dir.path(), &listen);
     let server = Server::start(dir.path());
     let url = server.branvil_url();
-    let opened = guildbotics(&data, &["open", "--branvil", "--print"]);
+    let opened = Command::new(BIN)
+        .args(["open", "--branvil", "--print"])
+        .env("BRANVIL_DATA_DIR", &data)
+        .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
+        .env_remove("BRANVIL_URL")
+        .output()
+        .unwrap();
     server.stop();
     assert_ok(&opened);
     let link = String::from_utf8(opened.stdout).unwrap();
@@ -1131,7 +1147,8 @@ fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
 fn branvil_failing_to_start_stops_the_server() {
     let dir = tempfile::tempdir().unwrap();
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    set_up_branvil(dir.path(), &taken.local_addr().unwrap().to_string());
+    let data = set_up_branvil(dir.path(), &taken.local_addr().unwrap().to_string());
+    std::fs::write(data.join("branvil.toml"), "invalid = true").unwrap();
     let mut child = server_command(dir.path(), free_port())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -1141,7 +1158,7 @@ fn branvil_failing_to_start_stops_the_server() {
     std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
     let status = child.wait().unwrap();
     assert!(!status.success());
-    assert!(stderr.contains("cannot listen"), "{stderr}");
+    assert!(stderr.contains("unknown field"), "{stderr}");
 }
 
 #[test]
@@ -1920,6 +1937,31 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
                 .unwrap()
                 .is_some()
         );
+        let refused = server
+            .http
+            .get(server.url("/-/guildbotics/api/config/status"))
+            .bearer_auth(server.owner_token())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let attempt = claim["attempt_id"].as_str().unwrap();
+        let heartbeat = server
+            .http
+            .post(format!("{url}/api/v1/runner/attempts/{attempt}/heartbeat"))
+            .bearer_auth(runner.trim())
+            .json(&json!({"lease": claim["lease"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(heartbeat.status(), StatusCode::OK);
+        let remote = format!("{url}/git/acme/demo.git");
+        assert_ok(&git(
+            &work,
+            &home,
+            owner.trim(),
+            &["push", "-q", &remote, "main:refs/heads/during-drain"],
+        ));
         if interrupt {
             let result = Command::new("kill")
                 .args(["-TERM", &server.child.id().to_string()])

@@ -17,7 +17,7 @@
 scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ```
 
-開発用のデータとポート（GuildBotics 8866、Branvil 7879）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
+開発用のデータとポート（両サービス共通で 8866）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
 
 ## 実装と責務境界
 

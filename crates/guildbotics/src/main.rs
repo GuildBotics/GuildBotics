@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 /// How Branvil's commands are started on this executable: the hook scripts
 /// and the automatic runner start them again.
@@ -141,10 +141,11 @@ enum ServerCommand {
     /// Run the server in the foreground until SIGINT or SIGTERM (a first
     /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
     /// cancels them): GuildBotics
-    /// on GUILDBOTICS_SERVER_PORT (default 8765) with its records under
+    /// on GUILDBOTICS_SERVER_PORT (default 7878) with its records under
     /// GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once
-    /// `guildbotics branvil init` has set it up, as `guildbotics branvil serve`
-    /// without options runs it (BRANVIL_DATA_DIR chooses its data directory)
+    /// `guildbotics branvil init` has set it up, on the same listener
+    /// (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting
+    /// is used only by `guildbotics branvil serve`)
     Start {
         /// Start services even when automatic startup is disabled
         #[arg(long)]
@@ -357,7 +358,11 @@ fn browse(url: &str) -> bool {
 /// Branvil's commands, keeping its secrets in the identity store.
 fn branvil_main(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
-    branvil::main(BRANVIL, vault, args)
+    let url = match gb_server::port() {
+        Ok(port) => format!("http://127.0.0.1:{port}"),
+        Err(error) => return outcome(Err(error)),
+    };
+    branvil::main_with_client_url(BRANVIL, vault, args, Some(url))
 }
 
 fn start(services: bool) -> anyhow::Result<u8> {
@@ -403,70 +408,13 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
         served?;
         return Ok(0);
     }
-    let shutdown = server.shutdown_requests();
-    let abort_branvil = Arc::new(Notify::new());
-    let guildbotics_drained = Arc::new(Notify::new());
-    let interrupt = {
-        let abort_branvil = abort_branvil.clone();
-        let shutdown = shutdown.clone();
-        async move {
-            tokio::select! {
-                () = wait_for_stop(signals, Stop::Cancelling) => {},
-                () = shutdown.wait_for_cancel() => {},
-                () = abort_branvil.notified() => {},
-            }
-        }
-    };
-    let drain_ci = {
-        let guildbotics_drained = guildbotics_drained.clone();
-        async move { guildbotics_drained.notified().await }
-    };
-    let (ready, data_api) = tokio::sync::oneshot::channel();
+    let base_url = server.base_url();
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
-    let mut branvil = tokio::spawn(branvil::serve_with_data_api(
-        BRANVIL, vault, interrupt, drain_ci, ready,
-    ));
-    let mut stop = Box::pin(stop);
-    let data_api = tokio::select! {
-        biased;
-        () = &mut stop => {
-            // No work was admitted yet. Stop even if Branvil is still starting.
-            abort_branvil.notify_one();
-            return branvil.await?;
-        }
-        result = data_api => match result {
-            Ok(api) => api,
-            Err(_) => return branvil.await?,
-        },
-    };
-    if let Err(error) = server.attach_branvil(data_api) {
-        abort_branvil.notify_one();
-        let _ = branvil.await;
-        return Err(error);
-    }
-
-    let serving = server.serve(stop, cancel);
-    tokio::pin!(serving);
-    let (_held, served) = tokio::select! {
-        drained = &mut serving => {
-            // Work that can still use Branvil has finished. Keep the machine
-            // lock through Branvil's own shutdown, including any CI wait.
-            if drained.1.is_ok() {
-                guildbotics_drained.notify_one();
-            } else {
-                abort_branvil.notify_one();
-            }
-            branvil.await??;
-            drained
-        }
-        ended = &mut branvil => {
-            // Work depending on a peer that exited cannot drain normally.
-            shutdown.request(true);
-            let drained = serving.await;
-            ended??;
-            drained
-        }
-    };
+    let (_held, served) = server
+        .serve_embedded(stop, cancel, async move {
+            branvil::prepare_embedded(BRANVIL, vault, &base_url).await
+        })
+        .await;
     served?;
     // Branvil logs CI jobs interrupted at its deadline. An orderly stop of
     // the combined server must exit successfully so launchd leaves it stopped.
