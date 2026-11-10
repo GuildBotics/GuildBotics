@@ -84,28 +84,34 @@ scripts/hub-server.sh recover
 
 ## 署名を入れる前のHubを移す
 
-`hub-update.json` の `manual_update_version` 1 の手作業です。署名の識別を記録していないHubでは、`update` が切り替えの前に止まります。
+`hub-update.json` の `manual_update_version` 1 の手作業です。署名の識別を記録していないHubでは、`update` が切り替えの前に止まります。次のコマンドは、Hubのチェックアウトの同じターミナルで続けて実行します。
 
 1. [署名の識別を用意する](#署名の識別を用意する)の手順で識別を用意します。
-2. 退避と予行を通すため、この変更の直前のコミットまで、いつもの手動更新を行います。
+2. 署名を入れた変更のコミットを求め、その直前のコミットまで、退避と予行を通すいつもの手動更新を行います。チェックアウトがすでに先へ進んでいれば、`git reset --keep` がそこへ戻します。
 
    ```sh
    git fetch origin main
-   git merge --ff-only "$(git log --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)^"
+   change=$(git log --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)
+   git reset --keep "$change^"
    scripts/hub-server.sh update
    ```
 
-3. この変更を含むコミットへ進め、LaunchAgentの登録を解除してから、識別を指定してインストールし直します。最初の起動で出るキーチェーンと「書類」フォルダの確認には、[インストール](#インストール)のとおりに答えます。
+3. 署名を入れた変更のコミットへ進め、LaunchAgentの登録を解除してから、識別を指定してインストールし直します。`install` はこのシェルの `PATH` をLaunchAgentに記録します。`GUILDBOTICS_HOME` や `GUILDBOTICS_SERVER_PORT` を変えていた場合は、それも同じ値を設定します。最初の起動で出るキーチェーンと「書類」フォルダの確認には、[インストール](#インストール)のとおりに答えます。
 
    ```sh
-   git merge --ff-only FETCH_HEAD
+   git merge --ff-only "$change"
    scripts/hub-server.sh uninstall
    export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
    export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
    scripts/hub-server.sh install
    ```
 
-   `GUILDBOTICS_HOME` や `GUILDBOTICS_SERVER_PORT` を変えていた場合は、それも同じ値を設定します。
+4. 残りのコミットへ、いつもの手動更新で進めます。
+
+   ```sh
+   git merge --ff-only FETCH_HEAD
+   scripts/hub-server.sh update
+   ```
 
 ## 自動更新用の内部コマンド
 
