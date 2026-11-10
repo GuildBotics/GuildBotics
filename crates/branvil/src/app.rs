@@ -30,8 +30,11 @@ pub struct App {
     pub upstream: crate::upstream::Upstream,
     /// Landing pull requests automatically, and the webhook told of it.
     pub autoland: crate::autoland::Autoland,
-    /// Signs collection cursors.
+    /// Signs collection cursors; made per process, so a restart ends the
+    /// cursors handed out before (`invalid_cursor`).
     pub cursor_key: Vec<u8>,
+    /// Members' upstream credentials and the webhook's URL.
+    pub secrets: crate::vault::Secrets,
     /// Shared with the hook processes this service spawns (through the Git
     /// child's environment); authenticates their callbacks.
     pub hook_secret: String,
@@ -55,6 +58,9 @@ pub struct App {
     /// Requests that carry the same `Idempotency-Key` of the same member run
     /// one at a time; other keys do not wait for them.
     pub idempotency: KeyedLocks,
+    /// One change of a member's account on a host at a time
+    /// (`upstream::ops`).
+    pub accounts: KeyedLocks,
     /// When a token's `last_used_at` was last written (to write it at most
     /// once a minute).
     pub token_touched: Mutex<HashMap<String, std::time::Instant>>,
@@ -129,10 +135,11 @@ impl App {
         config: Config,
         base_url: String,
         store: Store,
-        cursor_key: Vec<u8>,
+        vault: Arc<dyn crate::vault::Vault>,
         hook_url: String,
     ) -> Shared {
         let layout = config.layout();
+        let secrets = crate::vault::Secrets::new(vault, &layout.root);
         let git = Git::new(
             layout.clone(),
             config.limits.git_concurrency,
@@ -161,7 +168,8 @@ impl App {
             ci,
             upstream: crate::upstream::Upstream::new(&config.upstream),
             autoland: Default::default(),
-            cursor_key,
+            cursor_key: crate::util::random_bytes::<32>().to_vec(),
+            secrets,
             hook_secret: crate::util::random_secret::<32>(),
             hook_url,
             repo_locks: Mutex::new(HashMap::new()),
@@ -169,6 +177,7 @@ impl App {
             file_deletions: Default::default(),
             me: me.clone(),
             idempotency: KeyedLocks::default(),
+            accounts: KeyedLocks::default(),
             token_touched: Mutex::new(HashMap::new()),
             entry_codes: Mutex::default(),
             app_codes: Mutex::default(),
@@ -325,7 +334,7 @@ mod tests {
             config,
             "http://127.0.0.1:7878".into(),
             store,
-            vec![],
+            std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         )
     }

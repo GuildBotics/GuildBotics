@@ -4,7 +4,12 @@ const SLACK_PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
 async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi, String) {
     let path = f.root.join("branvil");
     let token = branvil::api::initialize(&path, "owner1").unwrap();
-    let running = branvil::api::Running::start(&path).await.unwrap();
+    let running = branvil::api::Running::start(
+        &path,
+        std::sync::Arc::new(branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     f.api.branvil.set(running.data.clone()).ok().unwrap();
     f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &token);
     f.write(

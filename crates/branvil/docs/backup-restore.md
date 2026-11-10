@@ -39,7 +39,7 @@ branvil-2026-10-14/          (0700)
                    "bundle": "repos/repo_01K….bundle",
                    "refs": {"refs/heads/main": "<sha>", "refs/branvil/upstream/main": "<sha>"}}],
  "files": [{"path": "branvil.redb", "bytes": 565248, "sha256": "…"}, "…"],
- "excluded": ["secrets/ (…)", "secrets/accounts/ (…)", "secrets/webhook.url (…)", "hooks/ and git/ (…)", "Git reflogs (…)"],
+ "excluded": ["secrets/ (…)", "members' upstream credentials and the webhook URL (…)", "hooks/ and git/ (…)", "Git reflogs (…)"],
  "account_tokens_excluded": [{"member": "aiko", "provider": "github"}]}
 ```
 
@@ -137,9 +137,9 @@ GuildBotics stays valid. Two services on the same base URL cannot both listen.
 | Member tokens | Yes, as SHA-256 hashes in the database | The same tokens keep working after a restore, except the owner's token file's. A hash does not give the token, but protect the backup like the data directory (it is created `0700`). |
 | The owner's token (`secrets/owner.token`) | No | The first start of the restored service writes a new one and revokes the old. |
 | GUI sessions | Their records, but they do not survive | The new owner token's start deletes every session. |
-| Members' upstream credentials (`secrets/accounts/`: tokens, GitHub App keys) | **No** | A credential for GitHub is a secret of another system; a backup copied to another disk or machine should not carry it. After a restore the accounts (provider, kind, and login) are there, but polling reports that the credential is not on this machine and nothing is read or sent until it is set again (`PUT …/members/{name}/accounts/{provider}`). `guildbotics branvil backup` and `guildbotics branvil restore` list these accounts. |
-| The notification webhook's URL (`secrets/webhook.url`) | **No** | Like an upstream credential, it is a secret of another system. After a restore nothing is told until the owner sets it again (Settings → Notifications, `PUT /api/v1/admin/webhook`); it is then told of pending CI failures, automatic-retry recoveries, and passed-gate notices for pull requests still open on the host. |
-| `secrets/cursor.key` | No | A new key is made at the first start; list cursors handed out before become `invalid_cursor`, which clients recover from by starting the list again. |
+| Members' upstream credentials (tokens, GitHub App keys) | **No** | A credential for GitHub is a secret of another system; a backup copied to another disk or machine should not carry it. It is in the service's vault ([security](security.md#upstream-tokens)), named after the data directory's path: a restore into the same path on the same machine, with the same vault, finds it again; a restore anywhere else has the accounts (provider, kind, and login), but polling reports that the credential is not on this machine and nothing is read or sent until it is set again (`PUT …/members/{name}/accounts/{provider}`). `guildbotics branvil backup` and `guildbotics branvil restore` list these accounts. |
+| The notification webhook's URL | **No** | Like an upstream credential, it is a secret of another system, kept in the vault the same way. After a restore elsewhere nothing is told until the owner sets it again (Settings → Notifications, `PUT /api/v1/admin/webhook`); it is then told of pending CI failures, automatic-retry recoveries, and passed-gate notices for pull requests still open on the host. |
+| The cursor signing key | No | It is made per process: list cursors handed out before a start become `invalid_cursor`, which clients recover from by starting the list again. |
 | The hook secret | No | It is made per process. |
 
 ## Not in a backup

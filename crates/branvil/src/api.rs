@@ -735,12 +735,16 @@ pub struct Running {
     task: Option<tokio::task::JoinHandle<anyhow::Result<u8>>>,
 }
 impl Running {
-    pub async fn start(data_dir: &std::path::Path) -> anyhow::Result<Self> {
+    pub async fn start(
+        data_dir: &std::path::Path,
+        vault: std::sync::Arc<dyn crate::vault::Vault>,
+    ) -> anyhow::Result<Self> {
         let config = crate::config::Config::load(None, Some(data_dir), None, None)?;
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (ready, started) = tokio::sync::oneshot::channel();
         let mut task = tokio::spawn(crate::cli::serve_with_api(
             config,
+            vault,
             async {
                 let _ = stopped.await;
             },
@@ -789,7 +793,12 @@ mod tests {
     async fn authenticated_data_operations_share_permissions_and_revocation() {
         let temp = tempfile::tempdir().unwrap();
         let token = initialize(temp.path(), "owner1").unwrap();
-        let running = Running::start(temp.path()).await.unwrap();
+        let running = Running::start(
+            temp.path(),
+            std::sync::Arc::new(crate::vault::Memory::default()),
+        )
+        .await
+        .unwrap();
         let api = &running.data;
         assert!(api.authenticate("invalid".into()).await.is_err());
         let owner = api.authenticate(token).await.unwrap();

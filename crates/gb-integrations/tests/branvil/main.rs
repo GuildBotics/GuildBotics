@@ -314,7 +314,12 @@ async fn scenario() {
     let data = temp.path().join("branvil");
     let owner_token = ::branvil::api::initialize(&data, "owner").unwrap();
     let alert_host = alerts::Host::configure(&data);
-    let running = ::branvil::api::Running::start(&data).await.unwrap();
+    let running = ::branvil::api::Running::start(
+        &data,
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     let base = running.data.base_url().to_owned();
     let owner = running
         .data
@@ -816,7 +821,11 @@ async fn scenario() {
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|a| a == "hook") {
-        return ::branvil::main(::branvil::Invocation::standalone(), args);
+        return ::branvil::main(
+            ::branvil::Invocation::standalone(),
+            std::sync::Arc::new(::branvil::vault::Memory::default()),
+            args,
+        );
     }
     if args.iter().any(|a| a == "--list") {
         println!("branvil_three_paths: test");

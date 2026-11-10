@@ -33,7 +33,7 @@ pub struct Member {
     pub display_name: String,
     pub kind: MemberKind,
     /// Accounts on upstream code hosts, one per provider. Their credentials
-    /// are files under `<data>/secrets/accounts/`, never in this record.
+    /// are in the service's vault (`vault::Secrets`), never in this record.
     pub accounts: Vec<Account>,
     /// The members asked to review every pull request this member opens,
     /// by their names: owners and agents other than this member.

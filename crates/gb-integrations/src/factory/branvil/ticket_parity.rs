@@ -13,7 +13,12 @@ impl Fixture {
     async fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let token = initialize(temp.path(), "owner1").unwrap();
-        let running = Running::start(temp.path()).await.unwrap();
+        let running = Running::start(
+            temp.path(),
+            std::sync::Arc::new(::branvil::vault::Memory::default()),
+        )
+        .await
+        .unwrap();
         let owner = running.data.authenticate(token.clone()).await.unwrap();
         for workspace in ["test", "other"] {
             owner

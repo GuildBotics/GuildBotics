@@ -81,9 +81,8 @@ pub struct AccountEntry {
 }
 
 const EXCLUDED: &[&str] = &[
-    "secrets/ (cursor signing key and owner token: the first start makes new ones; old list cursors and every GUI session end)",
-    "secrets/accounts/ (members' upstream credentials: set them again after a restore)",
-    "secrets/webhook.url (the webhook told of automatic publishes: set it again after a restore)",
+    "secrets/ (the owner token: the first start makes a new one and every GUI session ends)",
+    "members' upstream credentials and the webhook URL (in the service's vault, named after its data directory: set them again after a restore into another directory)",
     "hooks/ and git/ (written again at every start)",
     "Git reflogs and repository-local Git configuration (Branvil re-applies its own at start)",
 ];
@@ -542,7 +541,7 @@ mod tests {
             config,
             "http://127.0.0.1:7878".into(),
             store,
-            vec![],
+            std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         )
     }

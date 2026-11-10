@@ -1205,7 +1205,7 @@ mod tests {
             config,
             "http://127.0.0.1:7878".into(),
             ci.inner.store.clone(),
-            vec![],
+            std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         );
         // Even an explicit protection pattern cannot make a hidden gate save caches.

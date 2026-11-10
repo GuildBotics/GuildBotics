@@ -3,7 +3,8 @@
 //!
 //! The `branvil` executable runs `main`; another executable may run the same
 //! commands under one of its own (`main` with its `Invocation`) and the
-//! service in its own process (`serve`).
+//! service in its own process (`serve_with_data_api`), each with the vault
+//! of that executable (`vault::Vault`).
 
 pub mod api;
 mod app;
@@ -31,10 +32,12 @@ mod store;
 mod upgrade;
 mod upstream;
 mod util;
+pub mod vault;
 mod webhook;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
@@ -203,6 +206,7 @@ enum Command {
 /// runs `askpass_main` first.
 pub fn main(
     invocation: Invocation,
+    vault: Arc<dyn vault::Vault>,
     argv: impl IntoIterator<Item = OsString>,
 ) -> std::process::ExitCode {
     // An executable that runs Branvil under its own may have set its own.
@@ -228,7 +232,7 @@ pub fn main(
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let result = runtime.block_on(run(cli));
+    let result = runtime.block_on(run(cli, vault));
     match result {
         Ok(code) => std::process::ExitCode::from(code),
         Err(e) => {
@@ -238,7 +242,7 @@ pub fn main(
     }
 }
 
-async fn run(cli: Cli) -> anyhow::Result<u8> {
+async fn run(cli: Cli, vault: Arc<dyn vault::Vault>) -> anyhow::Result<u8> {
     match cli.command {
         Command::Init {
             owner,
@@ -267,7 +271,7 @@ async fn run(cli: Cli) -> anyhow::Result<u8> {
                 base_url.as_deref(),
             )?;
             let (interrupt, terminate) = cli::stop_signals()?;
-            cli::serve(config, interrupt, terminate, true).await
+            cli::serve(config, vault, interrupt, terminate, true).await
         }
         Command::Open {
             print,
@@ -344,31 +348,25 @@ async fn run(cli: Cli) -> anyhow::Result<u8> {
     }
 }
 
-/// Runs the service in a process of another executable, which starts
-/// Branvil's commands as `invocation` names them: as `branvil serve` without
-/// options does (the data directory of BRANVIL_DATA_DIR, else the default
-/// one, and its configuration), stopping as it does on `interrupt` and
-/// `terminate`, and telling what it does in its log, never on stdout. The exit
-/// code is `branvil serve`'s.
-pub async fn serve(
-    invocation: Invocation,
-    interrupt: impl Future<Output = ()> + Send + 'static,
-    terminate: impl Future<Output = ()> + Send + 'static,
-) -> anyhow::Result<u8> {
-    invocation.install();
-    cli::serve(serve_config()?, interrupt, terminate, false).await
-}
-
 /// Runs the combined-process service and publishes its authenticated data API
 /// after recovery and background startup, before accepting HTTP requests.
 pub async fn serve_with_data_api(
     invocation: Invocation,
+    vault: Arc<dyn vault::Vault>,
     interrupt: impl Future<Output = ()> + Send + 'static,
     terminate: impl Future<Output = ()> + Send + 'static,
     ready: tokio::sync::oneshot::Sender<api::DataApi>,
 ) -> anyhow::Result<u8> {
     invocation.install();
-    cli::serve_with_api(serve_config()?, interrupt, terminate, false, Some(ready)).await
+    cli::serve_with_api(
+        serve_config()?,
+        vault,
+        interrupt,
+        terminate,
+        false,
+        Some(ready),
+    )
+    .await
 }
 
 /// Whether `branvil init` has made the data directory `serve` would use.

@@ -24,7 +24,12 @@ fn report() -> pulls::ChecksView {
 async fn readiness_keeps_report_and_current_heads_distinct() {
     let temp = tempfile::tempdir().unwrap();
     initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(temp.path()).await.unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     let service = BranvilService::new(
         running.data.clone(),
         String::new(),

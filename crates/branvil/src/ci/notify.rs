@@ -97,7 +97,7 @@ pub async fn sweep(app: &App) -> AppResult<()> {
                 ))
             ));
         }
-        if !app.autoland.send(&app.layout, &text).await {
+        if !app.autoland.send(&app.secrets, &text).await {
             break;
         }
         app.store
@@ -173,7 +173,7 @@ async fn recoveries(app: &App) -> AppResult<bool> {
             "\nSuccessful attempt: {}/{}/-/jobs/{}",
             app.base_url, a.repo_path, a.id
         ));
-        if !app.autoland.send(&app.layout, &text).await {
+        if !app.autoland.send(&app.secrets, &text).await {
             return Ok(false);
         }
         app.store
@@ -187,7 +187,7 @@ async fn recoveries(app: &App) -> AppResult<bool> {
 mod tests {
     use super::*;
     use crate::ci::pipeline::JobDef;
-    use crate::config::{Config, Layout};
+    use crate::config::Config;
     use crate::model::Repo;
     use std::sync::{Arc, Mutex};
 
@@ -195,11 +195,13 @@ mod tests {
         let config = Config::load(None, Some(path), None, None).unwrap();
         config.layout().create().unwrap();
         let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
+        // On disk, so a restart (a new app) keeps the webhook.
+        let vault = crate::vault::Sealed::new(&path.join("vault"), &[7; 32]).unwrap();
         App::new(
             config,
             "http://127.0.0.1:7878".into(),
             store,
-            vec![],
+            std::sync::Arc::new(vault),
             "http://127.0.0.1:7878".into(),
         )
     }
@@ -308,7 +310,7 @@ mod tests {
             }),
         );
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        std::fs::write(app.layout.webhook(), url).unwrap();
+        app.secrets.set(app.secrets.webhook(), url).await.unwrap();
         let now = crate::util::now();
         let first = app
             .store
@@ -596,7 +598,7 @@ mod tests {
             }),
         );
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        std::fs::write(Layout::new(dir.path()).webhook(), url).unwrap();
+        app.secrets.set(app.secrets.webhook(), url).await.unwrap();
         sweep(&app).await.unwrap();
         assert_eq!(received.lock().unwrap().len(), 1);
         sweep(&app).await.unwrap();

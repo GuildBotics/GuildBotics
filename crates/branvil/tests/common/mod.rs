@@ -16,6 +16,8 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
 pub const BIN: &str = env!("CARGO_BIN_EXE_branvil");
+/// The key of every test service's vault (`BRANVIL_VAULT_KEY`): 32 bytes of 7.
+const VAULT_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 
 pub struct Server {
     child: Option<ServiceProcess>,
@@ -23,6 +25,9 @@ pub struct Server {
     lines: std::sync::mpsc::Receiver<String>,
     pub url: String,
     pub data: PathBuf,
+    /// The directory of the service's sealed secrets (`BRANVIL_VAULT`),
+    /// outside its data directory.
+    pub vault: PathBuf,
     pub http: reqwest::Client,
 }
 
@@ -75,9 +80,12 @@ impl Server {
             .append(true)
             .open(dir.join("serve.log"))
             .unwrap();
+        let vault = dir.join("vault");
         let mut cmd = Command::new(BIN);
         cmd.args(["serve", "--listen", listen, "--data-dir"])
             .arg(&data)
+            .env("BRANVIL_VAULT", &vault)
+            .env("BRANVIL_VAULT_KEY", VAULT_KEY)
             .env("BRANVIL_LOG", "branvil=debug")
             .env_remove("BRANVIL_FAILPOINT")
             .stdout(Stdio::piped())
@@ -112,8 +120,69 @@ impl Server {
             lines,
             url,
             data,
+            vault,
             http: reqwest::Client::new(),
         }
+    }
+
+    /// The service's vault, and the name `name` gives in it.
+    fn in_vault(
+        &self,
+        name: impl FnOnce(&branvil::vault::Secrets) -> String,
+    ) -> (branvil::vault::Sealed, String) {
+        use branvil::vault::{Memory, Sealed, Secrets};
+        let names = Secrets::new(std::sync::Arc::new(Memory::default()), &self.data);
+        (Sealed::new(&self.vault, &[7; 32]).unwrap(), name(&names))
+    }
+
+    /// What the service keeps in its vault under the name `name` gives.
+    pub fn kept(&self, name: impl FnOnce(&branvil::vault::Secrets) -> String) -> Option<String> {
+        use branvil::vault::Vault;
+        let (vault, name) = self.in_vault(name);
+        vault.get(&name).unwrap()
+    }
+
+    /// Removes that from the vault, as a restore elsewhere loses it.
+    pub fn forget(&self, name: impl FnOnce(&branvil::vault::Secrets) -> String) {
+        use branvil::vault::Vault;
+        let (vault, name) = self.in_vault(name);
+        vault.delete(&name).unwrap();
+    }
+
+    /// The files under `<data>/secrets/`: the owner's token, and no secret
+    /// of another system.
+    pub fn secret_files(&self) -> Vec<String> {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else {
+                    out.push(path.strip_prefix(root).unwrap().display().to_string());
+                }
+            }
+        }
+        let mut files = Vec::new();
+        let root = self.data.join("secrets");
+        walk(&root, &root, &mut files);
+        files.sort();
+        files
+    }
+
+    /// The vault's file of the name `name` gives.
+    pub fn vault_file(&self, name: impl FnOnce(&branvil::vault::Secrets) -> String) -> PathBuf {
+        self.vault.join(self.in_vault(name).1)
+    }
+
+    /// Whether a file of the vault holds `value` in plain text.
+    pub fn vault_shows(&self, value: &str) -> bool {
+        std::fs::read_dir(&self.vault)
+            .into_iter()
+            .flatten()
+            .any(|e| {
+                let bytes = std::fs::read(e.unwrap().path()).unwrap_or_default();
+                String::from_utf8_lossy(&bytes).contains(value)
+            })
     }
 
     /// Stops the service as Ctrl-C does (no wait for CI jobs; the repository

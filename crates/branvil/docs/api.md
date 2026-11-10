@@ -1362,8 +1362,8 @@ is polled when, and how conflicts are settled: `docs/architecture.md`,
 Branvil tells the webhook when an automatically landing pull request is ready to merge on the host, when a
 protected run's required checks finally fail, and when a scripted service
 update or activation stops. Its URL is a credential of another system:
-it is kept in `<data>/secrets/webhook.url` (`0600`), never returned, and not in
-backups.
+it is kept in the service's vault (not in the data directory), never returned,
+and not in backups.
 
 - `GET /api/v1/admin/webhook` → `{"set": true, "host": "hooks.slack.com",
   "problem": null}`: whether one is set, the host of its URL, and why the last

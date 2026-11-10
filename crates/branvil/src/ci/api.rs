@@ -743,7 +743,7 @@ mod tests {
                 config,
                 "http://127.0.0.1:7878".into(),
                 store,
-                vec![],
+                std::sync::Arc::new(crate::vault::Memory::default()),
                 "http://127.0.0.1:7878".into(),
             );
             let repo = Repo {

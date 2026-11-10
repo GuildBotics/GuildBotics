@@ -769,17 +769,13 @@ async fn the_webhook_url_is_a_secret_shown_only_by_its_host() {
     let (st, v) = s.put("/admin/webhook", &w.owner, json!({"url": url})).await;
     assert_eq!((st, &v), (StatusCode::OK, &set));
     assert_eq!(s.ok("/admin/webhook", &w.owner).await, set);
-    let file = s.data.join("secrets/webhook.url");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), url);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
+    // Kept sealed in the vault, never in the data directory.
+    assert_eq!(s.kept(|n| n.webhook()).as_deref(), Some(url.as_str()));
+    assert!(!s.vault_shows(secret));
+    assert_eq!(s.secret_files(), ["owner.token"]);
     let (st, v) = s.delete("/admin/webhook", &w.owner).await;
     assert_eq!((st, &v), (StatusCode::OK, &unset));
-    assert!(!file.exists());
+    assert_eq!(s.kept(|n| n.webhook()), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -958,7 +954,7 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
     .await;
     // Model restoring a backup: account metadata survives, credentials do not.
     w.server.stop();
-    std::fs::remove_file(w.server.data.join("secrets/accounts/aiko.github.json")).unwrap();
+    w.server.forget(|n| n.account("aiko", "github"));
     auto_land_on(&w, REPO);
     w.restart(&[]);
     eventually("stored automatic failure", || async {

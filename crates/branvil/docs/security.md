@@ -249,10 +249,10 @@ Other consumers of the API (GuildBotics) must treat bodies as untrusted text.
 | Entry-link codes | memory | SHA-256 only, 60 seconds, single use |
 | Local-app codes | memory | SHA-256 only, 60 seconds, single use, bound to the app's name, `redirect_uri`, and PKCE challenge |
 | The owner's token | `<data>/secrets/owner.token` | `0600` in `0700` [`tests/security.rs` `the_data_directory_is_owner_only`]; replaced at start when missing or invalid |
-| Cursor signing key | `<data>/secrets/cursor.key` | `0600` in `0700` |
+| Cursor signing key | memory | per process: a restart ends the list cursors handed out before |
 | Hook secret | memory, and the environment of Git children | per process |
-| Members' upstream credentials (a token, or a GitHub App's id, installation id, and private key) | `<data>/secrets/accounts/<member>.<provider>.json` | `0600` in `0700`, written to a new file then renamed |
-| The notification webhook's URL (a credential of the system it posts to, such as Slack) | `<data>/secrets/webhook.url` | `0600` in `0700`, written to a new file then renamed; never returned (`GET /admin/webhook` shows only its host) or logged (a failure is reported without the URL), not in backups [`tests/autoland.rs` `the_webhook_url_is_a_secret_shown_only_by_its_host`, `tests/backup.rs`] |
+| Members' upstream credentials (a token, or a GitHub App's id, installation id, and private key) | the service's vault (see [Upstream tokens](#upstream-tokens)) | sealed; never in the data directory [`tests/upstream.rs` `accounts_are_checked_with_the_host_and_their_tokens_never_returned`] |
+| The notification webhook's URL (a credential of the system it posts to, such as Slack) | the service's vault | sealed; never in the data directory, returned (`GET /admin/webhook` shows only its host), or logged (a failure is reported without the URL), not in backups [`tests/autoland.rs` `the_webhook_url_is_a_secret_shown_only_by_its_host`, `tests/backup.rs`] |
 | GitHub App installation tokens | memory | made when needed from the app's key, an hour each, made again five minutes before they expire |
 
 On Windows the permission calls are no-ops; the data directory inherits the
@@ -271,16 +271,26 @@ user profile's ACL.
   A read the host refuses to the reader is reported, never tried again with
   another member's account [`tests/upstream.rs`
   `a_failed_read_of_dependency_alerts_is_never_an_empty_list`].
-- **Where.** A credential (a token, or a GitHub App's private key with its ids)
-  is a `0600` file under `<data>/secrets/accounts/`, not the OS keychain. The service runs headless under launchd, systemd, or the Task
-  Scheduler, often without a login session: the macOS Keychain may then prompt
-  on screen or refuse when locked, and the Linux Secret Service needs a
-  desktop session on D-Bus. A keychain would also not keep the value from other
-  processes of the same OS user, who can already read the database and every
-  repository. The file sits with the data it guards, under the same `0700`
-  directory, with one code path on every OS [`tests/upstream.rs`
+- **Where.** A credential (a token, or a GitHub App's private key with its ids),
+  like the webhook's URL, is kept in the vault that the process running the
+  service provides (`src/vault.rs`), never in the data directory. Run by
+  GuildBotics (`guildbotics server start`, `guildbotics branvil`), that is
+  GuildBotics' identity store: AES-256-GCM in
+  `<identity>/.guildbotics/local/secrets.enc.json`, with the machine's key in
+  the OS keychain, under `branvil_account_<provider>_<hash>` and
+  `branvil_webhook_<hash>` (the hash of the data directory's path, and of the
+  member; a GuildBotics member's secret is named in capitals, so these are
+  never one). The `branvil` executable keeps them in the directory
+  `BRANVIL_VAULT` names, one file per name sealed with the key in
+  `BRANVIL_VAULT_KEY` and bound to that name, and keeps none without
+  them. When the vault cannot keep or open a value (no key, a locked keychain,
+  another key, a damaged file), reading, setting, and removing it are refused
+  and every use reports why, the way a missing credential is reported; the
+  value stays as it was, and nothing falls back to a plain file
+  [`tests/upstream.rs`
   `accounts_are_checked_with_the_host_and_their_tokens_never_returned`,
-  `an_app_account_is_checked_with_an_installation_token_and_replaces_a_token_account`].
+  `an_app_account_is_checked_with_an_installation_token_and_replaces_a_token_account`,
+  `a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason`].
   An app's installation tokens are never written anywhere: they are made from
   the key when needed and kept in memory until shortly before they expire.
 - **Never stored elsewhere.** The member record keeps the provider, the kind,
@@ -303,9 +313,9 @@ user profile's ACL.
   with the token replaced by `***` if it ever appears, and cut to 600 bytes
   [unit `messages_are_cut_and_never_show_the_token`]; the host's errors keep
   only its status and message.
-- **Backups** do not include them; after a restore, polling reports that the
-  credential is not on this machine and nothing is sent until it is set again
-  (`docs/backup-restore.md`) [`tests/backup.rs`].
+- **Backups** do not include them; after a restore into another directory,
+  polling reports that the credential is not on this machine and nothing is
+  sent until it is set again (`docs/backup-restore.md`) [`tests/backup.rs`].
 - **CI.** Jobs never receive `secrets/` or these values: the runner gets the
   commit as a Git bundle from the service and nothing else (its checkout keeps
   no remote), and a job's microVM runs its commands as a user that is not
@@ -351,8 +361,9 @@ service log for the tokens].
 ## What is not protected
 
 - **The same OS user and root** can read everything: the database (all
-  tickets, reviews, token hashes), repositories, `secrets/`, backups, and the
-  environment of running Git children.
+  tickets, reviews, token hashes), repositories, `secrets/`, backups, the
+  environment of running Git children, and the vault, as far as the OS
+  keychain gives them its key.
 - **There is no sign-out.** A session lasts `limits.session_hours` (default
   720). To end every GUI session, or to recover from a leaked owner token or
   session cookie, stop the service, delete `<data>/secrets/owner.token`, and
