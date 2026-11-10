@@ -147,11 +147,12 @@ mod tests {
                 path.display()
             );
         }
-        let secrets: Vec<_> = std::fs::read_dir(data.join("secrets"))
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
+        // Branvil's secrets/ holds one file, the owner's token.
+        let kept: Vec<_> = files(&data.join("secrets"))
+            .into_iter()
+            .map(|(_, bytes)| bytes)
             .collect();
-        assert_eq!(secrets, ["owner.token"]);
+        assert_eq!(kept, [owner.into_bytes()]);
     }
 
     #[test]
