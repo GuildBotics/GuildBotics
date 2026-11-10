@@ -283,10 +283,10 @@ user profile's ACL.
   never one). The `branvil` executable keeps them in the directory
   `BRANVIL_VAULT` names, one file per name sealed with the key in
   `BRANVIL_VAULT_KEY` and bound to that name, and keeps none without
-  them. A vault that cannot keep a value (no key, a locked keychain, a damaged
-  identity store) refuses to set it, and one that cannot open a value (a damaged
-  file, another key) reports why at every use, the way a missing credential is
-  reported; nothing falls back to a plain file
+  them. When the vault cannot keep or open a value (no key, a locked keychain,
+  another key, a damaged file), reading, setting, and removing it are refused
+  and every use reports why, the way a missing credential is reported; the
+  value stays as it was, and nothing falls back to a plain file
   [`tests/upstream.rs`
   `accounts_are_checked_with_the_host_and_their_tokens_never_returned`,
   `an_app_account_is_checked_with_an_installation_token_and_replaces_a_token_account`,

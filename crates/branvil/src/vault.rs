@@ -128,6 +128,9 @@ impl Vault for Sealed {
 
     fn set(&self, name: &str, value: &str) -> anyhow::Result<()> {
         use std::io::Write;
+        // A value it cannot open (another key, a damaged file) stays: the
+        // right key still reads it.
+        self.get(name)?;
         let (path, key) = self.entry(name)?;
         let nonce = random_bytes::<NONCE_LEN>();
         let mut data = value.as_bytes().to_vec();
@@ -164,6 +167,7 @@ impl Vault for Sealed {
     }
 
     fn delete(&self, name: &str) -> anyhow::Result<()> {
+        self.get(name)?;
         let (path, _) = self.entry(name)?;
         match std::fs::remove_file(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -304,16 +308,31 @@ mod tests {
         vault.delete("webhook_x").unwrap();
 
         // A value moved to another name, another key, or a damaged file:
-        // refused, saying why, and nothing else changes.
+        // reading, replacing, and removing it are refused, saying why, and it
+        // stays as it was: the right key still reads a value of its own.
         std::fs::copy(path.join("account_github_y"), path.join("webhook_x")).unwrap();
         let error = vault.get("webhook_x").unwrap_err().to_string();
         assert!(error.contains("does not open"), "{error}");
         let other = Sealed::new(&path, &random_bytes::<32>()).unwrap();
         let error = other.get("account_github_y").unwrap_err().to_string();
         assert!(error.contains("does not open"), "{error}");
+        let error = other.set("account_github_y", "secret-x").unwrap_err();
+        assert!(error.to_string().contains("does not open"), "{error}");
+        let error = other.delete("account_github_y").unwrap_err();
+        assert!(error.to_string().contains("does not open"), "{error}");
+        assert_eq!(
+            vault.get("account_github_y").unwrap().as_deref(),
+            Some("secret-2")
+        );
         std::fs::write(path.join("account_github_z"), b"short").unwrap();
         let error = vault.get("account_github_z").unwrap_err().to_string();
         assert!(error.contains("malformed"), "{error}");
+        assert!(vault.set("account_github_z", "secret-y").is_err());
+        assert!(vault.delete("account_github_z").is_err());
+        assert_eq!(
+            std::fs::read(path.join("account_github_z")).unwrap(),
+            b"short"
+        );
         // Only `[a-z0-9_]` names: none is a path, nor a writer's temporary
         // file (`.<name>.<random>.tmp`), nor the file it replaces.
         for name in ["../escape", "Upper", "webhook_x.tmp", ".webhook_x"] {
