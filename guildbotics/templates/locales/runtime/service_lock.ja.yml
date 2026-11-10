@@ -16,3 +16,4 @@ ja:
   services_started: "サービスを開始しました。"
   services_stopped: "サービスを停止しました。"
   teardown_timeout: "実行中の作業をキャンセルしたあともサーバーが終了しませんでした。"
+  hub_operation_failed: "Hub の操作に失敗しました: %{reason}"
