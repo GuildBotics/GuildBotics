@@ -52,6 +52,8 @@ pub mod work_stops;
 pub mod workflow_runtime;
 pub mod workspace;
 
-pub use server::{Held, PORT_ENV, PORT_NOTICE_PREFIX, RunningServer, Server, Shutdown, running};
+pub use server::{
+    Held, PORT_ENV, PORT_NOTICE_PREFIX, RunningServer, Server, Shutdown, port, running,
+};
 
 mod provider_api;

@@ -370,7 +370,7 @@ Run the server
 Usage: guildbotics server <COMMAND>
 
 Commands:
-  start  Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 8765) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, as `guildbotics branvil serve` without options runs it (BRANVIL_DATA_DIR chooses its data directory)
+  start  Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, on the same listener (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting is used only by `guildbotics branvil serve`)
   stop   Stop the server and wait for its work to end
   help   Print this message or the help of the given subcommand(s)
 
@@ -382,7 +382,7 @@ Options:
 ## guildbotics server start
 
 ```text
-Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 8765) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, as `guildbotics branvil serve` without options runs it (BRANVIL_DATA_DIR chooses its data directory)
+Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, on the same listener (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting is used only by `guildbotics branvil serve`)
 
 Usage: guildbotics server start [OPTIONS]
 

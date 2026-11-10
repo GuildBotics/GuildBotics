@@ -30,7 +30,7 @@ Users interact with the system through:
 
 ```text
 guildbotics server start                 Rust host, one process on the Hub
-  ├─ GuildBotics screens and /-/guildbotics/api        gb-server, loopback port 8765 by default
+  ├─ GuildBotics screens and /-/guildbotics/api        gb-server, loopback port 7878 by default
   ├─ Branvil screens, Git and HTTP API   branvil, loopback port 7878 by default
   └─ one microVM per command            gb-environment
        └─ guildbotics.guest.entry       Python commands, subcommands and AI CLI turns
@@ -949,7 +949,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
   and the `/-/guildbotics/api/events` WebSocket) and the screens themselves (the Vite build of
   `desktop/`: `/-/guildbotics/`, `/-/guildbotics/assets/*`, and `/-/guildbotics/-/enter` and `/-/guildbotics/-/authorize`, which
   the main page tells apart by path; `gb-server/src/ui.rs`). It listens on loopback only, on
-  one fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default), which every program of
+  one fixed port (`GUILDBOTICS_SERVER_PORT`, 7878 by default), which every program of
   the machine reads from the environment: the server, its CLI clients, and the Vite dev
   server that proxies `/-/guildbotics/api` to it. GuildBotics runs
   on one machine, the Hub; other machines reach it from a browser through SSH forwarding
@@ -1001,7 +1001,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     site, which act on their unguessable `state`.
 - **Who receives a token**: a loopback port is not owned by an OS user, so a token goes
   only to a process that showed it holds the port or knows the token.
-  - The server binds the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default),
+  - The server binds the fixed port (`GUILDBOTICS_SERVER_PORT`, 7878 by default),
     listens, writes its owner token file, and then announces the port as the only line
     its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is
     stderr. A launcher that waits for the line (the E2E harness, for example) addresses
@@ -1019,9 +1019,13 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     taken before the client's next connection (later requests usually reuse the proved
     connection). A browser redirected back by Branvil's consent reaches the port even after the server exited, carrying a one-time code.
 - **Runtime lifecycle**: `guildbotics server start` runs one foreground process.
-  It owns `app-api.lock` until both services exit. `guildbotics server stop`
-  keeps Branvil available while GuildBotics drains its work, then lets
-  Branvil wait for its CI jobs. `--force` and SIGTERM skip the wait. The
+  It owns one listener and `app-api.lock` until both services exit. Branvil's
+  `prepare_embedded` returns a router and data/shutdown handles without binding;
+  its routes return 503 until recovery completes. GuildBotics routes take
+  precedence over Branvil's GUI fallback. `guildbotics server stop` refuses new
+  GuildBotics requests, keeps Branvil available while GuildBotics drains its
+  work, then lets Branvil wait for its CI jobs. Events close before the shared
+  listener's request grace and repository-operation drain. `--force` and SIGTERM skip the wait. The
   LaunchAgent runs the server directly and uses the CLI's forced-stop
   timeout for SIGTERM. The workspace's service settings control whether patrol and chat
   reception start with the server.

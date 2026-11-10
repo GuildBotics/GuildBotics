@@ -42,7 +42,7 @@ npx vite build
 scripts/dev.sh --data-dir /absolute/path/to/dev-data --no-open
 ```
 
-既定の開発用ポートはGuildBoticsが8866、Branvilが7879です。画面だけを編集しながら確認する場合は、別のターミナルでViteの画面を起動します。
+既定の開発用ポートは両サービス共通で8866です。画面だけを編集しながら確認する場合は、別のターミナルでViteの画面を起動します。
 
 ```sh
 GUILDBOTICS_SERVER_PORT=8866 scripts/desktop-dev-frontend.sh

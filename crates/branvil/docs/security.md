@@ -396,3 +396,13 @@ service log for the tokens].
   large pushes).
 - **Backups are not encrypted.** They hold token hashes and all project data;
   store them like the data directory.
+
+## Integrated host origin
+
+GuildBotics and Branvil share one loopback origin (port 7878 by default).
+Their cookies and entry links remain separate, but the browser's origin boundary
+no longer separates the screens. Both use `loopback_auth::CSP`: scripts and fonts
+from self, no objects, no Tauri IPC sources. Rendered user content must remain
+sanitized; same-origin scripts can reach either service. Host and Origin checks
+still apply on each service's routes. Standalone Branvil continues to use its
+own configured origin.

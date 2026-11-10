@@ -129,7 +129,7 @@ elif tool == "guildbotics":
         while not release.exists():
             if not BRANVIL_LISTENED.exists() and time.monotonic() >= branvil_at:
                 BRANVIL_LISTENED.touch()
-                print("INFO branvil::cli: listening on http://127.0.0.1:7879", file=sys.stderr, flush=True)
+                print("INFO gb_server: Branvil ready on the shared listener", file=sys.stderr, flush=True)
             try:
                 for signum in os.read(wakeup, 64):
                     record(signal=signal.Signals(signum).name)
@@ -499,7 +499,7 @@ def test_branvil_is_set_up_once(launcher: Launcher) -> None:
             "--owner",
             "owner",
             "--listen",
-            "127.0.0.1:7879",
+            "127.0.0.1:8866",
         ]
     ]
 

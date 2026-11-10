@@ -210,6 +210,16 @@ pub fn main(
     vault: Arc<dyn vault::Vault>,
     argv: impl IntoIterator<Item = OsString>,
 ) -> std::process::ExitCode {
+    main_with_client_url(invocation, vault, argv, None)
+}
+
+/// Run commands with the embedding host's default client origin.
+pub fn main_with_client_url(
+    invocation: Invocation,
+    vault: Arc<dyn vault::Vault>,
+    argv: impl IntoIterator<Item = OsString>,
+    client_url: Option<String>,
+) -> std::process::ExitCode {
     // An executable that runs Branvil under its own may have set its own.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -219,7 +229,7 @@ pub fn main(
         .with_writer(std::io::stderr)
         .try_init();
     invocation.install();
-    let cli = match invocation.bin_name() {
+    let mut cli = match invocation.bin_name() {
         None => Cli::parse_from(argv),
         Some(name) => {
             let mut command = Cli::command().bin_name(name);
@@ -229,6 +239,17 @@ pub fn main(
             Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.format(&mut command).exit())
         }
     };
+    match &mut cli.command {
+        Command::Open { client, .. }
+        | Command::Member { client, .. }
+        | Command::Repo { client, .. }
+        | Command::Workspace { client, .. }
+        | Command::Runner { client, .. }
+        | Command::Backup { client, .. } => {
+            client.url = client.url.take().or(client_url);
+        }
+        _ => {}
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -349,25 +370,17 @@ async fn run(cli: Cli, vault: Arc<dyn vault::Vault>) -> anyhow::Result<u8> {
     }
 }
 
-/// Runs the combined-process service and publishes its authenticated data API
-/// after recovery and background startup, before accepting HTTP requests.
-pub async fn serve_with_data_api(
+pub use cli::Embedded;
+
+/// Prepare an embedded service without binding. All advertised URLs use the host origin.
+pub async fn prepare_embedded(
     invocation: Invocation,
     vault: Arc<dyn vault::Vault>,
-    interrupt: impl Future<Output = ()> + Send + 'static,
-    terminate: impl Future<Output = ()> + Send + 'static,
-    ready: tokio::sync::oneshot::Sender<api::DataApi>,
-) -> anyhow::Result<u8> {
+    base_url: &str,
+) -> anyhow::Result<Embedded> {
     invocation.install();
-    cli::serve_with_api(
-        serve_config()?,
-        vault,
-        interrupt,
-        terminate,
-        false,
-        Some(ready),
-    )
-    .await
+    let base_url = config::normalize_base_url(base_url)?;
+    cli::prepare(serve_config()?, vault, base_url.clone(), base_url).await
 }
 
 /// Whether `branvil init` has made the data directory `serve` would use.

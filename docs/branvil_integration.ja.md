@@ -90,9 +90,9 @@ Hubで[GuildBoticsのインストール手順](../README.ja.md#インストー�
 
 Hub 以外の各マシンで、チェックアウトに同梱されたスクリプトを実行します。必要なのは
 OpenSSH と OS のサービス管理だけで、Python や GuildBotics の CLI は使いません。
-Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はありません。同じサービスで、
-[ブラウザ](../README.ja.md#ブラウザから使う)のための GuildBotics サーバーのポート（8765）も
-転送します。転送するポートをすべて指定してください。
+Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はありません。
+[ブラウザ](../README.ja.md#ブラウザから使う)と Branvil は共通のポート 7878 を使うので、
+7878 だけを転送してください。
 
 1. 手動や OS のサービスで `branvil tunnel` を動かしていれば止める。
 2. `ssh my-hub` で一度接続し、確認済みのホスト鍵を受け入れる。`my-hub` は自分の SSH 設定の
@@ -108,7 +108,7 @@ Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はあり�
 macOS（launchd のユーザーエージェント）と Linux（systemd のユーザーサービス）:
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765
+sh scripts/hub-forward.sh install --hub my-hub --port 7878
 sh scripts/hub-forward.sh status
 # 更新は、必要なすべてのポートを指定して install をもう一度実行する。
 sh scripts/hub-forward.sh uninstall
@@ -119,7 +119,7 @@ Linux のユーザーサービスには、ログインシェルの `SSH_AUTH_SOC
 agent を使う場合は、その**固定の絶対パス**を指定します。
 
 ```sh
-sh scripts/hub-forward.sh install --hub my-hub --port 7878 --port 8765 --agent-socket "$SSH_AUTH_SOCK"
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
 ```
 
 スクリプトがサービスの環境変数 `SSH_AUTH_SOCK` に設定します。ログインのたびに socket の
@@ -129,7 +129,7 @@ macOS では、OS が launchd に渡す agent を使います。
 Windows（タスクスケジューラー、Windows PowerShell 5.1。管理者権限は不要）:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878,8765"
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878"
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
 # 更新は、必要なすべてのポートを指定して install をもう一度実行する。
 powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
@@ -144,7 +144,7 @@ ssh の失敗時も 15 秒あけて起動し直します。実行時間の上限
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service`（ログは
 `journalctl --user -u hub-forward.service`）です。SSH 設定、鍵、known_hosts は変更しません。
 サービスはユーザーごとに 1 つです。install は Hub とポート一覧を丸ごと置き換えます。
-複数ポートは POSIX で `--port` を繰り返し、PowerShell では `-Port "7878,8765"` と指定します。
+統合サーバーは POSIX で `--port 7878`、PowerShell では `-Port "7878"` と指定します。
 
 転送はすべて `127.0.0.1` だけで待ち受け、Hub の `127.0.0.1` の同じポートにつなぎます。
 切断は SSH の keepalive で検出して張り直します。Linux と Windows は終了から 15 秒あけ、

@@ -189,14 +189,48 @@ pub async fn serve(
     serve_with_api(config, vault, interrupt, terminate, announce, None).await
 }
 
-pub(crate) async fn serve_with_api(
+/// A prepared service. Its host owns the listener and shutdown ordering.
+pub struct Embedded {
+    app: Arc<App>,
+}
+
+impl Embedded {
+    pub fn router(&self) -> axum::Router {
+        crate::http::router(self.app.clone())
+    }
+
+    pub fn data_api(&self) -> crate::api::DataApi {
+        crate::api::DataApi::new(self.app.clone())
+    }
+
+    pub async fn drain(&self) -> anyhow::Result<usize> {
+        let cut = self.app.ci.stop(false).await?;
+        if cut > 0 {
+            tracing::warn!("stopped with {cut} CI job(s) interrupted at the drain deadline");
+        }
+        Ok(cut)
+    }
+
+    pub fn close_events(&self) {
+        self.app.events.close();
+    }
+
+    pub async fn close(self) {
+        self.app.close().await;
+    }
+}
+
+pub(crate) async fn prepare(
     config: Config,
     vault: Arc<dyn crate::vault::Vault>,
-    interrupt: impl Future<Output = ()> + Send + 'static,
-    terminate: impl Future<Output = ()> + Send + 'static,
-    announce: bool,
-    ready: Option<tokio::sync::oneshot::Sender<crate::api::DataApi>>,
-) -> anyhow::Result<u8> {
+    base_url: String,
+    hook_url: String,
+) -> anyhow::Result<Embedded> {
+    let store = open_service(&config).await?;
+    recover(config, vault, base_url, hook_url, store).await
+}
+
+async fn open_service(config: &Config) -> anyhow::Result<Store> {
     let layout = config.layout();
     layout.create()?;
     let store = Store::open(
@@ -210,30 +244,21 @@ pub(crate) async fn serve_with_api(
             layout.db().display()
         );
     }
-    // After the database: a service still running refuses the start there.
-    let (mut interrupt, mut terminate) = (Box::pin(interrupt), Box::pin(terminate));
-    tokio::select! {
-        held = crate::git::hold(&layout) => held?,
-        _ = &mut interrupt => return Ok(0),
-        _ = &mut terminate => return Ok(0),
-    }
+    crate::git::hold(&layout).await?;
     crate::auth::ensure_owner_token(&store, &layout)?;
     crate::hooks::install(&layout)?;
-    let listener = tokio::net::TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("cannot listen on {}", config.listen))?;
-    let bound = listener.local_addr()?;
-    let base_url = config
-        .base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://{bound}"));
-    let app = App::new(
-        config,
-        base_url.clone(),
-        store,
-        vault,
-        format!("http://{bound}"),
-    );
+    Ok(store)
+}
+
+async fn recover(
+    config: Config,
+    vault: Arc<dyn crate::vault::Vault>,
+    base_url: String,
+    hook_url: String,
+    store: Store,
+) -> anyhow::Result<Embedded> {
+    let hook_base = hook_url.clone();
+    let app = App::new(config, base_url, store, vault, hook_url);
     app.git
         .version()
         .await
@@ -260,14 +285,48 @@ pub(crate) async fn serve_with_api(
     );
 
     crate::ci::Ci::start(app.clone());
-    crate::ci::supervise::start(app.clone(), format!("http://{bound}"));
+    crate::ci::supervise::start(app.clone(), hook_base);
     crate::upstream::start(app.clone());
     crate::autoland::start(app.clone());
     crate::domain::attachments::start(app.clone());
 
-    let router = crate::http::router(app.clone());
+    Ok(Embedded { app })
+}
+
+pub(crate) async fn serve_with_api(
+    config: Config,
+    vault: Arc<dyn crate::vault::Vault>,
+    interrupt: impl Future<Output = ()> + Send + 'static,
+    terminate: impl Future<Output = ()> + Send + 'static,
+    announce: bool,
+    ready: Option<tokio::sync::oneshot::Sender<crate::api::DataApi>>,
+) -> anyhow::Result<u8> {
+    let (mut interrupt, mut terminate) = (Box::pin(interrupt), Box::pin(terminate));
+    let store = tokio::select! {
+        store = open_service(&config) => store?,
+        _ = &mut interrupt => return Ok(0),
+        _ = &mut terminate => return Ok(0),
+    };
+    let listener = tokio::net::TcpListener::bind(config.listen)
+        .await
+        .with_context(|| format!("cannot listen on {}", config.listen))?;
+    let bound = listener.local_addr()?;
+    let base_url = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{bound}"));
+    let prepared = recover(
+        config,
+        vault,
+        base_url.clone(),
+        format!("http://{bound}"),
+        store,
+    )
+    .await?;
+    let app = prepared.app.clone();
+    let router = prepared.router();
     if let Some(ready) = ready {
-        let _ = ready.send(crate::api::DataApi::new(app.clone()));
+        let _ = ready.send(prepared.data_api());
     }
     if announce {
         println!("branvil listening on http://{bound} (base URL {base_url})");
