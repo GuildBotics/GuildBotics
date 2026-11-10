@@ -29,7 +29,6 @@ import {
 import {
   dismissSystemAlert,
   getConfigStatus,
-  getProjectConfig,
   getSystemAlerts,
   subscribeEvents,
   runScenarioDiagnostics,
@@ -184,15 +183,13 @@ describe("App", () => {
       );
       await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
       if (available) {
-        const entry = await screen.findByRole("link", { name: "Branvil", exact: true });
+        const entry = await screen.findByRole("link", { name: "Branvil" });
         expect(entry).toHaveAttribute("href", "/");
         expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(
           entry,
         );
       } else {
-        expect(
-          screen.queryByRole("link", { name: "Branvil", exact: true }),
-        ).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: "Branvil" })).not.toBeInTheDocument();
       }
     },
   );
