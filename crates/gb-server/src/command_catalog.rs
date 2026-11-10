@@ -1,7 +1,7 @@
 //! What the command screens offer and whether a selected file can run, as
 //! the Python version answers them (`guildbotics/app_api/command_catalog.py`):
-//! `GET /api/commands/options`, `GET /api/commands/routine-options` and
-//! `GET /api/commands/files/{id}/execution-status`. What a command needs is
+//! `GET /-/guildbotics/api/commands/options`, `GET /-/guildbotics/api/commands/routine-options` and
+//! `GET /-/guildbotics/api/commands/files/{id}/execution-status`. What a command needs is
 //! satisfied as this device and the project can provide it, read once per
 //! answer.
 

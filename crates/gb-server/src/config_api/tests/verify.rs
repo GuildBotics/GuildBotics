@@ -1,4 +1,4 @@
-//! `POST /api/verify` (凍結版 `tests/guildbotics/app_api/test_verify.py`).
+//! `POST /-/guildbotics/api/verify` (凍結版 `tests/guildbotics/app_api/test_verify.py`).
 //! The fixture's device has no snapshot and no tool login, so the isolated
 //! environment and the AI CLI tool are refused as such.
 

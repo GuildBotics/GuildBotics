@@ -60,7 +60,7 @@ async fn provider_listing_validation_localization_and_public_page() {
     let response = f
         .respond(
             Request::builder()
-                .uri("/providers/branvil/pages/connected?state=forged")
+                .uri("/-/guildbotics/providers/branvil/pages/connected?state=forged")
                 .header("host", "127.0.0.1:8765")
                 .body(HttpBody::empty())
                 .unwrap(),
@@ -710,7 +710,7 @@ async fn denied_forged_spent_and_unkept_consents_do_not_connect() {
         let old = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
         let redirect = match mode {
             "denied" => format!(
-                "http://127.0.0.1:8765/providers/branvil/pages/connected?state={}&error=denied",
+                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={}&error=denied",
                 started["state"].as_str().unwrap()
             ),
             "forged" => redirect.replace(started["state"].as_str().unwrap(), "forged"),
@@ -722,7 +722,7 @@ async fn denied_forged_spent_and_unkept_consents_do_not_connect() {
                         .data
                         .exchange(branvil::api::TokenRequest {
                             code: q["code"].clone(),
-                            redirect_uri: "http://127.0.0.1:8765/providers/branvil/pages/connected"
+                            redirect_uri: "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected"
                                 .into(),
                             code_verifier: "wrong".into()
                         })
@@ -1461,7 +1461,7 @@ async fn every_provider_operation_requires_owner_authentication() {
             .respond(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api{path}"))
+                    .uri(format!("/-/guildbotics/api{path}"))
                     .header("host", "127.0.0.1:8765")
                     .header("content-type", "application/json")
                     .body(HttpBody::from("{}"))
@@ -1772,7 +1772,7 @@ async fn callback_keeps_the_initiating_language_and_retry_in_browser_and_poll() 
             .await;
         assert_eq!(status, StatusCode::OK);
         let redirect = format!(
-            "http://127.0.0.1:8765/providers/branvil/pages/connected?state={}&error=denied",
+            "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={}&error=denied",
             started["state"].as_str().unwrap()
         );
         let (status, page) = callback(&f, &redirect).await;
@@ -1823,7 +1823,7 @@ async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
             assert_eq!(polled["message"], expired);
         } else {
             let url = format!(
-                "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
             );
             let (status, page) = callback(&f, &url).await;
             assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1843,7 +1843,7 @@ async fn completed_consents_keep_their_outcomes_after_the_pending_deadline() {
         let state = started["state"].as_str().unwrap();
         let redirect = if mode == "denied" {
             format!(
-                "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
             )
         } else {
             redirect
@@ -1918,7 +1918,7 @@ async fn completed_consents_keep_their_outcomes_after_the_pending_deadline() {
     callback(
         &f,
         &format!(
-            "http://127.0.0.1:8765/providers/branvil/pages/connected?state={state}&error=denied"
+            "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
         ),
     )
     .await;

@@ -48,7 +48,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data --no-open
 GUILDBOTICS_SERVER_PORT=8866 scripts/desktop-dev-frontend.sh
 ```
 
-ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420`）が画面を配り、`/api`（`/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
+ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420/-/guildbotics/`）が画面を配り、`/-/guildbotics/api`（`/-/guildbotics/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
 
 コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AIアシスタントは質問には回答だけを返し、エディタやファイルを変更しません。ソース変更を依頼した場合は、現在のコマンドの更新と必要な補助コマンドの新規作成をまとめて提案します。提案ソースはチャット履歴には展開せず、エディタ側の読み取り専用ファイルタブへ「現在」「新規作成」「更新」を区別して表示します。「更新」タブは追加行と削除行を行番号付きの差分として表示し、「新規作成」タブは完成版ソースを表示します。各表示は領域内で縦横にスクロールできます。内容を確認して「変更を適用」を押した時点で、リビジョン競合と全ソースの妥当性を確認したうえで反映されます。新規ファイルだけを適用した場合、開いていた既存コマンドは切り替えません。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。通常の手動編集ではバリデーションエラーのある途中のソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
 
@@ -94,7 +94,7 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /-/guildbotics/api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
 
 前提:
 
@@ -114,7 +114,7 @@ cd desktop
 npm run e2e
 ```
 
-`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ画面を build（`vite build` で `desktop/dist`）→ スタックごとに backend（temp workspace）を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。画面は本番と同じく backend が配ります。各テストは `guildbotics open` と同じ入口から入ります。harness が owner token（temp HOME の `~/.guildbotics/data/server/<port>/owner.token`）で `POST /api/session/links` を呼び、返った入口リンクを Playwright が開いてセッションの cookie を得ます（`desktop/e2e/stack-context.ts` の `test`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
+`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ画面を build（`vite build` で `desktop/dist`）→ スタックごとに backend（temp workspace）を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。画面は本番と同じく backend が配ります。各テストは `guildbotics open` と同じ入口から入ります。harness が owner token（temp HOME の `~/.guildbotics/data/server/<port>/owner.token`）で `POST /-/guildbotics/api/session/links` を呼び、返った入口リンクを Playwright が開いてセッションの cookie を得ます（`desktop/e2e/stack-context.ts` の `test`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
 | spec                      | journey                                                                                                                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -10,6 +10,6 @@ if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules
   npm ci
 fi
 
-# Vite serves the pages and proxies `/api` to the backend at
+# Vite serves the pages and proxies `/-/guildbotics/api` to the backend at
 # GUILDBOTICS_SERVER_PORT (8765 unless set; `desktop/vite.config.ts`).
 exec npm run dev --workspace desktop

@@ -18,7 +18,11 @@ test("capture the desktop presentation for review", async ({ page }) => {
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
     for (const route of ["service", "commands", "diagnostics", "setup"]) {
-      await page.goto(route === "diagnostics" ? "/#/diagnostics?tab=memory" : `/#/${route}`);
+      await page.goto(
+        route === "diagnostics"
+          ? "/-/guildbotics/#/diagnostics?tab=memory"
+          : `/-/guildbotics/#/${route}`,
+      );
       await expect(page.locator("main")).toBeVisible();
       await page.waitForLoadState("networkidle");
       await page.addStyleTag({

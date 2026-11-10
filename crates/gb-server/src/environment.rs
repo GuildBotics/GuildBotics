@@ -1119,7 +1119,7 @@ mod tests {
         ] {
             let mut request = Request::builder()
                 .uri(format!(
-                    "/api/intelligences/cli-agents/{agent}/usage?refresh=true"
+                    "/-/guildbotics/api/intelligences/cli-agents/{agent}/usage?refresh=true"
                 ))
                 .header("host", "127.0.0.1:38761");
             if authorized {

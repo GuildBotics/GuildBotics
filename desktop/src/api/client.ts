@@ -1,9 +1,9 @@
 import { createApiClient } from "@guildbotics/ui/api";
-// Every request goes to the server that served this page, under `/api`. The
+// Every request goes to the server that served this page, under `/-/guildbotics/api`. The
 // HttpOnly session cookie authenticates it; the session's CSRF value is kept
 // only in this module's memory (never in storage) and goes with every write.
 
-const API_PREFIX = "/api";
+const API_PREFIX = "/-/guildbotics/api";
 
 const transport = createApiClient({
   prefix: API_PREFIX,
@@ -1563,7 +1563,7 @@ export async function uploadMemberAvatar(
   return uploadFile(`/config/members/${encodeURIComponent(personId)}/avatar`, file);
 }
 
-/** POST a file as multipart form data to an API path (relative to `/api`). */
+/** POST a file as multipart form data to an API path (relative to `/-/guildbotics/api`). */
 export async function uploadFile<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
@@ -1597,7 +1597,7 @@ export function subscribeEvents(
   return () => socket.close();
 }
 
-/** A JSON request to an API path (relative to `/api`). */
+/** A JSON request to an API path (relative to `/-/guildbotics/api`). */
 export async function request<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},

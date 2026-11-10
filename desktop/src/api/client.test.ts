@@ -121,7 +121,7 @@ describe("session", () => {
     await setWorkspace({ workspace_dir: "/ws" });
     await getConfigStatus();
 
-    expect(calls[0].url).toBe("/api/session");
+    expect(calls[0].url).toBe("/-/guildbotics/api/session");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ code: "code-1" }));
     expect(headerValue(calls[1].init, "X-GuildBotics-CSRF")).toBe("entered");
@@ -139,7 +139,7 @@ describe("session", () => {
     await verify();
     await expect(resumeSession()).resolves.toBe(false);
 
-    expect(calls[0].url).toBe("/api/session");
+    expect(calls[0].url).toBe("/-/guildbotics/api/session");
     expect(calls[0].init.method).toBe("GET");
     expect(headerValue(calls[1].init, "X-GuildBotics-CSRF")).toBe("resumed");
   });
@@ -154,9 +154,9 @@ describe("session", () => {
     await expect(setWorkspace({ workspace_dir: "/ws" })).resolves.toEqual({ cwd: "/ws" });
 
     expect(calls.map(({ url, init }) => `${init.method} ${url}`)).toEqual([
-      "POST /api/workspace",
-      "GET /api/session",
-      "POST /api/workspace",
+      "POST /-/guildbotics/api/workspace",
+      "GET /-/guildbotics/api/session",
+      "POST /-/guildbotics/api/workspace",
     ]);
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBe("fresh");
@@ -218,7 +218,7 @@ describe("session", () => {
     await expect(authorizeApp(body)).resolves.toEqual({
       redirect: "http://127.0.0.1:5000/cb?code=c",
     });
-    expect(calls[0].url).toBe("/api/apps/authorizations");
+    expect(calls[0].url).toBe("/-/guildbotics/api/apps/authorizations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify(body));
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
@@ -227,11 +227,13 @@ describe("session", () => {
 
 describe("memberAvatarUrl", () => {
   it("is a same-origin API path with the cache-buster", () => {
-    expect(memberAvatarUrl("alice", 12345)).toBe("/api/config/members/alice/avatar?t=12345");
+    expect(memberAvatarUrl("alice", 12345)).toBe(
+      "/-/guildbotics/api/config/members/alice/avatar?t=12345",
+    );
   });
 
   it("encodes the person id and omits the cache-buster when absent", () => {
-    expect(memberAvatarUrl("a/b")).toBe("/api/config/members/a%2Fb/avatar");
+    expect(memberAvatarUrl("a/b")).toBe("/-/guildbotics/api/config/members/a%2Fb/avatar");
   });
 });
 
@@ -241,7 +243,7 @@ describe("request headers and body", () => {
     await getConfigStatus();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("/api/config/status");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/status");
     expect(calls[0].init.method).toBe("GET");
     expect(headerValue(calls[0].init, "Content-Type")).toBe("application/json");
     expect(headerValue(calls[0].init, "X-GuildBotics-Language")).toBe("en");
@@ -254,7 +256,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ cwd: "/ws" }));
     await setWorkspace({ workspace_dir: "/projects/demo" });
 
-    expect(calls[0].url).toBe("/api/workspace");
+    expect(calls[0].url).toBe("/-/guildbotics/api/workspace");
     expect(calls[0].init.method).toBe("POST");
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(JSON.stringify({ workspace_dir: "/projects/demo" }));
@@ -268,8 +270,8 @@ describe("request headers and body", () => {
     await uploadCommandInputFile(commandInput);
     await uploadMemberAvatar("a/b", avatar);
 
-    expect(calls[0].url).toBe("/api/commands/input-files");
-    expect(calls[1].url).toBe("/api/config/members/a%2Fb/avatar");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/input-files");
+    expect(calls[1].url).toBe("/-/guildbotics/api/config/members/a%2Fb/avatar");
     for (const [call, file] of [
       [calls[0], commandInput],
       [calls[1], avatar],
@@ -294,7 +296,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse(providers));
     const result = await getProviders();
 
-    expect(calls[0].url).toBe("/api/config/providers");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/providers");
     expect(calls[0].init.method).toBe("GET");
     expect(result).toEqual(providers);
   });
@@ -303,7 +305,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await providerOperation("slack", "verify-tokens", { bot_token: "xoxb-1" });
 
-    expect(calls[0].url).toBe("/api/config/providers/slack/verify-tokens");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/providers/slack/verify-tokens");
     expect(calls[0].init.method).toBe("POST");
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1" }));
@@ -313,7 +315,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ avatar_timestamp: 1 }));
     await importAvatarFromProvider("a/b", "git hub");
 
-    expect(calls[0].url).toBe("/api/config/members/a%2Fb/avatar/git%20hub");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/members/a%2Fb/avatar/git%20hub");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
   });
@@ -324,7 +326,7 @@ describe("request headers and body", () => {
     );
     const result = await startSlackAppRegistration({ app_name: "alice" });
 
-    expect(calls[0].url).toBe("/api/config/providers/slack/app-registrations");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/providers/slack/app-registrations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ app_name: "alice" }));
     expect(result.registration_url).toBe("https://api.slack.com/apps?new_app=1");
@@ -334,7 +336,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ bot_ok: true, app_token_ok: true }));
     await verifySlackTokens({ bot_token: "xoxb-1", app_token: "xapp-1" });
 
-    expect(calls[0].url).toBe("/api/config/providers/slack/verify-tokens");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/providers/slack/verify-tokens");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1", app_token: "xapp-1" }));
   });
@@ -356,7 +358,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await verify();
 
-    expect(calls[0].url).toBe("/api/verify");
+    expect(calls[0].url).toBe("/-/guildbotics/api/verify");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
   });
@@ -368,8 +370,8 @@ describe("GET query parameter encoding", () => {
     await getTranscriptSettings();
     await updateTranscriptSettings({ detail: "full", retention_days: 14 });
 
-    expect(calls[0].url).toBe("/api/transcripts/settings");
-    expect(calls[1].url).toBe("/api/transcripts/settings");
+    expect(calls[0].url).toBe("/-/guildbotics/api/transcripts/settings");
+    expect(calls[1].url).toBe("/-/guildbotics/api/transcripts/settings");
     expect(calls[1].init.method).toBe("PUT");
     expect(calls[1].init.body).toBe(JSON.stringify({ detail: "full", retention_days: 14 }));
   });
@@ -378,14 +380,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ enabled: false }));
     await getRuntimeDebug();
 
-    expect(calls[0].url).toBe("/api/runtime/debug");
+    expect(calls[0].url).toBe("/-/guildbotics/api/runtime/debug");
   });
 
   it("updates runtime debug status", async () => {
     const { calls } = captureFetch(jsonResponse({ enabled: true }));
     await updateRuntimeDebug({ enabled: true });
 
-    expect(calls[0].url).toBe("/api/runtime/debug");
+    expect(calls[0].url).toBe("/-/guildbotics/api/runtime/debug");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.body).toBe(JSON.stringify({ enabled: true }));
   });
@@ -405,11 +407,11 @@ describe("GET query parameter encoding", () => {
     await updateServiceSettings({ routine_interval_minutes: 3 });
     await startScheduler();
 
-    expect(calls[0].url).toBe("/api/service/settings");
-    expect(calls[1].url).toBe("/api/service/settings");
+    expect(calls[0].url).toBe("/-/guildbotics/api/service/settings");
+    expect(calls[1].url).toBe("/-/guildbotics/api/service/settings");
     expect(calls[1].init.method).toBe("PATCH");
     expect(calls[1].init.body).toBe(JSON.stringify({ routine_interval_minutes: 3 }));
-    expect(calls[2].url).toBe("/api/scheduler/start");
+    expect(calls[2].url).toBe("/-/guildbotics/api/scheduler/start");
     expect(calls[2].init.method).toBe("POST");
     expect(calls[2].init.body).toBeUndefined();
   });
@@ -418,7 +420,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await runScenarioDiagnostics("alice/dev");
 
-    expect(calls[0].url).toBe("/api/diagnostics/scenario?person_id=alice%2Fdev");
+    expect(calls[0].url).toBe("/-/guildbotics/api/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
   });
 
@@ -435,7 +437,7 @@ describe("GET query parameter encoding", () => {
     ];
     const { calls } = captureFetch(jsonResponse(turns));
     expect(await getCliAgentLastTurns()).toEqual(turns);
-    expect(calls[0].url).toBe("/api/intelligences/cli-agents/last-turns");
+    expect(calls[0].url).toBe("/-/guildbotics/api/intelligences/cli-agents/last-turns");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -447,8 +449,8 @@ describe("GET query parameter encoding", () => {
     await getCliAgentUsage("codex", true);
 
     expect(calls.map((call) => call.url)).toEqual([
-      "/api/intelligences/cli-agents/codex/usage",
-      "/api/intelligences/cli-agents/codex/usage?refresh=true",
+      "/-/guildbotics/api/intelligences/cli-agents/codex/usage",
+      "/-/guildbotics/api/intelligences/cli-agents/codex/usage?refresh=true",
     ]);
     expect(calls[0].init.method).toBe("GET");
   });
@@ -457,7 +459,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ alerts: [] }));
     await getSystemAlerts();
 
-    expect(calls[0].url).toBe("/api/system-alerts");
+    expect(calls[0].url).toBe("/-/guildbotics/api/system-alerts");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -465,7 +467,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ alerts: [] }));
     await dismissSystemAlert("credential:slack:alice/dev");
 
-    expect(calls[0].url).toBe("/api/system-alerts/dismiss");
+    expect(calls[0].url).toBe("/-/guildbotics/api/system-alerts/dismiss");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ alert_id: "credential:slack:alice/dev" }));
   });
@@ -485,7 +487,7 @@ describe("GET query parameter encoding", () => {
     });
 
     const url = new URL(calls[0].url, window.location.href);
-    expect(url.pathname).toBe("/api/diagnostics/memory-events");
+    expect(url.pathname).toBe("/-/guildbotics/api/diagnostics/memory-events");
     expect(url.searchParams.get("person_id")).toBe("alice/dev");
     expect(url.searchParams.get("doc_id")).toBe("doc 1");
     expect(url.searchParams.get("action")).toBe("touch");
@@ -508,7 +510,7 @@ describe("GET query parameter encoding", () => {
     });
 
     const url = new URL(calls[0].url, window.location.href);
-    expect(url.pathname).toBe("/api/activity/history");
+    expect(url.pathname).toBe("/-/guildbotics/api/activity/history");
     expect(url.searchParams.get("start")).toBe("2026-07-01T00:00:00+09:00");
     expect(url.searchParams.get("end")).toBe("2026-07-02T00:00:00+09:00");
     expect(url.searchParams.has("limit")).toBe(false);
@@ -521,14 +523,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await runScenarioDiagnostics();
 
-    expect(calls[0].url).toBe("/api/diagnostics/scenario");
+    expect(calls[0].url).toBe("/-/guildbotics/api/diagnostics/scenario");
   });
 
   it("fetches the sandbox status of this device", async () => {
     const { calls } = captureFetch(jsonResponse({ platform: "darwin", members: [] }));
     await getAgentEnvironmentStatus();
 
-    expect(calls[0].url).toBe("/api/intelligences/agent-environment");
+    expect(calls[0].url).toBe("/-/guildbotics/api/intelligences/agent-environment");
   });
 
   it("encodes grant evaluations", async () => {
@@ -537,10 +539,10 @@ describe("GET query parameter encoding", () => {
     await evaluateGrant({ scope: "local", path: "/opt/home brew", access: "read_write" });
 
     expect(calls[0].url).toBe(
-      "/api/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
+      "/-/guildbotics/api/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
     );
     expect(calls[1].url).toBe(
-      "/api/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
+      "/-/guildbotics/api/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
     );
   });
 
@@ -548,42 +550,42 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ config_dir: "/c" }));
     await getIntelligenceConfig("bob smith");
 
-    expect(calls[0].url).toBe("/api/config/intelligences?person_id=bob%20smith");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/intelligences?person_id=bob%20smith");
   });
 
   it("encodes person for getCommandOptions", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getCommandOptions("a&b");
 
-    expect(calls[0].url).toBe("/api/commands/options?person=a%26b");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/options?person=a%26b");
   });
 
   it("omits the query when getCommandOptions has no person", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getCommandOptions();
 
-    expect(calls[0].url).toBe("/api/commands/options");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/options");
   });
 
   it("encodes person for getRoutineCommandOptions", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getRoutineCommandOptions("a&b");
 
-    expect(calls[0].url).toBe("/api/commands/routine-options?person=a%26b");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/routine-options?person=a%26b");
   });
 
   it("omits the query when getRoutineCommandOptions has no person", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getRoutineCommandOptions();
 
-    expect(calls[0].url).toBe("/api/commands/routine-options");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/routine-options");
   });
 
   it("encodes the path segment for getMemberConfig", async () => {
     const { calls } = captureFetch(jsonResponse({ person_id: "x" }));
     await getMemberConfig("team/alice");
 
-    expect(calls[0].url).toBe("/api/config/members/team%2Falice");
+    expect(calls[0].url).toBe("/-/guildbotics/api/config/members/team%2Falice");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -591,7 +593,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ files: [] }));
     await listCommandFiles();
 
-    expect(calls[0].url).toBe("/api/commands/files");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/files");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -599,14 +601,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({}));
     await getCommandFile("a/b+c");
 
-    expect(calls[0].url).toBe("/api/commands/files/a%2Fb%2Bc");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/files/a%2Fb%2Bc");
   });
 
   it("posts a create command file request", async () => {
     const { calls } = captureFetch(jsonResponse({}));
     await createCommandFile({ command: "reports/weekly", format: "markdown" });
 
-    expect(calls[0].url).toBe("/api/commands/files");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/files");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({ command: "reports/weekly", format: "markdown" }),
@@ -627,7 +629,7 @@ describe("GET query parameter encoding", () => {
       person: "bot",
     });
 
-    expect(calls[0].url).toBe("/api/commands/author");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/author");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
@@ -660,7 +662,7 @@ describe("GET query parameter encoding", () => {
 
     await applyCommandAuthoring(changes);
 
-    expect(calls[0].url).toBe("/api/commands/author/apply");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/author/apply");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ changes }));
   });
@@ -695,7 +697,7 @@ describe("GET query parameter encoding", () => {
       focus: { view: "trace", trace_id: "abc123", source: "routine" },
     });
 
-    expect(calls[0].url).toBe("/api/diagnostics/troubleshoot");
+    expect(calls[0].url).toBe("/-/guildbotics/api/diagnostics/troubleshoot");
     expect(calls[0].init.method).toBe("POST");
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(
@@ -725,7 +727,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({}));
     await updateCommandFile("greet-id", { content: "body", expected_revision: "rev-1" });
 
-    expect(calls[0].url).toBe("/api/commands/files/greet-id");
+    expect(calls[0].url).toBe("/-/guildbotics/api/commands/files/greet-id");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.body).toBe(
       JSON.stringify({ content: "body", expected_revision: "rev-1" }),
@@ -740,7 +742,7 @@ describe("GET query parameter encoding", () => {
     });
 
     expect(calls[0].url).toBe(
-      "/api/commands/files/greet-id/execution-status?expected_revision=rev-1&person=a%26b",
+      "/-/guildbotics/api/commands/files/greet-id/execution-status?expected_revision=rev-1&person=a%26b",
     );
   });
 });
@@ -848,7 +850,7 @@ describe("websocket subscriptions", () => {
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
   });
 
-  it("connects to this page's /api/events without a subprotocol and drives status transitions", () => {
+  it("connects to this page's /-/guildbotics/api/events without a subprotocol and drives status transitions", () => {
     const events: RuntimeEvent[] = [];
     const statuses: StreamStatus[] = [];
 
@@ -859,7 +861,7 @@ describe("websocket subscriptions", () => {
 
     const socket = MockWebSocket.instances[0];
     // The session cookie authenticates the handshake.
-    expect(socket.url).toBe(`ws://${window.location.host}/api/events`);
+    expect(socket.url).toBe(`ws://${window.location.host}/-/guildbotics/api/events`);
     expect(socket.protocols).toBeUndefined();
     expect(statuses).toEqual(["connecting"]);
 

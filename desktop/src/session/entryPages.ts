@@ -12,10 +12,10 @@ export const SESSION_QUERY = {
 } as const;
 
 /** Where an entry link (`guildbotics open`) lands, with its code in the fragment. */
-export const ENTER_PATH = "/-/enter";
+export const ENTER_PATH = "/-/guildbotics/-/enter";
 
 /** Where a local app asks the owner to allow it (`guildbotics connect`). */
-export const AUTHORIZE_PATH = "/-/authorize";
+export const AUTHORIZE_PATH = "/-/guildbotics/-/authorize";
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
 

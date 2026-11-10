@@ -50,7 +50,7 @@ const token = readFileSync(
   join(homeDir, ".guildbotics", "data", "server", String(backendPort), "owner.token"),
   "utf8",
 ).trim();
-const response = await fetch(`http://127.0.0.1:${backendPort}/api/session/links`, {
+const response = await fetch(`http://127.0.0.1:${backendPort}/-/guildbotics/api/session/links`, {
   method: "POST",
   headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   body: "{}",

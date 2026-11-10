@@ -536,7 +536,7 @@ mod tests {
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             reqwest::Client::new()
-                .get(format!("http://127.0.0.1:{port}/api/health"))
+                .get(format!("http://127.0.0.1:{port}/-/guildbotics/api/health"))
                 .bearer_auth(token.trim())
                 .send(),
         )
@@ -590,7 +590,7 @@ mod tests {
                 stop.clone().cancelled_owned(),
                 force.clone().cancelled_owned(),
             ));
-            let endpoint = format!("http://127.0.0.1:{port}/api");
+            let endpoint = format!("http://127.0.0.1:{port}/-/guildbotics/api");
             let http = reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(5))

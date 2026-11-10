@@ -88,7 +88,7 @@ impl CliPeer {
 
     async fn prove(&self) {
         let (socket, request, headers, body) = self.next().await;
-        assert!(request.starts_with("POST /api/local-api/proof "));
+        assert!(request.starts_with("POST /-/guildbotics/api/local-api/proof "));
         assert!(!headers.contains("authorization:"));
         assert_eq!(body["token_id"], "0123456789abcdef");
         let nonce = body["nonce"].as_str().unwrap();
@@ -112,7 +112,7 @@ impl CliPeer {
     async fn authorized(&self, method: &str, path: &str) -> (tokio::net::TcpStream, Value) {
         let (socket, request, headers, body) = self.next().await;
         assert!(
-            request.starts_with(&format!("{method} /api/{path} ")),
+            request.starts_with(&format!("{method} /-/guildbotics/api/{path} ")),
             "{request}"
         );
         assert!(headers.contains(&format!("authorization: Bearer {}\r\n", Self::TOKEN)));
@@ -610,7 +610,7 @@ async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
     let mut probe = peer_cli(root, &["server", "hub-probe", "--ready"]);
     let task = tokio::spawn(async move { probe.output().await.unwrap() });
     let (socket, path, headers, _) = peer.next().await;
-    assert!(path.starts_with("POST /api/local-api/proof "));
+    assert!(path.starts_with("POST /-/guildbotics/api/local-api/proof "));
     assert!(!headers.contains("authorization:"));
     CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
     let refused = task.await.unwrap();
@@ -641,7 +641,7 @@ async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_forc
         cli.env("LANGUAGE", "en");
         let stop = tokio::spawn(async move { cli.output().await.unwrap() });
         let (socket, path, headers, _) = peer.next().await;
-        assert!(path.starts_with("POST /api/local-api/proof "));
+        assert!(path.starts_with("POST /-/guildbotics/api/local-api/proof "));
         assert!(!headers.contains("authorization:"));
         CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
         let refused = tokio::time::timeout(Duration::from_secs(10), stop)
@@ -776,7 +776,7 @@ async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
         let running = tokio::spawn(async move { cli.output().await.unwrap() });
         if state == "proof-failed" {
             let (socket, request, headers, _) = peer.next().await;
-            assert!(request.starts_with("POST /api/local-api/proof "));
+            assert!(request.starts_with("POST /-/guildbotics/api/local-api/proof "));
             assert!(!headers.contains("authorization:"));
             CliPeer::respond(socket, "200 OK", r#"{"proof":"incorrect"}"#).await;
         } else if state != "missing-token" {

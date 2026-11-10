@@ -89,7 +89,7 @@ async fn team_failures_keep_json_error_shape_security_headers_and_cross_origin_p
         "http://localhost:1420",
         "http://localhost:9999",
     ] {
-        for path in ["/api/team", "/api/events"] {
+        for path in ["/-/guildbotics/api/team", "/-/guildbotics/api/events"] {
             let response = f
                 .respond(
                     Request::builder()
@@ -283,7 +283,7 @@ async fn app_consent_requires_owner_or_session_csrf_and_uses_public_pkce_exchang
     let form = json!({"client":"Example CLI","redirect_uri":"http://127.0.0.1:12345/callback","state":"state","code_challenge":loopback_auth::b64(&loopback_auth::sha256(b"test-verifier"))});
     let request = Request::builder()
         .method("POST")
-        .uri("/api/apps/authorizations")
+        .uri("/-/guildbotics/api/apps/authorizations")
         .header("host", "127.0.0.1:8765")
         .header("content-type", "application/json")
         .body(HttpBody::from(form.to_string()))
@@ -304,7 +304,7 @@ async fn app_consent_requires_owner_or_session_csrf_and_uses_public_pkce_exchang
     ] {
         let request = Request::builder()
             .method("POST")
-            .uri("/api/apps/authorizations")
+            .uri("/-/guildbotics/api/apps/authorizations")
             .header("host", "127.0.0.1:8765")
             .header("cookie", format!("{}={cookie}", f.api.auth.cookie))
             .header(crate::auth::CSRF_HEADER, sent)
@@ -566,7 +566,7 @@ async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_
     let (cookie, _) = f.api.auth.start_session(code).unwrap().unwrap();
     let cookie = format!("{}={cookie}", f.api.auth.cookie);
     let request = || {
-        let mut r = format!("ws://127.0.0.1:{port}/api/events")
+        let mut r = format!("ws://127.0.0.1:{port}/-/guildbotics/api/events")
             .into_client_request()
             .unwrap();
         r.headers_mut()
@@ -615,7 +615,7 @@ async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_
             let mut tcp = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
                 .await
                 .unwrap();
-            let mut wire = String::from("GET /api/events HTTP/1.1\r\n");
+            let mut wire = String::from("GET /-/guildbotics/api/events HTTP/1.1\r\n");
             for (key, value) in r.headers() {
                 wire.push_str(&format!("{key}: {}\r\n", value.to_str().unwrap()));
             }

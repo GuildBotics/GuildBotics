@@ -17,7 +17,7 @@
 scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ```
 
-開発用のデータとポート（GuildBotics 8866、Branvil 7879）で両方の画面を開く。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
+開発用のデータとポート（GuildBotics 8866、Branvil 7879）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
 
 ## 実装と責務境界
 
@@ -86,7 +86,7 @@ lychee --no-progress --scheme file --include-fragments --extensions md './*.md' 
 
 黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
 Rustの入口へ向ける形で残す。サーバーには `cargo build --locked -p gb-server --example browser-test-server`
-で作る `target/debug/examples/browser-test-server` を指定し、OS キーチェーンを使わない。
+で作る `target/debug/examples/browser-test-server` を指定し、API の接頭辞は製品と同じ `/-/guildbotics/api` とする。OS キーチェーンを使わない。
 `GUILDBOTICS_BLACKBOX_MEMBER_CLI` にも example の絶対パスを指定する。member は
 同じ example 内の製品クライアントを使い、実行ファイル hash の照合を保持する。
 その他の CLI 操作は `GUILDBOTICS_BLACKBOX_CLI` の製品バイナリを直接使う。サーバー単独の黒箱テストも CI で実行する。

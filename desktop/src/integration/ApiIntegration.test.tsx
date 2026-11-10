@@ -15,7 +15,7 @@ import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
-const BASE = "/api";
+const BASE = "/-/guildbotics/api";
 const CSRF = "integration-csrf";
 
 // jsdom lacks scrollIntoView, which Mantine's Combobox calls when opening a Select.
@@ -25,7 +25,7 @@ if (!Element.prototype.scrollIntoView) {
 
 // ---------------------------------------------------------------------------
 // Mock HTTP boundary: a recording fetch that matches "METHOD /pathname" against
-// a route table of API paths (after `/api`) and returns canned JSON. The real
+// a route table of API paths (after `/-/guildbotics/api`) and returns canned JSON. The real
 // api/client builds the request (URL, method, headers, JSON body, query
 // string), so every recorded call reflects exactly what the client would send
 // over the wire. The page takes up its session first, as a served page does.
@@ -66,7 +66,7 @@ class MockServer {
 
   private handle(input: string, init?: RequestInit): Response {
     const url = new URL(input, window.location.href);
-    const pathname = url.pathname.replace(/^\/api(?=\/)/, "");
+    const pathname = url.pathname.replace(/^\/-\/guildbotics\/api(?=\/)/, "");
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = (init?.headers as Record<string, string>) ?? {};
     const body = init?.body == null ? undefined : JSON.parse(String(init.body));
@@ -733,7 +733,7 @@ describe("Commands integration (real client + mock server)", () => {
     // refreshes the run from the server.
     const socket = FakeWebSocket.find("/events");
     // The session cookie authenticates the stream: no token rides on it.
-    expect(socket.url).toBe(`ws://${window.location.host}/api/events`);
+    expect(socket.url).toBe(`ws://${window.location.host}/-/guildbotics/api/events`);
     expect(socket.protocols).toBeUndefined();
     await waitFor(() => expect(socket.onmessage).not.toBeNull());
 

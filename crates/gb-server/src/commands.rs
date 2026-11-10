@@ -1,4 +1,4 @@
-//! `POST /api/commands/run`: one command the screens or the command line
+//! `POST /-/guildbotics/api/commands/run`: one command the screens or the command line
 //! start, as manual work under a trace of its own, in a microVM of its own,
 //! as the Python version runs it (`AppRuntime.run_command` of
 //! `guildbotics/app_api/runtime.py`).
@@ -1060,7 +1060,7 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/api/commands/run")
+                    .uri("/-/guildbotics/api/commands/run")
                     .header("host", "127.0.0.1:8765")
                     .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {}", token.trim()))

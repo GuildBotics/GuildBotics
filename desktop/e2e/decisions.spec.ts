@@ -14,7 +14,7 @@ test("uses the common brain assignment for chat judgment and restores it after r
     join(ctx.configDir, "intelligences", "brain_mapping.yml"),
     "default:\n  kind: model\n  model: default\n",
   );
-  await page.goto("/#/setup?section=intelligence&advanced=intelligence");
+  await page.goto("/-/guildbotics/#/setup?section=intelligence&advanced=intelligence");
   const card = page.locator("#decision-settings");
   await expect(card.getByText("Chat judgment engine", { exact: true })).toBeVisible();
   await expect(card.getByRole("combobox")).toHaveCount(2);

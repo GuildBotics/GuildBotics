@@ -265,7 +265,7 @@ mod tests {
         ] {
             let mut request = Request::builder()
                 .method(method)
-                .uri("/api/service/settings")
+                .uri("/-/guildbotics/api/service/settings")
                 .header("host", "127.0.0.1:38761")
                 .header("content-type", "application/json");
             if authorized {
@@ -300,7 +300,7 @@ mod tests {
                 .oneshot(
                     Request::builder()
                         .method(method)
-                        .uri("/api/service/settings")
+                        .uri("/-/guildbotics/api/service/settings")
                         .header("host", "127.0.0.1:38761")
                         .header("content-type", "application/json")
                         .header("authorization", format!("Bearer {}", token.trim()))

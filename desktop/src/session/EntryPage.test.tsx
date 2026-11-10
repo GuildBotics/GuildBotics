@@ -17,7 +17,7 @@ const t = i18n.getFixedT("en");
 type Answer = { status: number; body: unknown } | Error;
 type Call = { method: string; url: string; headers: Record<string, string>; body: unknown };
 
-/** The server as `fetch` meets it: "METHOD /api/path" to an answer, recording the calls. */
+/** The server as `fetch` meets it: "METHOD /-/guildbotics/api/path" to an answer, recording the calls. */
 function serve(routes: Record<string, Answer | (() => Answer)>): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
@@ -83,7 +83,7 @@ const REQUEST = {
   state: "s&1",
   code_challenge: CHALLENGE,
 };
-const AUTHORIZE = `/-/authorize?${new URLSearchParams({ ...REQUEST, code_challenge_method: "S256" })}`;
+const AUTHORIZE = `/-/guildbotics/-/authorize?${new URLSearchParams({ ...REQUEST, code_challenge_method: "S256" })}`;
 
 beforeEach(() => {
   localStorage.clear();
@@ -96,17 +96,20 @@ afterEach(() => {
 
 describe("a page the server serves", () => {
   it("shows the screen once the session is taken up", async () => {
-    serve({ "GET /api/session": SESSION, "GET /api/config/status": ok({ cwd: "/ws" }) });
+    serve({
+      "GET /-/guildbotics/api/session": SESSION,
+      "GET /-/guildbotics/api/config/status": ok({ cwd: "/ws" }),
+    });
 
-    renderPage("/");
+    renderPage("/-/guildbotics/");
 
     expect(await screen.findByText("Screen read /ws")).toBeInTheDocument();
   });
 
   it("says how to enter, on the server machine or from another, without a session", async () => {
-    serve({ "GET /api/session": NO_SESSION });
+    serve({ "GET /-/guildbotics/api/session": NO_SESSION });
 
-    renderPage("/");
+    renderPage("/-/guildbotics/");
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(screen.getByText("guildbotics open")).toBeInTheDocument();
@@ -116,8 +119,11 @@ describe("a page the server serves", () => {
 
   it("says how to enter again once a request finds the session gone", async () => {
     let config: Answer = ok({ cwd: "/ws" });
-    serve({ "GET /api/session": SESSION, "GET /api/config/status": () => config });
-    const view = renderPage("/");
+    serve({
+      "GET /-/guildbotics/api/session": SESSION,
+      "GET /-/guildbotics/api/config/status": () => config,
+    });
+    const view = renderPage("/-/guildbotics/");
     await screen.findByText("Screen read /ws");
 
     config = NO_SESSION;
@@ -130,9 +136,12 @@ describe("a page the server serves", () => {
   it("says how to enter again when a retry finds the session gone", async () => {
     let config: Answer = ok({ cwd: "/ws" });
     let session: Answer = SESSION;
-    serve({ "GET /api/session": () => session, "GET /api/config/status": () => config });
+    serve({
+      "GET /-/guildbotics/api/session": () => session,
+      "GET /-/guildbotics/api/config/status": () => config,
+    });
     const user = userEvent.setup();
-    renderPage("/");
+    renderPage("/-/guildbotics/");
     await screen.findByText("Screen read /ws");
     config = OFFLINE;
     session = OFFLINE;
@@ -148,8 +157,11 @@ describe("a page the server serves", () => {
 
   it("keeps saying how to enter again when a later request cannot reach the server", async () => {
     let config: Answer = ok({ cwd: "/ws" });
-    serve({ "GET /api/session": SESSION, "GET /api/config/status": () => config });
-    renderPage("/");
+    serve({
+      "GET /-/guildbotics/api/session": SESSION,
+      "GET /-/guildbotics/api/config/status": () => config,
+    });
+    renderPage("/-/guildbotics/");
     await screen.findByText("Screen read /ws");
     config = NO_SESSION;
     void getConfigStatus().catch(() => undefined);
@@ -167,11 +179,11 @@ describe("a page the server serves", () => {
     let config: Answer = ok({ cwd: "/ws" });
     let session: Answer = SESSION;
     const calls = serve({
-      "GET /api/session": () => session,
-      "GET /api/config/status": () => config,
+      "GET /-/guildbotics/api/session": () => session,
+      "GET /-/guildbotics/api/config/status": () => config,
     });
     const user = userEvent.setup();
-    renderPage("/");
+    renderPage("/-/guildbotics/");
     await screen.findByText("Screen read /ws");
 
     config = OFFLINE;
@@ -180,7 +192,8 @@ describe("a page the server serves", () => {
 
     const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
     expect(screen.getByText("Screen read /ws")).toBeInTheDocument();
-    const sessionReads = () => calls.filter((call) => call.url === "/api/session").length;
+    const sessionReads = () =>
+      calls.filter((call) => call.url === "/-/guildbotics/api/session").length;
     const before = sessionReads();
     await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
     await waitFor(() => expect(sessionReads()).toBeGreaterThan(before));
@@ -195,9 +208,9 @@ describe("a page the server serves", () => {
   });
 
   it("shows the notice alone when the session cannot be read at first", async () => {
-    serve({ "GET /api/session": OFFLINE });
+    serve({ "GET /-/guildbotics/api/session": OFFLINE });
 
-    renderPage("/");
+    renderPage("/-/guildbotics/");
 
     expect(
       await screen.findByRole("dialog", { name: t("session.unreachable.title") }),
@@ -208,31 +221,35 @@ describe("a page the server serves", () => {
 
 describe("the entry page", () => {
   it("enters once with the link's code, forgets the code, and opens next", async () => {
-    const calls = serve({ "POST /api/session": SESSION });
+    const calls = serve({ "POST /-/guildbotics/api/session": SESSION });
 
-    renderPage("/-/enter?next=/index.html#code-1");
+    renderPage("/-/guildbotics/-/enter?next=/index.html#code-1");
 
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/index.html"));
     // StrictMode runs the effect twice; the code works a single time.
     expect(calls).toEqual([
-      expect.objectContaining({ method: "POST", url: "/api/session", body: { code: "code-1" } }),
+      expect.objectContaining({
+        method: "POST",
+        url: "/-/guildbotics/api/session",
+        body: { code: "code-1" },
+      }),
     ]);
     expect(window.location.hash).toBe("");
-    expect(window.location.pathname + window.location.search).toBe("/-/enter");
+    expect(window.location.pathname + window.location.search).toBe("/-/guildbotics/-/enter");
   });
 
   it("opens the App when no page, or a page of another site, is named", async () => {
-    serve({ "POST /api/session": SESSION });
+    serve({ "POST /-/guildbotics/api/session": SESSION });
 
-    renderPage("/-/enter?next=//attacker.example/#code-1");
+    renderPage("/-/guildbotics/-/enter?next=//attacker.example/#code-1");
 
-    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/-/guildbotics/"));
   });
 
   it("says how to get a new link when the code was used or expired", async () => {
-    serve({ "POST /api/session": NO_SESSION });
+    serve({ "POST /-/guildbotics/api/session": NO_SESSION });
 
-    renderPage("/-/enter#code-1");
+    renderPage("/-/guildbotics/-/enter#code-1");
 
     expect(await screen.findByText(t("session.guide.expired"))).toBeInTheDocument();
     expect(screen.getByText("guildbotics open")).toBeInTheDocument();
@@ -242,22 +259,22 @@ describe("the entry page", () => {
 
   it("tries the link again after a failure that leaves it possibly good", async () => {
     let answer: Answer = OFFLINE;
-    const calls = serve({ "POST /api/session": () => answer });
+    const calls = serve({ "POST /-/guildbotics/api/session": () => answer });
     const user = userEvent.setup();
 
-    renderPage("/-/enter#code-1");
+    renderPage("/-/guildbotics/-/enter#code-1");
 
     expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
     answer = SESSION;
     await user.click(screen.getByRole("button", { name: t("session.retry") }));
-    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/-/guildbotics/"));
     expect(calls).toHaveLength(2);
   });
 
   it("without a code only says how to enter", async () => {
     const calls = serve({});
 
-    renderPage("/-/enter");
+    renderPage("/-/guildbotics/-/enter");
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(calls).toEqual([]);
@@ -266,7 +283,7 @@ describe("the entry page", () => {
 
 describe("the consent page", () => {
   it("refuses an invalid request without offering anything", async () => {
-    const calls = serve({ "GET /api/session": SESSION });
+    const calls = serve({ "GET /-/guildbotics/api/session": SESSION });
 
     renderPage(AUTHORIZE.replace("127.0.0.1", "attacker.example"));
 
@@ -279,8 +296,8 @@ describe("the consent page", () => {
   it("allows the app with the session's CSRF value and goes to its address", async () => {
     const redirect = `${REDIRECT}?code=c-1&state=s%261`;
     const calls = serve({
-      "GET /api/session": SESSION,
-      "POST /api/apps/authorizations": { status: 201, body: { redirect } },
+      "GET /-/guildbotics/api/session": SESSION,
+      "POST /-/guildbotics/api/apps/authorizations": { status: 201, body: { redirect } },
     });
     const user = userEvent.setup();
 
@@ -294,27 +311,27 @@ describe("the consent page", () => {
     await user.click(screen.getByRole("button", { name: t("session.authorize.allow") }));
 
     await waitFor(() => expect(leavePage).toHaveBeenCalledWith(redirect));
-    const sent = calls.find((call) => call.url === "/api/apps/authorizations");
+    const sent = calls.find((call) => call.url === "/-/guildbotics/api/apps/authorizations");
     expect(sent?.body).toEqual(REQUEST);
     expect(sent?.headers["X-GuildBotics-CSRF"]).toBe("csrf-1");
     expect(localStorage.length).toBe(0);
   });
 
   it("denies by going to the app's address with access_denied, without asking the server", async () => {
-    const calls = serve({ "GET /api/session": SESSION });
+    const calls = serve({ "GET /-/guildbotics/api/session": SESSION });
     const user = userEvent.setup();
 
     renderPage(AUTHORIZE);
     await user.click(await screen.findByRole("button", { name: t("session.authorize.deny") }));
 
     expect(leavePage).toHaveBeenCalledWith(`${REDIRECT}?error=access_denied&state=s%261`);
-    expect(calls.map((call) => call.url)).toEqual(["/api/session"]);
+    expect(calls.map((call) => call.url)).toEqual(["/-/guildbotics/api/session"]);
   });
 
   it("stays, showing the refusal, when the server refuses", async () => {
     serve({
-      "GET /api/session": SESSION,
-      "POST /api/apps/authorizations": refused(400, "invalid"),
+      "GET /-/guildbotics/api/session": SESSION,
+      "POST /-/guildbotics/api/apps/authorizations": refused(400, "invalid"),
     });
     const user = userEvent.setup();
 
@@ -326,7 +343,10 @@ describe("the consent page", () => {
   });
 
   it("without a session says how to enter, and entering returns here", async () => {
-    serve({ "GET /api/session": NO_SESSION, "POST /api/session": SESSION });
+    serve({
+      "GET /-/guildbotics/api/session": NO_SESSION,
+      "POST /-/guildbotics/api/session": SESSION,
+    });
 
     const first = renderPage(AUTHORIZE);
 
@@ -337,7 +357,7 @@ describe("the consent page", () => {
     expect(screen.queryByRole("button", { name: t("session.authorize.allow") })).toBeNull();
 
     first.unmount();
-    renderPage("/-/enter#code-1");
+    renderPage("/-/guildbotics/-/enter#code-1");
 
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith(AUTHORIZE));
   });

@@ -307,7 +307,7 @@ async function waitForHealth() {
   let lastError = "unknown";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/api/health`, { headers: ownerHeaders() });
+      const response = await fetch(`${baseUrl}/-/guildbotics/api/health`, { headers: ownerHeaders() });
       if (response.ok) {
         return;
       }
@@ -321,7 +321,7 @@ async function waitForHealth() {
 }
 
 async function postJson(path, body) {
-  const response = await fetch(`${baseUrl}/api${path}`, {
+  const response = await fetch(`${baseUrl}/-/guildbotics/api${path}`, {
     method: "POST",
     headers: ownerHeaders(),
     body: JSON.stringify(body),

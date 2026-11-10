@@ -29,7 +29,7 @@ test("creates, edits and saves a shared command, and says why it cannot run here
 }) => {
   const ctx = readStackContext("configured");
 
-  await page.goto("/#/commands");
+  await page.goto("/-/guildbotics/#/commands");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
 
   // The assistant is a drawer, as on the diagnostics screen: the editor owns

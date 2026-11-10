@@ -1,7 +1,7 @@
 //! Changes to the shared command files from the command screens, as the
 //! Python version makes them (`AppRuntime._write_shared_commands`):
-//! `POST /api/commands/files`, `PUT` and `DELETE /api/commands/files/{id}`
-//! and `POST /api/commands/author/apply`. Each runs under the workspace's
+//! `POST /-/guildbotics/api/commands/files`, `PUT` and `DELETE /-/guildbotics/api/commands/files/{id}`
+//! and `POST /-/guildbotics/api/commands/author/apply`. Each runs under the workspace's
 //! shared write lock without comparing config revisions: a change names the
 //! revision of the very file it read instead.
 

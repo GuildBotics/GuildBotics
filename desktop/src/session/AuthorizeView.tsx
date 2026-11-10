@@ -9,7 +9,7 @@ import { Connecting, FailureAlert, GuideCard, NoSessionGuide } from "./Guidance"
 import { leavePage } from "./pageNavigation";
 
 /**
- * `/-/authorize`: the owner allows (or denies) a local app, such as the CLI of
+ * `/-/guildbotics/-/authorize`: the owner allows (or denies) a local app, such as the CLI of
  * another machine, the owner's rights. Allowing sends the browser to the app's
  * loopback address with a single-use code; denying sends it there with
  * `error=access_denied`. Without a session the page says how to enter, and

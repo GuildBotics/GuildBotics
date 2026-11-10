@@ -18,7 +18,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
 }) => {
   const ctx = readStackContext("setup");
 
-  await page.goto("/");
+  await page.goto("/-/guildbotics/");
 
   // The empty temp workspace has no config, so the landing redirect lands on the
   // first-setup screen.
@@ -95,7 +95,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   expect(JSON.parse(projectYaml).services.chat_service.name).toBe("slack");
 
   const memberFile = join(ctx.configDir, "team", "members", "local-agent", "member.yml");
-  await page.goto("/#/setup?section=members&person_id=local-agent&tab=slack");
+  await page.goto("/-/guildbotics/#/setup?section=members&person_id=local-agent&tab=slack");
   await page.getByRole("tab", { name: "Basic", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
     "Local Agent",
@@ -113,7 +113,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   const saveMember = async () => {
     const saved = page.waitForResponse(
       (response) =>
-        new URL(response.url()).pathname === "/api/config/members/local-agent" &&
+        new URL(response.url()).pathname === "/-/guildbotics/api/config/members/local-agent" &&
         response.request().method() === "PUT",
     );
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
