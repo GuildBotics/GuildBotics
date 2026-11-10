@@ -11,6 +11,7 @@ mod app;
 mod auth;
 mod autoland;
 mod backup;
+pub mod browser_session;
 mod ci;
 mod cli;
 mod config;
@@ -121,7 +122,7 @@ enum Command {
         #[command(flatten)]
         data: DataArgs,
     },
-    /// Open the GUI in the browser with a single-use link (on the Hub machine, as the owner)
+    /// Open Branvil with a single-use link (the shared GuildBotics entry on an integrated server)
     Open {
         /// Print the link (valid once, for 60 seconds) instead of opening a browser
         #[arg(long)]
@@ -377,10 +378,13 @@ pub async fn prepare_embedded(
     invocation: Invocation,
     vault: Arc<dyn vault::Vault>,
     base_url: &str,
+    session: Arc<dyn browser_session::BrowserSession>,
 ) -> anyhow::Result<Embedded> {
     invocation.install();
     let base_url = config::normalize_base_url(base_url)?;
-    cli::prepare(serve_config()?, vault, base_url.clone(), base_url).await
+    let embedded = cli::prepare(serve_config()?, vault, base_url.clone(), base_url).await?;
+    let _ = embedded.app.browser_session.set(session);
+    Ok(embedded)
 }
 
 /// Whether `branvil init` has made the data directory `serve` would use.
@@ -404,7 +408,7 @@ fn data_config(data: &DataArgs) -> Option<config::Config> {
 }
 
 /// The HTTP route inventory, independent of the embedding host.
-pub use http::route_inventory;
+pub use http::{embedded_route_inventory, route_inventory};
 
 /// Exact hook paths whose shared-secret authentication replaces Host/Origin checks.
 pub fn hook_paths() -> impl Iterator<Item = &'static str> {

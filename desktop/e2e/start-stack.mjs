@@ -210,6 +210,10 @@ backendEnv = Object.fromEntries(
     ].includes(key.toUpperCase()),
   ),
 );
+if (stackName === "setup") {
+  backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
+  backendEnv.BRANVIL_DATA_DIR = join(homeDir, "branvil");
+}
 backendEnv.GUILDBOTICS_HOME = join(homeDir, ".guildbotics");
 backendEnv.HTTP_PROXY = backendEnv.HTTPS_PROXY = backendEnv.ALL_PROXY = "http://127.0.0.1:1";
 backendEnv.NO_PROXY = "localhost,127.0.0.1,::1";
@@ -307,7 +311,9 @@ async function waitForHealth() {
   let lastError = "unknown";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/-/guildbotics/api/health`, { headers: ownerHeaders() });
+      const response = await fetch(`${baseUrl}/-/guildbotics/api/health`, {
+        headers: ownerHeaders(),
+      });
       if (response.ok) {
         return;
       }

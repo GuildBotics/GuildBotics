@@ -448,6 +448,12 @@ guildbotics open
 
 ブラウザが、一度だけ使える入口リンク（60 秒で失効します）で開きます。サインインの画面はなく、`~/.guildbotics/data/server/<port>/owner.token` を読める OS のユーザーがオーナーです。セッションは 30 日続きます。期限が切れたら、もう一度 `guildbotics open` を実行してください。
 
+統合サーバーでは、GuildBotics と Branvil の入口とブラウザセッションを共用します。
+`guildbotics open`、`guildbotics open --branvil`、`guildbotics branvil open` は
+`/-/guildbotics/-/enter` の入口リンクを表示し、入った後の画面だけが異なります。
+更新後は新しいリンクで一度入り直してください。単体の `guildbotics branvil serve` は
+従来の Branvil セッションを使います。
+
 **別のマシンのブラウザで開く**: GuildBotics は Hub だけで動き、別のマシンからは SSH 経由でその画面を開きます。そのマシンに GuildBotics のインストールは要らず、OpenSSH クライアントだけが必要です（[必要なもの](#必要なもの)を参照）。
 
 1. そのマシンが SSH 鍵で Hub にログインできるようにします。公開鍵（`~/.ssh/id_ed25519.pub`。無ければ `ssh-keygen -t ed25519` で作ります）を Hub の `~/.ssh/authorized_keys` に追加します。Hub で実行します:

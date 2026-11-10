@@ -173,6 +173,12 @@ member's agent and token belong with the members' identities, which every worksp
 shares, so connecting once serves every workspace, and each workspace chooses the Branvil
 workspace its members work in.
 
+The integrated server uses one browser entry and session for GuildBotics and Branvil.
+`guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
+issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
+After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
+retains its own Branvil sessions.
+
 ## Connect GuildBotics to Branvil
 
 On the Hub's screens, under **Setup → Integrations**:

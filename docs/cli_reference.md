@@ -155,7 +155,7 @@ Commands:
   secrets         Manage workspace or shared identity secrets
   service         Start or stop scheduled commands, ticket patrol, and chat events
   connect         Connect this machine's CLI through the server's consent screen
-  open            Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
+  open            Open the GuildBotics screens in the browser. The browser enters with a shared single-use link that expires after 60 seconds. The session also opens Branvil
   branvil         Branvil's commands (code hosting: `guildbotics branvil --help`)
   help            Print this message or the help of the given subcommand(s)
 
@@ -1704,7 +1704,7 @@ Options:
 ## guildbotics open
 
 ```text
-Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
+Open the GuildBotics screens in the browser. The browser enters with a shared single-use link that expires after 60 seconds. The session also opens Branvil
 
 Usage: guildbotics open [OPTIONS]
 
@@ -1731,7 +1731,7 @@ Usage: guildbotics branvil <COMMAND>
 Commands:
   init       Create the data directory, the configuration, and the owner (its token goes to <data dir>/secrets/owner.token)
   serve      Run the service
-  open       Open the GUI in the browser with a single-use link (on the Hub machine, as the owner)
+  open       Open Branvil with a single-use link (the shared GuildBotics entry on an integrated server)
   member     Manage agents, runners, and tokens (through the running service)
   repo       Manage repositories (through the running service)
   workspace  Manage workspaces (through the running service)
@@ -1814,7 +1814,7 @@ Options:
 ## guildbotics branvil open
 
 ```text
-Open the GUI in the browser with a single-use link (on the Hub machine, as the owner)
+Open Branvil with a single-use link (the shared GuildBotics entry on an integrated server)
 
 Usage: guildbotics branvil open [OPTIONS]
 

@@ -191,7 +191,7 @@ pub async fn serve(
 
 /// A prepared service. Its host owns the listener and shutdown ordering.
 pub struct Embedded {
-    app: Arc<App>,
+    pub(crate) app: Arc<App>,
 }
 
 impl Embedded {

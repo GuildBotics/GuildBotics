@@ -343,6 +343,32 @@ impl ServerAuth {
     }
 }
 
+impl branvil::browser_session::BrowserSession for ServerAuth {
+    fn check(
+        &self,
+        cookie: &str,
+        csrf: Option<&str>,
+    ) -> Result<String, branvil::browser_session::Denied> {
+        use branvil::browser_session::Denied;
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", cookie.parse().map_err(|_| Denied::Unauthorized)?);
+        let expected = self.session_csrf(&headers).ok_or(Denied::Unauthorized)?;
+        if let Some(sent) = csrf
+            && !loopback_auth::csrf_matches(sent, &expected)
+        {
+            return Err(Denied::CsrfMismatch);
+        }
+        Ok(expected)
+    }
+    fn entry_link(&self) -> (String, String) {
+        let link = self.entry_link("/");
+        (link.url, link.expires_at)
+    }
+    fn entry_path(&self) -> &str {
+        "/-/guildbotics/-/enter?next=%2F"
+    }
+}
+
 /// A fresh token: its public id, its secret's digest, and its text.
 fn new_token() -> (String, String, String) {
     let id = loopback_auth::hex(&loopback_auth::random_bytes::<8>());
@@ -400,6 +426,42 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn branvil_uses_only_the_live_owner_cookie_and_its_csrf() {
+        use branvil::browser_session::{BrowserSession, Denied as HostDenied};
+        let data = tempfile::tempdir().unwrap();
+        let auth = ServerAuth::open(data.path(), 8765).unwrap();
+        let link = auth.entry_link("/");
+        let (cookie, csrf) = auth
+            .start_session(link.url.split_once('#').unwrap().1)
+            .unwrap()
+            .unwrap();
+        let header = format!("{}={cookie}", auth.cookie);
+        assert_eq!(auth.check(&header, None).ok(), Some(csrf.clone()));
+        assert_eq!(auth.check(&header, Some(&csrf)).ok(), Some(csrf));
+        for bad in ["", "wrong"] {
+            assert!(matches!(
+                auth.check(&header, Some(bad)),
+                Err(HostDenied::CsrfMismatch)
+            ));
+        }
+        for bad in [
+            String::new(),
+            format!("guildbotics_session_8766={cookie}"),
+            format!("branvil_session_8765={cookie}"),
+        ] {
+            assert!(matches!(
+                auth.check(&bad, None),
+                Err(HostDenied::Unauthorized)
+            ));
+        }
+        auth.state.lock().unwrap().records.sessions.clear();
+        assert!(matches!(
+            auth.check(&header, None),
+            Err(HostDenied::Unauthorized)
+        ));
+    }
+
     #[test]
     fn session_use_never_renews_its_thirty_day_expiry_and_expired_cookies_are_refused() {
         use super::*;

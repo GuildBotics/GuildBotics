@@ -127,9 +127,12 @@ scripts/hub-server.sh recover
 
 ## ポートを 7878 にまとめる版への切り替え
 
-この版の `manual_update_version` は 2。自動更新は手作業が必要として止まる。
+この版の `manual_update_version` は 3。自動更新は手作業が必要として止まる。
 実機への適用は #177 で行う。既存のチケット・PR・Git remote の 7878 の URL は変えない。
-入口リンクとブラウザのセッションは GuildBotics と Branvil で別々のままである。
+入口リンクとブラウザセッションは GuildBotics を正として共用する。更新後は
+`guildbotics open`（Branvil へは `guildbotics open --branvil` または
+`guildbotics branvil open`）の新しい入口リンクで一度入り直す。
+古い Branvil セッションは統合サーバーで使えない。単体の `guildbotics branvil serve` は従来どおり。
 
 ### Hub
 

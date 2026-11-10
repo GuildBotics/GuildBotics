@@ -449,6 +449,12 @@ guildbotics open
 
 The browser opens with a single-use entry link that expires after 60 seconds. There is no sign-in screen: the OS user who can read `~/.guildbotics/data/server/<port>/owner.token` is the owner. A session lasts 30 days; when it has expired, run `guildbotics open` again.
 
+The integrated server uses one browser entry and session for GuildBotics and Branvil.
+`guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
+issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
+After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
+retains its own Branvil sessions.
+
 **In a browser on another machine**: GuildBotics runs only on the Hub, and another machine reaches its screens over SSH. That machine needs no GuildBotics installation, only an OpenSSH client (see [What You Need](#what-you-need)).
 
 1. Let the machine log in to the Hub with an SSH key. Add its public key (`~/.ssh/id_ed25519.pub`; create one with `ssh-keygen -t ed25519` if it has none) to the Hub's `~/.ssh/authorized_keys`. On the Hub:

@@ -161,6 +161,12 @@ macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えない�
 置くので、一度接続すればすべてのワークスペースで使えます。メンバーが作業する Branvil の
 ワークスペースは、ワークスペースごとに選びます。
 
+統合サーバーでは、GuildBotics と Branvil の入口とブラウザセッションを共用します。
+`guildbotics open`、`guildbotics open --branvil`、`guildbotics branvil open` は
+`/-/guildbotics/-/enter` の入口リンクを表示し、入った後の画面だけが異なります。
+更新後は新しいリンクで一度入り直してください。単体の `guildbotics branvil serve` は
+従来の Branvil セッションを使います。
+
 ## GuildBotics を Branvil に接続する
 
 Hub の画面の **設定 → 連携** から:

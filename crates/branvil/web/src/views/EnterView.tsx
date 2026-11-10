@@ -1,3 +1,5 @@
+import { rememberReturn, takeReturn } from "@guildbotics/ui/entryReturn";
+export { rememberReturn };
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { isApiError, setCsrfToken } from "../api/client";
@@ -24,7 +26,7 @@ export function EnterView() {
     onSuccess: (session) => {
       setCsrfToken(session.csrf);
       client.setQueryData(keys.session(), session);
-      navigate(takeReturn() ?? href.home(), { replace: true });
+      navigate(takeReturn(["/-/authorize"]) ?? href.home(), { replace: true });
     },
   });
   useEffect(() => {
@@ -41,35 +43,6 @@ export function EnterView() {
   // wrong Host) leaves the link possibly good, so it can be tried again.
   if (isApiError(enter.error, undefined, 401)) return <GuidanceView notice={t("enter.expired")} />;
   return <GuidanceView error={enter.error} onRetry={() => enter.mutate()} />;
-}
-
-const RETURN = "branvil.return";
-const RETURN_MS = 10 * 60_000;
-
-/**
- * Remembers this page (the consent page, met without a session) for
- * `/-/enter` to return to instead of the board, for 10 minutes.
- */
-export function rememberReturn(): void {
-  try {
-    const path = window.location.pathname + window.location.search;
-    window.localStorage.setItem(RETURN, JSON.stringify({ path, expires: Date.now() + RETURN_MS }));
-  } catch {
-    // Without storage, entering opens the board; the app can be allowed again.
-  }
-}
-
-/** The remembered consent page, once, while it has not expired. */
-function takeReturn(): string | null {
-  try {
-    const raw = window.localStorage.getItem(RETURN);
-    window.localStorage.removeItem(RETURN);
-    const saved = raw ? (JSON.parse(raw) as { path?: unknown; expires?: unknown }) : null;
-    const fresh = typeof saved?.expires === "number" && saved.expires > Date.now();
-    return fresh && typeof saved.path === "string" && saved.path.startsWith("/-/authorize?") ? saved.path : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Without a session every page shows how to get one. */

@@ -1072,24 +1072,70 @@ fn set_up_branvil(dir: &Path, listen: &str) -> PathBuf {
     data
 }
 
-#[test]
-fn open_can_print_a_branvil_entry_link() {
+#[tokio::test]
+async fn open_commands_share_the_entry_and_browser_session() {
     let dir = tempfile::tempdir().unwrap();
     let listen = format!("127.0.0.1:{}", free_port());
     let data = set_up_branvil(dir.path(), &listen);
     let server = Server::start(dir.path());
-    let url = server.branvil_url();
-    let opened = Command::new(BIN)
-        .args(["open", "--branvil", "--print"])
-        .env("BRANVIL_DATA_DIR", &data)
-        .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
-        .env_remove("BRANVIL_URL")
-        .output()
-        .unwrap();
+    let _ = server.branvil_url();
+    for (args, next) in [
+        (vec!["open", "--print"], None),
+        (vec!["open", "--branvil", "--print"], Some("/")),
+        (vec!["branvil", "open", "--print"], Some("/")),
+    ] {
+        let opened = Command::new(BIN)
+            .args(args)
+            .env("BRANVIL_DATA_DIR", &data)
+            .env("GUILDBOTICS_HOME", &server.home)
+            .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
+            .env_remove("BRANVIL_URL")
+            .output()
+            .unwrap();
+        assert_ok(&opened);
+        let link = String::from_utf8(opened.stdout).unwrap();
+        let link = reqwest::Url::parse(link.trim()).unwrap();
+        assert_eq!(link.origin().ascii_serialization(), server.url(""));
+        assert_eq!(link.path(), "/-/guildbotics/-/enter");
+        assert_eq!(
+            link.query_pairs()
+                .find(|(key, _)| key == "next")
+                .map(|(_, value)| value.into_owned())
+                .as_deref(),
+            next
+        );
+        let entered = server
+            .http
+            .post(server.url("/-/guildbotics/api/session"))
+            .json(&json!({"code": link.fragment().unwrap()}))
+            .send()
+            .await
+            .unwrap();
+        let (status, headers, session) = body(entered).await;
+        assert_eq!(status, StatusCode::OK);
+        let cookie = headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        for path in ["/-/guildbotics/api/session", "/api/v1/session"] {
+            let current = server
+                .http
+                .get(server.url(path))
+                .header("cookie", cookie)
+                .send()
+                .await
+                .unwrap();
+            let (status, _, current) = body(current).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(current["csrf"] == session["csrf"]);
+            if path == "/api/v1/session" {
+                assert_eq!(current["me"]["kind"], "owner");
+            }
+        }
+    }
     server.stop();
-    assert_ok(&opened);
-    let link = String::from_utf8(opened.stdout).unwrap();
-    assert!(link.starts_with(&format!("{url}/-/enter#")), "{link}");
 }
 
 /// A Ctrl-C while the server still starts -- here held, after its notice,

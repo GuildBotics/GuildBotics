@@ -262,6 +262,11 @@ pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> Ap
         let member = authenticate_token(app, token).await?;
         return Ok(Caller { member });
     }
+    if app.browser_session.get().is_some() {
+        return Ok(Caller {
+            member: host_session(app, method, headers).await?.0,
+        });
+    }
     let Some(id) = session_cookie(app, headers) else {
         return Err(AppError::unauthorized());
     };
@@ -283,6 +288,50 @@ pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> Ap
         }
     }
     Ok(Caller { member })
+}
+
+/// Resolve a host browser session without accepting a Bearer credential.
+pub(crate) async fn host_session(
+    app: &App,
+    method: &Method,
+    headers: &HeaderMap,
+) -> AppResult<(Member, String)> {
+    let host = app
+        .browser_session
+        .get()
+        .ok_or_else(AppError::unauthorized)?;
+    let cookie = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let csrf = if method == Method::GET || method == Method::HEAD {
+        None
+    } else {
+        Some(
+            headers
+                .get(CSRF_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+        )
+    };
+    let csrf = host.check(cookie, csrf).map_err(|e| match e {
+        crate::browser_session::Denied::Unauthorized => AppError::unauthorized(),
+        crate::browser_session::Denied::CsrfMismatch => AppError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "csrf_mismatch",
+            "The X-Branvil-CSRF header does not match the current session.",
+        ),
+    })?;
+    let member = app
+        .store
+        .read(|r| {
+            r.prefix_all::<Member>(store::MEMBERS, &[])?
+                .into_iter()
+                .find(|m| m.kind == MemberKind::Owner)
+                .ok_or_else(AppError::unauthorized)
+        })
+        .await?;
+    Ok((member, csrf))
 }
 
 #[cfg(test)]
@@ -368,6 +417,121 @@ mod tests {
                 .unwrap_err()
                 .code,
             "unauthorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn embedding_replaces_sessions_but_preserves_bearer_authentication() {
+        use std::sync::Arc;
+        struct Host;
+        impl crate::browser_session::BrowserSession for Host {
+            fn check(
+                &self,
+                cookie: &str,
+                csrf: Option<&str>,
+            ) -> Result<String, crate::browser_session::Denied> {
+                if cookie != "host_session_7878=fixture" {
+                    return Err(crate::browser_session::Denied::Unauthorized);
+                }
+                if csrf.is_some_and(|v| v != "host-csrf") {
+                    return Err(crate::browser_session::Denied::CsrfMismatch);
+                }
+                Ok("host-csrf".into())
+            }
+            fn entry_link(&self) -> (String, String) {
+                (
+                    "http://127.0.0.1:7878/host-entry#fixture".into(),
+                    "expiry".into(),
+                )
+            }
+            fn entry_path(&self) -> &str {
+                "/host-entry"
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Config::load(None, Some(dir.path()), None, None).unwrap();
+        config.layout().create().unwrap();
+        let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
+        let token = store
+            .write_sync(|w| {
+                crate::domain::members::insert_member(
+                    w,
+                    &crate::domain::members::NewMember {
+                        name: "fixture-owner".into(),
+                        display_name: None,
+                        kind: MemberKind::Owner,
+                    },
+                )?;
+                Ok(issue_token(w, "fixture-owner", "fixture")?.1)
+            })
+            .unwrap();
+        let app = App::new(
+            config,
+            "http://127.0.0.1:7878".into(),
+            store,
+            Arc::new(crate::vault::Memory::default()),
+            "http://127.0.0.1:7878".into(),
+        );
+        let owner = Caller {
+            member: authenticate_token(&app, &token).await.unwrap(),
+        };
+        let old_link = crate::domain::members::entry_link(&app, &owner).unwrap();
+        let (_, old_cookie) =
+            crate::domain::members::enter(&app, old_link.url.split_once('#').unwrap().1.into())
+                .await
+                .unwrap();
+        let _ = app.browser_session.set(Arc::new(Host));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            format!("branvil_session_7878={old_cookie}")
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            authenticate(&app, &Method::GET, &headers)
+                .await
+                .unwrap_err()
+                .code,
+            "unauthorized"
+        );
+        headers.insert("cookie", "host_session_7878=fixture".parse().unwrap());
+        assert!(
+            authenticate(&app, &Method::GET, &headers)
+                .await
+                .unwrap()
+                .is_owner()
+        );
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            headers.remove(CSRF_HEADER);
+            assert_eq!(
+                authenticate(&app, &method, &headers)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "csrf_mismatch"
+            );
+            headers.insert(CSRF_HEADER, "host-csrf".parse().unwrap());
+            assert!(
+                authenticate(&app, &method, &headers)
+                    .await
+                    .unwrap()
+                    .is_owner()
+            );
+        }
+        headers.clear();
+        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        assert!(
+            authenticate(&app, &Method::POST, &headers)
+                .await
+                .unwrap()
+                .is_owner()
+        );
+        assert!(
+            crate::domain::members::entry_link(&app, &owner)
+                .unwrap()
+                .url
+                .contains("/host-entry#")
         );
     }
 
