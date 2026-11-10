@@ -11,6 +11,9 @@ pub const FORCED_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Subcommand)]
 pub enum ServiceCommand {
+    /// Print server and service state as JSON for Hub maintenance
+    #[command(hide = true)]
+    Status,
     /// Start the services with the settings saved on the Service screen
     Start,
     /// Stop the services after their in-flight work; the server keeps running
@@ -25,12 +28,17 @@ pub async fn run(command: ServiceCommand) -> anyhow::Result<()> {
     let language = client::language().await;
     let text = |key| i18n::t(language, key, &[]);
     let data = gb_base::home::data()?;
+    if matches!(command, ServiceCommand::Status) {
+        println!("{}", status(&data, language).await?);
+        return Ok(());
+    }
     let running = gb_server::running(&data, language)?
         .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.not_running")))?;
     let owner = OwnerClient::connect(&data, running.port, language)
         .await?
         .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.api_unavailable")))?;
     let (path, body, message) = match command {
+        ServiceCommand::Status => unreachable!(),
         ServiceCommand::Start => (
             "/scheduler/start",
             None,
@@ -45,6 +53,38 @@ pub async fn run(command: ServiceCommand) -> anyhow::Result<()> {
     owner.post(path, body.as_ref(), None).await?;
     println!("{}", text(message));
     Ok(())
+}
+
+async fn status(
+    data: &std::path::Path,
+    language: &'static str,
+) -> anyhow::Result<serde_json::Value> {
+    let Some(holder) = gb_server::running(data, language)? else {
+        return Ok(json!({"server_running": false, "running": false, "state": "stopped"}));
+    };
+    let owner = OwnerClient::connect(data, holder.port, language)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(i18n::t(
+                language,
+                "runtime.service_lock.api_unavailable",
+                &[]
+            ))
+        })?;
+    let response = owner
+        .request(reqwest::Method::GET, "/scheduler/status")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?;
+    let value: serde_json::Value = client::checked(response).await?.json().await?;
+    let running = value["scheduler"]["running"].as_bool().ok_or_else(|| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "runtime.service_lock.api_unavailable",
+            &[]
+        ))
+    })?;
+    Ok(json!({"server_running": true, "running": running, "state": value["scheduler"]["state"]}))
 }
 
 /// Print a PID only when this machine's server holds the lock. With `ready`,
