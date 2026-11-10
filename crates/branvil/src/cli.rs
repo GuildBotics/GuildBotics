@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Subcommand;
@@ -180,15 +181,17 @@ pub fn init(
 /// otherwise only its log does.
 pub async fn serve(
     config: Config,
+    vault: Arc<dyn crate::vault::Vault>,
     interrupt: impl Future<Output = ()> + Send + 'static,
     terminate: impl Future<Output = ()> + Send + 'static,
     announce: bool,
 ) -> anyhow::Result<u8> {
-    serve_with_api(config, interrupt, terminate, announce, None).await
+    serve_with_api(config, vault, interrupt, terminate, announce, None).await
 }
 
 pub(crate) async fn serve_with_api(
     config: Config,
+    vault: Arc<dyn crate::vault::Vault>,
     interrupt: impl Future<Output = ()> + Send + 'static,
     terminate: impl Future<Output = ()> + Send + 'static,
     announce: bool,
@@ -214,7 +217,6 @@ pub(crate) async fn serve_with_api(
         _ = &mut interrupt => return Ok(0),
         _ = &mut terminate => return Ok(0),
     }
-    let cursor_key = layout.load_cursor_key()?;
     crate::auth::ensure_owner_token(&store, &layout)?;
     crate::hooks::install(&layout)?;
     let listener = tokio::net::TcpListener::bind(config.listen)
@@ -229,7 +231,7 @@ pub(crate) async fn serve_with_api(
         config,
         base_url.clone(),
         store,
-        cursor_key,
+        vault,
         format!("http://{bound}"),
     );
     app.git

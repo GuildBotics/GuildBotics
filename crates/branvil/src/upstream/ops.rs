@@ -225,7 +225,7 @@ pub async fn set_account(
             Some(400..500) => AppError::invalid(e.message),
             _ => AppError::unavailable(e.message),
         })?;
-    super::write_credential(app, &member.name, host.name(), &credential)?;
+    super::write_credential(app, &member.name, host.name(), &credential).await?;
     let (n, p, kind) = (
         member.name.clone(),
         host.name().to_string(),
@@ -269,7 +269,11 @@ pub async fn delete_account(
 ) -> AppResult<MemberView> {
     caller.require_owner()?;
     let host = app.upstream.hosts.get(provider)?;
-    let (n, p) = (name.to_string(), host.name().to_string());
+    let n = name.to_string();
+    let member = app.store.read(move |r| member_by_name(r, &n)).await?;
+    // Before the record changes: a removed account leaves no credential behind.
+    super::remove_credential(app, &member.name, host.name()).await?;
+    let (n, p) = (member.name, host.name().to_string());
     let (m, repos) = app
         .store
         .write(move |w| {
@@ -297,7 +301,6 @@ pub async fn delete_account(
     for path in repos {
         app.events.publish("repo", &path, "");
     }
-    super::remove_credential(app, &m.name, host.name());
     Ok(member_view(&m))
 }
 

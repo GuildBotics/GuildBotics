@@ -5,6 +5,7 @@
 mod activity;
 mod api;
 mod auth;
+pub mod branvil_vault;
 pub mod chat_dispatch;
 pub mod chat_receiver;
 pub mod chat_state;

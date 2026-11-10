@@ -156,19 +156,12 @@ async fn accounts_are_checked_with_the_host_and_their_tokens_never_returned() {
     assert_eq!(v["accounts"][0]["kind"], "token");
     let members = s.ok("/members?limit=100", &w.owner).await.to_string();
     assert!(!members.contains(AIKO_TOKEN) && !members.contains(OWNER_TOKEN));
-    let file = s.data.join("secrets/accounts/aiko.github.json");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap(),
-        json!({"token": AIKO_TOKEN})
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
+    // Kept sealed in the vault, never in the data directory.
+    let aiko = |n: &branvil::vault::Secrets| n.account("aiko", "github");
+    let kept: Value = serde_json::from_str(&s.kept(aiko).unwrap()).unwrap();
+    assert_eq!(kept, json!({"token": AIKO_TOKEN}));
+    assert!(!s.vault_shows(AIKO_TOKEN));
+    assert_eq!(s.secret_files(), ["owner.token"]);
     let (st, _) = s.delete("/members/aiko/accounts/../x", &w.owner).await;
     assert_ne!(st, StatusCode::OK);
     let (st, v) = s.delete("/members/aiko/accounts/gitlab", &w.owner).await;
@@ -176,7 +169,7 @@ async fn accounts_are_checked_with_the_host_and_their_tokens_never_returned() {
     let (st, v) = s.delete(account, &w.owner).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert!(v["accounts"].as_array().unwrap().is_empty());
-    assert!(!file.exists());
+    assert_eq!(s.kept(aiko), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -474,15 +467,14 @@ async fn a_pull_request_is_published_as_its_author_and_follows_the_host_to_the_m
         (StatusCode::CONFLICT, &json!("upstream_refused"))
     );
     gh.set(|st| st.refusal = None);
-    let file = s.data.join("secrets/accounts/alice.github.json");
-    let kept = std::fs::read(&file).unwrap();
-    std::fs::remove_file(&file).unwrap();
+    let kept = std::fs::read(&s.vault).unwrap();
+    std::fs::remove_file(&s.vault).unwrap();
     let (st, v) = s.get(&log_path, &w.aiko).await;
     assert_eq!(
         (st, &v["error"]["code"]),
         (StatusCode::CONFLICT, &json!("no_account"))
     );
-    std::fs::write(&file, kept).unwrap();
+    std::fs::write(&s.vault, kept).unwrap();
     assert!(
         gh.requests("GET", "/logs")
             .iter()
@@ -1590,12 +1582,78 @@ fn key_line(key: &AppKey) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
+    let (mut w, _gh) = followed().await;
+    let upstream = format!("{}/upstream", w.repo_path());
+    let setting = json!({"provider": "github", "repository": GH});
+    let account = "/members/aiko/accounts/github";
+    let webhook = json!({"url": "https://hooks.example.test/services/T0/hook-5e1a"});
+
+    // A vault file the key does not open: reads report it as a missing
+    // credential does, and writes refuse without touching anything.
+    std::fs::write(&w.server.vault, b"{\"nonce\":\"x\",\"ciphertext\":\"y\"}").unwrap();
+    // The service starts all the same: only what needs a secret stops.
+    w.restart(&[]);
+    let s = &w.server;
+    let (st, v) = s.put(&upstream, &w.owner, setting.clone()).await;
+    assert_eq!(
+        (st, &v["error"]["code"]),
+        (StatusCode::CONFLICT, &json!("no_account"))
+    );
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("cannot be read"), "{message}");
+    assert!(message.contains("vault file"), "{message}");
+    let (st, v) = s.put(account, &w.owner, json!({"token": AIKO_TOKEN})).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be kept"),
+        "{v}"
+    );
+    let (st, v) = s.put("/admin/webhook", &w.owner, webhook.clone()).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    let view = s.ok("/admin/webhook", &w.owner).await;
+    assert_eq!(view["set"], false, "{view}");
+    assert!(
+        view["problem"].as_str().unwrap().contains("vault file"),
+        "{view}"
+    );
+    assert!(!s.vault_shows(AIKO_TOKEN) && !s.vault_shows("hook-5e1a"));
+    assert_eq!(s.secret_files(), ["owner.token"]);
+
+    // No key at all: the same, saying so.
+    w.restart(&[("BRANVIL_VAULT_KEY", "")]);
+    let s = &w.server;
+    let (st, v) = s.put(&upstream, &w.owner, setting).await;
+    assert_eq!(
+        (st, &v["error"]["code"]),
+        (StatusCode::CONFLICT, &json!("no_account"))
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("BRANVIL_VAULT_KEY"),
+        "{v}"
+    );
+    let (st, v) = s.put("/admin/webhook", &w.owner, webhook).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("no vault"),
+        "{v}"
+    );
+    assert_eq!(s.secret_files(), ["owner.token"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_app_account_is_checked_with_an_installation_token_and_replaces_a_token_account() {
     let (w, gh) = followed().await;
     let key = with_app(&gh);
     let s = &w.server;
     let account = "/members/aiko/accounts/github";
-    let file = s.data.join("secrets/accounts/aiko.github.json");
+    let aiko = |n: &branvil::vault::Secrets| n.account("aiko", "github");
     let (st, v) = s.put(account, &w.owner, json!({"token": AIKO_TOKEN})).await;
     assert_eq!(st, StatusCode::OK, "{v}");
 
@@ -1618,7 +1676,7 @@ async fn an_app_account_is_checked_with_an_installation_token_and_replaces_a_tok
         assert!(!v.to_string().contains(&key_line(&key)), "{v}");
     }
     assert_eq!(
-        serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap(),
+        serde_json::from_str::<Value>(&s.kept(aiko).unwrap()).unwrap(),
         json!({"token": AIKO_TOKEN})
     );
 
@@ -1636,17 +1694,11 @@ async fn an_app_account_is_checked_with_an_installation_token_and_replaces_a_tok
     // (the stand-in verifies the JWT); the malformed bodies never left.
     assert_eq!(gh.requests("GET", "/app").len(), 3);
     assert_eq!(gh.installation_tokens().len(), 1);
-    // The file now holds the app (the token is gone), owner-only.
-    let kept: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    // The vault now holds the app (the token is gone), sealed.
+    let kept: Value = serde_json::from_str(&s.kept(aiko).unwrap()).unwrap();
     assert_eq!(kept, app_body(&key.pem, INSTALLATION));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
+    assert!(!s.vault_shows(&key_line(&key)));
+    assert_eq!(s.secret_files(), ["owner.token"]);
     // Never in an answer: neither the key nor an installation token.
     let me = s.ok("/me", &w.aiko).await.to_string();
     let members = s.ok("/members?limit=100", &w.owner).await.to_string();
@@ -2002,15 +2054,14 @@ async fn a_failed_read_of_dependency_alerts_is_never_an_empty_list() {
     assert_eq!(s.ok(&list, &w.aiko).await["items"][0]["id"], "1");
 
     // The reader's credential is not on this machine: nobody else's is used.
-    let file = s.data.join("secrets/accounts/alice.github.json");
-    let kept = std::fs::read(&file).unwrap();
-    std::fs::remove_file(&file).unwrap();
+    let kept = std::fs::read(&s.vault).unwrap();
+    std::fs::remove_file(&s.vault).unwrap();
     let before = gh.requests("GET", "/dependabot/alerts").len();
     let (st, v) = s.get(&list, &w.aiko).await;
     failed(st, &v, "no_account");
     assert_eq!(st, StatusCode::CONFLICT);
     assert_eq!(gh.requests("GET", "/dependabot/alerts").len(), before);
-    std::fs::write(&file, kept).unwrap();
+    std::fs::write(&s.vault, kept).unwrap();
 
     // No upstream: nothing to read alerts of.
     let (st, _) = s

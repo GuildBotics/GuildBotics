@@ -90,6 +90,12 @@ apps"). There is no sign-out: to end every session, stop the service, delete
 the old one stops working; tokens given to local apps stay until revoked under
 Settings → Members → owner → Tokens).
 
+The secrets of other systems that Branvil uses, members' upstream credentials
+and the notification webhook's URL, are never in the data directory:
+`guildbotics branvil serve` and the GuildBotics server keep them in
+GuildBotics' identity store, sealed with the machine's key in the OS keychain
+([security](docs/security.md#upstream-tokens)).
+
 ## Set up a project
 
 The `member`, `workspace`, `repo`, `backup`, and `open` commands talk to

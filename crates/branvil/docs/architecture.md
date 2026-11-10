@@ -309,10 +309,10 @@ kinds:
   way most agents are set up on GitHub. The account acts as `<slug>[bot]`.
 
 Either is checked with the host when set; the login it reports and the kind
-are kept on the member and shown. The credential itself is a `0600` file,
-`<data>/secrets/accounts/<member>.<provider>.json` (`{"token": ...}` or
-`{"app": {...}}`, the body it was set with), never in redb, a response, a log,
-argv, or a URL. Every use of an account (reads, pushes, API calls) gets its
+are kept on the member and shown. The credential itself (`{"token": ...}` or
+`{"app": {...}}`, the body it was set with) is kept in the vault the process
+running the service provides (`src/vault.rs`, [security](security.md#upstream-tokens)),
+never in the data directory, redb, a response, a log, argv, or a URL. Every use of an account (reads, pushes, API calls) gets its
 token from one place (`token_of` in `src/upstream/mod.rs`, which asks the
 host): a token account's token as is; for an app, an installation token
 (valid an hour) that the host module makes from a JWT signed with the key,
@@ -557,7 +557,7 @@ finished, and so had every other app's check suite of it that has check runs
 new gate for an already published head. `Landing.notified_at` records a `2xx`
 answer for that gate; a later pass has its own notification. Pending notices
 are retried even if automatic landing is later turned off. The URL is kept in
-`secrets/webhook.url` (`0600`), never returned or backed up. Delivery is at least
+the service's vault, like an upstream credential, never returned or backed up. Delivery is at least
 once: a crash before the write can repeat it. Failures are kept in memory in
 `GET /admin/webhook`'s `problem`, without the URL. A send times out after 10
 seconds, and a sweep stops sending after one failure.

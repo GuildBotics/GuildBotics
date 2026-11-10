@@ -831,9 +831,12 @@ transfer format. Dollar expressions are literal and key-only lines are
 rejected before saving. Real environment variables can supply configured keys;
 a workspace `.env` is never read at startup. Tests inject a temporary keychain.
 
-Branvil separately owns the files in its data directory's `secrets/`. See its
-[backup and restore guide](../crates/branvil/docs/backup-restore.md) for which
-files a backup includes.
+Branvil keeps only the owner's token in its data directory's `secrets/`.
+Members' upstream credentials and the webhook URL are in the identity store
+under lower-case `branvil_*` names (`gb-server/src/branvil_vault.rs`), so
+`--identities` export and import carry them too. See Branvil's
+[backup and restore guide](../crates/branvil/docs/backup-restore.md) for what a
+backup includes.
 
 ## 10. Observability and Diagnostics
 

@@ -44,9 +44,17 @@ impl Default for Autoland {
 }
 
 impl Autoland {
-    /// Shares delivery and its diagnostic with CI and landing notices.
-    pub(crate) async fn send(&self, layout: &crate::config::Layout, text: &str) -> bool {
-        match crate::webhook::send(&self.client, layout, text).await {
+    /// Shares delivery and its diagnostic with CI and landing notices. True
+    /// only after delivery; an unset webhook is a successful no-op.
+    pub(crate) async fn send(&self, secrets: &crate::vault::Secrets, text: &str) -> bool {
+        let sent = match webhook_url(secrets).await {
+            Ok(Some(url)) => crate::webhook::send(&self.client, &url, text)
+                .await
+                .map(|()| true),
+            Ok(None) => Ok(false),
+            Err(why) => Err(why),
+        };
+        match sent {
             Ok(sent) => {
                 *self.problem.lock().unwrap() = None;
                 sent
@@ -275,7 +283,7 @@ async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
         app.pull_url(&repo.path, number),
         first.host_url.unwrap_or_default(),
     );
-    if !app.autoland.send(&app.layout, &text).await {
+    if !app.autoland.send(&app.secrets, &text).await {
         return Ok(false);
     }
     app.store
@@ -296,8 +304,20 @@ struct WebhookView {
     problem: Option<String>,
 }
 
-fn webhook_view(app: &App) -> WebhookView {
-    let host = std::fs::read_to_string(app.layout.webhook()).ok().map(|u| {
+/// The webhook's URL, or why the vault cannot tell it.
+async fn webhook_url(secrets: &crate::vault::Secrets) -> Result<Option<String>, String> {
+    secrets
+        .get(secrets.webhook())
+        .await
+        .map_err(|why| format!("cannot read the webhook credential: {why}"))
+}
+
+async fn webhook_view(app: &App) -> WebhookView {
+    let (url, problem) = match webhook_url(&app.secrets).await {
+        Ok(url) => (url, app.autoland.problem.lock().unwrap().clone()),
+        Err(why) => (None, Some(why)),
+    };
+    let host = url.map(|u| {
         reqwest::Url::parse(u.trim())
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
@@ -306,7 +326,7 @@ fn webhook_view(app: &App) -> WebhookView {
     WebhookView {
         set: host.is_some(),
         host,
-        problem: app.autoland.problem.lock().unwrap().clone(),
+        problem,
     }
 }
 
@@ -318,7 +338,7 @@ struct WebhookInput {
 
 async fn webhook_get(State(app): State<Shared>, c: Caller) -> AppResult<Response> {
     c.require_owner()?;
-    Ok(axum::Json(webhook_view(&app)).into_response())
+    Ok(axum::Json(webhook_view(&app).await).into_response())
 }
 
 async fn webhook_put(
@@ -331,17 +351,22 @@ async fn webhook_put(
         .ok()
         .filter(|u| ["http", "https"].contains(&u.scheme()) && u.host_str().is_some())
         .ok_or_else(|| AppError::invalid("The webhook URL must be an http or https URL."))?;
-    crate::config::write_secret(&app.layout.webhook(), url.as_str().as_bytes())
-        .map_err(AppError::internal)?;
+    app.secrets
+        .set(app.secrets.webhook(), url.to_string())
+        .await
+        .map_err(|why| AppError::unavailable(format!("The webhook cannot be kept: {why}.")))?;
     *app.autoland.problem.lock().unwrap() = None;
-    Ok(axum::Json(webhook_view(&app)).into_response())
+    Ok(axum::Json(webhook_view(&app).await).into_response())
 }
 
 async fn webhook_delete(State(app): State<Shared>, c: Caller) -> AppResult<Response> {
     c.require_owner()?;
-    let _ = std::fs::remove_file(app.layout.webhook());
+    app.secrets
+        .delete(app.secrets.webhook())
+        .await
+        .map_err(|why| AppError::unavailable(format!("The webhook cannot be removed: {why}.")))?;
     *app.autoland.problem.lock().unwrap() = None;
-    Ok(axum::Json(webhook_view(&app)).into_response())
+    Ok(axum::Json(webhook_view(&app).await).into_response())
 }
 
 /// The webhook's routes, merged into `/api/v1`.

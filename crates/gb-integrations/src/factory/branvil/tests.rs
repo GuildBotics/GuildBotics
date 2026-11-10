@@ -4,7 +4,12 @@ use branvil::api::{Running, initialize};
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();
     let token = initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(temp.path()).await.unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     let m = running.data.authenticate(token.clone()).await.unwrap();
     m.repos_create_workspace(decode(json!({"name":"test"})).unwrap())
         .await
@@ -262,7 +267,12 @@ fn mentions_match_the_frozen_ascii_name_boundaries() {
 async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
     let temp = tempfile::tempdir().unwrap();
     initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(temp.path()).await.unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     let mut service = BranvilService::new(
         running.data.clone(),
         String::new(),
@@ -339,7 +349,12 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
 async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
     let temp = tempfile::tempdir().unwrap();
     let token = initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(temp.path()).await.unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     let service = BranvilService::new(
         running.data.clone(),
         token,
@@ -419,7 +434,12 @@ fn pull_numbers_have_the_frozen_canonical_decimal_shape() {
 async fn missing_branvil_credentials_point_to_member_setup() {
     let temp = tempfile::tempdir().unwrap();
     initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(temp.path()).await.unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
     for (token, username, key, args) in [
         (
             "",

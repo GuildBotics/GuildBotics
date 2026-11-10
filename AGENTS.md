@@ -54,13 +54,13 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 
 - 共有ファイルの更新は `gb-base/src/shared_writes.rs` の書き込み境界を通す。読み取り・変更・保存、rename、削除を同じプロセス間lockの中で行う。identityとworkspaceの両方に触る場合はidentityが先、共有lockと機能ごとのlockでは共有が先。端末固有の `local/` は共有の対象外。
 - 設定の比較・書き込み・応答revisionの取得は `gb-config/src/repository.rs` で1つに扱う。設定以外へrevisionを広げない。書き込み経路のテストはURLの接頭辞でなく、何を書き換えるかで分類する。
-- GuildBoticsの秘密の値は `local/secrets.enc.json` に暗号化して保存し、鍵はOSキーチェーンに置く。`config/secrets.yml` はキー名の索引。メンバーの資格情報はidentityに置き、秘密名のプレフィックスが別ワークスペースのIDとも衝突しないよう確認する。壊れた索引を空として扱わない。
+- GuildBoticsの秘密の値は `local/secrets.enc.json` に暗号化して保存し、鍵はOSキーチェーンに置く。`config/secrets.yml` はキー名の索引。メンバーの資格情報はidentityに置き、秘密名のプレフィックスが別ワークスペースのIDとも衝突しないよう確認する。壊れた索引を空として扱わない。Branvilの上流の資格情報とwebhookのURLも、`gb-server/src/branvil_vault.rs` がidentityのstoreに `branvil_` で始まる小文字の名前で置く（メンバーの秘密名は大文字なので衝突しない）。
 - 共有記録には端末固有の値を入れない。値を持たせずに済む項目は型で防ぎ、記録のマスクとサイズ制限は共通の処理で行う。診断の文脈を捨てるためにエラー全体を隠さない。
 
 ### Branvil
 
 - `branvil` crateはGuildBoticsのcrateに依存しない。データの入口は同じサービスの公開API（`api::DataApi` と認証後の `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
-- 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`admin upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。Branvilの `secrets/` はOSキーチェーンを使うGuildBoticsの運用とは別で、データディレクトリに保持する。実データやtokenの中身を参照しない。
+- 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`admin upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。Branvilの `secrets/` にはowner tokenだけを置く。ほかの秘密は起動するプロセスが渡す `vault::Vault` 越しに保存し、平文のファイルへ逃がさない（`branvil` 単体では `BRANVIL_VAULT` / `BRANVIL_VAULT_KEY` の暗号化ファイル）。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
 - HTTP契約を変えたら [API文書](crates/branvil/docs/api.md) とRustの組み込みproviderを合わせ、`scripts/branvil-integration.sh` で公開APIとの結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
 - 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `packages/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。

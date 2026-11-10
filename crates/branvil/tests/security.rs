@@ -487,14 +487,14 @@ async fn the_data_directory_is_owner_only() {
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "{}", dir.display());
     }
-    for file in ["cursor.key", "owner.token"] {
-        let mode = std::fs::metadata(w.server.data.join("secrets").join(file))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "{file}");
-    }
+    // The cursor key is made per process: a start writes the owner's token alone.
+    assert_eq!(w.server.secret_files(), ["owner.token"]);
+    let mode = std::fs::metadata(w.server.data.join("secrets/owner.token"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
 }
 
 #[tokio::test]

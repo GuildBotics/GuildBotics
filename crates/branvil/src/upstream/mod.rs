@@ -9,7 +9,6 @@ pub mod http;
 pub mod ops;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -163,29 +162,25 @@ impl Upstream {
 
 // ---------------------------------------------------------------- accounts
 
-fn credential_path(app: &App, member: &str, provider: &str) -> PathBuf {
-    app.layout
-        .accounts()
-        .join(format!("{}.{provider}.json", fold(member)))
-}
-
-/// Writes a member's credential to its `0600` file.
-fn write_credential(
+/// Keeps a member's credential in the service's vault.
+async fn write_credential(
     app: &App,
     member: &str,
     provider: &str,
     credential: &Credential,
 ) -> AppResult<()> {
-    let dir = app.layout.accounts();
-    std::fs::create_dir_all(&dir).map_err(AppError::internal)?;
-    crate::config::restrict(&dir, true).map_err(AppError::internal)?;
-    let text = serde_json::to_vec(credential).map_err(AppError::internal)?;
-    crate::config::write_secret(&credential_path(app, member, provider), &text)
-        .map_err(AppError::internal)
+    let text = serde_json::to_string(credential).map_err(AppError::internal)?;
+    app.secrets
+        .set(app.secrets.account(member, provider), text)
+        .await
+        .map_err(|why| AppError::unavailable(format!("The credential cannot be kept: {why}.")))
 }
 
-fn remove_credential(app: &App, member: &str, provider: &str) {
-    let _ = std::fs::remove_file(credential_path(app, member, provider));
+async fn remove_credential(app: &App, member: &str, provider: &str) -> AppResult<()> {
+    app.secrets
+        .delete(app.secrets.account(member, provider))
+        .await
+        .map_err(|why| AppError::unavailable(format!("The credential cannot be removed: {why}.")))
 }
 
 fn require_account(member: &Member, host: &Host) -> Result<(), String> {
@@ -203,17 +198,28 @@ fn require_account(member: &Member, host: &Host) -> Result<(), String> {
 /// of an account (reads, pushes, API calls) gets its token here.
 async fn token_of(app: &App, member: &Member, host: &Host) -> Result<String, String> {
     require_account(member, host)?;
-    let credential: Credential =
-        std::fs::read(credential_path(app, &member.name, host.name()))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .ok_or_else(|| {
-                format!(
-                    "The {} credential of {} is not on this machine (backups do not carry it); set it again.",
-                    host.display_name(),
-                    member.name
-                )
-            })?;
+    let unreadable = |why: &str| {
+        format!(
+            "The {} credential of {} cannot be read: {why}.",
+            host.display_name(),
+            member.name
+        )
+    };
+    let credential: Credential = app
+        .secrets
+        .get(app.secrets.account(&member.name, host.name()))
+        .await
+        .map_err(|why| unreadable(&why))?
+        .ok_or_else(|| {
+            format!(
+                "The {} credential of {} is not on this machine (backups do not carry it); set it again.",
+                host.display_name(),
+                member.name
+            )
+        })
+        .and_then(|text| {
+            serde_json::from_str(&text).map_err(|_| unreadable("the stored credential is malformed"))
+        })?;
     host.token(&credential).await.map_err(|e| e.message)
 }
 

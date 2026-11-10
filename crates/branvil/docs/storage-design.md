@@ -162,8 +162,9 @@ reads the repository records to find the workspace's repositories, whose pull
 requests it lists (GuildBotics calls it to import the board's finished work as
 activity, not on its patrol path). No hot path scans a whole table. Lists follow signed cursors: the cursor is the last position
 (record key, or sort key for lists sorted in memory) plus an HMAC-SHA256 tag
-over the collection, the caller, and every query condition, keyed by
-`<data>/secrets/cursor.key`.
+over the collection, the caller, and every query condition, keyed by 32
+random bytes made at each start: a restart ends the cursors handed out before
+(`invalid_cursor`), which clients recover from by starting the list again.
 
 ## Transaction boundaries (atomicity)
 
@@ -193,7 +194,7 @@ over the collection, the caller, and every query condition, keyed by
 - Git objects live only in Git. Repositories are never deleted by the API
   (there is no delete endpoint yet).
 - The data directory (0700), `ci/logs`, `ci/artifacts`, `attachments`, and
-  `secrets/` (0700; `cursor.key` 0600) are created at start.
+  `secrets/` (0700, for the owner's token alone) are created at start.
 - Tickets' attachments: `attachments/<attachment id>` (written to a temporary
   name, synced, renamed, and only then recorded in `attachments`). Deleting a
   ticket removes its body/comment attachment references with the other indexes;
@@ -218,7 +219,8 @@ over the collection, the caller, and every query condition, keyed by
 - Sessions expire (`limits.session_hours`, default 720) and are pruned at
   the next entry-code exchange; idempotency keys after 24 hours; finished journal entries are deleted
   when they complete.
-- Members' upstream credentials are `0600` files in `secrets/accounts/`,
-  deleted with their account.
+- Members' upstream credentials and the webhook's URL are in the service's
+  vault (`src/vault.rs`), not in the data directory; a credential is deleted
+  with its account.
 - Backups and restores: `docs/backup-restore.md`. The token hashes in the
   database are not secrets by themselves; `secrets/` is not backed up.

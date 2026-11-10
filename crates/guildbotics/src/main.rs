@@ -165,9 +165,7 @@ fn main() -> ExitCode {
         Command::Environment { command, workspace } => {
             outcome(block(environment_cli::run(command, workspace)).map(|()| 0))
         }
-        Command::Branvil { args } => {
-            branvil::main(BRANVIL, std::iter::once(OsString::new()).chain(args))
-        }
+        Command::Branvil { args } => branvil_main(std::iter::once(OsString::new()).chain(args)),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
         Command::GitCredential { action } => {
             outcome(block(gb_server::client::git_credential(&action)).map(|()| 0))
@@ -201,7 +199,7 @@ fn main() -> ExitCode {
             if print {
                 args.push("--print".into());
             }
-            branvil::main(BRANVIL, args)
+            branvil_main(args)
         }
         Command::Open {
             print,
@@ -313,6 +311,12 @@ fn browse(url: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// Branvil's commands, keeping its secrets in the identity store.
+fn branvil_main(args: impl IntoIterator<Item = OsString>) -> ExitCode {
+    let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
+    branvil::main(BRANVIL, vault, args)
+}
+
 fn start(services: bool) -> anyhow::Result<u8> {
     use tracing_subscriber::prelude::*;
     let configured = std::env::var("GUILDBOTICS_LOG").unwrap_or_default();
@@ -375,8 +379,9 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
         async move { guildbotics_drained.notified().await }
     };
     let (ready, data_api) = tokio::sync::oneshot::channel();
+    let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let mut branvil = tokio::spawn(branvil::serve_with_data_api(
-        BRANVIL, interrupt, drain_ci, ready,
+        BRANVIL, vault, interrupt, drain_ci, ready,
     ));
     let mut stop = Box::pin(stop);
     let data_api = tokio::select! {

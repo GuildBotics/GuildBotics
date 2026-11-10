@@ -1,6 +1,4 @@
-//! The owner's webhook, usable without opening the database or the service.
-
-use crate::config::Layout;
+//! Sending to the owner's webhook.
 
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -11,14 +9,8 @@ pub fn client() -> reqwest::Client {
         .expect("an HTTP client")
 }
 
-/// True only after delivery; an unset webhook is a successful no-op.
 /// Neither errors nor response bodies may expose the credential in the URL.
-pub async fn send(client: &reqwest::Client, layout: &Layout, text: &str) -> Result<bool, String> {
-    let url = match std::fs::read_to_string(layout.webhook()) {
-        Ok(url) => url,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err("cannot read the webhook credential".into()),
-    };
+pub async fn send(client: &reqwest::Client, url: &str, text: &str) -> Result<(), String> {
     let response = client
         .post(url.trim())
         .json(&serde_json::json!({ "text": text }))
@@ -37,7 +29,7 @@ pub async fn send(client: &reqwest::Client, layout: &Layout, text: &str) -> Resu
     if !response.status().is_success() {
         return Err(format!("the webhook answered {}", response.status()));
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -46,9 +38,6 @@ mod tests {
 
     #[tokio::test]
     async fn delivery_errors_identify_timeout_connection_and_status_without_secrets() {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = Layout::new(dir.path());
-        layout.create().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let router = axum::Router::new()
@@ -73,19 +62,19 @@ mod tests {
             .timeout(std::time::Duration::from_millis(100))
             .build()
             .unwrap();
-        std::fs::write(layout.webhook(), format!("http://{address}/secret-timeout")).unwrap();
+        let timeout = format!("http://{address}/secret-timeout");
         assert_eq!(
-            send(&short, &layout, "notice").await.unwrap_err(),
+            send(&short, &timeout, "notice").await.unwrap_err(),
             "the webhook request timed out"
         );
-        std::fs::write(layout.webhook(), format!("http://{address}/secret-status")).unwrap();
-        let error = send(&client(), &layout, "notice").await.unwrap_err();
+        let status = format!("http://{address}/secret-status");
+        let error = send(&client(), &status, "notice").await.unwrap_err();
         assert!(error.contains("500"), "{error}");
         assert!(!error.contains("secret"), "{error}");
         server.abort();
         let _ = server.await;
         assert_eq!(
-            send(&client(), &layout, "notice").await.unwrap_err(),
+            send(&client(), &status, "notice").await.unwrap_err(),
             "could not connect to the webhook"
         );
     }

@@ -30,8 +30,11 @@ pub struct App {
     pub upstream: crate::upstream::Upstream,
     /// Landing pull requests automatically, and the webhook told of it.
     pub autoland: crate::autoland::Autoland,
-    /// Signs collection cursors.
+    /// Signs collection cursors; made per process, so a restart ends the
+    /// cursors handed out before (`invalid_cursor`).
     pub cursor_key: Vec<u8>,
+    /// Members' upstream credentials and the webhook's URL.
+    pub secrets: crate::vault::Secrets,
     /// Shared with the hook processes this service spawns (through the Git
     /// child's environment); authenticates their callbacks.
     pub hook_secret: String,
@@ -129,10 +132,11 @@ impl App {
         config: Config,
         base_url: String,
         store: Store,
-        cursor_key: Vec<u8>,
+        vault: Arc<dyn crate::vault::Vault>,
         hook_url: String,
     ) -> Shared {
         let layout = config.layout();
+        let secrets = crate::vault::Secrets::new(vault, &layout.root);
         let git = Git::new(
             layout.clone(),
             config.limits.git_concurrency,
@@ -161,7 +165,8 @@ impl App {
             ci,
             upstream: crate::upstream::Upstream::new(&config.upstream),
             autoland: Default::default(),
-            cursor_key,
+            cursor_key: crate::util::random_bytes::<32>().to_vec(),
+            secrets,
             hook_secret: crate::util::random_secret::<32>(),
             hook_url,
             repo_locks: Mutex::new(HashMap::new()),
@@ -325,7 +330,7 @@ mod tests {
             config,
             "http://127.0.0.1:7878".into(),
             store,
-            vec![],
+            std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         )
     }
