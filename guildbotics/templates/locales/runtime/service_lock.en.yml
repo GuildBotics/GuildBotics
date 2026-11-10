@@ -16,3 +16,4 @@ en:
   services_started: "The services started."
   services_stopped: "The services stopped."
   teardown_timeout: "The server did not terminate after cancelling its work."
+  hub_operation_failed: "Hub operation failed: %{reason}"

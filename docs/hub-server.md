@@ -62,3 +62,13 @@ scripts/hub-server.sh recover
 ```
 
 通常停止がBranvilのCIを待っている段階では、GuildBoticsのHTTPポートは閉じています。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。
+
+## 自動更新用の内部コマンド
+
+以下はシェルの更新ループ向けの隠しコマンドです。成功時の標準出力は1行の JSON、実行エラーは終了コード1です。状態の判定結果は終了コード0で返します。実データを変更せず、通知だけは外部の webhook へ送信します。
+
+- `guildbotics service status`: `server_running`、サービスの `running`、`state` を返します。サーバー停止中はそれぞれ `false`、`false`、`stopped`。サーバーのロックが指すポートへ接続し、オーナーの証明を検証してから状態を読みます。認証できない場合は停止扱いにせずエラーにします。
+- `guildbotics server hub-checks --repo GuildBotics/GuildBotics --sha <full-sha>`: `run_registered` と `state` を返します。`state` は `unregistered`（run 未登録）、`pending`（必須チェック未完了・欠落）、`failure`（必須チェック失敗）、`success`（必須チェック成功）。必須チェックのない登録済み run は `success`。不正な pipeline は失敗です。必須チェックは `success` またはサービスによるパス判定の `skipped` だけを成功とします。
+- `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin は Branvil の設定済み base URL と一致する HTTP(S) URL で、認証情報や query を含まないものに限ります。接続先は設定済み Hub に固定し、プロキシやリダイレクトを使いません。トークンは `BRANVIL_DATA_DIR` の `secrets/owner.token` から直接読み、引数や環境変数では受け取りません。
+- `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
+- `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。

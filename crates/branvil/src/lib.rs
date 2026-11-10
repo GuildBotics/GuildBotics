@@ -20,6 +20,7 @@ mod events;
 mod git;
 mod hooks;
 mod http;
+pub mod hub;
 mod invocation;
 mod landing;
 mod model;

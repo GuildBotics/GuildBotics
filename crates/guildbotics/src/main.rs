@@ -108,6 +108,7 @@ enum Command {
 mod cli_reference;
 mod diagnostics_cli;
 mod environment_cli;
+mod hub_cli;
 mod install_cli;
 mod secrets_cli;
 mod service_cli;
@@ -117,6 +118,26 @@ use environment_cli::EnvironmentCommand;
 
 #[derive(Subcommand)]
 enum ServerCommand {
+    /// Read commit checks on the local Hub; credentials are read only from disk
+    #[command(hide = true)]
+    HubChecks {
+        #[arg(
+            long,
+            conflicts_with = "checkout",
+            required_unless_present = "checkout"
+        )]
+        repo: Option<String>,
+        #[arg(long)]
+        checkout: Option<std::path::PathBuf>,
+        #[arg(long)]
+        sha: String,
+    },
+    /// Send stdin to the identity store's webhook, even with the server stopped
+    #[command(hide = true)]
+    HubNotify,
+    /// Print the manual-update declaration embedded in this binary
+    #[command(hide = true)]
+    HubMigration,
     /// Run the server in the foreground until SIGINT or SIGTERM (a first
     /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
     /// cancels them): GuildBotics
@@ -205,6 +226,20 @@ fn main() -> ExitCode {
             print,
             branvil: false,
         } => open(print),
+        Command::Server {
+            command:
+                ServerCommand::HubChecks {
+                    repo,
+                    checkout,
+                    sha,
+                },
+        } => outcome(block(hub_cli::checks(repo, checkout, sha)).map(|()| 0)),
+        Command::Server {
+            command: ServerCommand::HubNotify,
+        } => outcome(block(hub_cli::notify()).map(|()| 0)),
+        Command::Server {
+            command: ServerCommand::HubMigration,
+        } => outcome(hub_cli::migration().map(|()| 0)),
         Command::Server {
             command: ServerCommand::Start { services },
         } => outcome(start(services)),

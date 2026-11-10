@@ -1602,6 +1602,12 @@ fn service_command(dir: &Path, args: &[&str]) -> Output {
 #[test]
 fn service_commands_need_a_running_server() {
     let dir = tempfile::tempdir().unwrap();
+    let status = service_command(dir.path(), &["status"]);
+    assert_ok(&status);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&status.stdout).unwrap(),
+        json!({"server_running":false,"running":false,"state":"stopped"})
+    );
     for action in ["start", "stop"] {
         let output = service_command(dir.path(), &[action]);
         assert!(!output.status.success());
@@ -1616,6 +1622,7 @@ fn service_commands_need_a_running_server() {
 fn service_commands_reach_the_port_held_by_the_server_and_show_its_result() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path());
+    assert_service_status(dir.path(), false);
     // A server with no workspace refuses to start its services.
     let started = service_command(dir.path(), &["start"]);
     // Stopping idle services succeeds for both modes.
@@ -1631,6 +1638,15 @@ fn service_commands_reach_the_port_held_by_the_server_and_show_its_result() {
         String::from_utf8_lossy(&started.stderr)
             .contains("GuildBotics configuration is not available.")
     );
+}
+
+fn assert_service_status(root: &Path, running: bool) {
+    let output = service_command(root, &["status"]);
+    assert_ok(&output);
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["server_running"], true);
+    assert_eq!(status["running"], running);
+    assert!(status["state"].is_string());
 }
 
 #[test]
@@ -2474,7 +2490,9 @@ async fn server_starts_services_from_settings_or_flag_and_serves_after_a_startup
             })
             .await
             .unwrap();
+            assert_service_status(&root, true);
             assert_ok(&service_command(&root, &["stop"]));
+            assert_service_status(&root, false);
             assert!(!server.scheduler_running().await);
         }
         assert_eq!(server.health().await["workspace"], json!(workspace));

@@ -65,6 +65,10 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
 - 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `packages/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。
 
+## Hub の手作業が必要な更新
+
+ポート変更など、更新後にオーナーの作業が必要な変更を入れるチケットでは、ルートの `hub-update.json` の `manual_update_version` を直前の番号より上げ、`instructions` に `docs/` 配下の手順書への相対パスを書く。番号は最後に手作業が必要だった版を表し、その後の通常更新でも下げない。宣言はビルドに埋め込まれ、`guildbotics server hub-migration` が読む。宣言のない版の番号は 0 とする。コマンドの契約は [Hub の起動と更新](docs/hub-server.md#自動更新用の内部コマンド) を参照する。
+
 ## 開発時の基本コマンド（CI準拠）
 
 Pythonは `.python-version` の3.15、Rustは `rust-toolchain.toml` の固定版を使う。CIの開発イメージも同じ版にそろえる。Rustのテストには `cargo install --locked cargo-nextest` でnextestを用意する。BranvilのGit lockはプロセス内に1つなので、テストごとにプロセスを分ける。通常の `cargo test` はスレッド数を1にしても同じプロセスを使う。
