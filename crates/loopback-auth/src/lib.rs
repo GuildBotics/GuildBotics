@@ -23,3 +23,6 @@ pub use session::{cookie_value, csrf_matches, session_set_cookie};
 
 /// Shared browser policy for the host and embedded code service.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+mod routes;
+pub use routes::{Route, RouteAuth};

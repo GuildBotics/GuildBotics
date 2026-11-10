@@ -7,7 +7,6 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -703,24 +702,20 @@ async fn finish(
     Ok(ok(view(&app, &a).await?))
 }
 
-/// The CI routes, merged into `/api/v1`.
-pub fn routes() -> Router<Shared> {
-    Router::new()
-        .route("/repos/{repo}/jobs/{id}", get(job_get))
-        .route("/repos/{repo}/jobs/{id}/log", get(job_log))
-        .route("/repos/{repo}/jobs/{id}/retry", post(job_retry))
-        .route("/repos/{repo}/jobs/{id}/cancel", post(job_cancel))
-        .route(
-            "/repos/{repo}/commits/{sha}/artifacts/{name}",
-            get(artifact_get),
-        )
-        .route("/runner/claim", post(claim))
-        .route("/runner/attempts/{id}/source", get(source))
-        .route("/runner/attempts/{id}/heartbeat", post(heartbeat))
-        .route("/runner/attempts/{id}/log", post(log_append))
-        .route("/runner/attempts/{id}/artifacts/{name}", put(artifact_put))
-        .route("/runner/attempts/{id}/finish", post(finish))
-}
+// The CI routes, merged into `/api/v1`.
+loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/repos/{repo}/jobs/{id}", (get, job_get, MemberSession)),
+    ("/repos/{repo}/jobs/{id}/log", (get, job_log, MemberSession)),
+    ("/repos/{repo}/jobs/{id}/retry", (post, job_retry, MemberSession)),
+    ("/repos/{repo}/jobs/{id}/cancel", (post, job_cancel, MemberSession)),
+    ("/repos/{repo}/commits/{sha}/artifacts/{name}", (get, artifact_get, MemberSession)),
+    ("/runner/claim", (post, claim, MemberSession)),
+    ("/runner/attempts/{id}/source", (get, source, MemberSession)),
+    ("/runner/attempts/{id}/heartbeat", (post, heartbeat, MemberSession)),
+    ("/runner/attempts/{id}/log", (post, log_append, MemberSession)),
+    ("/runner/attempts/{id}/artifacts/{name}", (put, artifact_put, MemberSession)),
+    ("/runner/attempts/{id}/finish", (post, finish, MemberSession)),
+);
 
 #[cfg(test)]
 mod tests {

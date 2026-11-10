@@ -3,7 +3,6 @@
 use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
 
 use super::host::AlertState;
 use super::ops;
@@ -111,26 +110,13 @@ async fn alert(State(app): State<Shared>, c: Caller, P((repo, id)): P<(String, S
     Ok(ok(ops::dependency_alert(&app, &c, &repo, &id).await?))
 }
 
-/// Paths relative to `/api/v1`.
-pub fn routes() -> Router<Shared> {
-    Router::new()
-        .route(
-            "/repos/{repo}/upstream",
-            put(upstream_put).delete(upstream_delete),
-        )
-        .route("/repos/{repo}/upstream/refresh", post(refresh))
-        .route("/repos/{repo}/upstream/dependency-alerts", get(alerts))
-        .route("/repos/{repo}/upstream/dependency-alerts/{id}", get(alert))
-        .route(
-            "/repos/{repo}/pulls/{number}/publish",
-            get(preview).post(publish),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/landing/resume",
-            post(resume_landing),
-        )
-        .route(
-            "/members/{name}/accounts/{provider}",
-            put(account_put).delete(account_delete),
-        )
-}
+// Paths relative to `/api/v1`.
+loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/repos/{repo}/upstream", (put, upstream_put, OwnerSession), (delete, upstream_delete, OwnerSession)),
+    ("/repos/{repo}/upstream/refresh", (post, refresh, MemberSession)),
+    ("/repos/{repo}/upstream/dependency-alerts", (get, alerts, MemberSession)),
+    ("/repos/{repo}/upstream/dependency-alerts/{id}", (get, alert, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/publish", (get, preview, MemberSession), (post, publish, OwnerSession)),
+    ("/repos/{repo}/pulls/{number}/landing/resume", (post, resume_landing, OwnerSession)),
+    ("/members/{name}/accounts/{provider}", (put, account_put, OwnerSession), (delete, account_delete, OwnerSession)),
+);

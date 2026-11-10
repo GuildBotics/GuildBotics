@@ -3,7 +3,6 @@
 use axum::{
     Router,
     extract::{Path, State},
-    routing::get,
 };
 use serde::Serialize;
 
@@ -248,9 +247,9 @@ async fn queue_get(
     Ok(axum::Json(serde_json::json!({"items":items})))
 }
 
-pub fn routes() -> Router<Shared> {
-    Router::new().route("/repos/{repo}/landing", get(queue_get))
-}
+loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/repos/{repo}/landing", (get, queue_get, MemberSession)),
+);
 
 pub fn mark_notified(w: &Wtx, expected: &Landing, at: &str) -> AppResult<()> {
     if let Some(mut e) = current(w, &expected.repo, expected.number)?

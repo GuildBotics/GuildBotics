@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::any;
 use futures_util::Stream;
 use loopback_auth::Refusal;
 use serde::de::DeserializeOwned;
@@ -1235,142 +1235,123 @@ async fn idempotency(State(app): State<Shared>, req: Request, next: Next) -> Res
     Response::from_parts(rparts, Body::from(rbytes))
 }
 
+loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROUTES,
+    ("/health", (get, health, Public)),
+    ("/me", (get, me, MemberSession)),
+    ("/session", (post, session_create, Public), (get, session_get, Session)),
+    ("/session/links", (post, session_link, OwnerSession)),
+    ("/members", (get, members_list, OwnerSession), (post, members_create, OwnerSession)),
+    ("/members/{name}", (get, member_get, MemberSession), (patch, member_patch, OwnerSession)),
+    ("/members/{name}/avatar", (get, avatar_get, MemberSession), (put, avatar_put, MemberSession), (delete, avatar_delete, MemberSession)),
+    ("/members/{name}/tokens", (get, tokens_list, MemberSession), (post, tokens_create, MemberSession)),
+    ("/members/{name}/reviewers/{reviewer}", (put, member_reviewer_put, OwnerSession), (delete, member_reviewer_delete, OwnerSession)),
+    ("/members/{name}/tokens/{id}", (delete, token_delete, MemberSession)),
+    ("/apps/authorizations", (post, app_authorize, OwnerSession)),
+    ("/apps/token", (post, app_token, Public)),
+    ("/workspaces", (get, workspaces_list, MemberSession), (post, workspaces_create, OwnerSession)),
+    ("/workspaces/{workspace}", (get, workspace_get, MemberSession)),
+    ("/workspaces/{workspace}/board/cards", (get, board_cards, MemberSession)),
+    ("/workspaces/{workspace}/tickets", (get, mentioned_tickets, MemberSession)),
+    ("/workspaces/{workspace}/board/closed", (get, board_closed, MemberSession)),
+    ("/repos", (get, repos_list, MemberSession), (post, repos_create, OwnerSession)),
+    ("/repos/{repo}", (get, repo_get, MemberSession), (patch, repo_patch, OwnerSession)),
+    ("/repos/{repo}/markdown", (post, markdown_render, MemberSession)),
+    ("/repos/{repo}/branches/{branch}", (get, branch_get, MemberSession)),
+    ("/repos/{repo}/compare", (get, compare, MemberSession)),
+    ("/repos/{repo}/commits/{sha}", (get, commit_get, MemberSession)),
+    ("/repos/{repo}/commits/{sha}/checks", (get, commit_checks, MemberSession)),
+    ("/repos/{repo}/pulls", (get, pulls_list, MemberSession), (post, pulls_create, MemberSession)),
+    ("/repos/{repo}/pulls/{number}", (get, pull_get, MemberSession), (patch, pull_patch, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/activity", (get, pull_activity, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/comments", (get, pull_comments, MemberSession), (post, pull_comment, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/reviews", (get, pull_reviews, MemberSession), (post, pull_review, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/inline-comments", (post, pull_inline, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/threads", (get, pull_threads, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/threads/{id}/comments", (get, thread_comments, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/threads/{id}/replies", (post, thread_reply, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/threads/{id}/resolved", (put, thread_resolved, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/reactions", (post, pull_react, MemberSession), (delete, pull_unreact, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/reviewers/{name}", (put, reviewer_put, MemberSession), (delete, reviewer_delete, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/files", (get, pull_files, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/commits", (get, pull_commits, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/checks", (get, pull_checks, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/merge", (post, pull_merge, OwnerSession)),
+    ("/repos/{repo}/pulls/{number}/close", (post, pull_close, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/reopen", (post, pull_reopen, MemberSession)),
+    ("/pulls", (get, patrol, MemberSession)),
+    ("/repos/{repo}/tickets", (get, tickets_list, MemberSession), (post, tickets_create, MemberSession)),
+    ("/repos/{repo}/tickets/{number}", (get, ticket_get, MemberSession), (patch, ticket_patch, MemberSession), (delete, ticket_delete, OwnerSession)),
+    ("/repos/{repo}/attachments", (post, attachments_create, MemberSession)),
+    ("/repos/{repo}/attachments/{id}", (get, attachment_get, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/pulls", (get, ticket_pulls, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/attachments", (get, ticket_attachments, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/comments", (get, ticket_comments, MemberSession), (post, ticket_comment, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/comments/{id}", (patch, ticket_comment_patch, MemberSession), (delete, ticket_comment_delete, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/reactions", (post, ticket_react, MemberSession), (delete, ticket_unreact, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/assignee", (put, assignee_put, MemberSession), (delete, assignee_delete, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/board", (put, ticket_board, MemberSession)),
+    ("/events", (get, events, MemberSession)),
+    ("/admin/diagnostics", (get, diagnostics, OwnerSession)),
+    ("/admin/backup", (post, crate::backup::http_backup, OwnerSession)),
+);
+
+loopback_auth::classified_routes!(pub fn hook_routes() -> Router<Shared>, HOOK_ROUTES,
+    ("/-/hooks/pre-receive", (post, hook_pre_receive, HookSecret)),
+    ("/-/hooks/post-receive", (post, hook_post_receive, HookSecret)),
+);
+
+const GIT_ROUTE: loopback_auth::Route = loopback_auth::Route {
+    method: "any",
+    path: "/git/{*rest}",
+    auth: loopback_auth::RouteAuth::Basic,
+};
+const GUI_ROUTE: loopback_auth::Route = loopback_auth::Route {
+    method: "any",
+    path: "/{*path}",
+    auth: loopback_auth::RouteAuth::Public,
+};
+
+/// Every Branvil route, with absolute paths, including the GUI fallback.
+/// GET declarations also admit HEAD; `any` includes every HTTP method.
+pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
+    let mut routes = Vec::new();
+    for table in [
+        API_ROUTES,
+        crate::ci::api::ROUTES,
+        crate::ci::admin::ROUTES,
+        crate::upstream::http::ROUTES,
+        crate::autoland::ROUTES,
+        crate::landing::ROUTES,
+    ] {
+        for route in table {
+            routes.push((format!("/api/v1{}", route.path), *route));
+        }
+    }
+    routes.extend(
+        HOOK_ROUTES
+            .iter()
+            .chain([GIT_ROUTE, GUI_ROUTE].iter())
+            .map(|r| (r.path.to_owned(), *r)),
+    );
+    routes
+}
+
 pub fn router(app: Shared) -> Router {
     let body_limit = app.config.limits.api_body_max_kib << 10;
-    let api = Router::new()
-        .route("/health", get(health))
-        .route("/me", get(me))
-        .route("/session", post(session_create).get(session_get))
-        .route("/session/links", post(session_link))
-        .route("/members", get(members_list).post(members_create))
-        .route("/members/{name}", get(member_get).patch(member_patch))
-        .route(
-            "/members/{name}/avatar",
-            get(avatar_get).put(avatar_put).delete(avatar_delete),
-        )
-        .route(
-            "/members/{name}/tokens",
-            get(tokens_list).post(tokens_create),
-        )
-        .route(
-            "/members/{name}/reviewers/{reviewer}",
-            put(member_reviewer_put).delete(member_reviewer_delete),
-        )
-        .route(
-            "/members/{name}/tokens/{id}",
-            axum::routing::delete(token_delete),
-        )
-        .route("/apps/authorizations", post(app_authorize))
-        .route("/apps/token", post(app_token))
-        .route("/workspaces", get(workspaces_list).post(workspaces_create))
-        .route("/workspaces/{workspace}", get(workspace_get))
-        .route("/workspaces/{workspace}/board/cards", get(board_cards))
-        .route("/workspaces/{workspace}/tickets", get(mentioned_tickets))
-        .route("/workspaces/{workspace}/board/closed", get(board_closed))
-        .route("/repos", get(repos_list).post(repos_create))
-        .route("/repos/{repo}", get(repo_get).patch(repo_patch))
-        .route("/repos/{repo}/markdown", post(markdown_render))
-        .route("/repos/{repo}/branches/{branch}", get(branch_get))
-        .route("/repos/{repo}/compare", get(compare))
-        .route("/repos/{repo}/commits/{sha}", get(commit_get))
-        .route("/repos/{repo}/commits/{sha}/checks", get(commit_checks))
-        .route("/repos/{repo}/pulls", get(pulls_list).post(pulls_create))
-        .route(
-            "/repos/{repo}/pulls/{number}",
-            get(pull_get).patch(pull_patch),
-        )
-        .route("/repos/{repo}/pulls/{number}/activity", get(pull_activity))
-        .route(
-            "/repos/{repo}/pulls/{number}/comments",
-            get(pull_comments).post(pull_comment),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/reviews",
-            get(pull_reviews).post(pull_review),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/inline-comments",
-            post(pull_inline),
-        )
-        .route("/repos/{repo}/pulls/{number}/threads", get(pull_threads))
-        .route(
-            "/repos/{repo}/pulls/{number}/threads/{id}/comments",
-            get(thread_comments),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/threads/{id}/replies",
-            post(thread_reply),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/threads/{id}/resolved",
-            put(thread_resolved),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/reactions",
-            post(pull_react).delete(pull_unreact),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/reviewers/{name}",
-            put(reviewer_put).delete(reviewer_delete),
-        )
-        .route("/repos/{repo}/pulls/{number}/files", get(pull_files))
-        .route("/repos/{repo}/pulls/{number}/commits", get(pull_commits))
-        .route("/repos/{repo}/pulls/{number}/checks", get(pull_checks))
-        .route("/repos/{repo}/pulls/{number}/merge", post(pull_merge))
-        .route("/repos/{repo}/pulls/{number}/close", post(pull_close))
-        .route("/repos/{repo}/pulls/{number}/reopen", post(pull_reopen))
-        .route("/pulls", get(patrol))
-        .route(
-            "/repos/{repo}/tickets",
-            get(tickets_list).post(tickets_create),
-        )
-        .route(
-            "/repos/{repo}/tickets/{number}",
-            get(ticket_get).patch(ticket_patch).delete(ticket_delete),
-        )
-        .route("/repos/{repo}/attachments", post(attachments_create))
-        .route("/repos/{repo}/attachments/{id}", get(attachment_get))
-        .route("/repos/{repo}/tickets/{number}/pulls", get(ticket_pulls))
-        .route(
-            "/repos/{repo}/tickets/{number}/attachments",
-            get(ticket_attachments),
-        )
-        .route(
-            "/repos/{repo}/tickets/{number}/comments",
-            get(ticket_comments).post(ticket_comment),
-        )
-        .route(
-            "/repos/{repo}/tickets/{number}/comments/{id}",
-            axum::routing::patch(ticket_comment_patch).delete(ticket_comment_delete),
-        )
-        .route(
-            "/repos/{repo}/tickets/{number}/reactions",
-            post(ticket_react).delete(ticket_unreact),
-        )
-        .route(
-            "/repos/{repo}/tickets/{number}/assignee",
-            put(assignee_put).delete(assignee_delete),
-        )
-        .route("/repos/{repo}/tickets/{number}/board", put(ticket_board))
-        .route("/events", get(events))
-        .route("/admin/diagnostics", get(diagnostics))
+    let api = api_routes()
         .merge(crate::ci::api::routes())
         .merge(crate::ci::admin::routes())
-        .route("/admin/backup", post(crate::backup::http_backup))
         .merge(crate::upstream::http::routes())
         .merge(crate::autoland::routes())
         .merge(crate::landing::routes())
         .fallback(|| async { AppError::not_found("No such endpoint.") })
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(app.clone(), idempotency));
-    let hooks = Router::new()
-        .route("/pre-receive", post(hook_pre_receive))
-        .route("/post-receive", post(hook_post_receive));
     Router::new()
         .nest("/api/v1", api)
-        .nest("/-/hooks", hooks)
+        .merge(hook_routes())
         .route(
-            "/git/{*rest}",
+            GIT_ROUTE.path,
             any(crate::smart_http::handle).layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .fallback(gui)

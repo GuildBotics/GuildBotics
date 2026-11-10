@@ -9,7 +9,6 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -369,10 +368,7 @@ async fn webhook_delete(State(app): State<Shared>, c: Caller) -> AppResult<Respo
     Ok(axum::Json(webhook_view(&app).await).into_response())
 }
 
-/// The webhook's routes, merged into `/api/v1`.
-pub fn routes() -> Router<Shared> {
-    Router::new().route(
-        "/admin/webhook",
-        get(webhook_get).put(webhook_put).delete(webhook_delete),
-    )
-}
+// The webhook's routes, merged into `/api/v1`.
+loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/admin/webhook", (get, webhook_get, OwnerSession), (put, webhook_put, OwnerSession), (delete, webhook_delete, OwnerSession)),
+);

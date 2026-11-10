@@ -916,3 +916,118 @@ async fn the_consent_exchange_refuses_what_does_not_match_the_code() {
         1
     );
 }
+
+/// All registered methods, not a hand-picked sample of the API.
+#[tokio::test]
+async fn classified_routes_enforce_host_origin_and_credentials() {
+    use loopback_auth::RouteAuth;
+    let w = World::new().await;
+    let s = &w.server;
+    let (cookie, _) = s.session(&w.owner).await;
+    let mut seen = std::collections::BTreeSet::new();
+    for (method, path) in [
+        (
+            reqwest::Method::GET,
+            "/git/acme/demo.git/info/refs?service=git-upload-pack",
+        ),
+        (reqwest::Method::POST, "/git/acme/demo.git/git-upload-pack"),
+    ] {
+        for credential in [None, Some("Basic invalid-test-value")] {
+            let mut request = s.http.request(method.clone(), format!("{}{path}", s.url));
+            if let Some(value) = credential {
+                request = request.header("authorization", value);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(
+                response.headers()["www-authenticate"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("Basic ")
+            );
+        }
+    }
+    for (path, route) in branvil::route_inventory() {
+        assert!(
+            seen.insert((route.method, path.clone())),
+            "duplicate {route:?}"
+        );
+        let path = if route.auth == RouteAuth::Basic {
+            "/git/acme/demo.git/info/refs?service=git-upload-pack".to_owned()
+        } else {
+            path.split('/')
+                .map(|part| if part.starts_with('{') { "1" } else { part })
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        let methods: &[&str] = match route.method {
+            "any" => &[
+                "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT",
+            ],
+            "get" => &["GET", "HEAD"],
+            method => &[method],
+        };
+        for method in methods {
+            let method = reqwest::Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            let request = || {
+                s.http
+                    .request(method.clone(), format!("{}{path}", s.url))
+                    .json(&json!({"repo":"missing", "member":"missing", "updates":[]}))
+            };
+            if route.auth == RouteAuth::HookSecret {
+                // A hook uses its secret even when Host/Origin are not local.
+                let response = request()
+                    .header("host", "evil.invalid")
+                    .header("origin", "http://evil.invalid")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{route:?}");
+                if method != reqwest::Method::HEAD {
+                    assert_eq!(
+                        response.json::<Value>().await.unwrap()["error"]["message"],
+                        "Bad hook secret."
+                    );
+                }
+                continue;
+            }
+            for (name, value, expected) in [
+                ("host", "evil.invalid", StatusCode::MISDIRECTED_REQUEST),
+                ("origin", "http://evil.invalid", StatusCode::FORBIDDEN),
+            ] {
+                let response = request().header(name, value).send().await.unwrap();
+                assert_eq!(response.status(), expected, "{method} {path}: {route:?}");
+            }
+            if matches!(
+                route.auth,
+                RouteAuth::OwnerSession | RouteAuth::MemberSession
+            ) && method != reqwest::Method::GET
+                && method != reqwest::Method::HEAD
+            {
+                let response = request().header("cookie", &cookie).send().await.unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+                assert_eq!(
+                    response.json::<Value>().await.unwrap()["error"]["code"],
+                    "csrf_mismatch"
+                );
+            }
+            if matches!(
+                route.auth,
+                RouteAuth::OwnerSession | RouteAuth::MemberSession | RouteAuth::Session
+            ) {
+                for unknown in [false, true] {
+                    let mut req = request();
+                    if unknown {
+                        req = req.bearer_auth("unknown-test-token");
+                    }
+                    let response = req.send().await.unwrap();
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::UNAUTHORIZED,
+                        "{method} {path}"
+                    );
+                }
+            }
+        }
+    }
+}

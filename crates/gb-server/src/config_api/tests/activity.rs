@@ -646,6 +646,26 @@ async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_
         assert!(matches!(message,Message::Close(Some(frame)) if u16::from(frame.code)==1008));
         assert_eq!(f.api.events.subscriber_count(), 0);
     }
+    // The WebSocket bypasses the HTTP guard, so its own Host check must refuse
+    // a valid session arriving for another host too.
+    let mut wrong_host = request();
+    wrong_host
+        .headers_mut()
+        .insert("host", "evil.invalid".parse().unwrap());
+    wrong_host
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+    wrong_host
+        .headers_mut()
+        .insert("origin", "http://127.0.0.1:8765".parse().unwrap());
+    let (mut refused, _) = tokio_tungstenite::connect_async(wrong_host).await.unwrap();
+    let message = tokio::time::timeout(Duration::from_secs(2), refused.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(message, Message::Close(Some(frame)) if u16::from(frame.code) == 1008));
+    assert_eq!(f.api.events.subscriber_count(), 0);
     let mut r = request();
     r.headers_mut().insert("cookie", cookie.parse().unwrap());
     r.headers_mut()

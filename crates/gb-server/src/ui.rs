@@ -15,7 +15,7 @@ use crate::i18n;
 
 /// The main screen's paths: its own routes are in the fragment, and the
 /// entry and consent pages are told apart by their path.
-const MAIN_PATHS: &[&str] = &[
+pub(crate) const MAIN_PATHS: &[&str] = &[
     "/-/guildbotics/",
     "/-/guildbotics/index.html",
     "/-/guildbotics/-/enter",
@@ -30,6 +30,22 @@ pub fn directory() -> PathBuf {
         .join("desktop/dist")
 }
 
+pub(crate) const ASSET_PATH: &str = "/-/guildbotics/assets/{*path}";
+
+#[cfg(test)]
+pub(crate) fn route_inventory() -> Vec<loopback_auth::Route> {
+    MAIN_PATHS
+        .iter()
+        .copied()
+        .chain([ASSET_PATH])
+        .map(|path| loopback_auth::Route {
+            method: "get",
+            path,
+            auth: loopback_auth::RouteAuth::Public,
+        })
+        .collect()
+}
+
 pub fn router<S: Clone + Send + Sync + 'static>(directory: PathBuf) -> Router<S> {
     let mut router = Router::new();
     for path in MAIN_PATHS {
@@ -37,7 +53,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(directory: PathBuf) -> Router<S>
         router = router.route(path, get(move || page(directory.join("index.html"))));
     }
     router.route(
-        "/-/guildbotics/assets/{*path}",
+        ASSET_PATH,
         get(move |Captured(path): Captured<String>| asset(directory.join("assets"), path)),
     )
 }
