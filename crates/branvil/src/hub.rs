@@ -19,7 +19,7 @@ pub fn repository(origin: &str, base: &str) -> anyhow::Result<String> {
             && url.fragment().is_none(),
         "origin does not name this Hub"
     );
-    let prefix = format!("{}/", base.path().trim_end_matches('/'));
+    let prefix = format!("{}/git/", base.path().trim_end_matches('/'));
     let repo = url.path().strip_prefix(&prefix).context("origin path")?;
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
     validate_repository(repo)?;
@@ -70,6 +70,7 @@ async fn checks_at(
         sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid commit SHA"
     );
+    let repo = crate::util::encode_segment(&repo);
     let token = std::fs::read_to_string(config.layout().owner_token())?;
     let http = reqwest::Client::builder()
         .no_proxy()
@@ -169,18 +170,20 @@ mod tests {
         config.base_url = Some(base.clone());
         let sha = "a".repeat(40);
         let app = axum::Router::new()
-            .route("/api/v1/repos/team/repo", axum::routing::get(|headers: axum::http::HeaderMap| async move {
+            .route("/api/v1/repos/{repo}", axum::routing::get(|axum::extract::Path(repo): axum::extract::Path<String>, headers: axum::http::HeaderMap| async move {
+                assert_eq!(repo, "team/repo");
                 assert_eq!(headers["authorization"], "Bearer fixture-owner");
                 axum::Json(json!({"required_checks":["test"]}))
             }))
-            .route("/api/v1/repos/team/repo/commits/{sha}/checks", axum::routing::get(|axum::extract::Path(sha): axum::extract::Path<String>| async move {
+            .route("/api/v1/repos/{repo}/commits/{sha}/checks", axum::routing::get(|axum::extract::Path((repo, sha)): axum::extract::Path<(String, String)>| async move {
+                assert_eq!(repo, "team/repo");
                 assert_eq!(sha, "a".repeat(40));
                 axum::Json(json!({"run_registered":true,"checks":[{"name":"test","status":"completed","conclusion":"success"}]}))
             }));
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         for (repo, origin) in [
             (Some("team/repo"), None),
-            (None, Some(format!("{base}/team/repo.git"))),
+            (None, Some(format!("{base}/git/team/repo.git"))),
         ] {
             assert_eq!(
                 checks_at(&config, repo, origin.as_deref(), &sha)
@@ -201,19 +204,31 @@ mod tests {
 
     #[test]
     fn origin_is_bound_to_the_configured_hub() {
-        assert_eq!(
-            repository(
-                "http://127.0.0.1:7878/team/repo.git",
-                "http://127.0.0.1:7878"
-            )
-            .unwrap(),
-            "team/repo"
-        );
+        // Use the same clone URL shape as App::clone_url and the Git HTTP route.
+        for (origin, base) in [
+            (
+                "http://127.0.0.1:7878/git/team/repo.git",
+                "http://127.0.0.1:7878",
+            ),
+            (
+                "http://127.0.0.1:7878/git/team/repo",
+                "http://127.0.0.1:7878/",
+            ),
+            (
+                "https://localhost:7878/hub/git/team/repo.git",
+                "https://localhost:7878/hub",
+            ),
+        ] {
+            assert_eq!(repository(origin, base).unwrap(), "team/repo");
+        }
         for origin in [
-            "https://other/team/repo.git",
-            "http://user:secret@127.0.0.1:7878/team/repo",
-            "http://127.0.0.1:7878/team/repo?token=x",
-            "http://127.0.0.1:7878/team/repo/extra",
+            "https://other/git/team/repo.git",
+            "http://127.0.0.1:7879/git/team/repo.git",
+            "http://user:secret@127.0.0.1:7878/git/team/repo.git",
+            "http://127.0.0.1:7878/git/team/repo.git?token=x",
+            "http://127.0.0.1:7878/git/team/repo.git#fragment",
+            "http://127.0.0.1:7878/git/team/repo/extra",
+            "http://127.0.0.1:7878/team/repo.git",
         ] {
             assert!(repository(origin, "http://127.0.0.1:7878").is_err());
         }
