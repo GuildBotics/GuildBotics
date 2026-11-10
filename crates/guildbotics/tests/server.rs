@@ -1755,15 +1755,35 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
             Duration::from_secs(1),
         )
         .unwrap();
-        let request = server
-            .http
-            .post(server.url("/-/guildbotics/api/workspace"))
-            .bearer_auth(server.owner_token())
-            .json(&json!({"workspace_dir": workspace}))
-            .timeout(Duration::from_millis(300))
-            .send()
-            .await;
-        assert!(request.unwrap_err().is_timeout());
+        // Branvil's router is ready before startup/autostart releases workspace
+        // admission. Retry only that documented conflict until the switch is
+        // admitted and blocked on the registry held by this fixture.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match server
+                    .http
+                    .post(server.url("/-/guildbotics/api/workspace"))
+                    .bearer_auth(server.owner_token())
+                    .json(&json!({"workspace_dir": workspace}))
+                    .timeout(Duration::from_millis(300))
+                    .send()
+                    .await
+                {
+                    Err(error) => {
+                        assert!(error.is_timeout(), "{error}");
+                        break;
+                    }
+                    Ok(response) => {
+                        assert_eq!(response.status(), StatusCode::CONFLICT);
+                        let body: Value = response.json().await.unwrap();
+                        assert_eq!(body["code"], "workspace_switch_blocked_by_active_work");
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("startup never released workspace admission");
         // A conflict confirms that the detached switch still holds admission
         // while waiting to persist its selection.
         let reply = server

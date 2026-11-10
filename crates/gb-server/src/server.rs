@@ -697,6 +697,18 @@ mod tests {
         assert_eq!(start.status(), reqwest::StatusCode::CONFLICT);
         let body: serde_json::Value = start.json().await.unwrap();
         assert_eq!(body["code"], "command_workspace_changing");
+        let selection = http
+            .post(format!(
+                "http://127.0.0.1:{port}/-/guildbotics/api/workspace"
+            ))
+            .bearer_auth(token.trim())
+            .json(&serde_json::json!({"workspace_dir": root.path()}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(selection.status(), reqwest::StatusCode::CONFLICT);
+        let body: serde_json::Value = selection.json().await.unwrap();
+        assert_eq!(body["code"], "workspace_switch_blocked_by_active_work");
         let response = http
             .get(format!("http://127.0.0.1:{port}/-/guildbotics/unknown"))
             .send()
