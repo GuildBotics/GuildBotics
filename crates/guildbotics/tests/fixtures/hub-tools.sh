@@ -13,7 +13,17 @@ case "$name" in
     cargo)
         while [ "$1" != --target-dir ]; do shift; done
         mkdir -p "$2/release"
-        cp "$0" "$2/release/guildbotics"
+        # A build is this stub marked with the commit's build-id.
+        { cat "$0"; printf '# build: %s\n' "$(cat build-id)"; } >"$2/release/guildbotics"
+        chmod +x "$2/release/guildbotics"
+        ;;
+    security) cat "$FAKE_ROOT/identities" ;;
+    codesign)
+        [ ! -f "$FAKE_ROOT/fail-sign" ] || exit 1
+        # A new signature replaces the previous one.
+        { grep -v '^# signed: ' "$6"; printf '# signed: %s %s\n' "$3" "$5"; } >"$6.signed"
+        chmod +x "$6.signed"
+        mv -f "$6.signed" "$6"
         ;;
     plutil)
         if [ "$1" = -lint ]; then exit 0; fi
@@ -48,7 +58,7 @@ case "$name" in
             bootstrap)
                 touch "$FAKE_ROOT/loaded"
                 bin=$(plutil -extract ProgramArguments.0 raw -o - "$3")
-                build=$(cat "$(dirname "$(readlink "$bin")")/build-id")
+                build=$(sed -n 's/^# build: //p' "$bin")
                 if [ "$build" = new ] && [ -f "$FAKE_ROOT/fail-start" ]; then
                     touch "$FAKE_ROOT/start-failed"
                 else
@@ -64,9 +74,7 @@ case "$name" in
         esac
         ;;
     current|guildbotics-bin)
-        bin=$0
-        if [ -L "$bin" ]; then bin=$(readlink "$bin"); fi
-        build=$(cat "$(dirname "$bin")/build-id")
+        build=$(sed -n 's/^# build: //p' "$0")
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"

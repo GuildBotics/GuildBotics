@@ -2,22 +2,41 @@
 
 Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。Branvilを初めて使う場合は、ビルド済みの `guildbotics branvil init --data-dir <絶対パス>` でデータディレクトリを用意します。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
 
+## 署名の識別を用意する
+
+Hubは、ビルドした実行ファイルにオーナーのApple Developmentの証明書で署名し、LaunchAgentはそのコピーを固定のパス（`builds/current`）から起動します。macOSはキーチェーンの許可を証明書のTeam IDに、「書類」フォルダの許可を実行ファイルのパスと署名に結び付けるので、同じ識別で署名した更新では確認が出ません。
+
+1. Xcodeの設定の「Apple Accounts」でApple IDを追加します。無料のApple ID（Personal Team）で足ります。
+2. Apple IDのチームを選び、「Manage Certificates…」の「＋」から「Apple Development」を作ります。
+3. 次を実行し、「Valid identities only」の下の `Apple Development: …` の行にある40桁の16進数（SHA-1）を控えます。
+
+   ```sh
+   security find-identity -v -p codesigning
+   ```
+
+   証明書が「Valid identities only」に出ない場合は、Appleの中間証明書（[Apple Worldwide Developer Relations Certification Authority G3](https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer)）をダウンロードし、ダブルクリックしてログインキーチェーンへ追加します。
+
+`codesign` が初めてこの証明書の鍵を使うとき、「codesignがキーチェーンに含まれるキーへアクセスしようとしています」と確認が出ます。ログインのパスワードを入力して「常に許可」を選びます。
+
+Apple Developmentの証明書の有効期限は1年です。期限が切れると `update` は署名の前に止まります。Xcodeで同じApple IDの新しい証明書を作り、そのSHA-1を `~/Library/Application Support/GuildBotics/Hub/signing-identity` に書き込みます。次に新しいコミットへ `update` するときから、新しい証明書で署名します。署名の要件は証明書の名前とTeam IDで決まるので、同じApple IDの証明書であれば確認は出ません。
+
 ## インストール
 
 ```sh
 export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
+export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 scripts/hub-server.sh install
 scripts/hub-server.sh status
 ```
 
 `install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスで両方のポートを待ち受けます。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。画面は `http://127.0.0.1:8765/-/guildbotics/` で配り、`/` はこの場所へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合や署名に失敗した場合は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。画面は `http://127.0.0.1:8765/-/guildbotics/` で配り、`/` はこの場所へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
-新しいビルドの最初の起動時（インストール・更新とも）、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。
+インストール後の最初の起動時、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。同じ識別で署名した更新では、これらの確認は出ません。
 
-- **キーチェーンへのアクセス**：GuildBoticsのSecretを暗号化・復号する端末共通の鍵（サービス名 `GuildBotics`、アカウント名 `agent-environment-credentials`）への許可です。#108 の写しでは、更新のたびに1回でした。回数は保存済みの鍵やアクセス許可の状態によるため、2回出ることを前提に待つ必要はありません。`guildbotics connect` が保存する `guildbotics-server` の項目はCLIの接続用トークンで、この暗号化の鍵とは別です。Branvilの秘密はデータディレクトリにあり、Branvil用の鍵の確認がもう1回出るわけではありません。
-- **「書類」フォルダへのアクセス**：macOSのプライバシー保護（TCC）の確認です。サーバーが、メンバーとの受け渡し先 `~/Documents/GuildBotics` や「書類」の下にあるワークスペースなどへアクセスするために必要です。#108 の写しでは、初回起動でも更新でも1回出ました。新しいビルドで再度表示されることがあるので、キーチェーンとは別に許可してください。
+- **キーチェーンへのアクセス**：GuildBoticsのSecretを暗号化・復号する端末共通の鍵（サービス名 `GuildBotics`、アカウント名 `agent-environment-credentials`）への許可です。「常に許可」を選ぶと、同じTeam IDで署名したビルドには再び確認が出ません。`guildbotics connect` が保存する `guildbotics-server` の項目はCLIの接続用トークンで、この暗号化の鍵とは別です。Branvilの秘密はデータディレクトリにあり、Branvil用の鍵の確認がもう1回出るわけではありません。
+- **「書類」フォルダへのアクセス**：macOSのプライバシー保護（TCC）の確認です。サーバーが、メンバーとの受け渡し先 `~/Documents/GuildBotics` や「書類」の下にあるワークスペースなどへアクセスするために必要です。キーチェーンとは別に許可してください。
 
 ```sh
 scripts/hub-server.sh restart    # GuildBoticsの作業とBranvilのCIを待ってから再起動
@@ -36,12 +55,12 @@ git merge --ff-only FETCH_HEAD
 scripts/hub-server.sh update
 ```
 
-1. `update` は更新するコミットから画面と実行ファイルを作ります。現在のサーバーは稼働を続けます。
+1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
 2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
-4. 新ビルドの起動時には、インストール時と同じくキーチェーンと「書類」フォルダへのアクセスの確認に回答してください（対象と回数は上記を参照）。起動を確認できると、新ビルドからCLIとスキルを導入します。
+4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の実行ファイルとソース、`builds/current` はLaunchAgentが起動する実行ファイルへのリンクです。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピー、`builds/active` は現行ビルドの実行ファイルへのリンク、`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 

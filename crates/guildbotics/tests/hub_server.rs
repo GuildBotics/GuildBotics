@@ -10,6 +10,9 @@ use std::{
 
 const SCRIPT: &str = include_str!("../../../scripts/hub-server.sh");
 const TOOLS: &str = include_str!("fixtures/hub-tools.sh");
+const IDENTITY: &str = "0123ABCD";
+const IDENTITIES: &str =
+    "  1) 0123ABCD \"Apple Development: Fixture (TEAM)\"\n     1 valid identities found\n";
 
 struct Hub {
     temp: tempfile::TempDir,
@@ -30,10 +33,20 @@ impl Hub {
         }
         fs::write(repo.join("scripts/hub-server.sh"), SCRIPT).unwrap();
         fs::write(root.join("os"), "Darwin\n").unwrap();
+        fs::write(root.join("identities"), IDENTITIES).unwrap();
         let stub = tools.join("stub");
         fs::write(&stub, TOOLS).unwrap();
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-        for name in ["uname", "id", "launchctl", "npm", "cargo", "plutil"] {
+        for name in [
+            "uname",
+            "id",
+            "launchctl",
+            "npm",
+            "cargo",
+            "plutil",
+            "security",
+            "codesign",
+        ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
         let path = format!("{}:/usr/bin:/bin", tools.display());
@@ -91,15 +104,25 @@ impl Hub {
         self.git(&["commit", "-qm", name]);
     }
 
+    /// Runs `action` as the owner does: install is given the signing identity.
     fn run(&self, action: &str, port: Option<&str>, success: bool) -> Output {
+        let mut env = vec![];
+        if let Some(port) = port {
+            env.push(("GUILDBOTICS_SERVER_PORT", port));
+        }
+        if action == "install" {
+            env.push(("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY));
+        }
+        self.run_with(action, &env, success)
+    }
+
+    fn run_with(&self, action: &str, env: &[(&str, &str)], success: bool) -> Output {
         for file in ["calls", "actions"] {
             fs::write(self.root().join(file), "").unwrap();
         }
-        let mut command = self.command("sh");
-        if let Some(port) = port {
-            command.env("GUILDBOTICS_SERVER_PORT", port);
-        }
-        let result = command
+        let result = self
+            .command("sh")
+            .envs(env.iter().copied())
             .args(["scripts/hub-server.sh", action])
             .output()
             .unwrap();
@@ -116,7 +139,32 @@ impl Hub {
     }
 
     fn installed_build(&self) -> PathBuf {
-        fs::read_link(self.builds().join("current")).unwrap()
+        fs::read_link(self.builds().join("active")).unwrap()
+    }
+
+    /// The executable launchd runs: a copy of the active build signed by `identity`.
+    fn assert_runs_signed_by(&self, build: &str, identity: &str) {
+        let current = self.builds().join("current");
+        assert!(!current.is_symlink());
+        let program = fs::read_to_string(current).unwrap();
+        assert!(
+            program.contains(&format!("# build: {build}\n")),
+            "{program}"
+        );
+        assert!(program.contains(&format!("# signed: {identity} local.guildbotics\n")));
+    }
+
+    fn assert_runs_signed(&self, build: &str) {
+        self.assert_runs_signed_by(build, IDENTITY);
+    }
+
+    /// The update stopped before switching: the old build still runs.
+    fn assert_still_runs_old(&self, old: &Path) {
+        assert_eq!(self.installed_build(), old);
+        self.assert_runs_signed("old");
+        assert_eq!(self.lines("holder"), "42\n");
+        assert!(!self.lines("calls").contains("current|server|stop"));
+        assert!(!self.builds().join("update-from").exists());
     }
 
     fn install(&self) {
@@ -147,7 +195,6 @@ fn assert_startup_guidance(out: &Output) {
     assert!(output.contains("Keychain access"));
     assert!(output.contains("Documents folder access"));
     assert!(output.contains("docs/hub-server.md"));
-    assert!(!output.contains("two Keychain prompts"));
 }
 
 #[test]
@@ -185,6 +232,15 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
             "launchctl|bootstrap|gui/1234|",
         ],
     );
+    in_order(
+        &hub.lines("calls"),
+        &[
+            "security|find-identity|-v|-p|codesigning",
+            "npm|ci",
+            &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
+            "launchctl|bootstrap|",
+        ],
+    );
     assert!(hub.lines("actions").contains("old|install\n"));
     assert!(text(&out).contains(log.to_str().unwrap()));
     assert_startup_guidance(&out);
@@ -192,6 +248,20 @@ fn install_runs_one_server_at_login_and_installs_the_cli() {
         fs::read_to_string(hub.installed_build().parent().unwrap().join("build-id")).unwrap(),
         "old"
     );
+    hub.assert_runs_signed("old");
+    assert_eq!(
+        fs::read_to_string(hub.builds().parent().unwrap().join("signing-identity")).unwrap(),
+        format!("{IDENTITY}\n")
+    );
+}
+
+#[test]
+fn install_needs_a_signing_identity_before_building() {
+    let hub = Hub::new();
+    let out = hub.run_with("install", &[], false);
+    assert!(text(&out).contains("GUILDBOTICS_HUB_SIGNING_IDENTITY"));
+    assert!(!hub.lines("calls").contains("npm|"));
+    assert!(!hub.plist().exists());
 }
 
 #[test]
@@ -224,7 +294,18 @@ fn reinstall_replaces_only_a_stopped_agent() {
     assert!(!hub.lines("calls").contains("launchctl|bootout"));
     fs::remove_file(hub.root().join("holder")).unwrap();
     fs::remove_file(hub.root().join("job-pid")).unwrap();
-    hub.install();
+    // The reused build is signed again with the identity given now.
+    let renewed = "Apple Development: Renewed (TEAM)";
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"{renewed}\"\n{IDENTITIES}"),
+    )
+    .unwrap();
+    hub.run_with(
+        "install",
+        &[("GUILDBOTICS_HUB_SIGNING_IDENTITY", renewed)],
+        true,
+    );
     in_order(
         &hub.lines("calls"),
         &[
@@ -233,6 +314,8 @@ fn reinstall_replaces_only_a_stopped_agent() {
             "launchctl|bootstrap|",
         ],
     );
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_runs_signed_by("old", renewed);
 }
 
 #[test]
@@ -289,7 +372,18 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "current|install",
         ],
     );
-    assert_startup_guidance(&out);
+    // The identity install recorded signs the new build; macOS does not ask again.
+    in_order(
+        &hub.lines("calls"),
+        &[
+            "security|find-identity|",
+            "cargo|build|",
+            &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
+            "current|branvil|backup|",
+        ],
+    );
+    hub.assert_runs_signed("new");
+    assert!(!text(&out).contains("Keychain access"));
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(plist.contains("<key>ExitTimeOut</key><integer>92</integer>"));
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
@@ -319,6 +413,52 @@ fn rehearsal_failure_leaves_the_running_build_alone() {
 }
 
 #[test]
+fn an_identity_missing_from_the_keychain_stops_the_update_before_building() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    // Only another certificate is valid; its name merely contains the identity.
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"Apple Development: {IDENTITY} (TEAM)\"\n"),
+    )
+    .unwrap();
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("not a valid code signing identity"));
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
+fn a_failed_signing_stops_the_update_before_switching() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("fail-sign");
+    hub.run("update", None, false);
+    hub.assert_still_runs_old(&old);
+    let failure = fs::read_to_string(hub.builds().parent().unwrap().join("last-failure")).unwrap();
+    assert!(failure.contains("during signing"));
+}
+
+#[test]
+fn update_needs_the_identity_recorded_by_install() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    fs::remove_file(hub.builds().parent().unwrap().join("signing-identity")).unwrap();
+    hub.commit("new");
+    let out = hub.run("update", None, false);
+    assert!(
+        text(&out).contains("uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY")
+    );
+    assert!(!hub.lines("calls").contains("npm|"));
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
 fn failed_start_returns_to_the_previous_compatible_build() {
     let hub = Hub::new();
     hub.install();
@@ -329,6 +469,7 @@ fn failed_start_returns_to_the_previous_compatible_build() {
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(plist.contains("<key>ExitTimeOut</key><integer>91</integer>"));
     assert_eq!(hub.installed_build(), old);
+    hub.assert_runs_signed("old");
     assert_eq!(hub.lines("holder"), "42\n");
     assert!(text(&out).contains("The previous build is running again"));
     assert!(!hub.builds().join("update-from").exists());
