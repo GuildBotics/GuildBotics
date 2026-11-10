@@ -1059,41 +1059,71 @@ mod tests {
     #[tokio::test]
     async fn config_reports_embedded_topology_before_branvil_is_ready() {
         use tower::ServiceExt;
+        struct EmptyKeychain;
+        impl gb_config::secrets::Keychain for EmptyKeychain {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                Ok(None)
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("the topology test never creates a key")
+            }
+        }
         for embedded in [false, true] {
             let root = tempfile::tempdir().unwrap();
-            let api = Arc::new(Api::new(
+            let mut api = Api::new(
                 Selected::default(),
                 crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
                 ServerAuth::open(root.path(), 8765).unwrap(),
                 "fixture".into(),
                 root.path().into(),
-            ));
+            );
+            api.keychain = Arc::new(EmptyKeychain);
+            let api = Arc::new(api);
             assert!(api.branvil.get().is_none());
             let host = embedded.then(Router::new);
             let link = api.auth.entry_link("/");
-            let (cookie, _) = api
+            let (cookie, csrf) = api
                 .auth
                 .start_session(link.url.split_once('#').unwrap().1)
                 .unwrap()
                 .unwrap();
             let cookie = format!("{}={cookie}", api.auth.cookie);
             let app = router_with_host(api, host);
-            let response = app
-                .oneshot(
-                    axum::http::Request::get("/-/guildbotics/api/config/status")
-                        .header("host", "127.0.0.1:8765")
-                        .header("cookie", cookie)
-                        .body(axum::body::Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["branvil_available"], embedded);
+            let workspace = root.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            for (method, path, input, nested) in [
+                ("GET", "/config/status", json!({}), false),
+                (
+                    "POST",
+                    "/workspace",
+                    json!({"workspace_dir": workspace}),
+                    false,
+                ),
+                ("POST", "/verify", json!({}), true),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .method(method)
+                            .uri(format!("/-/guildbotics/api{path}"))
+                            .header("host", "127.0.0.1:8765")
+                            .header("cookie", &cookie)
+                            .header("x-guildbotics-csrf", &csrf)
+                            .header("content-type", "application/json")
+                            .body(axum::body::Body::from(input.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let config = if nested { &body["config"] } else { &body };
+                assert_eq!(config["branvil_available"], embedded, "{path}");
+            }
         }
     }
 

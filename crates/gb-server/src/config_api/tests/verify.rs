@@ -56,7 +56,7 @@ async fn post_verify_answers_the_checks_and_publishes_verify_completed() {
         ]
     );
     assert_eq!(answer["ok"], false);
-    assert_eq!(answer["config"], crate::screens::status(&f.api).await);
+    assert_eq!(answer["config"], f.get("/config/status").await);
     assert_eq!(answer["active_members"], json!([]));
     assert_eq!(answer["errors"][0]["code"], "active_members");
     assert_eq!(

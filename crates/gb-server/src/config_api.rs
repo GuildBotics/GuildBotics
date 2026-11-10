@@ -298,6 +298,7 @@ fn blocked(headers: &HeaderMap, context: Value) -> Response {
 /// is the one that is open, and a server that stops waits for it.
 pub(crate) async fn select_workspace(
     State(api): State<Shared>,
+    axum::Extension(host): axum::Extension<crate::api::EmbeddedHost>,
     headers: HeaderMap,
     Body(request): Body<WorkspaceRequest>,
 ) -> Response {
@@ -308,6 +309,7 @@ pub(crate) async fn select_workspace(
     let work = api.work.clone();
     let switch = work.spawn(switch(
         api,
+        host,
         headers.clone(),
         request.workspace_dir,
         switching,
@@ -322,6 +324,7 @@ pub(crate) async fn select_workspace(
 /// the new one is persisted, opened and announced.
 async fn switch(
     api: Shared,
+    host: crate::api::EmbeddedHost,
     headers: HeaderMap,
     requested: PathBuf,
     _switching: tokio::sync::OwnedRwLockWriteGuard<()>,
@@ -381,7 +384,7 @@ async fn switch(
     payload.insert("workspace".into(), json!(workspace));
     api.events
         .publish("workspace.changed", payload, Origin::default());
-    Json(crate::screens::status(&api).await).into_response()
+    Json(crate::screens::status(&api, host).await).into_response()
 }
 
 /// The absolute name `path` means, its `..` taken back as the Python

@@ -51,14 +51,18 @@ impl Checks {
     }
 }
 
-pub(crate) async fn verify(State(api): State<Shared>, headers: HeaderMap) -> Response {
+pub(crate) async fn verify(
+    State(api): State<Shared>,
+    axum::Extension(host): axum::Extension<crate::api::EmbeddedHost>,
+    headers: HeaderMap,
+) -> Response {
     let language = i18n::language(
         headers
             .get("x-guildbotics-language")
             .and_then(|v| v.to_str().ok())
             .unwrap_or(""),
     );
-    let config = crate::screens::status(&api).await;
+    let config = crate::screens::status(&api, host).await;
     let workspace = api.selected().workspace.clone();
     let mut checks = Checks {
         checks: Vec::new(),
