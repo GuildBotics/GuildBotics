@@ -82,7 +82,7 @@ case "$name" in
             *) exit 2 ;;
         esac
         ;;
-    current|guildbotics-bin)
+    current|guildbotics-bin|update-from)
         build=$(sed -n 's/^# build: //p' "$0")
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done

@@ -42,6 +42,7 @@ builds=$hub/builds
 # keeps the Documents folder access it granted to that path. The copy is the
 # only record of the active build: it names the source tree it was built from.
 current=$builds/current
+# During an update, the copy that ran before it: what a rollback restores.
 pending=$builds/update-from
 signing=$hub/signing-identity
 backups=$hub/backups
@@ -246,14 +247,13 @@ complete_activation() {
     rm -f "$pending" && install_assets
 }
 rollback() {
-    previous=$(cat "$pending") || return
     # The start failed before its authenticated readiness was observed.
     if loaded; then launchctl bootout "$target" || return; fi
-    assert_stopped "$previous" || return
-    point_current "$previous" || return
+    assert_stopped "$pending" || return
+    point_current "$pending" || return
     # The previous build may refuse the upgraded schema. Leave the data in
     # place and stay stopped for the operator to decide how to restore it.
-    if ! "$previous" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
+    if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
         printf 'The previous build cannot check the live data. See docs/hub-server.md before restarting.\n' >&2
         return 1
     fi
@@ -321,11 +321,12 @@ case "$action" in
             install_assets
             exit 0
         fi
+        # Copy while the server still runs; current stays until the switch.
+        cp "$current" "$lock/update-from"
         backup_and_rehearse
         stage="stopping the previous build"
         stop_agent
-        assert_stopped "$previous"
-        printf '%s\n' "$previous" >"$lock/update-from"
+        assert_stopped "$current"
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
         if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&

@@ -60,7 +60,7 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は更新のあいだだけある、切り替える前に動いていたコピーで、失敗したときはこれに戻します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -95,6 +95,8 @@ scripts/hub-server.sh recover
    git reset --keep "$change^"
    scripts/hub-server.sh update
    ```
+
+   この `update` が途中で止まった場合は、チェックアウトを動かさずに `scripts/hub-server.sh recover` を済ませてから、手順 3 へ進みます。
 
 3. 署名を入れた変更のコミットへ進め、LaunchAgentの登録を解除してから、識別を指定してインストールし直します。`install` はこのシェルの `PATH` をLaunchAgentに記録します。`GUILDBOTICS_HOME` や `GUILDBOTICS_SERVER_PORT` を変えていた場合は、それも同じ値を設定します。最初の起動で出るキーチェーンと「書類」フォルダの確認には、[インストール](#インストール)のとおりに答えます。
 

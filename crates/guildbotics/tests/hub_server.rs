@@ -631,16 +631,15 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
 fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
     let hub = Hub::new();
     hub.install();
-    let old = hub.installed_build();
+    let running = fs::read(hub.builds().join("current")).unwrap();
     hub.commit("new");
     hub.mark("change-schema");
     hub.run("update", None, true);
     let new = hub.installed_build();
-    fs::write(
-        hub.builds().join("update-from"),
-        format!("{}\n", old.display()),
-    )
-    .unwrap();
+    // Stopped after the switch: the copy that ran before is still kept.
+    let pending = hub.builds().join("update-from");
+    fs::write(&pending, running).unwrap();
+    fs::set_permissions(&pending, fs::Permissions::from_mode(0o755)).unwrap();
 
     hub.run("recover", None, true);
     assert_eq!(hub.installed_build(), new);
@@ -655,6 +654,38 @@ fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
     assert!(text(&out).contains("The previous build is running again"));
     assert_eq!(hub.installed_build(), new);
     assert_eq!(hub.lines("holder"), "42\n");
+}
+
+#[test]
+fn a_rollback_restores_the_copy_that_ran_whatever_happened_to_its_build() {
+    let hub = Hub::new();
+    hub.install();
+    // A refused reinstall for another team signs the stored build again.
+    let other = "Apple Development: Other (TEAM)";
+    fs::write(
+        hub.root().join("identities"),
+        format!("  1) 4567CDEF \"{other}\"\n{IDENTITIES}"),
+    )
+    .unwrap();
+    fs::write(hub.root().join("team"), "OTHERTEAM1").unwrap();
+    let out = hub.run_with(
+        "install",
+        &[("GUILDBOTICS_HUB_SIGNING_IDENTITY", other)],
+        false,
+    );
+    assert!(text(&out).contains("A GuildBotics server is running"));
+    fs::remove_file(hub.root().join("team")).unwrap();
+
+    hub.commit("new");
+    hub.fail_start("new");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The previous build is running again"));
+    hub.assert_runs_signed("old");
+    assert!(
+        fs::read_to_string(hub.builds().join("current"))
+            .unwrap()
+            .contains("# team: FIXTURE123\n")
+    );
 }
 
 #[test]
