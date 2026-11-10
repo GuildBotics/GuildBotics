@@ -698,7 +698,7 @@ mod tests {
         body.extend_from_slice(b"\r\n--fixture--\r\n");
         let mut builder = axum::http::Request::builder()
             .method("POST")
-            .uri("/api/commands/input-files")
+            .uri("/-/guildbotics/api/commands/input-files")
             .header("host", "127.0.0.1:8765")
             .header("content-type", "multipart/form-data; boundary=fixture");
         if authorized {
@@ -746,13 +746,13 @@ mod tests {
             api.inputs.session.get().is_none(),
             "optional uploads must not prevent startup"
         );
-        let response = get(api.clone(), "/api/config/status").await;
+        let response = get(api.clone(), "/-/guildbotics/api/config/status").await;
         assert_eq!(response.status(), StatusCode::OK);
         let status = value(response).await;
         assert!(!status["input_store_problem"].as_str().unwrap().is_empty());
         assert!(api.inputs.mount_if_available().await.is_none());
         std::fs::remove_file(&inputs).unwrap();
-        let response = get(api.clone(), "/api/config/status").await;
+        let response = get(api.clone(), "/-/guildbotics/api/config/status").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(value(response).await["input_store_problem"], "");
         assert!(api.inputs.mount_if_available().await.unwrap().readonly);
@@ -774,13 +774,13 @@ mod tests {
         let original = root.path().join("original-inputs");
         std::fs::rename(&inputs, &original).unwrap();
         std::fs::write(&inputs, b"replaced initialized storage").unwrap();
-        let status = value(get(api.clone(), "/api/config/status").await).await;
+        let status = value(get(api.clone(), "/-/guildbotics/api/config/status").await).await;
         assert!(!status["input_store_problem"].as_str().unwrap().is_empty());
         assert!(api.inputs.mount_if_available().await.is_none());
         std::fs::remove_file(&inputs).unwrap();
         std::fs::rename(&original, &inputs).unwrap();
         assert_eq!(
-            value(get(api, "/api/config/status").await).await["input_store_problem"],
+            value(get(api, "/-/guildbotics/api/config/status").await).await["input_store_problem"],
             ""
         );
     }
@@ -806,7 +806,7 @@ mod tests {
                     )
                     .await
                 } else {
-                    get(waiting_api, "/api/config/status").await
+                    get(waiting_api, "/-/guildbotics/api/config/status").await
                 }
             });
             assert!(
@@ -815,10 +815,12 @@ mod tests {
                     .is_err(),
                 "initialization must wait for the lock without occupying Tokio"
             );
-            let response =
-                tokio::time::timeout(Duration::from_millis(100), get(api, "/api/health"))
-                    .await
-                    .unwrap();
+            let response = tokio::time::timeout(
+                Duration::from_millis(100),
+                get(api, "/-/guildbotics/api/health"),
+            )
+            .await
+            .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             drop(lock);
             let response = tokio::time::timeout(Duration::from_secs(1), waiting)

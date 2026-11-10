@@ -27,7 +27,7 @@ test("keeps the screen under a notice while the server is unreachable, then reco
   test.setTimeout(150_000);
 
   const ctx = readStackContext("down");
-  await page.goto("/");
+  await page.goto("/-/guildbotics/");
   await expect(page.getByRole("navigation")).toBeVisible({ timeout: 60_000 });
 
   await control(ctx, "stop-backend");

@@ -74,7 +74,10 @@ pub(crate) async fn connect(
     }
     let state = loopback_auth::random_secret::<32>();
     let verifier = loopback_auth::random_secret::<48>();
-    let redirect = format!("{}/providers/branvil/pages/connected", api.auth.base_url());
+    let redirect = format!(
+        "{}/-/guildbotics/providers/branvil/pages/connected",
+        api.auth.base_url()
+    );
     let mut url =
         url::Url::parse(&format!("{}/-/authorize", data.base_url())).expect("service origin");
     url.query_pairs_mut()
@@ -397,7 +400,7 @@ pub(crate) async fn entry(
 
 pub(crate) mod slack;
 
-pub(crate) const CALLBACK_PATH: &str = "/providers/branvil/pages/connected";
+pub(crate) const CALLBACK_PATH: &str = "/-/guildbotics/providers/branvil/pages/connected";
 #[cfg(test)]
 pub(crate) const CONFIG_WRITERS: &[(&str, &str)] = &[
     ("get", CALLBACK_PATH),

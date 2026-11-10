@@ -61,7 +61,7 @@ impl OwnerClient {
         language: &'static str,
         token: String,
     ) -> anyhow::Result<Option<Self>> {
-        let base = format!("http://127.0.0.1:{port}/api");
+        let base = format!("http://127.0.0.1:{port}/-/guildbotics/api");
         let http = http()?;
         let Some((id, secret)) = auth::parse_token(&token) else {
             return Ok(None);
@@ -424,7 +424,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let app = Router::new()
             .route(
-                "/api/local-api/proof",
+                "/-/guildbotics/api/local-api/proof",
                 post({
                     let seen = seen.clone();
                     move |headers: HeaderMap, Json(body): Json<Value>| {
@@ -448,7 +448,7 @@ mod tests {
                 }),
             )
             .route(
-                "/api/session/links",
+                "/-/guildbotics/api/session/links",
                 post(|headers: HeaderMap| async move {
                     assert_eq!(headers["authorization"], format!("Bearer {TOKEN}").as_str());
                     assert_eq!(headers["x-guildbotics-language"], "ja");
@@ -517,7 +517,7 @@ mod tests {
         for mode in ["replay", "non-json", "array", "number", "non-ascii", "slow"] {
             let ids = Arc::new(Mutex::new(Vec::new()));
             let app = Router::new().route(
-                "/api/local-api/proof",
+                "/-/guildbotics/api/local-api/proof",
                 post({
                     let ids = ids.clone();
                     move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {

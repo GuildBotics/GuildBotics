@@ -1,4 +1,4 @@
-// Changes the server announces on `/api/events`.
+// Changes the server announces on `/-/guildbotics/api/events`.
 //
 // Every screen -- a browser tab, on any machine -- keeps its own query cache,
 // so state that changes on the server has to be announced rather than left for

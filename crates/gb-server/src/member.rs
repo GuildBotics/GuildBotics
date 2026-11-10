@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(
             request(
                 api.clone(),
-                "/api/member/run",
+                "/-/guildbotics/api/member/run",
                 serde_json::to_vec(&body()).unwrap(),
                 false
             )
@@ -449,7 +449,7 @@ mod tests {
             assert_eq!(
                 request(
                     api.clone(),
-                    "/api/member/run",
+                    "/-/guildbotics/api/member/run",
                     serde_json::to_vec(&input).unwrap(),
                     true
                 )
@@ -465,7 +465,10 @@ mod tests {
     async fn plan_and_run_preserve_content_and_option_values_without_opening_caller_paths() {
         let temp = tempfile::tempdir().unwrap();
         let (api, calls) = api(temp.path(), false);
-        for (path, describe) in [("/api/member/plan", true), ("/api/member/run", false)] {
+        for (path, describe) in [
+            ("/-/guildbotics/api/member/plan", true),
+            ("/-/guildbotics/api/member/run", false),
+        ] {
             let mut input = body();
             input["arguments"] = json!([
                 "ticket",
@@ -496,7 +499,7 @@ mod tests {
         let mut wire = serde_json::to_vec(&input).unwrap();
         wire.push(b'\n');
         wire.extend(b"raw\0bundle\xff");
-        let response = request(api, "/api/member/git", wire, true).await;
+        let response = request(api, "/-/guildbotics/api/member/git", wire, true).await;
         assert_eq!(response.status(), StatusCode::OK);
         let response = bytes(response).await;
         let newline = response.iter().position(|v| *v == b'\n').unwrap();
@@ -510,7 +513,7 @@ mod tests {
         let (api, calls) = api(temp.path(), true);
         let response = request(
             api.clone(),
-            "/api/member/run",
+            "/-/guildbotics/api/member/run",
             serde_json::to_vec(&body()).unwrap(),
             true,
         )
@@ -532,7 +535,7 @@ mod tests {
             vec![b'x'; MAX_METADATA + 1],
         ] {
             assert!(
-                request(api.clone(), "/api/member/git", wire, true)
+                request(api.clone(), "/-/guildbotics/api/member/git", wire, true)
                     .await
                     .status()
                     .is_client_error()
@@ -548,7 +551,7 @@ mod tests {
         let response = crate::api::router(api)
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/health")
+                    .uri("/-/guildbotics/api/health")
                     .header("host", "127.0.0.1:8765")
                     .header("authorization", format!("Bearer {}", token.trim()))
                     .body(Body::empty())
@@ -578,7 +581,7 @@ mod tests {
                 .oneshot(
                     axum::http::Request::builder()
                         .method("POST")
-                        .uri("/api/member/run")
+                        .uri("/-/guildbotics/api/member/run")
                         .header("host", "127.0.0.1:8765")
                         .header("authorization", format!("Bearer {}", token.trim()))
                         .header("content-type", "application/json")
@@ -596,8 +599,13 @@ mod tests {
             assert!(!message.contains("%{"));
             assert!(!message.contains("guildbotics server stop"));
             api.cancelled.cancel();
-            let response =
-                request(api, "/api/member/run", body.to_string().into_bytes(), true).await;
+            let response = request(
+                api,
+                "/-/guildbotics/api/member/run",
+                body.to_string().into_bytes(),
+                true,
+            )
+            .await;
             assert_eq!(response.status(), StatusCode::CONFLICT);
             let payload: Value = serde_json::from_slice(&bytes(response).await).unwrap();
             assert_eq!(payload["code"], "member_backend_closing");
@@ -607,7 +615,10 @@ mod tests {
     async fn missing_member_backend_guides_workspace_recovery_in_both_languages() {
         for language in ["en", "ja"] {
             for selected in [false, true] {
-                for path in ["/api/member/plan", "/api/member/run"] {
+                for path in [
+                    "/-/guildbotics/api/member/plan",
+                    "/-/guildbotics/api/member/run",
+                ] {
                     let temp = tempfile::tempdir().unwrap();
                     let (api, _) = api(temp.path(), false);
                     api.select(Default::default());

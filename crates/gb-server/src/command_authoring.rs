@@ -1,4 +1,4 @@
-//! `POST /api/commands/author`: one request of the command editor's
+//! `POST /-/guildbotics/api/commands/author`: one request of the command editor's
 //! assistant, as the Python version answers it (`AppRuntime.author_command`).
 //! The bundled `assistants/author_command` answers it, read-only, as the work
 //! of the editor's conversation: the request holds the editor's file and the

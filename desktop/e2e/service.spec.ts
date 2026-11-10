@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
   // Each test starts from a stopped runtime, regardless of order. The service
   // screen only renders the Stop button while running, so this no-ops when the
   // runtime is already stopped.
-  await page.goto("/#/service");
+  await page.goto("/-/guildbotics/#/service");
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
   await ensureStopped(page);
 });
@@ -60,7 +60,7 @@ test("seeded workspace boots configured and lands on the service screen", () => 
 });
 
 test("starts the events target, reaches running via real events, then stops", async ({ page }) => {
-  await page.goto("/#/service");
+  await page.goto("/-/guildbotics/#/service");
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
   const patrolPanel = panel(page, "Patrol commands");

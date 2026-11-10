@@ -179,7 +179,7 @@ impl Fixture {
     fn request(&self, method: &str, uri: &str) -> axum::http::request::Builder {
         Request::builder()
             .method(method)
-            .uri(format!("/api{uri}"))
+            .uri(format!("/-/guildbotics/api{uri}"))
             .header("host", "127.0.0.1:8765")
             .header("authorization", format!("Bearer {}", self.token))
     }
@@ -1686,7 +1686,7 @@ async fn the_avatar_is_served_to_a_browser_session_cookie() {
     let link = f.api.auth.entry_link("/");
     let code = link.url.rsplit('#').next().unwrap();
     let (cookie, _csrf) = f.api.auth.start_session(code).unwrap().unwrap();
-    let request = Request::get("/api/config/members/alice/avatar")
+    let request = Request::get("/-/guildbotics/api/config/members/alice/avatar")
         .header("host", "127.0.0.1:8765")
         .header("cookie", format!("{}={cookie}", f.api.auth.cookie))
         .body(HttpBody::empty())
@@ -1703,8 +1703,11 @@ async fn the_avatar_is_served_to_a_browser_session_cookie() {
 async fn the_avatar_refuses_a_request_without_a_credential_even_with_a_token_in_the_query() {
     let f = fixture();
     for uri in [
-        "/api/config/members/alice/avatar".to_owned(),
-        format!("/api/config/members/alice/avatar?token={}", f.token),
+        "/-/guildbotics/api/config/members/alice/avatar".to_owned(),
+        format!(
+            "/-/guildbotics/api/config/members/alice/avatar?token={}",
+            f.token
+        ),
     ] {
         let request = Request::get(uri)
             .header("host", "127.0.0.1:8765")
@@ -2079,7 +2082,7 @@ async fn serving(
 /// is answered.
 async fn leave(f: &Fixture, port: u16, uri: &str, body: Value) {
     let sent = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/api{uri}"))
+        .post(format!("http://127.0.0.1:{port}/-/guildbotics/api{uri}"))
         .header("host", "127.0.0.1:8765")
         .bearer_auth(&f.token)
         .json(&body)
@@ -2712,7 +2715,7 @@ async fn every_config_route_refuses_a_request_without_a_credential() {
         for credential in [None, Some("Bearer gbt_0123456789abcdef_wrong")] {
             let mut request = Request::builder()
                 .method(method)
-                .uri(format!("/api{path}"))
+                .uri(format!("/-/guildbotics/api{path}"))
                 .header("host", "127.0.0.1:8765")
                 .header("content-type", "application/json");
             if let Some(credential) = credential {

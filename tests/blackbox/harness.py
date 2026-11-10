@@ -246,7 +246,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
                 .strip()
             )
             with httpx.Client(
-                base_url=f"http://127.0.0.1:{port}/api/",
+                base_url=f"http://127.0.0.1:{port}/-/guildbotics/api/",
                 headers={"Authorization": f"Bearer {token}"},
                 trust_env=False,
                 timeout=1,

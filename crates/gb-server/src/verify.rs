@@ -1,4 +1,4 @@
-//! `POST /api/verify`: whether the selected workspace is ready to run, as the
+//! `POST /-/guildbotics/api/verify`: whether the selected workspace is ready to run, as the
 //! Python version checks it (`guildbotics/app_api/verify.py`): its project,
 //! the secret store, the team and its active members, the LLM's key, the
 //! isolated environment, the AI CLI tool and the providers' credentials. The

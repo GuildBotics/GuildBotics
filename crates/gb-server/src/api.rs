@@ -1,4 +1,4 @@
-//! The server's HTTP API under `/api`, as far as the Python version's
+//! The server's HTTP API under `/-/guildbotics/api`, as far as the Python version's
 //! (`guildbotics/app_api/api.py`) has been carried over. Every request passes
 //! the Host and Origin checks first, every response gets the security
 //! headers, and every route is the owner's except the few that say why they
@@ -577,7 +577,11 @@ pub fn router(api: Shared) -> Router {
         owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     let anyone = public_routes();
     Router::new()
-        .nest("/api", owners.merge(anyone))
+        .route(
+            "/",
+            get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
+        )
+        .nest("/-/guildbotics/api", owners.merge(anyone))
         .route(
             crate::provider_api::CALLBACK_PATH,
             get(crate::provider_api::connected),
@@ -590,7 +594,7 @@ pub fn router(api: Shared) -> Router {
 /// Refuses a request for another host or from another origin before
 /// anything runs for it, and gives every response the security headers.
 async fn guard(State(api): State<Shared>, req: Request, next: Next) -> Response {
-    let websocket = req.uri().path() == "/api/events"
+    let websocket = req.uri().path() == "/-/guildbotics/api/events"
         && req.method() == axum::http::Method::GET
         && req
             .headers()
@@ -710,7 +714,7 @@ struct EntryLinkRequest {
 }
 
 fn root() -> String {
-    "/".into()
+    "/-/guildbotics/".into()
 }
 
 /// A path of this server: not `//host` or `/\host`, which a browser reads as
@@ -823,6 +827,67 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn old_routes_are_absent_and_root_redirects_under_the_guard() {
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "instance".into(),
+            root.path().into(),
+        ));
+        let app = router(api);
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        let mut paths = vec![
+            "/index.html".to_owned(),
+            "/-/enter".into(),
+            "/-/authorize".into(),
+            "/assets/app.js".into(),
+            "/providers/branvil/pages/connected".into(),
+        ];
+        paths.extend(
+            OWNER_ROUTES
+                .iter()
+                .chain(PUBLIC_ROUTES)
+                .map(|(_, path)| format!("/api{}", variable.replace_all(path, "missing"))),
+        );
+        for path in paths {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::get(&path)
+                        .header("host", "127.0.0.1:8765")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        for (host, status) in [
+            ("127.0.0.1:8765", StatusCode::TEMPORARY_REDIRECT),
+            ("evil.example", StatusCode::MISDIRECTED_REQUEST),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::get("/")
+                        .header("host", host)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert!(response.headers().contains_key("content-security-policy"));
+            if status == StatusCode::TEMPORARY_REDIRECT {
+                assert_eq!(response.headers()["location"], "/-/guildbotics/");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn every_owner_route_refuses_missing_and_unknown_credentials_before_running() {
         use super::*;
         use tower::ServiceExt;
@@ -840,7 +905,10 @@ mod tests {
             for unknown in [false, true] {
                 let mut request = axum::http::Request::builder()
                     .method(method.to_uppercase().as_str())
-                    .uri(format!("/api{}", variable.replace_all(path, "missing")))
+                    .uri(format!(
+                        "/-/guildbotics/api{}",
+                        variable.replace_all(path, "missing")
+                    ))
                     .header("host", "127.0.0.1:8765");
                 if unknown {
                     request = request.header("authorization", "Bearer gbt_0123456789abcdef_wrong");

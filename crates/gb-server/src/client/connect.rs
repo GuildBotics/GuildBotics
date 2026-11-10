@@ -52,7 +52,7 @@ async fn connect_to(
     let verifier = loopback_auth::random_secret::<48>();
     let challenge = loopback_auth::b64(&loopback_auth::sha256(verifier.as_bytes()));
     let state = loopback_auth::random_secret::<32>();
-    let mut url = url::Url::parse(&format!("{base}/-/authorize"))?;
+    let mut url = url::Url::parse(&format!("{base}/-/guildbotics/-/authorize"))?;
     url.query_pairs_mut()
         .append_pair("client", name)
         .append_pair("redirect_uri", &redirect)
@@ -96,7 +96,7 @@ async fn connect_to(
         .ok_or_else(|| anyhow::anyhow!(text("cli.server.consent_timeout")))?
         .ok_or_else(|| anyhow::anyhow!(text("cli.server.denied")))?;
     let call = super::http()?
-        .post(format!("{base}/api/apps/token"))
+        .post(format!("{base}/-/guildbotics/api/apps/token"))
         .timeout(super::TIMEOUT)
         .header("x-guildbotics-language", language)
         .json(&json!({"code":code, "redirect_uri":redirect, "code_verifier":verifier}));
@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn callback_state_and_consent_gate_the_token_exchange() {
         let exchanged = Arc::new(AtomicUsize::new(0));
-        let router = Router::new().route("/api/apps/token", post(
+        let router = Router::new().route("/-/guildbotics/api/apps/token", post(
             |State(exchanged): State<Arc<AtomicUsize>>, Json(body): Json<Value>| async move {
                 exchanged.fetch_add(1, Ordering::SeqCst);
                 assert!(matches!(body["code"].as_str(), Some("server-code" | "refused-code")));
@@ -209,7 +209,7 @@ mod tests {
         for code in [Some("server-code"), None, Some("refused-code")] {
             let result = connect_to(port, "Fixture", "en", |url| {
                 let url = url::Url::parse(url).unwrap();
-                assert_eq!(url.path(), "/-/authorize");
+                assert_eq!(url.path(), "/-/guildbotics/-/authorize");
                 let params = url
                     .query_pairs()
                     .collect::<std::collections::BTreeMap<_, _>>();

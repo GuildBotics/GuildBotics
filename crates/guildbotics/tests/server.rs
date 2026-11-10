@@ -232,24 +232,36 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         .unwrap()
     };
     let mut urls = vec![
-        ("/api/config/status".to_owned(), expected["status"].clone()),
-        ("/api/team".to_owned(), expected["team"].clone()),
-        ("/api/commands/files".to_owned(), expected["files"].clone()),
         (
-            "/api/diagnostics/traces".to_owned(),
+            "/-/guildbotics/api/config/status".to_owned(),
+            expected["status"].clone(),
+        ),
+        (
+            "/-/guildbotics/api/team".to_owned(),
+            expected["team"].clone(),
+        ),
+        (
+            "/-/guildbotics/api/commands/files".to_owned(),
+            expected["files"].clone(),
+        ),
+        (
+            "/-/guildbotics/api/diagnostics/traces".to_owned(),
             expected["traces"].clone(),
         ),
     ];
     for detail in expected["details"].as_array().unwrap() {
         urls.push((
-            format!("/api/commands/files/{}", detail["id"].as_str().unwrap()),
+            format!(
+                "/-/guildbotics/api/commands/files/{}",
+                detail["id"].as_str().unwrap()
+            ),
             detail.clone(),
         ));
     }
     for detail in expected["trace_details"].as_array().unwrap() {
         urls.push((
             format!(
-                "/api/diagnostics/traces/{}",
+                "/-/guildbotics/api/diagnostics/traces/{}",
                 detail["trace_id"].as_str().unwrap()
             ),
             detail.clone(),
@@ -283,7 +295,7 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         assert_eq!(
             server
                 .http
-                .get(server.url(&format!("/api/diagnostics/traces?{filter}")))
+                .get(server.url(&format!("/-/guildbotics/api/diagnostics/traces?{filter}")))
                 .bearer_auth(server.owner_token())
                 .send()
                 .await
@@ -301,7 +313,7 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         let (_, _, actual) = body(
             server
                 .http
-                .get(server.url(&format!("/api/diagnostics/traces?{filter}")))
+                .get(server.url(&format!("/-/guildbotics/api/diagnostics/traces?{filter}")))
                 .bearer_auth(server.owner_token())
                 .send()
                 .await
@@ -360,7 +372,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
 
     let health = server
         .http
-        .get(server.url("/api/health"))
+        .get(server.url("/-/guildbotics/api/health"))
         .bearer_auth(&token)
         .send()
         .await
@@ -378,7 +390,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
 
     let refused = server
         .http
-        .get(server.url("/api/health"))
+        .get(server.url("/-/guildbotics/api/health"))
         .send()
         .await
         .unwrap();
@@ -400,7 +412,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     );
     let in_japanese = server
         .http
-        .get(server.url("/api/health"))
+        .get(server.url("/-/guildbotics/api/health"))
         .header("X-GuildBotics-Language", "ja")
         .send()
         .await
@@ -423,7 +435,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     ] {
         let refused = server
             .http
-            .post(server.url("/api/local-api/proof"))
+            .post(server.url("/-/guildbotics/api/local-api/proof"))
             .json(&json!({"token_id":owner_id,"nonce":nonce}))
             .send()
             .await
@@ -436,7 +448,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     }
     let unknown = server
         .http
-        .post(server.url("/api/local-api/proof"))
+        .post(server.url("/-/guildbotics/api/local-api/proof"))
         .json(&json!({"token_id":"0123456789abcdef","nonce":"0".repeat(64)}))
         .send()
         .await
@@ -466,7 +478,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     ] {
         let response = server
             .http
-            .get(server.url("/api/health"))
+            .get(server.url("/-/guildbotics/api/health"))
             .bearer_auth(&token)
             .header(header, value)
             .send()
@@ -478,7 +490,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     }
     let same = server
         .http
-        .get(server.url("/api/health"))
+        .get(server.url("/-/guildbotics/api/health"))
         .bearer_auth(&token)
         .header("origin", server.url(""))
         .send()
@@ -491,7 +503,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     let nonce = "ab".repeat(32);
     let proof = server
         .http
-        .post(server.url("/api/local-api/proof"))
+        .post(server.url("/-/guildbotics/api/local-api/proof"))
         .json(&json!({"token_id": id, "nonce": nonce}))
         .send()
         .await
@@ -515,7 +527,7 @@ async fn the_port_says_it_listens_and_lets_only_its_owner_in() {
     ] {
         let response = server
             .http
-            .post(server.url("/api/local-api/proof"))
+            .post(server.url("/-/guildbotics/api/local-api/proof"))
             .json(&request)
             .send()
             .await
@@ -530,7 +542,7 @@ impl Server {
     async fn health(&self) -> Value {
         let response = self
             .http
-            .get(self.url("/api/health"))
+            .get(self.url("/-/guildbotics/api/health"))
             .bearer_auth(self.owner_token())
             .send()
             .await
@@ -619,7 +631,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     let token = server.owner_token();
     let link = server
         .http
-        .post(server.url("/api/session/links"))
+        .post(server.url("/-/guildbotics/api/session/links"))
         .bearer_auth(&token)
         .json(&json!({"next": "/commands"}))
         .send()
@@ -629,11 +641,11 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     assert_eq!(status, StatusCode::CREATED);
     let url = link["url"].as_str().unwrap();
     let (page, code) = url.split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/enter?next=%2Fcommands"));
+    assert_eq!(page, server.url("/-/guildbotics/-/enter?next=%2Fcommands"));
 
     let entered = server
         .http
-        .post(server.url("/api/session"))
+        .post(server.url("/-/guildbotics/api/session"))
         .json(&json!({"code": code}))
         .send()
         .await
@@ -651,7 +663,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     let cookie = set_cookie.split(';').next().unwrap().to_string();
     let again = server
         .http
-        .post(server.url("/api/session"))
+        .post(server.url("/-/guildbotics/api/session"))
         .json(&json!({"code": code}))
         .send()
         .await
@@ -660,7 +672,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
 
     let current = server
         .http
-        .get(server.url("/api/session"))
+        .get(server.url("/-/guildbotics/api/session"))
         .header("cookie", &cookie)
         .send()
         .await
@@ -672,7 +684,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     );
     let without = server
         .http
-        .post(server.url("/api/session/links"))
+        .post(server.url("/-/guildbotics/api/session/links"))
         .header("cookie", &cookie)
         .send()
         .await
@@ -684,7 +696,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     );
     let with = server
         .http
-        .post(server.url("/api/session/links"))
+        .post(server.url("/-/guildbotics/api/session/links"))
         .header("cookie", &cookie)
         .header("X-GuildBotics-CSRF", &csrf)
         .send()
@@ -696,11 +708,11 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
         with["url"]
             .as_str()
             .unwrap()
-            .starts_with(&server.url("/-/enter#"))
+            .starts_with(&server.url("/-/guildbotics/-/enter#"))
     );
     let elsewhere = server
         .http
-        .post(server.url("/api/session/links"))
+        .post(server.url("/-/guildbotics/api/session/links"))
         .bearer_auth(&token)
         .json(&json!({"next": "//evil.example"}))
         .send()
@@ -741,11 +753,11 @@ async fn open_prints_an_entry_link_a_browser_enters_with_once() {
     assert_ok(&opened);
     let url = String::from_utf8(opened.stdout).unwrap();
     let (page, code) = url.trim().split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/enter"));
+    assert_eq!(page, server.url("/-/guildbotics/-/enter"));
     for expected in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
         let entered = server
             .http
-            .post(server.url("/api/session"))
+            .post(server.url("/-/guildbotics/api/session"))
             .json(&json!({"code": code}))
             .send()
             .await
@@ -819,7 +831,9 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
     for answer in [
         json(
             "307 Temporary Redirect",
-            &format!("location: http://127.0.0.1:{elsewhere}/api/local-api/proof\r\n"),
+            &format!(
+                "location: http://127.0.0.1:{elsewhere}/-/guildbotics/api/local-api/proof\r\n"
+            ),
             "",
         ),
         json("200 OK", "", r#"{"proof":"0000"}"#),
@@ -839,7 +853,7 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
         let seen = requests.await.unwrap();
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert!(
-            seen[0].starts_with("post /api/local-api/proof "),
+            seen[0].starts_with("post /-/guildbotics/api/local-api/proof "),
             "{seen:?}"
         );
         assert!(!seen[0].contains("authorization") && !seen[0].contains("secret"));
@@ -1184,7 +1198,7 @@ impl Server {
     async fn run(&self, request: Value, language: &str) -> (StatusCode, Value) {
         let response = self
             .http
-            .post(self.url("/api/commands/run"))
+            .post(self.url("/-/guildbotics/api/commands/run"))
             .bearer_auth(self.owner_token())
             .header("x-guildbotics-language", language)
             .json(&request)
@@ -1525,7 +1539,7 @@ async fn a_read_only_command_runs_in_a_microvm_of_its_own() {
     let running = {
         let (http, url, token) = (
             server.http.clone(),
-            server.url("/api/commands/run"),
+            server.url("/-/guildbotics/api/commands/run"),
             server.owner_token(),
         );
         tokio::spawn(async move {
@@ -1710,7 +1724,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
         .unwrap();
         let request = server
             .http
-            .post(server.url("/api/workspace"))
+            .post(server.url("/-/guildbotics/api/workspace"))
             .bearer_auth(server.owner_token())
             .json(&json!({"workspace_dir": workspace}))
             .timeout(Duration::from_millis(300))
@@ -1721,7 +1735,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
         // while waiting to persist its selection.
         let reply = server
             .http
-            .post(server.url("/api/scheduler/start"))
+            .post(server.url("/-/guildbotics/api/scheduler/start"))
             .bearer_auth(server.owner_token())
             .send()
             .await
@@ -1731,7 +1745,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
         if via_api {
             let response = server
                 .http
-                .post(server.url("/api/shutdown"))
+                .post(server.url("/-/guildbotics/api/shutdown"))
                 .bearer_auth(server.owner_token())
                 .json(&json!({"force": false}))
                 .send()
@@ -1857,7 +1871,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
         assert_eq!(claim["job"]["name"], "fixture");
         let stop = server
             .http
-            .post(server.url("/api/shutdown"))
+            .post(server.url("/-/guildbotics/api/shutdown"))
             .bearer_auth(server.owner_token())
             .json(&json!({"force": false}))
             .send()
@@ -1920,7 +1934,7 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
     };
     let authenticated = server
         .http
-        .post(server.url("/api/apps/authorizations"))
+        .post(server.url("/-/guildbotics/api/apps/authorizations"))
         .bearer_auth(server.owner_token())
         .json(&authorize())
         .send()
@@ -1937,7 +1951,7 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
     let exchange = json!({"code":pairs["code"],"redirect_uri":redirect,"code_verifier":verifier});
     let issued = server
         .http
-        .post(server.url("/api/apps/token"))
+        .post(server.url("/-/guildbotics/api/apps/token"))
         .json(&exchange)
         .send()
         .await
@@ -1947,7 +1961,7 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
     let token = issued["token"].as_str().unwrap();
     let spent = server
         .http
-        .post(server.url("/api/apps/token"))
+        .post(server.url("/-/guildbotics/api/apps/token"))
         .json(&exchange)
         .send()
         .await
@@ -1962,7 +1976,7 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
     ] {
         let response = server
             .http
-            .post(server.url(&format!("/api{path}")))
+            .post(server.url(&format!("/-/guildbotics/api{path}")))
             .bearer_auth(token)
             .json(&json!({}))
             .send()
@@ -2005,7 +2019,7 @@ fn member_uses_the_active_workspace_and_reads_only_planned_caller_content() {
         .block_on(async {
             let ready = server
                 .http
-                .get(server.url("/api/health"))
+                .get(server.url("/-/guildbotics/api/health"))
                 .bearer_auth(server.owner_token())
                 .timeout(Duration::from_secs(15))
                 .send()
@@ -2121,7 +2135,7 @@ fn open_passes_one_entry_link_to_the_browser() {
         .env("LANGUAGE", "en")
         .output()
         .unwrap();
-    let expected = server.url("/-/enter#");
+    let expected = server.url("/-/guildbotics/-/enter#");
     server.stop();
     assert_ok(&output);
     assert!(output.stdout.is_empty());
@@ -2215,7 +2229,7 @@ fn current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking() {
     let status = runtime.block_on(async {
         server
             .http
-            .get(server.url("/api/health"))
+            .get(server.url("/-/guildbotics/api/health"))
             .bearer_auth(server.owner_token())
             .timeout(Duration::from_secs(15))
             .send()
@@ -2377,7 +2391,7 @@ impl Server {
     async fn scheduler_running(&self) -> bool {
         let response = self
             .http
-            .get(self.url("/api/scheduler/status"))
+            .get(self.url("/-/guildbotics/api/scheduler/status"))
             .bearer_auth(self.owner_token())
             .timeout(Duration::from_secs(15))
             .send()

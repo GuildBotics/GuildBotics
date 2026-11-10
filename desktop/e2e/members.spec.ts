@@ -31,7 +31,7 @@ test("adds a second member through the UI and persists it to the backend", async
 
   // The Members section of the configured Settings screen (deep link, mirroring
   // SetupPage.test.tsx `?section=members`).
-  await page.goto("/#/setup?section=members");
+  await page.goto("/-/guildbotics/#/setup?section=members");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
   // The seeded member is already listed. Scope rows to the list: both the
@@ -57,11 +57,12 @@ test("adds a second member through the UI and persists it to the backend", async
   // the list and the disk.
   const saveStarted = page.waitForRequest(
     (request) =>
-      new URL(request.url()).pathname === "/api/config/members" && request.method() === "POST",
+      new URL(request.url()).pathname === "/-/guildbotics/api/config/members" &&
+      request.method() === "POST",
   );
   const saved = page.waitForResponse(
     (response) =>
-      new URL(response.url()).pathname === "/api/config/members" &&
+      new URL(response.url()).pathname === "/-/guildbotics/api/config/members" &&
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Add member" }).click();

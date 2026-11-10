@@ -47,7 +47,7 @@ export function ownerApi(ctx: StackContext, path: string, init: RequestInit = {}
     join(ctx.homeDir, ".guildbotics", "data", "server", String(ctx.backendPort), "owner.token"),
     "utf-8",
   ).trim();
-  return fetch(`http://${ctx.host}:${ctx.backendPort}/api${path}`, {
+  return fetch(`http://${ctx.host}:${ctx.backendPort}/-/guildbotics/api${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -69,7 +69,7 @@ export async function enter(page: Page, ctx: StackContext): Promise<void> {
   const { url } = (await response.json()) as { url: string };
   await page.goto(url);
   // The entry page replaces itself with the App once the session is taken up.
-  await page.waitForURL((address) => address.pathname === "/");
+  await page.waitForURL((address) => address.pathname === "/-/guildbotics/");
 }
 
 /**

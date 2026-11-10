@@ -45,7 +45,7 @@ test("runs a command in the isolated environment and streams its result", async 
   test.setTimeout(180_000);
   const ctx = readStackContext("environment");
 
-  await page.goto("/#/commands");
+  await page.goto("/-/guildbotics/#/commands");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
 
   await page.getByRole("button", { name: "New command" }).first().click();

@@ -1203,7 +1203,7 @@ pub(crate) mod tests {
         ] {
             let mut request = axum::http::Request::builder()
                 .method(method)
-                .uri(format!("/api{path}"))
+                .uri(format!("/-/guildbotics/api{path}"))
                 .header("host", "127.0.0.1:8765")
                 .header("content-type", "application/json");
             if authorized {
@@ -1241,7 +1241,7 @@ pub(crate) mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/api/commands/run")
+                    .uri("/-/guildbotics/api/commands/run")
                     .header("host", "127.0.0.1:8765")
                     .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {}", token.trim()))
@@ -1268,7 +1268,7 @@ pub(crate) mod tests {
         .unwrap();
         for draining in [false, true] {
             let generation = draining.then(|| api.selected().service.execution.begin_drain(false));
-            let response = app.clone().oneshot(axum::http::Request::builder().method("POST").uri("/api/commands/run")
+            let response = app.clone().oneshot(axum::http::Request::builder().method("POST").uri("/-/guildbotics/api/commands/run")
                 .header("host", "127.0.0.1:8765").header("content-type", "application/json")
                 .header("authorization", format!("Bearer {}", token.trim()))
                 .body(axum::body::Body::from(json!({"command":"workflows/chat_conversation_workflow","person":"aiko"}).to_string())).unwrap()).await.unwrap();
@@ -1307,7 +1307,7 @@ pub(crate) mod tests {
             .clone()
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/scheduler/status")
+                    .uri("/-/guildbotics/api/scheduler/status")
                     .header("host", "127.0.0.1:8765")
                     .header("authorization", format!("Bearer {}", token.trim()))
                     .body(axum::body::Body::empty())
@@ -1372,7 +1372,7 @@ pub(crate) mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/api/scheduler/start")
+                    .uri("/-/guildbotics/api/scheduler/start")
                     .header("host", "127.0.0.1:8765")
                     .header("authorization", format!("Bearer {}", token.trim()))
                     .body(axum::body::Body::empty())
@@ -2317,7 +2317,7 @@ pub(crate) mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/api/commands/run")
+                    .uri("/-/guildbotics/api/commands/run")
                     .header("host", "127.0.0.1:8765")
                     .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {}", token.trim()))
@@ -4807,7 +4807,7 @@ pub(crate) mod tests {
                 ],
                 "本文\n",
             ),
-            "/api/member/run",
+            "/-/guildbotics/api/member/run",
         )
         .await;
         assert_eq!(result["exit_code"], 0, "{result}");
@@ -4819,7 +4819,7 @@ pub(crate) mod tests {
                 &["memory", "get", "--person", "aiko", "--id", id, "--team"],
                 "",
             ),
-            "/api/member/run",
+            "/-/guildbotics/api/member/run",
         )
         .await;
         assert_eq!(result["exit_code"], 0, "{result}");
@@ -4840,7 +4840,7 @@ pub(crate) mod tests {
                 ],
                 "",
             ),
-            "/api/member/plan",
+            "/-/guildbotics/api/member/plan",
         )
         .await;
         assert_eq!(result["plan"]["content_file"], "caller.md");
@@ -5141,7 +5141,12 @@ pub(crate) mod tests {
         );
     }
     async fn command(native: &Native, arguments: &[&str], stdin: &str) -> Value {
-        let reply = http(native.clone(), request(arguments, stdin), "/api/member/run").await;
+        let reply = http(
+            native.clone(),
+            request(arguments, stdin),
+            "/-/guildbotics/api/member/run",
+        )
+        .await;
         assert_eq!(reply["exit_code"], 0, "{reply}");
         serde_json::from_str(reply["stdout"].as_str().unwrap()).unwrap()
     }
