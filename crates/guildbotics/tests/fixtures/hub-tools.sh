@@ -39,6 +39,10 @@ case "$name" in
         case "$2" in
             ProgramArguments.0) key=ProgramArguments ;;
             EnvironmentVariables.*) key=${2#*.} ;;
+            ExitTimeOut)
+                sed -n 's|^<key>ExitTimeOut</key><integer>\([0-9]*\)</integer>|\1|p' "$6" | grep . && exit 0
+                exit 1
+                ;;
             *) exit 2 ;;
         esac
         line=$(sed -n "s|^<key>$key</key>.*<string>\\([^<]*\\)</string>.*|\\1|p" "$6")
@@ -51,6 +55,12 @@ case "$name" in
     launchctl)
         case "$1" in
             print)
+                # After a slow bootout, launchd lists the job for one more look.
+                if [ -f "$FAKE_ROOT/unloading" ]; then
+                    rm -f "$FAKE_ROOT/unloading"
+                elif [ -f "$FAKE_ROOT/unloaded" ]; then
+                    rm -f "$FAKE_ROOT/loaded" "$FAKE_ROOT/unloaded"
+                fi
                 [ -f "$FAKE_ROOT/loaded" ] || exit 1
                 if [ -f "$FAKE_ROOT/job-pid" ]; then
                     printf '  pid = %s\n' "$(cat "$FAKE_ROOT/job-pid")"
@@ -65,6 +75,11 @@ case "$name" in
                 ;;
             enable) : ;;
             bootstrap)
+                # Like launchd, refuse a job that is still listed.
+                if [ -f "$FAKE_ROOT/loaded" ]; then
+                    printf 'Bootstrap failed: 5: Input/output error\n' >&2
+                    exit 5
+                fi
                 touch "$FAKE_ROOT/loaded"
                 bin=$(plutil -extract ProgramArguments.0 raw -o - "$3")
                 build=$(sed -n 's/^# build: //p' "$bin")
@@ -77,7 +92,14 @@ case "$name" in
                 ;;
             bootout)
                 if [ -f "$FAKE_ROOT/job-pid" ]; then rm -f "$FAKE_ROOT/holder"; fi
-                rm -f "$FAKE_ROOT/loaded" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/start-failed"
+                rm -f "$FAKE_ROOT/job-pid" "$FAKE_ROOT/start-failed"
+                if [ -f "$FAKE_ROOT/slow-bootout" ]; then
+                    touch "$FAKE_ROOT/unloading" "$FAKE_ROOT/unloaded"
+                    printf 'Boot-out failed: 36: Operation now in progress\n' >&2
+                    exit 36
+                else
+                    rm -f "$FAKE_ROOT/loaded"
+                fi
                 ;;
             *) exit 2 ;;
         esac

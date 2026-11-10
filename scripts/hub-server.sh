@@ -68,6 +68,23 @@ trap 'exit 130' INT
 trap 'exit 143' HUP TERM
 
 loaded() { launchctl print "$target" >/dev/null 2>&1; }
+# launchctl bootout can return, or fail with "Operation now in progress",
+# while launchd still lists the job, and a bootstrap or install refuses a
+# listed job. Wait until it is gone, as long as launchd may take to stop it.
+unload() {
+    loaded || return 0
+    launchctl bootout "$target" || true
+    limit=$(($(setting ExitTimeOut) + 30))
+    waited=0
+    while loaded; do
+        if [ "$waited" -ge "$limit" ]; then
+            printf 'launchd still lists %s after %s seconds.\n' "$label" "$limit" >&2
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
 job_pid() { launchctl print "$target" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'; }
 setting() { plutil -extract "$1" raw -o - "$plist" 2>/dev/null; }
 installed() { [ "$(setting ProgramArguments.0)" = "$current" ]; }
@@ -86,7 +103,7 @@ stop_agent() {
             fail "A GuildBotics server outside this LaunchAgent is running (PID $holder)."
         "$current" server stop || return
     fi
-    if loaded; then launchctl bootout "$target"; fi
+    unload
 }
 agent_ready() {
     holder=$("$current" server hub-probe --ready) &&
@@ -248,7 +265,7 @@ complete_activation() {
 }
 rollback() {
     # The start failed before its authenticated readiness was observed.
-    if loaded; then launchctl bootout "$target" || return; fi
+    unload || return
     assert_stopped "$pending" || return
     point_current "$pending" || return
     # The previous build may refuse the upgraded schema. Leave the data in
@@ -294,13 +311,13 @@ case "$action" in
         stage="checking the stopped server"
         assert_stopped "$candidate"
         "$candidate" branvil admin check --data-dir "$BRANVIL_DATA_DIR"
-        if loaded; then launchctl bootout "$target"; fi
+        unload
         stage="installing the agent"
         point_current "$candidate"
         printf '%s\n' "$identity" >"$signing"
         printf 'Allow Keychain access and Documents folder access if macOS asks. See docs/hub-server.md for details.\n'
         if ! start_agent; then
-            if loaded; then launchctl bootout "$target"; fi
+            unload
             exit 1
         fi
         install_assets

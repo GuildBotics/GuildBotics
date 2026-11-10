@@ -360,6 +360,42 @@ fn install_leaves_a_different_installed_build_to_update() {
 }
 
 #[test]
+fn every_unload_waits_until_launchd_no_longer_lists_the_agent() {
+    let hub = Hub::new();
+    // An install whose start fails leaves no listed job behind.
+    hub.mark("slow-bootout");
+    hub.fail_start("old");
+    hub.run("install", None, false);
+    assert!(!hub.root().join("loaded").exists());
+    fs::remove_file(hub.root().join("slow-bootout")).unwrap();
+    fs::remove_file(hub.root().join("fail-start")).unwrap();
+    hub.install();
+    let old = hub.installed_build();
+    // launchd keeps listing the job briefly after bootout returns.
+    hub.mark("slow-bootout");
+    hub.run("restart", None, true);
+    assert_eq!(hub.lines("holder"), "42\n");
+
+    hub.commit("new");
+    hub.fail_start("new");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The previous build is running again"));
+    assert_eq!(hub.installed_build(), old);
+
+    hub.run("uninstall", None, true);
+    assert!(!hub.root().join("loaded").exists());
+    fs::remove_file(hub.root().join("fail-start")).unwrap();
+    hub.install();
+    assert_eq!(hub.lines("holder"), "42\n");
+
+    // A reinstall replaces the stopped agent that launchd still lists.
+    fs::remove_file(hub.root().join("holder")).unwrap();
+    fs::remove_file(hub.root().join("job-pid")).unwrap();
+    hub.install();
+    assert_eq!(hub.lines("holder"), "42\n");
+}
+
+#[test]
 fn restart_waits_for_graceful_stop_before_bootstrap() {
     let hub = Hub::new();
     hub.install();
