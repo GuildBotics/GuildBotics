@@ -1109,7 +1109,7 @@ mod tests {
                             .uri(format!("/-/guildbotics/api{path}"))
                             .header("host", "127.0.0.1:8765")
                             .header("cookie", &cookie)
-                            .header("x-guildbotics-csrf", &csrf)
+                            .header(crate::auth::CSRF_HEADER, &csrf)
                             .header("content-type", "application/json")
                             .body(axum::body::Body::from(input.to_string()))
                             .unwrap(),
