@@ -91,7 +91,7 @@ bootstrap() {
 }
 wait_ready() {
     # The proof is served after both servers are ready. Match the lock holder
-    # to this job, and allow the owner time to answer the Keychain dialogs.
+    # to this job, and allow the owner time to answer macOS access dialogs.
     deadline=$(($(date +%s) + 1200))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         if agent_ready; then return 0; fi
@@ -263,7 +263,7 @@ case "$action" in
         if loaded; then launchctl bootout "$target"; fi
         stage="installing the agent"
         point_current "$candidate"
-        printf 'Watch for two Keychain prompts when starting a new build.\n'
+        printf 'Allow Keychain access and Documents folder access if macOS asks. See docs/hub-server.md for details.\n'
         if ! start_agent; then
             if loaded; then launchctl bootout "$target"; fi
             exit 1
@@ -289,7 +289,7 @@ case "$action" in
         printf '%s\n' "$previous" >"$lock/update-from"
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
-        printf 'Watch for two Keychain prompts when starting a new build.\n'
+        printf 'Allow Keychain access and Documents folder access if macOS asks. See docs/hub-server.md for details.\n'
         if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&
             point_current "$candidate" && start_agent; then
             complete_activation

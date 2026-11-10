@@ -14,7 +14,10 @@ scripts/hub-server.sh status
 
 登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは8765です。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
-新しくビルドしたサーバーの起動時、macOSがキーチェーンの鍵へのアクセスを2回確認します。オーナーが両方のダイアログに回答してください。スクリプトは最大20分間、起動を待ちます。
+新しいビルドの最初の起動時（インストール・更新とも）、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。
+
+- **キーチェーンへのアクセス**：GuildBoticsのSecretを暗号化・復号する端末共通の鍵（サービス名 `GuildBotics`、アカウント名 `agent-environment-credentials`）への許可です。#108 の写しでは、更新のたびに1回でした。回数は保存済みの鍵やアクセス許可の状態によるため、2回出ることを前提に待つ必要はありません。`guildbotics connect` が保存する `guildbotics-server` の項目はCLIの接続用トークンで、この暗号化の鍵とは別です。Branvilの秘密はデータディレクトリにあり、Branvil用の鍵の確認がもう1回出るわけではありません。
+- **「書類」フォルダへのアクセス**：macOSのプライバシー保護（TCC）の確認です。サーバーが、メンバーとの受け渡し先 `~/Documents/GuildBotics` や「書類」の下にあるワークスペースなどへアクセスするために必要です。#108 の写しでは、初回起動でも更新でも1回出ました。新しいビルドで再度表示されることがあるので、キーチェーンとは別に許可してください。
 
 ```sh
 scripts/hub-server.sh restart    # GuildBoticsの作業とBranvilのCIを待ってから再起動
@@ -36,7 +39,7 @@ scripts/hub-server.sh update
 1. `update` は更新するコミットから画面と実行ファイルを作ります。現在のサーバーは稼働を続けます。
 2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
-4. 新ビルドが起動する際、キーチェーンの確認が2回出ます。両方に回答してください。起動を確認できると、新ビルドからCLIとスキルを導入します。
+4. 新ビルドの起動時には、インストール時と同じくキーチェーンと「書類」フォルダへのアクセスの確認に回答してください（対象と回数は上記を参照）。起動を確認できると、新ビルドからCLIとスキルを導入します。
 
 状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の実行ファイルとソース、`builds/current` はLaunchAgentが起動する実行ファイルへのリンクです。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
