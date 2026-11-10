@@ -22,7 +22,7 @@ export const branvil = {
           connected: "Connected to Branvil as its owner {{owner}}.",
           open: "Open Branvil",
           pending: "Answer Branvil's consent screen in the browser…",
-          hint: "Open the shared entry link on this machine, then allow GuildBotics to manage Branvil. The same browser session opens both screens.",
+          hint: "Connecting opens Branvil's consent screen in this browser. Allow GuildBotics to manage Branvil there.",
         },
         git: {
           title: "Your own git on this machine",
@@ -111,7 +111,7 @@ export const branvil = {
           connected: "Branvil にオーナー {{owner}} として接続しています。",
           open: "Branvil を開く",
           pending: "ブラウザで Branvil の同意画面に答えてください…",
-          hint: "このマシンのブラウザで共通の入口リンクを開き、GuildBotics に Branvil の管理を許可してください。同じセッションで両方の画面を使えます。",
+          hint: "Branvil に接続すると、このブラウザで Branvil の同意画面が開きます。GuildBotics に Branvil の管理を許可してください。",
         },
         git: {
           title: "このマシンのあなたの git",

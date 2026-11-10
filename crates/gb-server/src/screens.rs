@@ -53,8 +53,13 @@ pub(crate) fn answer(result: anyhow::Result<Value>, headers: &HeaderMap) -> Resp
     }
 }
 
-pub(crate) async fn config_status(State(api): State<Shared>) -> Response {
-    Json(status(&api).await).into_response()
+pub(crate) async fn config_status(
+    State(api): State<Shared>,
+    axum::Extension(host): axum::Extension<crate::api::EmbeddedHost>,
+) -> Response {
+    let mut config = status(&api).await;
+    config["branvil_available"] = json!(host.0);
+    Json(config).into_response()
 }
 
 /// Where the selected workspace keeps what, as the setup screens show it.

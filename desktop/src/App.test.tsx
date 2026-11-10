@@ -168,17 +168,34 @@ describe("App", () => {
     );
   });
 
-  it("places the Branvil browser entry immediately below setup", async () => {
-    const config = await getProjectConfig();
-    vi.mocked(getProjectConfig).mockResolvedValueOnce({
-      ...config,
-      services: { code_hosting_service: { name: "branvil" } },
-    });
-    window.location.hash = "#/service";
-    renderApp();
-    const entry = await screen.findByRole("link", { name: t()("setup.branvil.nav.label") });
-    expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(entry);
-  });
+  it.each([true, false, undefined])(
+    "shows the Branvil entry only when the server embeds it (%s)",
+    async (available) => {
+      const config = await getConfigStatus();
+      vi.mocked(getConfigStatus).mockResolvedValue({
+        ...config,
+        project_file_exists: false,
+        branvil_available: available,
+      });
+      window.location.hash = "#/setup";
+      renderApp();
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: t()("app.nav.setup") })).toBeVisible(),
+      );
+      await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
+      if (available) {
+        const entry = await screen.findByRole("link", { name: "Branvil", exact: true });
+        expect(entry).toHaveAttribute("href", "/");
+        expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(
+          entry,
+        );
+      } else {
+        expect(
+          screen.queryByRole("link", { name: "Branvil", exact: true }),
+        ).not.toBeInTheDocument();
+      }
+    },
+  );
   it("renders the shared workspace and input-store refusal once", async () => {
     const status = await getConfigStatus();
     vi.mocked(getConfigStatus).mockResolvedValue({

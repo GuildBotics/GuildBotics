@@ -2,7 +2,7 @@
 // pages, and the display language at the bottom.
 
 import { Select, Stack, Text } from "@mantine/core";
-import { GitPullRequest, Settings, SquareKanban, Workflow } from "lucide-react";
+import { ArrowLeftRight, GitPullRequest, Settings, SquareKanban, Workflow } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useI18n, type Language } from "../i18n";
 import { Link, navigate } from "../router/Router";
@@ -110,7 +110,7 @@ export function Sidebar({
         <NavItem to={href.settings()} active={page === "settings"} icon={<Settings size={18} />}>
           {t("nav.settings")}
         </NavItem>
-        {navigation && <a className="nav-item" href={navigation.url}>{navigation.label}</a>}
+        {navigation && <a className="nav-item" href={navigation.url}><ArrowLeftRight size={18} aria-hidden="true" /><span>{navigation.label}</span></a>}
       </nav>
       <Stack gap={6} className="sidebar-language">
         <Text component="label" htmlFor="language-switch" className="sidebar-field-label">

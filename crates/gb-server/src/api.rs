@@ -793,6 +793,9 @@ pub fn router(api: Shared) -> Router {
     router_with_host(api, None)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddedHost(pub bool);
+
 pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
     let owners =
         owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
@@ -809,6 +812,7 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
         .merge(crate::ui::router(crate::ui::directory()))
         .with_state(api.clone())
         .merge(host)
+        .layer(axum::Extension(EmbeddedHost(integrated)))
         .layer(middleware::from_fn_with_state((api, integrated), guard))
 }
 
@@ -1052,6 +1056,47 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn config_reports_embedded_topology_before_branvil_is_ready() {
+        use tower::ServiceExt;
+        for embedded in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let api = Arc::new(Api::new(
+                Selected::default(),
+                crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+                ServerAuth::open(root.path(), 8765).unwrap(),
+                "fixture".into(),
+                root.path().into(),
+            ));
+            assert!(api.branvil.get().is_none());
+            let host = embedded.then(Router::new);
+            let link = api.auth.entry_link("/");
+            let (cookie, _) = api
+                .auth
+                .start_session(link.url.split_once('#').unwrap().1)
+                .unwrap()
+                .unwrap();
+            let cookie = format!("{}={cookie}", api.auth.cookie);
+            let app = router_with_host(api, host);
+            let response = app
+                .oneshot(
+                    axum::http::Request::get("/-/guildbotics/api/config/status")
+                        .header("host", "127.0.0.1:8765")
+                        .header("cookie", cookie)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["branvil_available"], embedded);
+        }
+    }
+
     #[tokio::test]
     async fn classified_routes_cover_the_combined_guard_and_reserved_namespace() {
         assert_eq!(OUTER_ROUTES.len(), OUTER_CLASSIFIED.len());
