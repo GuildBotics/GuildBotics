@@ -85,7 +85,7 @@ describe("the consent page of a local app", () => {
     expect(sent?.body).toEqual({ client: "Desk App", redirect_uri: REDIRECT, state: "s&1", code_challenge: CHALLENGE });
     expect(sent?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
     // A session in hand: nothing is remembered for after entering.
-    expect(window.localStorage.getItem("branvil.return")).toBeNull();
+    expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
   });
 
   it("denies by going to the redirect with access_denied and the state, without asking the service", async () => {
@@ -127,7 +127,7 @@ describe("the consent page of a local app", () => {
     renderApp("/-/enter#code-1");
     expect(await screen.findByRole("heading", { name: "Allow Desk App to manage Branvil?" })).toBeInTheDocument();
     expect(window.location.pathname + window.location.search).toBe(authorizePath());
-    expect(window.localStorage.getItem("branvil.return")).toBeNull();
+    expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
   });
 
   it("forgets the page after 10 minutes, so entering opens the board", async () => {
@@ -140,7 +140,7 @@ describe("the consent page of a local app", () => {
     });
     const first = renderApp(authorizePath());
     await screen.findByText(/To allow Desk App, open Branvil first/);
-    expect(window.localStorage.getItem("branvil.return")).not.toBeNull();
+    expect(window.localStorage.getItem("guildbotics.entryReturn")).not.toBeNull();
     first.unmount();
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60_000 + 1);
@@ -151,7 +151,7 @@ describe("the consent page of a local app", () => {
   });
 
   it("returns only to the consent page", async () => {
-    window.localStorage.setItem("branvil.return", JSON.stringify({ path: "//attacker.example/", expires: Date.now() + 60_000 }));
+    window.localStorage.setItem("guildbotics.entryReturn", JSON.stringify({ path: "//attacker.example/", expires: Date.now() + 60_000 }));
     fakeApi({
       "POST /api/v1/session": json(200, SESSION),
       "GET /api/v1/workspaces": json(200, { items: [], next_cursor: null }),

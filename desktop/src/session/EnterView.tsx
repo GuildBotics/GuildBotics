@@ -26,7 +26,9 @@ export function EnterView() {
     queryKey: ["enter", code],
     queryFn: async () => {
       await enterSession(code);
-      replacePage(next ?? takeReturn() ?? "/-/guildbotics/");
+      const pending = takeReturn();
+      const explicit = next !== null && next !== "/" && next !== "/-/guildbotics/";
+      replacePage(explicit ? next : (pending ?? next ?? "/-/guildbotics/"));
       return true;
     },
     enabled: code !== "",

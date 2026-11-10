@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./entryReturn": "./src/entryReturn.ts",
     "./api": "./src/api.ts",
     "./theme": "./src/theme.ts",
     "./styles.css": "./src/styles.css",

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { expect } from "@playwright/test";
 
-import { readStackContext, test } from "./stack-context";
+import { ownerApi, readStackContext, test } from "./stack-context";
 
 // Journey ①: first-run setup happy path against the REAL backend.
 //
@@ -248,4 +248,34 @@ test("one entry opens both screens, APIs and consent pages", async ({ page, cont
   expect(
     (await page.request.post("/api/v1/session", { data: { code: "old-code" } })).status(),
   ).toBe(405);
+});
+
+test("unsigned consent resumes through the common entry for both screens", async ({
+  page,
+  context,
+}) => {
+  const query = new URLSearchParams({
+    client: "test-app",
+    redirect_uri: "http://127.0.0.1:12345/callback",
+    state: "fixture",
+    code_challenge: "a".repeat(43),
+    code_challenge_method: "S256",
+  });
+  for (const path of ["/-/authorize", "/-/guildbotics/-/authorize"]) {
+    await context.clearCookies();
+    await page.goto(`${path}?${query}`);
+    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem("guildbotics.entryReturn")))
+      .not.toBeNull();
+    const response = await ownerApi(readStackContext("setup"), "/session/links", {
+      method: "POST",
+      body: JSON.stringify({ next: "/" }),
+    });
+    const { url } = await response.json();
+    await page.goto(url);
+    await expect(page).toHaveURL(new RegExp(path.replaceAll("/", "\\/") + "\\?"));
+    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("guildbotics.entryReturn"))).toBeNull();
+  }
 });

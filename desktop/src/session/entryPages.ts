@@ -60,9 +60,6 @@ export function deniedRedirect({ redirect_uri, state }: AppAuthorizationRequest)
   return url.toString();
 }
 
-const RETURN_KEY = "guildbotics.entryReturn";
-const RETURN_MS = 10 * 60_000;
-
 /**
  * `next` when it names a page of this server, which is all entering may open:
  * the server's rule for it, and no control characters, which a browser drops
@@ -73,33 +70,4 @@ export function samePagePath(next: string | null): string | null {
   return next !== null && /^\/(?![/\\])[^\s#\x00-\x1f\x7f]*$/.test(next) ? next : null;
 }
 
-/**
- * Remember this page (the consent page, met without a session) for entering
- * to return to instead of the App, for 10 minutes.
- */
-export function rememberReturn(): void {
-  try {
-    const path = window.location.pathname + window.location.search;
-    window.localStorage.setItem(
-      RETURN_KEY,
-      JSON.stringify({ path, expires: Date.now() + RETURN_MS }),
-    );
-  } catch {
-    // Without storage, entering opens the App; the app can be allowed again.
-  }
-}
-
-/** The remembered consent page, once, while it has not expired. */
-export function takeReturn(): string | null {
-  try {
-    const raw = window.localStorage.getItem(RETURN_KEY);
-    window.localStorage.removeItem(RETURN_KEY);
-    const saved = raw ? (JSON.parse(raw) as { path?: unknown; expires?: unknown }) : null;
-    const fresh = typeof saved?.expires === "number" && saved.expires > Date.now();
-    return fresh && typeof saved.path === "string" && saved.path.startsWith(`${AUTHORIZE_PATH}?`)
-      ? saved.path
-      : null;
-  } catch {
-    return null;
-  }
-}
+export { rememberReturn, takeReturn } from "@guildbotics/ui/entryReturn";

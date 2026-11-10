@@ -238,6 +238,31 @@ describe("the entry page", () => {
     expect(window.location.pathname + window.location.search).toBe("/-/guildbotics/-/enter");
   });
 
+  it.each(["/-/authorize?client=Branvil", "/-/guildbotics/-/authorize?client=CLI"])(
+    "resumes %s before default next and consumes it once",
+    async (path) => {
+      serve({ "POST /-/guildbotics/api/session": SESSION });
+      window.localStorage.setItem(
+        "guildbotics.entryReturn",
+        JSON.stringify({ path, expires: Date.now() + 60_000 }),
+      );
+      renderPage("/-/guildbotics/-/enter?next=%2F#code-1");
+      await waitFor(() => expect(replacePage).toHaveBeenCalledWith(path));
+      expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
+    },
+  );
+
+  it("honors an explicit destination while consuming the pending consent", async () => {
+    serve({ "POST /-/guildbotics/api/session": SESSION });
+    window.localStorage.setItem(
+      "guildbotics.entryReturn",
+      JSON.stringify({ path: "/-/authorize?client=app", expires: Date.now() + 60_000 }),
+    );
+    renderPage("/-/guildbotics/-/enter?next=%2Fcommands#code-1");
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/commands"));
+    expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
+  });
+
   it("opens the App when no page, or a page of another site, is named", async () => {
     serve({ "POST /-/guildbotics/api/session": SESSION });
 
