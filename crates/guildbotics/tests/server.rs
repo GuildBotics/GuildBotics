@@ -588,7 +588,13 @@ async fn the_server_opens_the_workspace_selected_and_names_it_by_its_identity() 
     let device: Value =
         serde_json::from_slice(&std::fs::read(data.join("device.json")).unwrap()).unwrap();
     assert_eq!(health["machine_name"], device["display_name"]);
-    assert_eq!(server.health().await, health);
+    let mut repeated = server.health().await;
+    assert!(health["command_time"].as_u64().unwrap() > 0);
+    assert!(repeated["command_time"].as_u64().unwrap() > health["command_time"].as_u64().unwrap());
+    let mut stable = health;
+    stable.as_object_mut().unwrap().remove("command_time");
+    repeated.as_object_mut().unwrap().remove("command_time");
+    assert_eq!(repeated, stable);
     let registered: Vec<PathBuf> =
         serde_json::from_slice(&std::fs::read(data.join("workspaces.json")).unwrap()).unwrap();
     assert_eq!(registered, [selected]);
