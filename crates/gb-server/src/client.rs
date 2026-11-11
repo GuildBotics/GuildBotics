@@ -593,6 +593,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_helper_distinguishes_unserved_origin_from_missing_backend() {
+        let input = b"protocol=https\nhost=forge.example.invalid:9443\npath=a/b\npassword=fake-do-not-echo\n\n";
+        for language in ["en", "ja"] {
+            for missing_backend in [false, true] {
+                let mut output = Vec::new();
+                let mut error = Vec::new();
+                let required = crate::i18n::t(language, "cli.git_credential.backend_required", &[]);
+                answer_git_credential(
+                    "get",
+                    &input[..],
+                    &mut output,
+                    &mut error,
+                    language,
+                    async |origin| {
+                        assert_eq!(origin, "https://forge.example.invalid:9443");
+                        if missing_backend {
+                            anyhow::bail!(required.clone());
+                        }
+                        Ok(None)
+                    },
+                )
+                .await
+                .unwrap();
+                let error = String::from_utf8(error).unwrap();
+                if missing_backend {
+                    assert_eq!(output, b"quit=1\n");
+                    assert!(error.contains(&required));
+                    assert!(!required.contains("cli.git_credential.backend_required"));
+                } else {
+                    assert!(output.is_empty());
+                    assert_eq!(
+                        error.trim(),
+                        crate::i18n::t(
+                            language,
+                            "cli.git_credential.not_served",
+                            &[("origin", "https://forge.example.invalid:9443")]
+                        )
+                    );
+                }
+                assert!(!error.contains("fake-do-not-echo") && !error.contains("a/b"));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn git_helper_emits_credentials_for_the_origin_and_ends_the_search_on_failure() {
         let origin = "http://127.0.0.1:7878";
         for (input, fail) in [
