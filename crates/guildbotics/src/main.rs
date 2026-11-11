@@ -109,6 +109,7 @@ mod cli_reference;
 mod diagnostics_cli;
 mod environment_cli;
 mod hub_cli;
+mod hub_data;
 mod install_cli;
 mod secrets_cli;
 mod service_cli;
@@ -118,6 +119,16 @@ use environment_cli::EnvironmentCommand;
 
 #[derive(Subcommand)]
 enum ServerCommand {
+    /// Back up or validate Hub records without starting a server.
+    #[command(hide = true)]
+    HubData {
+        #[arg(value_enum)]
+        operation: hub_data::Operation,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
+        #[arg(long)]
+        to: Option<std::path::PathBuf>,
+    },
     /// Read commit checks on the local Hub; credentials are read only from disk
     #[command(hide = true)]
     HubChecks {
@@ -244,6 +255,14 @@ fn main() -> ExitCode {
         Command::Server {
             command: ServerCommand::HubMigration,
         } => outcome(hub_cli::migration().map(|()| 0)),
+        Command::Server {
+            command:
+                ServerCommand::HubData {
+                    operation,
+                    data_dir,
+                    to,
+                },
+        } => outcome(block(hub_data::run(operation, data_dir, to)).map(|()| 0)),
         Command::Server {
             command: ServerCommand::Start { services },
         } => outcome(start(services)),

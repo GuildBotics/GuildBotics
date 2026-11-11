@@ -119,6 +119,26 @@ case "$name" in
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
         case "$1:${2:-}" in
+            server:hub-data)
+                case "$3" in
+                    backup) touch "$5/manifest.json" ;;
+                    upgrade|check)
+                        if [ "$#" -gt 3 ]; then
+                            [ -f "$5/manifest.json" ] || exit 1
+                            [ ! -f "$FAKE_ROOT/fail-gb-rehearsal" ] || exit 1
+                        else
+                            [ ! -f "$FAKE_ROOT/holder" ] || exit 1
+                            if [ "$build" = old ]; then
+                                [ ! -f "$FAKE_ROOT/gb-new-schema" ] || exit 1
+                            else
+                                if [ "$3" = upgrade ] && [ -f "$FAKE_ROOT/change-gb-schema" ]; then touch "$FAKE_ROOT/gb-new-schema"; fi
+                                [ ! -f "$FAKE_ROOT/fail-gb-live" ] || exit 1
+                            fi
+                        fi
+                        ;;
+                    *) exit 2 ;;
+                esac
+                ;;
             server:hub-checks)
                 state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
                 printf '{"state":"%s"}\n' "$state"

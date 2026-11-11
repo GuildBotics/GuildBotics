@@ -446,13 +446,18 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "npm|run|build|--workspace|desktop|--workspace|crates/branvil/web",
             "cargo|build|--release|--locked|-p|guildbotics|--target-dir|",
             "current|branvil|backup|",
+            "guildbotics-bin|server|hub-data|backup|--to|",
             "current|branvil|restore|",
             "guildbotics-bin|branvil|admin|upgrade|",
             "guildbotics-bin|branvil|admin|check|",
+            "guildbotics-bin|server|hub-data|upgrade|--data-dir|",
+            "guildbotics-bin|server|hub-data|check|--data-dir|",
             "current|server|stop",
             "launchctl|bootout|",
             "guildbotics-bin|branvil|admin|upgrade|",
             "guildbotics-bin|branvil|admin|check|",
+            "guildbotics-bin|server|hub-data|upgrade\n",
+            "guildbotics-bin|server|hub-data|check\n",
             "launchctl|bootstrap|",
             "current|install",
             "current|environment|prune",
@@ -775,7 +780,7 @@ fn update_keeps_only_three_complete_backup_generations() {
         assert!(backups.join(format!("branvil-update-{stamp}")).exists());
     }
     assert!(!backups.join("branvil-update-2003").exists());
-    assert_eq!(fs::read_dir(backups).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(backups).unwrap().count(), 4);
 }
 
 #[test]
@@ -1207,4 +1212,78 @@ fn cleanup_failure_keeps_the_activated_build_and_never_rolls_back() {
         );
         assert!(text(&out).contains("guildbotics environment prune"));
     }
+}
+
+#[test]
+fn guildbotics_rehearsal_failure_keeps_the_old_server_running() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.commit("new");
+    hub.mark("fail-gb-rehearsal");
+    hub.run("update", None, false);
+    hub.assert_still_runs_old(&old);
+}
+
+#[test]
+fn guildbotics_live_failure_checks_old_data_and_reports_backups() {
+    let hub = Hub::new();
+    hub.install();
+    hub.commit("new");
+    hub.mark("change-gb-schema");
+    hub.mark("fail-gb-live");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("Backups:"));
+    assert!(text(&out).contains("/backups"));
+    assert!(!hub.root().join("holder").exists());
+    assert!(hub.lines("calls").contains("launchctl|disable|"));
+    assert!(hub.lines("calls").contains("current|server|hub-data|check"));
+    assert!(hub.builds().join("update-from").exists());
+}
+
+#[test]
+fn guildbotics_backup_rotation_retains_three_complete_generations() {
+    let hub = Hub::new();
+    hub.install();
+    let backups = hub.builds().parent().unwrap().join("backups");
+    for stamp in ["2000", "2001", "2002", "2003"] {
+        let path = backups.join(format!("guildbotics-update-{stamp}"));
+        fs::create_dir_all(&path).unwrap();
+        if stamp != "2003" {
+            fs::write(path.join("manifest.json"), "").unwrap();
+        }
+    }
+    hub.commit("new");
+    hub.run("update", None, true);
+    assert!(!backups.join("guildbotics-update-2000").exists());
+    assert!(!backups.join("guildbotics-update-2003").exists());
+    for stamp in ["2001", "2002"] {
+        assert!(backups.join(format!("guildbotics-update-{stamp}")).exists());
+    }
+}
+
+#[test]
+fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
+    let hub = Hub::new();
+    let identity = hub.root().join("identity");
+    let name = identity.to_str().unwrap();
+    hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_IDENTITY_ROOT", name),
+        ],
+        true,
+    );
+    hub.commit("new");
+    hub.run_with(
+        "update",
+        &[("GUILDBOTICS_IDENTITY_ROOT", "/unrelated/identity")],
+        true,
+    );
+    let plist = fs::read_to_string(hub.plist()).unwrap();
+    assert!(plist.contains(&format!(
+        "<key>GUILDBOTICS_IDENTITY_ROOT</key><string>{name}</string>"
+    )));
+    assert!(!plist.contains("/unrelated/identity"));
 }

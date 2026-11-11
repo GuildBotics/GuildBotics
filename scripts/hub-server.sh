@@ -10,7 +10,7 @@ Usage: scripts/hub-server.sh install | update | restart | status | recover | uni
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
            Set BRANVIL_DATA_DIR to the absolute path of the initialized data,
            and GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity.
-update     Build HEAD, back up Branvil, rehearse the upgrade, and switch builds.
+update     Build HEAD, back up both services, rehearse the upgrade, and switch builds.
 restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
 recover    Resume an interrupted update or return to the previous build.
@@ -258,10 +258,25 @@ backup_and_rehearse() {
     done
     while [ "$#" -gt 2 ]; do rm -rf "$1"; shift; done
 
+    guildbotics_backup=$(mktemp -d "$backups/guildbotics-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+    "$candidate" server hub-data backup --to "$guildbotics_backup"
+    printf 'GuildBotics backup before update: %s\n' "$guildbotics_backup"
+    set --
+    for saved in "$backups"/guildbotics-update-*; do
+        if [ "$saved" != "$guildbotics_backup" ] && [ -d "$saved" ] && [ ! -L "$saved" ]; then
+            if [ -f "$saved/manifest.json" ]; then set -- "$@" "$saved"
+            else rm -rf "$saved"; fi
+        fi
+    done
+    while [ "$#" -gt 2 ]; do rm -rf "$1"; shift; done
+
     stage=rehearsal
     rehearsal=$lock/rehearsal
     "$current" branvil restore --from "$backup" --data-dir "$rehearsal"
     admin_upgrade_and_check "$candidate" "$rehearsal"
+    cp -R "$guildbotics_backup" "$lock/guildbotics-rehearsal"
+    "$candidate" server hub-data upgrade --data-dir "$lock/guildbotics-rehearsal"
+    "$candidate" server hub-data check --data-dir "$lock/guildbotics-rehearsal"
 }
 
 xml() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
@@ -277,6 +292,7 @@ write_plist() {
         entry PATH "$agent_path"
         entry BRANVIL_DATA_DIR "$BRANVIL_DATA_DIR"
         entry GUILDBOTICS_HOME "$GUILDBOTICS_HOME"
+        if [ -n "${GUILDBOTICS_IDENTITY_ROOT:-}" ]; then entry GUILDBOTICS_IDENTITY_ROOT "$GUILDBOTICS_IDENTITY_ROOT"; fi
         if [ -n "${GUILDBOTICS_SERVER_PORT:-}" ]; then entry GUILDBOTICS_SERVER_PORT "$GUILDBOTICS_SERVER_PORT"; fi
         printf '%s\n' '</dict>' \
             '<key>RunAtLoad</key><true/>' \
@@ -297,7 +313,8 @@ read_plist() {
     BRANVIL_DATA_DIR=$(setting EnvironmentVariables.BRANVIL_DATA_DIR)
     GUILDBOTICS_HOME=$(setting EnvironmentVariables.GUILDBOTICS_HOME)
     GUILDBOTICS_SERVER_PORT=$(setting EnvironmentVariables.GUILDBOTICS_SERVER_PORT || true)
-    export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT
+    GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
+    export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
 }
 install_assets() {
     stage="installing the CLI and skill"
@@ -323,9 +340,10 @@ rollback() {
     point_current "$pending" || return
     # The previous build may refuse the upgraded schema. Leave the data in
     # place and stay stopped for the operator to decide how to restore it.
-    if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
+    if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR" ||
+        ! "$current" server hub-data check; then
         launchctl disable "$target" || return
-        printf 'The previous build cannot check the live data. See docs/hub-server.md before restarting.\n' >&2
+        printf 'The previous build cannot check the live data. Backups: %s. See docs/hub-server.md before restarting.\n' "$backups" >&2
         return 1
     fi
     start_agent && rm -f "$pending" "$builds/update-to"
@@ -350,7 +368,7 @@ case "$action" in
         identity=${GUILDBOTICS_HUB_SIGNING_IDENTITY:-}
         [ -n "$identity" ] ||
             fail "Set GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity. See docs/hub-server.md."
-        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_SERVER_PORT:-}$identity" in
+        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_IDENTITY_ROOT:-}${GUILDBOTICS_SERVER_PORT:-}$identity" in
             *'
 '*) fail "Paths and environment settings must not contain line breaks." ;;
         esac
@@ -402,6 +420,7 @@ case "$action" in
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
         if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&
+            "$candidate" server hub-data upgrade && "$candidate" server hub-data check &&
             point_current "$candidate" && start_agent; then
             complete_activation
             printf 'Hub updated to %s.\n' "$revision"
@@ -426,6 +445,7 @@ case "$action" in
             assert_stopped "$current"
             if [ -x "$builds/update-to" ] &&
                 "$builds/update-to" branvil admin check --data-dir "$BRANVIL_DATA_DIR" &&
+                "$builds/update-to" server hub-data upgrade && "$builds/update-to" server hub-data check &&
                 point_current "$builds/update-to" && start_agent; then
                 complete_activation
             else

@@ -57,6 +57,8 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 - GuildBoticsの秘密の値は `local/secrets.enc.json` に暗号化して保存し、鍵はOSキーチェーンに置く。`config/secrets.yml` はキー名の索引。メンバーの資格情報はidentityに置き、秘密名のプレフィックスが別ワークスペースのIDとも衝突しないよう確認する。壊れた索引を空として扱わない。Branvilの上流の資格情報とwebhookのURLも、`gb-server/src/branvil_vault.rs` がidentityのstoreに `branvil_` で始まる小文字の名前で置く（メンバーの秘密名は大文字なので衝突しない）。
 - 共有記録には端末固有の値を入れない。値を持たせずに済む項目は型で防ぎ、記録のマスクとサイズ制限は共通の処理で行う。診断の文脈を捨てるためにエラー全体を隠さない。
 
+GuildBotics の共有記録を古い版で読めない形へ変えるときは `SHARED_RECORD_SCHEMA_VERSION` を上げ、`crates/gb-server/src/hub_data.rs` の `server hub-data upgrade` に直前の1版からの変換と `check` の検査を追加する。それより古い形式を通常読み取りや変換で並行サポートしない。変換は明示した退避の写しだけでも実行できる形にし、失敗時に本物へ切り替えないことと、旧ビルドの検査で停止することをテストする。項目追加だけだった版1〜4は変換せず検査する。
+
 ### HTTP 経路の認証分類
 
 - 新しい経路は登録と同時に `loopback_auth::RouteAuth` で分類する。Branvil は `classified_routes!`、GuildBotics API と画面外の経路は `api.rs` の `routes!` を使う。画面は `ui.rs` の共通パス定義へ加える。分類表とは別に `.route()` で追加しない。
