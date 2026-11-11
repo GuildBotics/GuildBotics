@@ -2006,14 +2006,26 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
                 .unwrap()
                 .is_some()
         );
-        let refused = server
+        // While it drains, the screens still answer and only new work is refused.
+        let screen = server
             .http
             .get(server.url("/-/guildbotics/api/config/status"))
             .bearer_auth(server.owner_token())
             .send()
             .await
             .unwrap();
-        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(screen.status(), StatusCode::OK);
+        let run = server
+            .http
+            .post(server.url("/-/guildbotics/api/commands/run"))
+            .bearer_auth(server.owner_token())
+            .json(&json!({"command": "ask"}))
+            .send()
+            .await
+            .unwrap();
+        let (status, _, refused) = body(run).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(refused["code"], "server_stopping");
         let attempt = claim["attempt_id"].as_str().unwrap();
         let heartbeat = server
             .http

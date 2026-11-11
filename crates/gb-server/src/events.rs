@@ -220,7 +220,7 @@ pub(crate) async fn stream(
         loop {
             tokio::select! {
                 _=api.cancelled.cancelled()=>break,
-                _=api.shutdown.wait()=>break,
+                _=api.shutdown.closing()=>break,
                 incoming=socket.recv()=>match incoming {
                     None|Some(Err(_))|Some(Ok(Message::Close(_)))=>break,
                     _=>(),

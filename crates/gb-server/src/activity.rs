@@ -219,7 +219,11 @@ pub(crate) async fn history(
             .and_then(|v| v.to_str().ok())
             .unwrap_or(""),
     );
-    refresh(&api, &workspace, sync_start, sync_end, q.refresh);
+    // A stopping server starts no sync for its drain to wait for; the
+    // screen shows what is already recorded.
+    if !api.shutdown.stopping() {
+        refresh(&api, &workspace, sync_start, sync_end, q.refresh);
+    }
     let identities = api.identity_root.clone();
     match tokio::task::spawn_blocking(move || {
         read(

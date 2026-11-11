@@ -115,6 +115,7 @@ fn announce(port: u16) -> std::io::Result<()> {
 pub struct Shutdown {
     stop: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
+    close: tokio_util::sync::CancellationToken,
 }
 
 impl Shutdown {
@@ -127,6 +128,22 @@ impl Shutdown {
 
     pub async fn wait(&self) {
         self.stop.cancelled().await;
+    }
+
+    /// Whether the server is stopping, for any reason: it then refuses what
+    /// would start more work for it to wait for (`api::REFUSED_WHILE_STOPPING`).
+    pub fn stopping(&self) -> bool {
+        self.stop.is_cancelled()
+    }
+
+    /// The listener is about to close: open event streams end so that the
+    /// graceful shutdown of the connections does not wait for them.
+    pub fn close(&self) {
+        self.close.cancel();
+    }
+
+    pub async fn closing(&self) {
+        self.close.cancelled().await;
     }
 
     pub async fn wait_for_cancel(&self) {
@@ -299,9 +316,8 @@ impl Server {
             std::pin::Pin<Box<dyn Future<Output = anyhow::Result<branvil::Embedded>> + Send>>,
         >,
     ) -> (Held, anyhow::Result<()>) {
-        use axum::{Router, http::StatusCode, middleware};
+        use axum::{Router, http::StatusCode};
         use tower::ServiceExt;
-        let accepting = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (ready_tx, ready_rx) = tokio::sync::watch::channel(prepare.is_none());
         let host_router = Arc::new(std::sync::RwLock::new(None::<Router>));
         let host = prepare.as_ref().map(|_| {
@@ -384,25 +400,7 @@ impl Server {
         let maintenance = tokio::spawn(crate::diagnostics::maintenance(self.api.clone()));
         let upkeep = tokio::spawn(crate::environment::upkeep(self.api.clone()));
         let service_api = self.api.clone();
-        let integrated = host.is_some();
-        let gate = accepting.clone();
-        let router = api::router_with_host(self.api, host).layer(middleware::from_fn(
-            move |request: axum::extract::Request, next: middleware::Next| {
-                let guildbotics =
-                    !integrated || request.uri().path().starts_with("/-/guildbotics/");
-                let refuse = guildbotics
-                    && request.uri().path() != "/-/guildbotics/api/shutdown"
-                    && !gate.load(std::sync::atomic::Ordering::Acquire);
-                async move {
-                    use axum::response::IntoResponse;
-                    if refuse {
-                        StatusCode::SERVICE_UNAVAILABLE.into_response()
-                    } else {
-                        next.run(request).await
-                    }
-                }
-            },
-        ));
+        let router = api::router_with_host(self.api, host);
         let (network_stop, network_stopped) = tokio::sync::oneshot::channel();
         let mut network = tokio::spawn(async move {
             axum::serve(self.listener, router)
@@ -434,9 +432,17 @@ impl Server {
                 }
             },
         }
-        accepting.store(false, std::sync::atomic::Ordering::Release);
+        // The screens and the CLI stay available while the server drains: the
+        // API refuses only what would start more work for it to wait for.
+        service.shutdown.request(false);
         stop_autostart.abort();
-        service.selected().service.stop(false).await;
+        // Nothing the drain waits for starts from the server's own loops.
+        autostart.abort();
+        let _ = autostart.await;
+        maintenance.abort();
+        let _ = maintenance.await;
+        upkeep.abort();
+        let _ = upkeep.await;
         if !startup_consumed {
             if !startup.is_finished() {
                 startup.abort();
@@ -445,27 +451,39 @@ impl Server {
                 embedded = service;
             }
         }
-        autostart.abort();
-        let _ = autostart.await;
-        maintenance.abort();
-        let _ = maintenance.await;
-        upkeep.abort();
-        let _ = upkeep.await;
-        work.close();
-        work.wait().await;
-        // A start the server's work finished after the stop above began after
-        // the stop was asked for, so what it runs is cancelled rather than
-        // waited for; only then is the last selection's transcript finished.
-        service_api.selected().service.stop(true).await;
-        crate::tool_login::drain_private().await;
-        gb_environment::worktree::drain_writebacks().await;
-        gb_environment::snapshot::drain_builds().await;
-        gb_environment::runtime::drain_vms().await;
-        if let Some(embedded) = embedded {
-            tokio::select! {
-                result = embedded.drain() => { if let Err(error) = result { failure = Some(error); } },
-                () = service_api.cancelled.cancelled() => {},
+        let guildbotics = async {
+            service.selected().service.stop(false).await;
+            work.close();
+            work.wait().await;
+            // A start the server's work finished after the stop above began after
+            // the stop was asked for, so what it runs is cancelled rather than
+            // waited for; only then is the last selection's transcript finished.
+            service_api.selected().service.stop(true).await;
+            crate::tool_login::drain_private().await;
+            gb_environment::worktree::drain_writebacks().await;
+            gb_environment::snapshot::drain_builds().await;
+            gb_environment::runtime::drain_vms().await;
+        };
+        // CI gives out no more jobs from now on, and its running jobs finish
+        // alongside the work above.
+        let ci = async {
+            if let Some(embedded) = &embedded {
+                tokio::select! {
+                    result = embedded.drain() => result.err(),
+                    () = service_api.cancelled.cancelled() => None,
+                }
+            } else {
+                None
             }
+        };
+        if let ((), Some(error)) = tokio::join!(guildbotics, ci) {
+            failure = Some(error);
+        }
+        // Interactive member operations were answered throughout the drain.
+        service_api.member_work.close();
+        service_api.member_work.wait().await;
+        service_api.shutdown.close();
+        if let Some(embedded) = embedded {
             embedded.close_events();
             let _ = network_stop.send(());
             if !network.is_finished()

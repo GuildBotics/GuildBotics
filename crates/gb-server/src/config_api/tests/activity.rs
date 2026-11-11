@@ -700,7 +700,11 @@ async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_
     let (mut socket, _) = tokio_tungstenite::connect_async(r).await.unwrap();
     let _ = socket.next().await;
     let _ = socket.next().await;
+    // A stop keeps the screens' events until the listener closes.
     f.api.shutdown.request(false);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(f.api.events.subscriber_count(), 1);
+    f.api.shutdown.close();
     tokio::time::timeout(Duration::from_secs(2), async {
         while f.api.events.subscriber_count() != 0 {
             tokio::task::yield_now().await;
@@ -712,4 +716,23 @@ async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_
         assert!(!String::from_utf8_lossy(bytes).contains(&f.token));
     }
     server.abort();
+}
+
+#[tokio::test]
+async fn a_stopping_server_shows_recorded_activity_without_starting_a_sync() {
+    let f = fixture();
+    f.init().await;
+    f.add(agent("alice")).await;
+    let calls = Arc::new(Mutex::new(0));
+    let called = calls.clone();
+    *f.api.activity_runner.lock().unwrap() = Some(Arc::new(move |_, _| {
+        *called.lock().unwrap() += 1;
+        Ok(())
+    }));
+    f.api.shutdown.request(false);
+    f.get("/activity/history?start=2999-09-10T00:00:00Z&end=2999-09-11T00:00:00Z&refresh=true")
+        .await;
+    f.api.work.close();
+    f.api.work.wait().await;
+    assert_eq!(*calls.lock().unwrap(), 0);
 }

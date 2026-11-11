@@ -231,7 +231,7 @@ async fn start(
             )
             .into_response();
     };
-    if api.cancelled.is_cancelled() || api.work.is_closed() {
+    if api.cancelled.is_cancelled() || api.member_work.is_closed() {
         return ApiError::new(StatusCode::CONFLICT, "member_backend_closing", &headers)
             .into_response();
     }
@@ -273,7 +273,7 @@ async fn start(
     };
     let timeout = backend.timeout;
     let (send, receive) = tokio::sync::oneshot::channel();
-    api.work.spawn(async move {
+    api.member_work.spawn(async move {
         let _admitted = admitted;
         let outgoing = exchange.temporary.path().join("out.bundle");
         let mut result = backend
@@ -508,6 +508,30 @@ mod tests {
         assert_eq!(&response[newline + 1..], b"raw\0bundle\xff");
     }
     #[tokio::test]
+    async fn a_stopping_server_answers_members_until_its_drain_ends() {
+        let temp = tempfile::tempdir().unwrap();
+        let (api, calls) = api(temp.path(), false);
+        let run = async || {
+            request(
+                api.clone(),
+                "/-/guildbotics/api/member/run",
+                serde_json::to_vec(&body()).unwrap(),
+                true,
+            )
+            .await
+            .status()
+        };
+        // The server's work is closed while it waits for runs and CI.
+        api.shutdown.request(false);
+        api.work.close();
+        assert_eq!(run().await, axum::http::StatusCode::OK);
+        // Its last step closes the members' work too.
+        api.member_work.close();
+        api.member_work.wait().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(run().await, axum::http::StatusCode::CONFLICT);
+    }
+    #[tokio::test]
     async fn timeout_keeps_the_worker_tracked_until_it_finishes() {
         let temp = tempfile::tempdir().unwrap();
         let (api, calls) = api(temp.path(), true);
@@ -520,9 +544,9 @@ mod tests {
         .await;
         let metadata: Value = serde_json::from_slice(&bytes(response).await).unwrap();
         assert_eq!(metadata["exit_code"], 124);
-        assert_eq!(api.work.len(), 1);
-        api.work.close();
-        api.work.wait().await;
+        assert_eq!(api.member_work.len(), 1);
+        api.member_work.close();
+        api.member_work.wait().await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     #[tokio::test]
