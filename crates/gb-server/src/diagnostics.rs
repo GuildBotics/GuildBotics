@@ -331,6 +331,7 @@ async fn run_check(
         message: MESSAGE.into(),
         cwd: None,
         expected_workspace: None,
+        request_id: None,
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };
@@ -974,6 +975,7 @@ pub(crate) async fn troubleshoot(
             .to_string(),
         cwd: None,
         expected_workspace: None,
+        request_id: None,
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };

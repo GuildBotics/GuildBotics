@@ -279,7 +279,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             "500 Internal Server Error",
             Some("Internal Server Error"),
             "",
-            "HTTP 500: Internal Server Error",
+            "HTTP 500 Internal Server Error",
         ),
         (
             vec!["run", "ask", "topic=review", "value"],
@@ -288,7 +288,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             "",
             None,
             "",
-            "error sending request",
+            "",
         ),
     ] {
         let mut child = peer_cli(&root, &arguments)
@@ -311,22 +311,41 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         CliPeer::respond(
             socket,
             "200 OK",
-            &json!({"workspace":workspace}).to_string(),
+            &json!({"workspace_id":"019691c2-8dc0-7654-8000-000000000042", "service_instance_id":"fixture", "command_time":100000}).to_string(),
         )
         .await;
         let (socket, request) = peer.authorized("POST", "commands/run").await;
+        let id = request["request_id"].as_str().unwrap();
+        assert!(id.starts_with("fixture.100000."));
         assert_eq!(
             request,
             json!({
                 "command": "ask", "args": ["topic=review", "value"],
                 "person": person, "message": message, "cwd": cwd,
-                "expected_workspace": workspace,
+                "expected_workspace": "019691c2-8dc0-7654-8000-000000000042",
+                "request_id": id,
             })
         );
-        if let Some(reply) = reply {
+        if reply.is_none() || status == "200 OK" {
+            if reply.is_none() {
+                drop(socket);
+            } else {
+                CliPeer::respond(socket, "200 OK", r#"{"state":"running"}"#).await;
+            }
+            let path = format!("commands/runs/{id}");
+            let (socket, _) = peer.authorized("GET", &path).await;
+            CliPeer::respond(socket, "200 OK", r#"{"state":"running"}"#).await;
+            let (socket, _) = peer.authorized("GET", &path).await;
+            let result: Value =
+                serde_json::from_str(reply.unwrap_or(r#"{"output":"recovered"}"#)).unwrap();
+            CliPeer::respond(
+                socket,
+                "200 OK",
+                &json!({"state":"finished", "status":200,"result":result}).to_string(),
+            )
+            .await;
+        } else if let Some(reply) = reply {
             CliPeer::respond(socket, status, reply).await;
-        } else {
-            drop(socket);
         }
         let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
             .await
@@ -337,10 +356,17 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             expected_error.is_empty(),
             "{output:?}"
         );
-        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected_stdout);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            if reply.is_none() {
+                "recovered\n"
+            } else {
+                expected_stdout
+            }
+        );
         let stderr = String::from_utf8(output.stderr).unwrap();
         if expected_error.is_empty() {
-            assert!(stderr.is_empty(), "{stderr}");
+            assert!(stderr.contains(id), "{stderr}");
         } else {
             assert!(stderr.contains(expected_error), "{stderr}");
             assert!(!stderr.contains("command_not_found"), "{stderr}");
@@ -737,7 +763,7 @@ async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_forc
 }
 
 #[tokio::test]
-async fn run_reports_an_unselected_workspace_before_waiting_for_stdin() {
+async fn run_requires_a_server_before_waiting_for_stdin() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let workspace = peer_workspace(&root);
@@ -757,14 +783,14 @@ async fn run_reports_an_unselected_workspace_before_waiting_for_stdin() {
     drop(input);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("workspace"),
+        String::from_utf8_lossy(&output.stderr).contains("requires a running GuildBotics server"),
         "{output:?}"
     );
     assert!(!root.join("home/data/workspaces.json").exists());
 }
 
 #[tokio::test]
-async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
+async fn run_cli_never_falls_back_when_the_peer_cannot_confirm_the_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let root = gb_base::host_path::normalize(dir.path()).unwrap();
     let workspace = peer_workspace(&root);
@@ -817,9 +843,13 @@ async fn run_cli_falls_back_only_when_the_peer_cannot_confirm_the_workspace() {
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(
-            stderr.contains("Person 'no-such-member' not found"),
+            stderr.contains("requires a running")
+                || stderr.contains("different workspace selected"),
             "{state}: {stderr}"
         );
+        if state == "other-workspace" || state == "malformed" {
+            assert!(stderr.contains(&gb_server::i18n::t("en", "cli.run.workspace_mismatch", &[])));
+        }
         peer.expect_no_retry().await;
     }
 }
@@ -866,59 +896,6 @@ async fn service_commands_request_the_same_endpoints_and_payloads_as_the_screen(
         );
         assert!(output.stderr.is_empty());
         peer.expect_no_retry().await;
-    }
-}
-
-#[test]
-fn run_cli_refuses_humans_before_loading_or_running_a_command() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = gb_base::host_path::normalize(dir.path()).unwrap();
-    let workspace = peer_workspace(&root);
-    for (path, data) in [
-        (
-            workspace.join(".guildbotics/config/team/project.yml"),
-            "name: CLI test\nlanguage: en\n",
-        ),
-        (
-            workspace.join(".guildbotics/config/team/members/aiko/member.yml"),
-            "is_active: false\n",
-        ),
-        (
-            root.join("home/identity/.guildbotics/config/team/members/aiko/identity.yml"),
-            "person_id: aiko\nname: Aiko\nperson_type: human\n",
-        ),
-    ] {
-        gb_base::files::atomic_write(&path, data.as_bytes()).unwrap();
-    }
-    for args in [
-        &["run", "missing", "--person", "aiko"][..],
-        &["run", "missing@aiko"][..],
-    ] {
-        let output = Command::new(BIN)
-            .args(args)
-            .current_dir(&root)
-            .env("HOME", &root)
-            .env("GUILDBOTICS_HOME", root.join("home"))
-            .env_remove("GUILDBOTICS_IDENTITY_ROOT")
-            .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
-            .env("LANGUAGE", "en")
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        assert!(output.stdout.is_empty());
-        let error = String::from_utf8(output.stderr).unwrap();
-        assert!(
-            error.contains("A human member cannot be used as an AI execution subject."),
-            "{error}"
-        );
-        assert!(!error.contains("Traceback"));
-        assert!(run_records(&workspace).is_empty());
-        assert!(
-            !workspace
-                .join(".guildbotics/local/run/diagnostics.jsonl")
-                .exists()
-        );
     }
 }
 
@@ -971,127 +948,83 @@ async fn workspace_and_member_refuse_a_directory_the_user_cannot_list() {
 }
 
 #[test]
-fn local_run_uses_the_selected_member_and_keeps_the_failed_run_with_its_trace() {
+fn run_without_a_server_never_loads_provider_configuration_or_starts_work() {
     let dir = tempfile::tempdir().unwrap();
-    let root = gb_base::host_path::normalize(dir.path()).unwrap();
-    let workspace = peer_workspace(&root);
-    for (path, data) in [
-        (
-            workspace.join(".guildbotics/config/team/project.yml"),
-            "name: CLI test\nlanguage: en\n",
-        ),
-        (
-            workspace.join(".guildbotics/config/team/members/alice/member.yml"),
-            "is_active: true\n",
-        ),
-        (
-            root.join("home/identity/.guildbotics/config/team/members/alice/identity.yml"),
-            "person_id: alice\nname: Alice\nperson_type: agent\n",
-        ),
-        (
-            workspace.join(".guildbotics/config/team/members/alice/commands/solo.md"),
-            "---\nbrain: none\n---\ndone\n",
-        ),
-        (
-            root.join("home/data/msb"),
-            "the runtime cannot be placed here",
-        ),
-    ] {
-        gb_base::files::atomic_write(&path, data.as_bytes()).unwrap();
-    }
-    let invoke = |args: &[&str], language: &str| {
-        Command::new(BIN)
-            .args(args)
-            .current_dir(&root)
-            .env("HOME", &root)
+    let root = dir.path();
+    let workspace = peer_workspace(root);
+    gb_base::files::atomic_write(
+        &workspace.join(".guildbotics/config/team/project.yml"),
+        b"invalid: [",
+    )
+    .unwrap();
+    for language in ["en", "ja"] {
+        let output = Command::new(BIN)
+            .args(["run", "solo@alice"])
             .env("GUILDBOTICS_HOME", root.join("home"))
             .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
-            .env_remove("GUILDBOTICS_IDENTITY_ROOT")
             .env("LANGUAGE", language)
             .stdin(Stdio::null())
             .output()
-            .unwrap()
-    };
-    let missing = invoke(&["run", "missing@alice", "--cwd", "workspace"], "en");
-    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
-    assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("Unable to locate command 'missing'")
-    );
-    assert!(run_records(&workspace).is_empty());
-    for args in [
-        &["run", "solo@alice", "--cwd", "workspace", "topic=review"][..],
-        &["run", "solo@alice", "--person", "", "--cwd", "workspace"][..],
-        &[
-            "run",
-            "solo@another",
-            "--person",
-            "alice",
-            "--cwd",
-            "workspace",
-            "topic=review",
-        ][..],
-    ] {
-        for language in ["en", "ja"] {
-            let output = invoke(args, language);
-            assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert!(output.stdout.is_empty());
-            // Keep the frozen localized message and destination exact, while
-            // allowing the operating system to supply its own nonempty reason.
-            let home = root.join("home/data/msb").display().to_string();
-            let prefix = gb_server::i18n::t(
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&gb_server::i18n::t(
                 language,
-                "intelligences.agent_environment.runtime.not_placed",
-                &[("home", &home), ("error", "")],
-            );
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr
-                    .trim()
-                    .strip_prefix(&format!("Error: {prefix}"))
-                    .is_some_and(|reason| !reason.is_empty()),
-                "{output:?}"
-            );
-        }
-    }
-    let records = run_records(&workspace);
-    assert_eq!(records.len(), 6);
-    for record in records {
-        assert_eq!(record["status"], "failed");
-        assert_eq!(record["source"], "manual");
-        assert_eq!(record["execution_mode"], "user_initiated");
-        assert_eq!(record["member_id"], "alice");
-        let id = record["run_id"].as_str().unwrap();
-        let trace = std::fs::read_to_string(
-            workspace.join(format!(".guildbotics/local/run/sessions/{id}.jsonl")),
-        )
-        .unwrap();
-        let events: Vec<Value> = trace
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        let boundaries: Vec<_> = events
-            .iter()
-            .filter(|e| e["type"].as_str().unwrap().starts_with("command."))
-            .collect();
-        assert_eq!(boundaries.len(), 2, "{events:?}");
-        assert_eq!(boundaries[0]["type"], "command.started");
-        assert_eq!(boundaries[1]["type"], "command.failed");
-        for event in boundaries {
-            assert_eq!(event["trace_id"], id);
-            assert_eq!(event["command"], "solo");
-            assert_eq!(event["attributes"]["run.entry"], "command");
-        }
+                "cli.run.backend_required",
+                &[]
+            ))
+        );
+        assert!(!workspace.join(".guildbotics/state/task-runs").exists());
+        assert!(!root.join("home/data/msb").exists());
     }
 }
 
-fn run_records(workspace: &Path) -> Vec<Value> {
-    let dirs = match std::fs::read_dir(workspace.join(".guildbotics/state/task-runs")) {
-        Ok(dirs) => dirs,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(error) => panic!("{error}"),
-    };
-    dirs.map(|entry| entry.unwrap().path().join("result.json"))
-        .filter(|path| path.is_file())
-        .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
-        .collect()
+#[tokio::test]
+async fn resume_only_reads_the_receipt_without_workspace_or_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let peer = CliPeer::bind(root).await;
+    let mut child = peer_cli(root, &["run", "--resume", "fixture.100000.id"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    peer.prove().await;
+    let (socket, _) = peer
+        .authorized("GET", "commands/runs/fixture.100000.id")
+        .await;
+    CliPeer::respond(
+        socket,
+        "200 OK",
+        r#"{"state":"finished","status":200,"result":{"output":"recovered"}}"#,
+    )
+    .await;
+    let output = tokio::time::timeout(Duration::from_secs(5), child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(input);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"recovered\n");
+    peer.expect_no_retry().await;
+}
+
+#[tokio::test]
+async fn invalid_resume_id_has_a_localized_input_error() {
+    for language in ["en", "ja"] {
+        let dir = tempfile::tempdir().unwrap();
+        let peer = CliPeer::bind(dir.path()).await;
+        let mut cli = peer_cli(dir.path(), &["run", "--resume", "bad/id"]);
+        cli.env("LANGUAGE", language);
+        let running = tokio::spawn(async move { cli.output().await.unwrap() });
+        peer.prove().await;
+        let output = running.await.unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&gb_server::i18n::t(language, "cli.run.invalid_id", &[])));
+        assert!(!stderr.contains(&gb_server::i18n::t(language, "cli.run.invalid_output", &[])));
+        peer.expect_no_retry().await;
+    }
 }

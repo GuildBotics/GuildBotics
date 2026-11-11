@@ -588,7 +588,13 @@ async fn the_server_opens_the_workspace_selected_and_names_it_by_its_identity() 
     let device: Value =
         serde_json::from_slice(&std::fs::read(data.join("device.json")).unwrap()).unwrap();
     assert_eq!(health["machine_name"], device["display_name"]);
-    assert_eq!(server.health().await, health);
+    let mut repeated = server.health().await;
+    assert!(health["command_time"].as_u64().unwrap() > 0);
+    assert!(repeated["command_time"].as_u64().unwrap() > health["command_time"].as_u64().unwrap());
+    let mut stable = health;
+    stable.as_object_mut().unwrap().remove("command_time");
+    repeated.as_object_mut().unwrap().remove("command_time");
+    assert_eq!(repeated, stable);
     let registered: Vec<PathBuf> =
         serde_json::from_slice(&std::fs::read(data.join("workspaces.json")).unwrap()).unwrap();
     assert_eq!(registered, [selected]);
@@ -1299,7 +1305,7 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
     let unselected = Server::start(dir.path());
     let (status, refused) = unselected
         .run(
-            json!({"command": "look", "expected_workspace": dir.path()}),
+            json!({"command": "look", "expected_workspace": "other-workspace-id"}),
             "en",
         )
         .await;
@@ -1332,7 +1338,7 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
             "command_file_not_found",
         ),
         (
-            json!({"command": "look", "expected_workspace": dir.path().join("other")}),
+            json!({"command": "look", "expected_workspace": "other-workspace-id"}),
             StatusCode::CONFLICT,
             "command_workspace_changed",
         ),
@@ -1716,7 +1722,7 @@ fn assert_service_status(root: &Path, running: bool) {
 }
 
 #[test]
-fn run_accepts_options_after_the_command_and_executes_with_or_without_a_server() {
+fn run_accepts_options_after_the_command_but_requires_a_server() {
     let dir = tempfile::tempdir().unwrap();
     let root = host_name(dir.path());
     let workspace = workspace_with_a_member(&root);
@@ -1741,18 +1747,23 @@ fn run_accepts_options_after_the_command_and_executes_with_or_without_a_server()
             .unwrap()
     };
     let via_server = run();
+    assert!(!via_server.status.success());
+    assert!(via_server.stdout.is_empty());
+    let error = String::from_utf8_lossy(&via_server.stderr);
+    assert!(
+        error.contains("unknown") && error.contains("yuki"),
+        "{error}"
+    );
     server.stop();
-    let local = run();
-    for output in [&via_server, &local] {
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            error.contains("unknown") && error.contains("yuki"),
-            "{error}"
-        );
-    }
-    assert_eq!(local.stderr, via_server.stderr);
+    let without_server = run();
+    assert!(!without_server.status.success());
+    assert!(without_server.stdout.is_empty());
+    let error = String::from_utf8_lossy(&without_server.stderr);
+    assert!(
+        error.contains("guildbotics run requires a running GuildBotics server."),
+        "{error}"
+    );
+    assert!(!error.contains("unknown"), "{error}");
 }
 
 #[test]

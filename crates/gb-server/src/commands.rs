@@ -8,7 +8,9 @@
 //! trace. Screen requests additionally compare the selected shared file's
 //! identity and revision with this member's runtime target before starting.
 
+mod results;
 pub(crate) use crate::i18n::say;
+pub(crate) use results::Results;
 use std::path::{Path, PathBuf};
 
 use axum::Json;
@@ -37,7 +39,8 @@ pub(crate) struct RunRequest {
     pub(crate) message: String,
     pub(crate) cwd: Option<PathBuf>,
     /// The workspace the caller means, which must still be the selected one.
-    pub(crate) expected_workspace: Option<PathBuf>,
+    pub(crate) expected_workspace: Option<String>,
+    pub(crate) request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expected_command_file_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,8 +91,21 @@ pub(crate) async fn run(
     headers: HeaderMap,
     Body(request): Body<RunRequest>,
 ) -> Response {
-    // Admitted for the selected workspace, which cannot be switched until
-    // the run is the server's work.
+    if request.request_id.is_some() {
+        return results::submit(api, headers, request).await;
+    }
+    run_once(api, headers, request).await
+}
+
+pub(crate) async fn result(
+    State(api): State<Shared>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    results::get(&api, &headers, &id)
+}
+
+async fn run_once(api: Shared, headers: HeaderMap, request: RunRequest) -> Response {
     let Some(admitted) = api.admit() else {
         return ApiError::new(StatusCode::CONFLICT, "command_workspace_changing", &headers)
             .into_response();
@@ -187,78 +203,6 @@ pub(crate) struct Ran {
     pub(crate) result: serde_json::Value,
 }
 
-/// Use the same execution boundary when no server has accepted this run.
-pub(crate) async fn run_locally(
-    request: RunRequest,
-    workspace: &PathBuf,
-    data: &Path,
-    language: &'static str,
-) -> anyhow::Result<String> {
-    let work = tokio_util::task::TaskTracker::new();
-    let cancelled = tokio_util::sync::CancellationToken::new();
-    let service = crate::server::service_controller(
-        Some(workspace),
-        data,
-        std::sync::Arc::new(gb_config::secrets::SystemKeychain),
-    );
-    let member = crate::server::member_backend(
-        workspace,
-        data,
-        &work,
-        None,
-        std::sync::Arc::new(gb_config::secrets::SystemKeychain),
-    );
-    let state = RunState {
-        home: std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
-        identity_root: gb_base::home::identity_root()?,
-        keychain: std::sync::Arc::new(gb_config::secrets::SystemKeychain),
-        events: None,
-        manual: None,
-        service: &service,
-        member,
-        inputs: None,
-        data,
-        workspace: Some(workspace),
-        work: &work,
-        cancelled: &cancelled,
-    };
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-guildbotics-language",
-        axum::http::HeaderValue::from_static(language),
-    );
-    let signal = tokio::spawn({
-        let cancelled = cancelled.clone();
-        async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                cancelled.cancel();
-            }
-        }
-    });
-    let launch = Launch::manual(&request.command);
-    let response = match start(&state, &headers, request, launch, None).await {
-        Ok(ran) => Json(json!({"trace_id": ran.trace_id, "output": ran.output})).into_response(),
-        Err(refused) => refused,
-    };
-    work.close();
-    work.wait().await;
-    signal.abort();
-    crate::tool_login::drain_private().await;
-    gb_environment::worktree::drain_writebacks().await;
-    gb_environment::runtime::drain_vms().await;
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
-    let answer = serde_json::from_slice(&bytes).unwrap_or_default();
-    anyhow::ensure!(
-        status.is_success(),
-        crate::client::response_error(status, &answer)
-    );
-    crate::client::command_output(answer, language)
-}
-
 /// Starts `request`; `admitted` holds the selection until the run is the
 /// server's work.
 async fn start(
@@ -280,12 +224,14 @@ async fn start(
     // The run is accepted for the workspace it was asked for before anything
     // is derived from it.
     if let Some(expected) = &request.expected_workspace {
-        let same = api.workspace.is_some_and(|workspace| {
-            std::fs::canonicalize(expected)
-                .ok()
-                .zip(std::fs::canonicalize(workspace).ok())
-                .is_some_and(|(expected, selected)| expected == selected)
-        });
+        let same = api
+            .workspace
+            .and_then(|workspace| {
+                gb_workspace::identity::read_workspace_identity(workspace)
+                    .ok()
+                    .flatten()
+            })
+            .is_some_and(|identity| identity.workspace_id == *expected);
         if !same {
             return Err(error(StatusCode::CONFLICT, "command_workspace_changed").into_response());
         }

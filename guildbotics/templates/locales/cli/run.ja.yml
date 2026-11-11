@@ -1,3 +1,8 @@
 ja:
   empty_command: "コマンド名を指定してください。"
   invalid_output: "GuildBotics サーバーから返されたコマンドの結果が無効です。"
+
+  backend_required: "guildbotics run には稼働中の GuildBotics サーバーが必要です。guildbotics server start で起動してください。"
+  receipt: "実行 ID: %{id}。guildbotics run --resume %{id} で結果を取り直せます。"
+  workspace_mismatch: "サーバーは別のワークスペースを選んでいます。実行中の作業を終え、guildbotics server stop、guildbotics workspace use <パス>、guildbotics server start の順に切り替えてください。"
+  invalid_id: "実行 ID の形式が正しくありません。"

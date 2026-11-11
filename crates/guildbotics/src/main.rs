@@ -60,7 +60,7 @@ enum Command {
         #[command(subcommand)]
         command: workspace_cli::WorkspaceCommand,
     },
-    /// Run a command in the selected workspace's isolated environment
+    /// Run a command on the server in the selected workspace's isolated environment
     Run {
         /// Member ID or name. Overrides a member specified as COMMAND@PERSON
         #[arg(long)]
@@ -69,7 +69,11 @@ enum Command {
         #[arg(long)]
         cwd: Option<std::path::PathBuf>,
         /// Command name, optionally followed by @PERSON
-        command: String,
+        #[arg(required_unless_present = "resume", conflicts_with = "resume")]
+        command: Option<String>,
+        /// Retrieve a prior run by ID without executing it again
+        #[arg(long, conflicts_with_all = ["command", "args", "person", "cwd"])]
+        resume: Option<String>,
         /// Arguments for the command
         args: Vec<String>,
     },
@@ -235,8 +239,11 @@ fn main() -> ExitCode {
             person,
             cwd,
             command,
+            resume,
             args,
-        } => outcome(run_command(&command, args, person, cwd).map(|()| 0)),
+        } => outcome(
+            run_command(command.as_deref(), resume.as_deref(), args, person, cwd).map(|()| 0),
+        ),
         Command::Diagnostics(command) => outcome(block(diagnostics_cli::run(command)).map(|()| 0)),
         Command::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
@@ -343,7 +350,8 @@ fn outcome(result: anyhow::Result<u8>) -> ExitCode {
 }
 
 fn run_command(
-    name: &str,
+    name: Option<&str>,
+    resume: Option<&str>,
     args: Vec<String>,
     person: Option<String>,
     cwd: Option<std::path::PathBuf>,
@@ -356,9 +364,16 @@ fn run_command(
         }
         Ok(message)
     };
-    let output = block(gb_server::client::run_command(
-        name, args, person, message, cwd,
-    ))?;
+    let output = match resume {
+        Some(id) => block(gb_server::client::resume_command(id))?,
+        None => block(gb_server::client::run_command(
+            name.unwrap(),
+            args,
+            person,
+            message,
+            cwd,
+        ))?,
+    };
     if !output.is_empty() {
         println!("{output}");
     }
