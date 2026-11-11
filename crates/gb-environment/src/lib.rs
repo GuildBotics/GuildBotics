@@ -320,6 +320,8 @@ pub fn shape(
     }
     let planned = if command.client_copy {
         contract::received_plan(
+            workspace,
+            &command.person_id,
             &command.cwd,
             &access,
             mounts,

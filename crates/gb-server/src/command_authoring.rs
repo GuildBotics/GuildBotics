@@ -113,7 +113,7 @@ pub(crate) async fn author(
     };
     let run = RunRequest {
         preflight: false,
-        client_copy: false,
+        client_cwd: None,
         upload: None,
         command: COMMAND.into(),
         args: vec![],

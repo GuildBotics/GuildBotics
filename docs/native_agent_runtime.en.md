@@ -204,6 +204,8 @@ locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
 opening it.
 
+CLI `guildbotics run` always sends a data copy, including cwd inside read/write grants and member clones. The server reconstructs it at the client spelling in private microVM storage, shadowing only cwd inside a grant; other granted paths stay mounted. The CLI saves exported file hashes locally per run ID before submission. On the same device, `--resume` also writes back with the original conflict checks, deleting the record after success. Commit after write-back in the interactive session. The following path-based rules apply only to server-initiated runs.
+
 - **Working directory**: the working directory itself opens nothing for
   writing; only a grant does. A command that may write works in it directly,
   bound read/write at its host path, only when a read/write grant (a document

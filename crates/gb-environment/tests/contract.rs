@@ -275,3 +275,100 @@ fn runtime_mounts_accept_precise_files_under_denied_ancestors_but_never_links() 
     let access = contract::resolve(&workspace, &home, &[], false, false).unwrap();
     assert!(contract::validate_mount_source(&file, &access).is_ok());
 }
+
+#[test]
+fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
+    use gb_environment::worktree::transfer::{Returned, Upload};
+    use std::sync::Arc;
+    let (_dir, root) = temporary();
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    let exchange = home.join(gb_environment::EXCHANGE);
+    let clones = workspace.join(".guildbotics/local/clones/aiko");
+    let clone = clones.join("a".repeat(64));
+    let child = exchange.join("repo");
+    for path in [&clone, &child] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let access = contract::resolve(&workspace, &home, &[], false, false).unwrap();
+    let upload = Arc::new(Upload {
+        directories: vec![],
+        files: vec![],
+        nested: vec![],
+        git: None,
+    });
+    for cwd in [&exchange, &child, &clone, &clone.join("subdir")] {
+        let plan = contract::received_plan(
+            &workspace,
+            "aiko",
+            cwd,
+            &access,
+            access.grants.clone(),
+            false,
+            Some(upload.clone()),
+            Returned::default(),
+        )
+        .unwrap();
+        let guest = gb_environment::guest_path(cwd).unwrap();
+        assert!(plan.copy.as_ref().unwrap().upload.is_some());
+        assert_eq!(plan.cwd, guest);
+        let at_cwd: Vec<_> = plan.mounts.iter().filter(|m| m.guest == guest).collect();
+        assert_eq!(at_cwd.len(), 1);
+        assert!(at_cwd[0].host.is_none());
+        assert!(!at_cwd[0].readonly);
+        assert!(plan.mounts.iter().any(|m| m.host.as_ref() == Some(&clones)));
+        if cwd != &exchange {
+            assert!(
+                plan.mounts
+                    .iter()
+                    .any(|m| m.host.as_ref() == Some(&exchange))
+            );
+        }
+        let readonly = contract::received_plan(
+            &workspace,
+            "aiko",
+            cwd,
+            &access,
+            access.grants.clone(),
+            true,
+            None,
+            Returned::default(),
+        )
+        .unwrap();
+        assert!(readonly.copy.is_none());
+        assert!(
+            readonly
+                .mounts
+                .iter()
+                .any(|m| m.guest == guest && m.host.is_none())
+        );
+    }
+    let mut readonly_access = access.clone();
+    readonly_access.grants[0].readonly = true;
+    assert!(
+        contract::received_plan(
+            &workspace,
+            "aiko",
+            &child,
+            &readonly_access,
+            readonly_access.grants.clone(),
+            false,
+            Some(upload.clone()),
+            Returned::default()
+        )
+        .is_err()
+    );
+    assert!(
+        contract::received_plan(
+            &workspace,
+            "other",
+            &clone,
+            &access,
+            access.grants.clone(),
+            false,
+            Some(upload),
+            Returned::default()
+        )
+        .is_err()
+    );
+}

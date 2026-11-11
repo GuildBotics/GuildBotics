@@ -18,6 +18,7 @@ pub mod diagnostics;
 mod git_credentials;
 pub mod member;
 pub mod secrets;
+mod writeback;
 
 const PROOF_TIMEOUT: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -192,7 +193,6 @@ pub async fn run_command(
     );
     let mut request = crate::commands::RunRequest {
         preflight: true,
-        client_copy: false,
         upload: None,
         command: name.to_owned(),
         args,
@@ -201,7 +201,8 @@ pub async fn run_command(
             (!inline.is_empty()).then(|| inline.to_owned())
         }),
         message: message()?,
-        cwd: Some(gb_base::host_path::normalize(&match cwd {
+        cwd: None,
+        client_cwd: Some(gb_base::host_path::normalize(&match cwd {
             Some(cwd) => cwd,
             None => std::env::current_dir()?,
         })?),
@@ -250,7 +251,7 @@ pub async fn run_command(
                     &[("reason", &reason)]
                 ))
             })?;
-    let cwd = request.cwd.as_ref().unwrap();
+    let cwd = request.client_cwd.as_ref().unwrap();
     gb_environment::contract::working_directory(
         &workspace,
         request.person.as_deref().unwrap_or(""),
@@ -264,38 +265,35 @@ pub async fn run_command(
             &[("reason", &reason)]
         ))
     })?;
-    let plan = gb_environment::contract::plan(
-        &workspace,
-        request.person.as_deref().unwrap_or(""),
-        cwd,
-        &access,
-        vec![],
-        data.join("run/worktree-write-back.lock"),
-        read_only,
-    )
-    .map_err(|reason| {
-        anyhow::anyhow!(i18n::t(
-            language,
-            "cli.run.worktree_refused",
-            &[("reason", &reason)]
-        ))
-    })?;
-    let covered = plan
-        .mounts
-        .iter()
-        .any(|m| m.host.as_ref().is_some_and(|p| cwd.starts_with(p)))
-        || access
-            .grants
-            .iter()
-            .any(|m| m.host.as_ref().is_some_and(|p| cwd.starts_with(p)));
-    let copy = plan.copy;
-    request.client_copy = (read_only && !covered) || copy.is_some();
+    let copy = if read_only {
+        None
+    } else {
+        Some(
+            gb_environment::contract::copy_plan(
+                &workspace,
+                request.person.as_deref().unwrap_or(""),
+                cwd,
+                &access,
+                &[],
+                data.join("run/worktree-write-back.lock"),
+            )
+            .map_err(|reason| {
+                anyhow::anyhow!(i18n::t(
+                    language,
+                    "cli.run.worktree_refused",
+                    &[("reason", &reason)]
+                ))
+            })?,
+        )
+    };
     request.upload = copy
         .as_ref()
         .map(gb_environment::worktree::transfer::Upload::capture)
         .transpose()
         .map_err(|error| anyhow::anyhow!(crate::i18n::say(error.sentence(), language)))?;
-    let copied = request.upload.as_ref().map(|u| u.copied());
+    if let Some(copy) = &copy {
+        writeback::save(&data, &id, copy, &request.upload.as_ref().unwrap().copied())?;
+    }
     request.preflight = false;
     request.request_id = Some(id.clone());
     eprintln!(
@@ -312,7 +310,7 @@ pub async fn run_command(
     {
         checked(response).await?;
     }
-    collect_command(&owner, &id, language, copy.as_ref().zip(copied.as_deref())).await
+    collect_command(&owner, &id, language, &data).await
 }
 
 async fn command_server(language: &'static str) -> anyhow::Result<(OwnerClient, PathBuf)> {
@@ -328,15 +326,15 @@ async fn command_server(language: &'static str) -> anyhow::Result<(OwnerClient, 
 /// Read an existing receipt without submitting a command or reading stdin.
 pub async fn resume_command(id: &str) -> anyhow::Result<String> {
     let language = language().await;
-    let (owner, _) = command_server(language).await?;
-    collect_command(&owner, id, language, None).await
+    let (owner, data) = command_server(language).await?;
+    collect_command(&owner, id, language, &data).await
 }
 
 async fn collect_command(
     owner: &OwnerClient,
     id: &str,
     language: &str,
-    copy: Option<(&gb_environment::worktree::Copy, &[u8])>,
+    data: &Path,
 ) -> anyhow::Result<String> {
     anyhow::ensure!(
         id.bytes()
@@ -344,6 +342,7 @@ async fn collect_command(
             && !id.is_empty(),
         i18n::t(language, "cli.run.invalid_id", &[])
     );
+    let saved = writeback::load(data, id)?;
     loop {
         let response = checked(
             owner
@@ -369,14 +368,22 @@ async fn collect_command(
                     response_error(status, &answer["result"])
                 );
                 if let Some(changes) = answer["result"]["worktree_changes"].as_str() {
-                    if let Some((copy, copied)) = copy {
+                    if let Some(saved) = &saved {
+                        let copy = saved.copy(data).map_err(|error| {
+                            anyhow::anyhow!(i18n::t(
+                                language,
+                                "cli.run.worktree_refused",
+                                &[("reason", &error.to_string())]
+                            ))
+                        })?;
                         gb_environment::worktree::write_back_async(
-                            copy,
-                            copied,
+                            &copy,
+                            saved.copied.as_bytes(),
                             changes.as_bytes(),
                         )
                         .await
                         .map_err(|e| anyhow::anyhow!(crate::i18n::say(e, language)))?;
+                        writeback::remove(data, id)?;
                     } else {
                         eprintln!("{}", i18n::t(language, "cli.run.resume_no_writeback", &[]));
                     }
@@ -574,7 +581,10 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 mod tests {
     #[test]
     fn upload_limit_is_localized_with_sizes_and_alternative() {
-        for (language, expected) in [("ja", "読み書き可"), ("en", "read/write grant")] {
+        for (language, expected) in [
+            ("ja", "小さい作業ディレクトリ"),
+            ("en", "smaller working directory"),
+        ] {
             let error = gb_environment::worktree::transfer::CaptureError::Limit {
                 files: 123,
                 history: 456,
