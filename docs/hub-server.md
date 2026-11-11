@@ -60,7 +60,7 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。CLIを現行ビルドで配置し終えると、ほかの `builds/<commit>/` を削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -179,7 +179,7 @@ scripts/hub-server.sh auto-uninstall
 ```
 
 別のLaunchAgent `local.guildbotics.update` がログイン時に起動し、起動直後と5分ごとに
-originのmainをfetchします。登録時のPATHを保存し、サーバーのデータとポートは
+originのmainをfetchします。登録時のPATHを保存し、サーバーのデータ、identity root、ポートは
 `local.guildbotics.plist` から読みます。チェックアウトは自動更新専用にしてください。
 必須チェックがすべて成功し、手動更新版の番号が現行以下、独自ベースイメージが
 読み込み済みのときだけfast-forwardして通常の `update` を実行します。
@@ -219,6 +219,33 @@ originのmainをfetchします。登録時のPATHを保存し、サーバーの�
 診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。
 ループの間隔は起動時の `GUILDBOTICS_HUB_UPDATE_INTERVAL`（秒、既定300）、
 長時間通知は `GUILDBOTICS_HUB_WAIT_NOTICE`（秒、既定3600）で指定できます。
+
+## Hubの写しで更新を確かめる
+
+失敗する更新のような、本番で起こせない経路は、Hubと並べて動かす写しで確かめます。
+`GUILDBOTICS_HUB_INSTANCE`（英小文字・数字・ハイフン）に名前を付けると、`scripts/hub-server.sh` の
+すべての操作が、その名前のLaunchAgent `local.guildbotics.<名前>`（自動更新は `local.guildbotics.<名前>.update`）、
+状態 `~/Library/Application Support/GuildBotics/Hub-<名前>`、ログ `~/Library/Logs/guildbotics-<名前>.log`
+（自動更新は `guildbotics-<名前>-update.log`）を使います。自動更新のLaunchAgentにもこの名前を記録します。
+実行ファイルの署名はHubと同じ識別子なので、キーチェーンの確認は出ません。
+
+名前に `update` は使えません。写しの通知と案内は、この名前を含めて表示します。
+
+写し専用のチェックアウトで、`install` の前に、`GUILDBOTICS_HOME`、`BRANVIL_DATA_DIR`、`GUILDBOTICS_SERVER_PORT` に
+Hubと別のものを設定し、`GUILDBOTICS_IDENTITY_ROOT` は外します（写しは `GUILDBOTICS_HOME` の下のidentityを使います）。
+以後の操作でも同じ `GUILDBOTICS_HUB_INSTANCE` を設定します。写しの `install` と `update` も、AI CLIのユーザースキルを
+写しの版で書き換えます。
+片付けは `auto-uninstall`、`uninstall` のあと、状態とデータのディレクトリを削除し、
+Hubの `builds/current install` でスキルを戻します。
+
+```sh
+export GUILDBOTICS_HUB_INSTANCE=copy
+export GUILDBOTICS_HOME="/absolute/path/to/copy-home"
+export BRANVIL_DATA_DIR="/absolute/path/to/copy-branvil-data"
+export GUILDBOTICS_SERVER_PORT=7979
+export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
+scripts/hub-server.sh install
+```
 
 ## レシピ変更のマージ前にスナップショットを用意する
 

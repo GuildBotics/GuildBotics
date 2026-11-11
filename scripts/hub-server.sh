@@ -21,6 +21,7 @@ auto-once       Run one automatic update inspection (also used by tests).
 
 Run install and update from the Hub owner's macOS desktop session. See
 docs/hub-server.md for Keychain prompts, backup locations, and recovery.
+Set GUILDBOTICS_HUB_INSTANCE to run a separate Hub copy beside the Hub.
 EOF
 }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -34,12 +35,21 @@ esac
 [ "$(uname -s)" = Darwin ] || fail "Supported system: macOS."
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
-label=local.guildbotics
+# A Hub copy, for verifying updates beside the Hub, has its own agents and state.
+instance=${GUILDBOTICS_HUB_INSTANCE:-}
+case "$instance" in
+    # "update" would take the Hub's own automatic update agent and log.
+    *[!a-z0-9-]*|update) fail "GUILDBOTICS_HUB_INSTANCE must be lowercase letters, digits and hyphens, other than \"update\"." ;;
+esac
+# Guidance names the copy, so that pasting it never operates the Hub.
+self="${instance:+GUILDBOTICS_HUB_INSTANCE=$instance }$0"
+label=local.guildbotics${instance:+.$instance}
 domain=gui/$(id -u)
 target=$domain/$label
 plist=$HOME/Library/LaunchAgents/$label.plist
-log=$HOME/Library/Logs/guildbotics.log
-hub="$HOME/Library/Application Support/GuildBotics/Hub"
+logs=$HOME/Library/Logs/guildbotics${instance:+-$instance}
+log=$logs.log
+hub="$HOME/Library/Application Support/GuildBotics/Hub${instance:+-$instance}"
 builds=$hub/builds
 # launchd runs a signed copy of the active build at one fixed path, so macOS
 # keeps the Documents folder access it granted to that path. The copy is the
@@ -74,7 +84,7 @@ trap 'exit 143' HUP TERM
 
 case "$action" in
     auto-install|auto-uninstall)
-        auto_label=local.guildbotics.update
+        auto_label=$label.update
         auto_plist=$HOME/Library/LaunchAgents/$auto_label.plist
         auto_target=$domain/$auto_label
         if launchctl print "$auto_target" >/dev/null 2>&1; then
@@ -99,9 +109,11 @@ case "$action" in
             printf '<key>Label</key><string>%s</string>\n' "$auto_label"
             printf '<key>ProgramArguments</key><array><string>%s</string><string>%s</string></array>\n' "$(auto_xml "$(command -v node)")" "$(auto_xml "$repo/scripts/hub-auto-update.mjs")"
             printf '<key>WorkingDirectory</key><string>%s</string>\n' "$(auto_xml "$repo")"
-            printf '<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string><key>HOME</key><string>%s</string></dict>\n' "$(auto_xml "$PATH")" "$(auto_xml "$HOME")"
+            printf '<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string><key>HOME</key><string>%s</string>' "$(auto_xml "$PATH")" "$(auto_xml "$HOME")"
+            if [ -n "$instance" ]; then printf '<key>GUILDBOTICS_HUB_INSTANCE</key><string>%s</string>' "$instance"; fi
+            printf '</dict>\n'
             printf '%s\n' '<key>RunAtLoad</key><true/>' '<key>KeepAlive</key><true/>' '<key>ThrottleInterval</key><integer>15</integer>'
-            printf '<key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string>\n' "$(auto_xml "$HOME/Library/Logs/guildbotics-update.log")" "$(auto_xml "$HOME/Library/Logs/guildbotics-update.log")"
+            printf '<key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string>\n' "$(auto_xml "$logs-update.log")" "$(auto_xml "$logs-update.log")"
             printf '%s\n' '</dict></plist>'
         } >"$auto_plist"
         plutil -lint "$auto_plist"
@@ -134,7 +146,7 @@ setting() { plutil -extract "$1" raw -o - "$plist" 2>/dev/null; }
 installed() { [ "$(setting ProgramArguments.0)" = "$current" ]; }
 require_agent() {
     installed && [ -x "$current" ] ||
-        fail "The integrated LaunchAgent is not installed. Run: $0 install"
+        fail "The integrated LaunchAgent is not installed. Run: $self install"
 }
 assert_stopped() {
     holder=$("$1" server hub-probe) || return
@@ -229,14 +241,15 @@ build_head() {
     fi
     # Sign a reused build too, so that every build carries the recorded identity.
     stage=signing
-    codesign --force -s "$identity" -i "$label" "$candidate.new"
+    # Every Hub runs the same program, so a copy keeps the Hub's signing identifier.
+    codesign --force -s "$identity" -i local.guildbotics "$candidate.new"
     # Keychain access survives a rebuild only for a signer with a Team ID, and
     # only while that Team ID stays the same.
     team=$(team_of "$candidate.new")
     printf '%s\n' "$team" | grep -Eq '^[0-9A-Z]{10}$' ||
         fail "\"$identity\" has no Team ID, so macOS would ask for Keychain access after every update. See docs/hub-server.md."
     [ "$team" = "${running_team-$team}" ] ||
-        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, run $0 uninstall, then install again. See docs/hub-server.md."
+        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, run $self uninstall, then install again. See docs/hub-server.md."
     mv -f "$candidate.new" "$candidate"
 }
 backup_and_rehearse() {
@@ -318,7 +331,16 @@ read_plist() {
 }
 install_assets() {
     stage="installing the CLI and skill"
-    if "$current" install; then return 0; fi
+    if "$current" install; then
+        # The installed CLI now runs this build too. No other build is used, and
+        # each keeps a large source tree. A failed removal is retried next time.
+        if active=$(built_from "$current"); then
+            for build in "$builds"/*/; do
+                [ "${build%/}" = "${active%/*}" ] || rm -rf "${build%/}" || :
+            done
+        fi
+        return 0
+    fi
     printf 'The Hub is running. Retry CLI and skill installation with: "%s" install\n' "$current" >&2
     return 1
 }
@@ -354,7 +376,7 @@ if [ "$action" != install ]; then
     read_plist
 fi
 if [ -e "$pending" ] && [ "$action" != recover ]; then
-    fail "An update has not finished. Run: $0 recover"
+    fail "An update has not finished. Run: $self recover"
 fi
 case "$action" in
     install)
@@ -378,7 +400,7 @@ case "$action" in
         fi
         build_head
         if installed && [ -e "$current" ] && [ "$(built_from "$current")" != "$candidate" ]; then
-            fail "A different build is installed. Run: $0 update"
+            fail "A different build is installed. Run: $self update"
         fi
         stage="checking the stopped server"
         assert_stopped "$candidate"
@@ -398,9 +420,9 @@ case "$action" in
     update)
         stage="checking the running server"
         agent_ready ||
-            fail "Start the installed LaunchAgent before updating. Run: $0 restart"
+            fail "Start the installed LaunchAgent before updating. Run: $self restart"
         [ -f "$signing" ] ||
-            fail "No signing identity is recorded. Run $0 uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY. See docs/hub-server.md."
+            fail "No signing identity is recorded. Run $self uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY. See docs/hub-server.md."
         identity=$(cat "$signing")
         running_team=$(team_of "$current")
         build_head

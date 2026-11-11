@@ -64,6 +64,12 @@ impl Hub {
         ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
+        // The loop runs on the Node.js that runs the tests, wherever it is installed.
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("node"))
+            .find(|node| node.is_file())
+            .expect("Node.js must be in PATH");
+        symlink(node, tools.join("node")).unwrap();
         let path = format!("{}:/usr/local/bin:/usr/bin:/bin", tools.display());
         let hub = Self {
             temp,
@@ -198,6 +204,29 @@ impl Hub {
 
     fn install(&self) {
         self.run("install", None, true);
+    }
+
+    /// The revision directories that keep a build's source tree.
+    fn source_trees(&self) -> Vec<String> {
+        let mut trees: Vec<_> = fs::read_dir(self.builds())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_dir() && !path.is_symlink())
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        trees.sort();
+        trees
+    }
+
+    fn installed_tree(&self) -> String {
+        let build = self.installed_build();
+        build
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -479,8 +508,32 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
     assert!(plist.contains("<key>ExitTimeOut</key><integer>92</integer>"));
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
     assert_ne!(hub.installed_build(), old);
-    assert!(old.exists());
     assert!(!hub.builds().join("update-from").exists());
+}
+
+#[test]
+fn a_committed_update_removes_every_other_build() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    // An interrupted build leaves its source tree behind.
+    fs::create_dir_all(hub.builds().join("interrupted/node_modules")).unwrap();
+    let elsewhere = hub.root().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    symlink(&elsewhere, hub.builds().join("linked")).unwrap();
+    hub.commit("new");
+    hub.fail_start("new");
+    hub.run("update", None, false);
+    // A rollback runs the previous build, from its source tree.
+    assert!(old.exists());
+
+    fs::remove_file(hub.root().join("fail-start")).unwrap();
+    hub.commit("newer");
+    hub.run("update", None, true);
+    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
+    assert!(hub.installed_build().exists());
+    assert!(hub.builds().join("current").exists());
+    assert!(elsewhere.exists());
 }
 
 #[test]
@@ -671,10 +724,13 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
     assert!(failure.contains("Z: Hub update failed"));
     assert_eq!(hub.lines("actions").matches("old|server|stop").count(), 1);
     assert!(!hub.lines("actions").contains("new|server|stop"));
+    // The CLI that was installed still runs the old build, from its source tree.
+    assert!(old.exists());
 
     fs::remove_file(hub.root().join("fail-install")).unwrap();
     hub.run("update", None, true);
     assert_eq!(hub.installed_build(), new);
+    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
     assert!(hub.lines("actions").contains("new|install"));
     assert!(!hub.lines("calls").contains("launchctl|bootstrap"));
 }
@@ -693,8 +749,10 @@ fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
     fs::write(&pending, running).unwrap();
     fs::set_permissions(&pending, fs::Permissions::from_mode(0o755)).unwrap();
 
+    fs::create_dir(hub.builds().join("interrupted")).unwrap();
     hub.run("recover", None, true);
     assert_eq!(hub.installed_build(), new);
+    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
     assert!(!hub.builds().join("update-from").exists());
     assert!(!hub.lines("actions").contains("server|stop"));
     assert!(hub.lines("actions").contains("new|install"));
@@ -1031,6 +1089,119 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
     hub.run("auto-uninstall", None, true);
     assert!(!plist.exists());
     assert_eq!(hub.lines("holder"), "42\n");
+}
+
+#[test]
+fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
+    let hub = Hub::new();
+    let copy = [("GUILDBOTICS_HUB_INSTANCE", "copy")];
+    let state = hub
+        .home
+        .join("Library/Application Support/GuildBotics/Hub-copy");
+    let agents = hub.home.join("Library/LaunchAgents");
+    let logs = hub.home.join("Library/Logs");
+    hub.run_with(
+        "install",
+        &[copy[0], ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY)],
+        true,
+    );
+    let mut calls = hub.lines("calls");
+    let plist = fs::read_to_string(agents.join("local.guildbotics.copy.plist")).unwrap();
+    assert!(plist.contains(&format!(
+        "<key>ProgramArguments</key><array><string>{}</string>",
+        state.join("builds/current").display()
+    )));
+    assert!(plist.contains(&logs.join("guildbotics-copy.log").display().to_string()));
+    in_order(
+        &hub.lines("calls"),
+        &[
+            // The same program keeps the Hub's signing identifier.
+            &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
+            "launchctl|enable|gui/1234/local.guildbotics.copy",
+            "launchctl|bootstrap|gui/1234|",
+        ],
+    );
+    hub.auto_candidate();
+    hub.run_with("auto-once", &copy, true);
+    calls += &hub.lines("calls");
+    assert!(state.join("auto-update.json").exists());
+    assert!(
+        fs::read_to_string(state.join("builds/current"))
+            .unwrap()
+            .contains("# build: new\n")
+    );
+    fs::write(
+        hub.repo.join("rust-toolchain.toml"),
+        include_str!("../../../rust-toolchain.toml"),
+    )
+    .unwrap();
+    hub.run_with("auto-install", &copy, true);
+    calls += &hub.lines("calls");
+    let auto = fs::read_to_string(agents.join("local.guildbotics.copy.update.plist")).unwrap();
+    assert!(auto.contains("<key>GUILDBOTICS_HUB_INSTANCE</key><string>copy</string>"));
+    assert!(
+        auto.contains(
+            &logs
+                .join("guildbotics-copy-update.log")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(calls.contains("launchctl|enable|gui/1234/local.guildbotics.copy.update"));
+    assert!(calls.contains("launchctl|bootout|gui/1234/local.guildbotics.copy\n"));
+    // Nothing of the Hub's own agents or state is touched.
+    assert!(!hub.builds().exists());
+    assert!(!hub.plist().exists());
+    assert!(!agents.join("local.guildbotics.update.plist").exists());
+    assert!(!calls.contains("gui/1234/local.guildbotics|"));
+    assert!(!calls.contains("gui/1234/local.guildbotics\n"));
+    assert!(!calls.contains("gui/1234/local.guildbotics.update"));
+
+    // Guidance for the copy names it, so that pasting it leaves the Hub alone.
+    fs::create_dir(state.join("operation")).unwrap();
+    hub.run_with("auto-once", &copy, true);
+    fs::remove_dir(state.join("operation")).unwrap();
+    fs::write(state.join("builds/update-from"), "interrupted").unwrap();
+    hub.run_with("auto-once", &copy, true);
+    assert!(
+        hub.lines("notifications")
+            .contains("Hub copy copy (GUILDBOTICS_HUB_INSTANCE=copy) ")
+    );
+    let out = hub.run_with("restart", &copy, false);
+    assert!(
+        text(&out).contains("Run: GUILDBOTICS_HUB_INSTANCE=copy scripts/hub-server.sh recover")
+    );
+
+    // "update" would be the Hub's own automatic update agent.
+    for name in ["Copy/1", "update"] {
+        let out = hub.run_with("restart", &[("GUILDBOTICS_HUB_INSTANCE", name)], false);
+        assert!(text(&out).contains("GUILDBOTICS_HUB_INSTANCE must be"));
+        assert!(!hub.lines("calls").contains("launchctl"));
+    }
+}
+
+#[test]
+fn auto_update_uses_the_agents_identity_root_instead_of_the_shells() {
+    for installed in [Some("identity"), None] {
+        let hub = Hub::new();
+        let identity = installed.map(|name| hub.root().join(name).display().to_string());
+        let mut env = vec![("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY)];
+        if let Some(identity) = &identity {
+            env.push(("GUILDBOTICS_IDENTITY_ROOT", identity));
+        }
+        hub.run_with("install", &env, true);
+        hub.auto_candidate();
+        fs::write(hub.root().join("checks"), "failure").unwrap();
+        hub.run_with(
+            "auto-once",
+            &[("GUILDBOTICS_IDENTITY_ROOT", "/unrelated/identity")],
+            true,
+        );
+        assert_eq!(
+            hub.lines("notify-identity-root"),
+            format!("{}\n", identity.unwrap_or_default())
+        );
+    }
 }
 
 #[test]

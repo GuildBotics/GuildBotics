@@ -6,7 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const hub = path.join(process.env.HOME, 'Library/Application Support/GuildBotics/Hub');
+// GUILDBOTICS_HUB_INSTANCE names a Hub copy, as in hub-server.sh.
+const instance = process.env.GUILDBOTICS_HUB_INSTANCE ?? '';
+const hub = path.join(process.env.HOME, `Library/Application Support/GuildBotics/Hub${instance && `-${instance}`}`);
 const current = path.join(hub, 'builds/current');
 const statePath = path.join(hub, 'auto-update.json');
 let state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : {};
@@ -37,15 +39,20 @@ function run(command, args, input, onWait) {
 const git = (...args) => run('git', ['-C', repo, ...args]);
 const cli = (...args) => run(current, args).then(JSON.parse);
 async function readAgent() {
-  const plist = path.join(process.env.HOME, 'Library/LaunchAgents/local.guildbotics.plist');
-  for (const key of ['BRANVIL_DATA_DIR', 'GUILDBOTICS_HOME', 'GUILDBOTICS_SERVER_PORT']) {
+  const plist = path.join(process.env.HOME, `Library/LaunchAgents/local.guildbotics${instance && `.${instance}`}.plist`);
+  for (const key of ['BRANVIL_DATA_DIR', 'GUILDBOTICS_HOME', 'GUILDBOTICS_SERVER_PORT', 'GUILDBOTICS_IDENTITY_ROOT']) {
     try { process.env[key] = await run('plutil', ['-extract', `EnvironmentVariables.${key}`, 'raw', '-o', '-', plist]); }
-    catch (error) { if (key !== 'GUILDBOTICS_SERVER_PORT') throw error; }
+    catch (error) {
+      if (['BRANVIL_DATA_DIR', 'GUILDBOTICS_HOME'].includes(key)) throw error;
+      // Like hub-server.sh, use the agent's setting rather than the shell's.
+      delete process.env[key];
+    }
   }
 }
 async function notify(sha, stage, reason, next, key = `${sha}:${stage}`) {
   if (state.notified?.includes(key)) return;
-  const message = `Hub ${sha}: ${stage}: ${reason}. Next: ${next}.`;
+  // A copy's notice names it: its commands need GUILDBOTICS_HUB_INSTANCE.
+  const message = `Hub${instance && ` copy ${instance} (GUILDBOTICS_HUB_INSTANCE=${instance})`} ${sha}: ${stage}: ${reason}. Next: ${next}.`;
   console.error(`${new Date().toISOString()} ${message}`);
   state.pendingNotices ??= {};
   state.pendingNotices[key] = message;

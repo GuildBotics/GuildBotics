@@ -56,7 +56,7 @@ case "$name" in
     launchctl)
         case "$1" in
             print)
-                case "$2" in */local.guildbotics.update)
+                case "$2" in */local.guildbotics*.update)
                     [ -f "$FAKE_ROOT/auto-loaded" ] || exit 1
                     if [ -f "$FAKE_ROOT/auto-unloading" ]; then rm -f "$FAKE_ROOT/auto-loaded" "$FAKE_ROOT/auto-unloading"; fi
                     exit 0 ;;
@@ -81,7 +81,7 @@ case "$name" in
                 ;;
             enable|disable) : ;;
             bootstrap)
-                case "$3" in *local.guildbotics.update.plist) exit 0 ;; esac
+                case "$3" in *local.guildbotics*.update.plist) exit 0 ;; esac
                 # Like launchd, refuse a job that is still listed.
                 if [ -f "$FAKE_ROOT/loaded" ]; then
                     printf 'Bootstrap failed: 5: Input/output error\n' >&2
@@ -99,7 +99,7 @@ case "$name" in
                 fi
                 ;;
             bootout)
-                case "$2" in */local.guildbotics.update) touch "$FAKE_ROOT/auto-unloading"; exit 0 ;; esac
+                case "$2" in */local.guildbotics*.update) touch "$FAKE_ROOT/auto-unloading"; exit 0 ;; esac
                 if [ -f "$FAKE_ROOT/job-pid" ]; then rm -f "$FAKE_ROOT/holder"; fi
                 rm -f "$FAKE_ROOT/job-pid" "$FAKE_ROOT/start-failed"
                 if [ -f "$FAKE_ROOT/slow-bootout" ]; then
@@ -146,6 +146,7 @@ case "$name" in
             server:hub-migration) printf '{"manual_update_version":0,"instructions":null}\n' ;;
             server:hub-notify)
                 [ ! -f "$FAKE_ROOT/fail-notify" ] || exit 1
+                printf '%s\n' "${GUILDBOTICS_IDENTITY_ROOT:-}" >"$FAKE_ROOT/notify-identity-root"
                 cat >>"$FAKE_ROOT/notifications"
                 printf '\n' >>"$FAKE_ROOT/notifications"
                 printf '{"sent":false}\n'
@@ -162,7 +163,7 @@ case "$name" in
             service:start) touch "$FAKE_ROOT/service-running" ;;
             service:stop) rm -f "$FAKE_ROOT/service-running" ;;
             environment:prune)
-                [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub/builds/update-from" ] || exit 1
+                [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub${GUILDBOTICS_HUB_INSTANCE:+-$GUILDBOTICS_HUB_INSTANCE}/builds/update-from" ] || exit 1
                 [ ! -f "$FAKE_ROOT/fail-prune" ] || exit 1
                 ;;
             environment:status)
