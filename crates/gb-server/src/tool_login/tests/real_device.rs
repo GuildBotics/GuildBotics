@@ -219,6 +219,9 @@ impl Device {
         let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
         let path = copy.path().join(path.strip_prefix(&config).unwrap());
         let command = gb_environment::Command {
+            client_copy: false,
+            upload: None,
+            returned: Default::default(),
             config: copy,
             invocation: None,
             wants_result: false,

@@ -147,6 +147,9 @@ impl Dispatcher {
         })?;
         invocation.run_id = trace_id.into();
         Ok(Command {
+            client_copy: false,
+            upload: None,
+            returned: Default::default(),
             config,
             wants_result: false,
             person_id: invocation.person_id.clone(),

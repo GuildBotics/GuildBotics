@@ -19,7 +19,7 @@ en:
   origin_mismatch: "Requests from another site are refused."
   command_result_missing: "This run result is unavailable (unknown ID, evicted, expired, or server restarted). The command was not executed again."
   command_results_full: "All retained runs are still running. Try a new run after one finishes."
-  command_result_too_large: "The command result exceeds the retrieval limit (1 MiB)."
+  command_result_too_large: "The command result exceeds the retrieval limit (32 MiB)."
   command_workspace_changed: "The server's workspace changed before the command started. Run the command again."
   validation_error: "Request validation failed."
   secret_store_unavailable: "The OS secret store could not be used: %{reason}"
@@ -80,3 +80,4 @@ en:
   service_worker_failed: "A service worker stopped unexpectedly. Check diagnostics for the cause."
   service_stop_timeout: "The service did not stop before the timeout. It still owns its running work."
   service_events_failed: "Chat reception stopped unexpectedly. Check diagnostics for the cause."
+  command_client_cwd_refused: "The client working directory is protected or covered by a read-only grant."

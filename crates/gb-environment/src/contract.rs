@@ -933,6 +933,90 @@ pub fn copy_plan(
     crate::worktree::Copy::new(source, guest, excluded, lock)
 }
 
+/// Compare protected and granted names without reading the client filesystem.
+pub fn validate_client_name(cwd: &Path, access: &Resolved, read_only: bool) -> Result<(), String> {
+    if !cwd.is_absolute() {
+        return Err("Client working directory must be absolute".into());
+    }
+    let cwd = gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?;
+    spelled(&cwd)?;
+    let contains = |root: &Path, path: &Path| {
+        if cfg!(any(target_os = "macos", windows)) {
+            windows_path_contains(root, path)
+        } else {
+            path.starts_with(root)
+        }
+    };
+    if access
+        .denied
+        .iter()
+        .any(|p| contains(p, &cwd) || contains(&cwd, p))
+    {
+        return Err("Protected client working directory".into());
+    }
+    if !read_only
+        && access
+            .grants
+            .iter()
+            .filter(|m| m.host.as_ref().is_some_and(|p| contains(p, &cwd)))
+            .max_by_key(|m| m.host.as_ref().unwrap().components().count())
+            .is_some_and(|m| m.readonly)
+    {
+        return Err("The working directory is inside a read-only grant".into());
+    }
+    Ok(())
+}
+
+/// Compare an untrusted client spelling without opening the client's directory.
+pub fn received_plan(
+    cwd: &Path,
+    access: &Resolved,
+    mut mounts: Vec<Mount>,
+    read_only: bool,
+    upload: Option<std::sync::Arc<crate::worktree::transfer::Upload>>,
+    returned: crate::worktree::transfer::Returned,
+) -> Result<Plan, String> {
+    validate_client_name(cwd, access, read_only)?;
+    let cwd = gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?;
+    let guest = spelled(&cwd)?;
+    mounts.retain(|m| m.guest != guest || m.host.is_some());
+    if mounts.iter().any(|m| cwd.starts_with(&m.guest)) {
+        return Err("Client copy overlaps a server mount".into());
+    }
+    let mut excluded = vec![".guildbotics".into()];
+    for mount in &mounts {
+        if let Some(relative) = mount.guest.strip_prefix(&format!("{guest}/")) {
+            excluded.push(relative.to_owned());
+        }
+    }
+    mounts.push(Mount {
+        guest: guest.clone(),
+        host: None,
+        readonly: false,
+        quota_mib: None,
+    });
+    let copy = if read_only {
+        if upload.is_some() {
+            return Err("Read-only command must not upload a worktree".into());
+        }
+        None
+    } else {
+        let upload = upload.ok_or("Missing client worktree")?;
+        upload.validate()?;
+        for file in &upload.files {
+            crate::worktree::validate_received_name(&file.path, &excluded)?;
+        }
+        let mut copy = crate::worktree::Copy::received(guest.clone(), upload, returned);
+        copy.excluded = excluded;
+        Some(copy)
+    };
+    Ok(Plan {
+        cwd: guest,
+        mounts,
+        copy,
+    })
+}
+
 /// What a run may add to the member's clones: every repository the member
 /// works in shares one mount, and a full Rust workspace build writes more
 /// than the runtime's default.

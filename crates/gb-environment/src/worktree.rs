@@ -13,6 +13,8 @@ use std::sync::{
 };
 use unicode_normalization::UnicodeNormalization;
 
+pub mod transfer;
+
 pub const SOURCE: &str = "/run/guildbotics/worktree";
 #[derive(Debug, Clone, PartialEq)]
 pub struct Copy {
@@ -20,12 +22,32 @@ pub struct Copy {
     pub guest: String,
     pub excluded: Vec<String>,
     pub lock: PathBuf,
-    identity: Arc<same_file::Handle>,
+    identity: Option<Arc<same_file::Handle>>,
+    pub upload: Option<Arc<transfer::Upload>>,
+    pub returned: transfer::Returned,
 }
 impl Copy {
+    pub fn received(
+        guest: String,
+        upload: Arc<transfer::Upload>,
+        returned: transfer::Returned,
+    ) -> Self {
+        Self {
+            host: PathBuf::new(),
+            guest,
+            excluded: vec![".guildbotics".into()],
+            lock: PathBuf::new(),
+            identity: None,
+            upload: Some(upload),
+            returned,
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if self.upload.is_some() {
+            return Ok(());
+        }
         gb_base::host_path::directory(&self.host, false).map_err(|e| e.to_string())?;
-        if identity(&open_root(&self.host)?)? != *self.identity {
+        if identity(&open_root(&self.host)?)? != **self.identity.as_ref().unwrap() {
             return Err("Working directory was replaced".into());
         }
         Ok(())
@@ -43,7 +65,9 @@ impl Copy {
             guest,
             excluded,
             lock,
-            identity: Arc::new(identity(&file)?),
+            identity: Some(Arc::new(identity(&file)?)),
+            upload: None,
+            returned: transfer::Returned::default(),
         })
     }
 }
@@ -64,6 +88,9 @@ struct Change {
 }
 fn folded(value: &str) -> String {
     unicase::UniCase::unicode(value.nfd().collect::<String>()).to_folded_case()
+}
+pub(crate) fn validate_received_name(value: &str, excluded: &[String]) -> Result<(), String> {
+    name(value, excluded, true).map(|_| ())
 }
 fn name(value: &str, excluded: &[String], sensitive: bool) -> Result<PathBuf, String> {
     let p = Path::new(value);
@@ -430,7 +457,7 @@ mod portable {
             cancelled.check()?;
             let root = open_root(&copy.host)?;
             if identity(&root.try_clone().map_err(|e| e.to_string())?.into_std_file())?
-                != *copy.identity
+                != **copy.identity.as_ref().unwrap()
             {
                 return Err("Working directory was replaced".into());
             }

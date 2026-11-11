@@ -438,7 +438,13 @@ routes!(
     ),
     (OwnerSession, post, "/apps/authorizations", authorize_app),
     (Session, get, "/session", session),
-    (OwnerSession, post, "/commands/run", crate::commands::run),
+    (
+        OwnerSession,
+        post,
+        "/commands/run",
+        crate::commands::run,
+        32 * 1024 * 1024
+    ),
     (
         OwnerSession,
         get,

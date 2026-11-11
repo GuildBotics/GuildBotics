@@ -18,7 +18,7 @@ use std::{
 
 const TTL: u64 = 24 * 60 * 60 * 1_000_000_000;
 const CAPACITY: usize = 256;
-const MAX_RESULT: usize = 1 << 20;
+const MAX_RESULT: usize = 32 * 1024 * 1024;
 
 #[derive(Default)]
 pub(crate) struct Results(Mutex<Store>);
@@ -373,6 +373,7 @@ mod tests {
         let path = workspace.join(".guildbotics/config/commands/functions/probe.py");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "async def main(context):\n    return 'done'\n").unwrap();
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
         let host = Arc::new(gb_environment::Host {
             data: native.data.clone(),
             home: root.path().join("home"),
@@ -404,6 +405,22 @@ mod tests {
                 .body(axum::body::Body::from(data.to_string()))
                 .unwrap()
         };
+        let preflight = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "person":"aiko", "preflight":true, "cwd":root.path().join("client-only/absent"), "expected_workspace":identity.workspace_id}))).await.unwrap();
+        let status = preflight.status();
+        let bytes = axum::body::to_bytes(preflight.into_body(), MAX_RESULT)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let answer: Value = serde_json::from_slice(&bytes).unwrap();
+        let declaration: Value = serde_json::from_str(answer["output"].as_str().unwrap()).unwrap();
+        assert_eq!(declaration["read_only"], false);
+        assert!(api.command_results.0.lock().unwrap().entries.is_empty());
+        assert!(!root.path().join("client-only").exists());
         let id = format!("fixture.{}.{}", Results::now(), uuid::Uuid::new_v4());
         let data = json!({"command":"functions/probe", "person":"aiko", "request_id":id, "expected_workspace":identity.workspace_id});
         let first = app

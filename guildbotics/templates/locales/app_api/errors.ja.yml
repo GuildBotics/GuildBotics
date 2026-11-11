@@ -18,7 +18,7 @@ ja:
   origin_mismatch: "別のサイトからのリクエストは受け付けません。"
   command_result_missing: "実行結果がありません（不明な ID、保持上限による削除、期限切れ、またはサーバー再起動）。コマンドは再実行していません。"
   command_results_full: "保持中の実行がすべて実行中です。いずれかが終了してから新しい実行を依頼してください。"
-  command_result_too_large: "コマンドの結果が取得上限（1 MiB）を超えました。"
+  command_result_too_large: "コマンドの結果が取得上限（32 MiB）を超えました。"
   command_workspace_changed: "コマンドの開始前にサーバーのワークスペースが変わりました。コマンドをもう一度実行してください。"
   validation_error: "リクエストの検証に失敗しました。"
   secret_store_unavailable: "OS の秘密ストアを使えませんでした: %{reason}"
@@ -79,3 +79,4 @@ ja:
   service_worker_failed: "サービスのワーカーが異常終了しました。診断で原因を確認してください。"
   service_stop_timeout: "停止がタイムアウトしました。実行中の処理は引き続きサービスが管理しています。"
   service_events_failed: "チャット受信が異常終了しました。診断で原因を確認してください。"
+  command_client_cwd_refused: "手元の作業ディレクトリは保護対象か、読み取り専用の許可先です。"

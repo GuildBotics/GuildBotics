@@ -190,7 +190,10 @@ pub async fn run_command(
         !name.is_empty(),
         i18n::t(language, "cli.run.empty_command", &[])
     );
-    let request = crate::commands::RunRequest {
+    let mut request = crate::commands::RunRequest {
+        preflight: true,
+        client_copy: false,
+        upload: None,
         command: name.to_owned(),
         args,
         person: person.filter(|p| !p.is_empty()).or_else(|| {
@@ -207,6 +210,100 @@ pub async fn run_command(
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };
+    request.request_id = None;
+    let preflight = owner
+        .post(
+            "/commands/run",
+            Some(&serde_json::to_value(&request)?),
+            Some(TIMEOUT),
+        )
+        .await?;
+    let declaration: Value = serde_json::from_str(
+        preflight["output"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?,
+    )?;
+    let read_only = declaration["read_only"]
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?;
+    request.person = Some(
+        declaration["person"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?
+            .to_owned(),
+    );
+    let home =
+        PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?);
+    let registered = gb_environment::device::registered_workspaces(&data).map_err(|reason| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.run.worktree_refused",
+            &[("reason", &reason)]
+        ))
+    })?;
+    let access =
+        gb_environment::contract::resolve(&workspace, &home, &registered, read_only, false)
+            .map_err(|reason| {
+                anyhow::anyhow!(i18n::t(
+                    language,
+                    "cli.run.worktree_refused",
+                    &[("reason", &reason)]
+                ))
+            })?;
+    let cwd = request.cwd.as_ref().unwrap();
+    gb_environment::contract::working_directory(
+        &workspace,
+        request.person.as_deref().unwrap_or(""),
+        cwd,
+        &access.denied,
+    )
+    .map_err(|reason| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.run.worktree_refused",
+            &[("reason", &reason)]
+        ))
+    })?;
+    let plan = gb_environment::contract::plan(
+        &workspace,
+        request.person.as_deref().unwrap_or(""),
+        cwd,
+        &access,
+        vec![],
+        data.join("run/worktree-write-back.lock"),
+        read_only,
+    )
+    .map_err(|reason| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.run.worktree_refused",
+            &[("reason", &reason)]
+        ))
+    })?;
+    let covered = plan
+        .mounts
+        .iter()
+        .any(|m| m.host.as_ref().is_some_and(|p| cwd.starts_with(p)))
+        || access
+            .grants
+            .iter()
+            .any(|m| m.host.as_ref().is_some_and(|p| cwd.starts_with(p)));
+    let copy = plan.copy;
+    request.client_copy = (read_only && !covered) || copy.is_some();
+    request.upload = copy
+        .as_ref()
+        .map(gb_environment::worktree::transfer::Upload::capture)
+        .transpose()
+        .map_err(|reason| {
+            anyhow::anyhow!(i18n::t(
+                language,
+                "cli.run.worktree_refused",
+                &[("reason", &reason)]
+            ))
+        })?;
+    let copied = request.upload.as_ref().map(|u| u.copied());
+    request.preflight = false;
+    request.request_id = Some(id.clone());
     eprintln!(
         "{}",
         i18n::t(language, "cli.run.receipt", &[("id", id.as_str())])
@@ -221,7 +318,7 @@ pub async fn run_command(
     {
         checked(response).await?;
     }
-    collect_command(&owner, &id, language).await
+    collect_command(&owner, &id, language, copy.as_ref().zip(copied.as_deref())).await
 }
 
 async fn command_server(language: &'static str) -> anyhow::Result<(OwnerClient, PathBuf)> {
@@ -238,10 +335,15 @@ async fn command_server(language: &'static str) -> anyhow::Result<(OwnerClient, 
 pub async fn resume_command(id: &str) -> anyhow::Result<String> {
     let language = language().await;
     let (owner, _) = command_server(language).await?;
-    collect_command(&owner, id, language).await
+    collect_command(&owner, id, language, None).await
 }
 
-async fn collect_command(owner: &OwnerClient, id: &str, language: &str) -> anyhow::Result<String> {
+async fn collect_command(
+    owner: &OwnerClient,
+    id: &str,
+    language: &str,
+    copy: Option<(&gb_environment::worktree::Copy, &[u8])>,
+) -> anyhow::Result<String> {
     anyhow::ensure!(
         id.bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
@@ -272,6 +374,19 @@ async fn collect_command(owner: &OwnerClient, id: &str, language: &str) -> anyho
                     status.is_success(),
                     response_error(status, &answer["result"])
                 );
+                if let Some(changes) = answer["result"]["worktree_changes"].as_str() {
+                    if let Some((copy, copied)) = copy {
+                        gb_environment::worktree::write_back_async(
+                            copy,
+                            copied,
+                            changes.as_bytes(),
+                        )
+                        .await
+                        .map_err(|e| anyhow::anyhow!(crate::i18n::say(e, language)))?;
+                    } else {
+                        eprintln!("{}", i18n::t(language, "cli.run.resume_no_writeback", &[]));
+                    }
+                }
                 return command_output(answer["result"].clone(), language);
             }
             _ => anyhow::bail!(i18n::t(language, "cli.run.invalid_output", &[])),

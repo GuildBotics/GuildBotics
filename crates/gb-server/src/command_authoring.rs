@@ -112,6 +112,9 @@ pub(crate) async fn author(
         result: Some(("CommandAuthoringResult", authoring_result)),
     };
     let run = RunRequest {
+        preflight: false,
+        client_copy: false,
+        upload: None,
         command: COMMAND.into(),
         args: vec![],
         person: request.person.clone(),

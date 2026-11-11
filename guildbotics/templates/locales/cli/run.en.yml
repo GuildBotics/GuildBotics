@@ -6,3 +6,5 @@ en:
   receipt: "Run ID: %{id}. Retrieve the result with guildbotics run --resume %{id}."
   workspace_mismatch: "The server has a different workspace selected. Finish active runs, then use guildbotics server stop, guildbotics workspace use <path>, and guildbotics server start."
   invalid_id: "The run ID has an invalid format."
+  resume_no_writeback: "Retrieving a result by ID does not write back the client worktree. Run the command again to edit local files."
+  worktree_refused: "The client worktree could not be transferred: %{reason}"
