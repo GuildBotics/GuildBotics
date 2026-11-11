@@ -38,9 +38,17 @@ function run(command, args, input, onWait) {
 }
 const git = (...args) => run('git', ['-C', repo, ...args]);
 const cli = (...args) => run(current, args).then(JSON.parse);
+const agentSettings = ['GUILDBOTICS_HOME', 'BRANVIL_DATA_DIR', 'GUILDBOTICS_SERVER_PORT', 'GUILDBOTICS_IDENTITY_ROOT'];
+const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+// Guidance runs this Hub's build with its settings: a bare guildbotics may run
+// another Hub's build against the default machine root.
+const guildbotics = () => [
+  ...agentSettings.filter(key => process.env[key]).map(key => `${key}=${quote(process.env[key])}`),
+  quote(current),
+].join(' ');
 async function readAgent() {
   const plist = path.join(process.env.HOME, `Library/LaunchAgents/local.guildbotics${instance && `.${instance}`}.plist`);
-  for (const key of ['BRANVIL_DATA_DIR', 'GUILDBOTICS_HOME', 'GUILDBOTICS_SERVER_PORT', 'GUILDBOTICS_IDENTITY_ROOT']) {
+  for (const key of agentSettings) {
     try { process.env[key] = await run('plutil', ['-extract', `EnvironmentVariables.${key}`, 'raw', '-o', '-', plist]); }
     catch (error) {
       if (['BRANVIL_DATA_DIR', 'GUILDBOTICS_HOME'].includes(key)) throw error;
@@ -161,7 +169,7 @@ export async function tick() {
     const environment = await cli('environment', 'status', '--format', 'json');
     clearBlocker(stage);
     if (environment.image?.reference && environment.image.present !== true) {
-      await notify(sha, stage, `Custom base image is not loaded: ${environment.image.reference}`, 'load the declared image with guildbotics environment image load');
+      await notify(sha, stage, `Custom base image is not loaded: ${environment.image.reference}`, `load the declared image with ${guildbotics()} environment image load`);
       return;
     }
     stage = 'service';
@@ -198,7 +206,7 @@ export async function tick() {
       const after = await cli('environment', 'status', '--format', 'json');
       clearBlocker(stage);
       if (['missing', 'stale', 'failed', 'building'].includes(after.snapshot?.state)) {
-        await notify(sha, stage, `Snapshot is ${after.snapshot.state}`, 'run guildbotics environment build (or wait for the running build), then guildbotics environment prune');
+        await notify(sha, stage, `Snapshot is ${after.snapshot.state}`, `run ${guildbotics()} environment build (or wait for the running build), then ${guildbotics()} environment prune`);
       }
     }
   } catch (error) {

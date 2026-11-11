@@ -512,10 +512,10 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
 }
 
 #[test]
-fn a_committed_update_removes_every_other_build() {
+fn an_update_removes_builds_that_no_process_started_before_it_runs() {
     let hub = Hub::new();
     hub.install();
-    let old = hub.installed_build();
+    let old = hub.installed_tree();
     // An interrupted build leaves its source tree behind.
     fs::create_dir_all(hub.builds().join("interrupted/node_modules")).unwrap();
     let elsewhere = hub.root().join("elsewhere");
@@ -525,15 +525,41 @@ fn a_committed_update_removes_every_other_build() {
     hub.fail_start("new");
     hub.run("update", None, false);
     // A rollback runs the previous build, from its source tree.
-    assert!(old.exists());
+    assert!(hub.source_trees().contains(&old));
 
     fs::remove_file(hub.root().join("fail-start")).unwrap();
+    hub.run("update", None, true);
+    let new = hub.installed_tree();
+    // A process started before this update still runs the old build.
+    let mut kept = vec![old.clone(), new.clone()];
+    kept.sort();
+    assert_eq!(hub.source_trees(), kept);
+    assert!(elsewhere.exists());
+
     hub.commit("newer");
     hub.run("update", None, true);
-    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
-    assert!(hub.installed_build().exists());
+    let mut kept = vec![new, hub.installed_tree()];
+    kept.sort();
+    assert_eq!(hub.source_trees(), kept);
     assert!(hub.builds().join("current").exists());
-    assert!(elsewhere.exists());
+}
+
+#[test]
+fn an_update_keeps_the_build_the_installed_cli_runs() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_tree();
+    hub.mark("fail-install");
+    hub.commit("new");
+    // Every new build fails to install the CLI, which stays the old build.
+    hub.run("update", None, false);
+    let new = hub.installed_tree();
+    hub.commit("newer");
+    hub.run("update", None, false);
+    // The server ran new until this update, and the CLI still runs old.
+    let mut kept = vec![old, new, hub.installed_tree()];
+    kept.sort();
+    assert_eq!(hub.source_trees(), kept);
 }
 
 #[test]
@@ -726,11 +752,16 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
     assert!(!hub.lines("actions").contains("new|server|stop"));
     // The CLI that was installed still runs the old build, from its source tree.
     assert!(old.exists());
+    assert!(text(&out).contains(&format!(
+        "Retry CLI and skill installation with: GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' install",
+        hub.home.join(".guildbotics").display(),
+        hub.root().join("branvil").display(),
+        hub.builds().join("current").display()
+    )));
 
     fs::remove_file(hub.root().join("fail-install")).unwrap();
     hub.run("update", None, true);
     assert_eq!(hub.installed_build(), new);
-    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
     assert!(hub.lines("actions").contains("new|install"));
     assert!(!hub.lines("calls").contains("launchctl|bootstrap"));
 }
@@ -749,10 +780,8 @@ fn recover_keeps_a_ready_build_after_an_interrupted_activation() {
     fs::write(&pending, running).unwrap();
     fs::set_permissions(&pending, fs::Permissions::from_mode(0o755)).unwrap();
 
-    fs::create_dir(hub.builds().join("interrupted")).unwrap();
     hub.run("recover", None, true);
     assert_eq!(hub.installed_build(), new);
-    assert_eq!(hub.source_trees(), [hub.installed_tree()]);
     assert!(!hub.builds().join("update-from").exists());
     assert!(!hub.lines("actions").contains("server|stop"));
     assert!(hub.lines("actions").contains("new|install"));
@@ -1095,6 +1124,7 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
 fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
     let hub = Hub::new();
     let copy = [("GUILDBOTICS_HUB_INSTANCE", "copy")];
+    let copy_home = hub.root().join("copy home");
     let state = hub
         .home
         .join("Library/Application Support/GuildBotics/Hub-copy");
@@ -1102,7 +1132,11 @@ fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
     let logs = hub.home.join("Library/Logs");
     hub.run_with(
         "install",
-        &[copy[0], ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY)],
+        &[
+            copy[0],
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HOME", copy_home.to_str().unwrap()),
+        ],
         true,
     );
     let mut calls = hub.lines("calls");
@@ -1122,8 +1156,26 @@ fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
         ],
     );
     hub.auto_candidate();
-    hub.run_with("auto-once", &copy, true);
+    // Guidance runs the copy's build with the copy's settings.
+    hub.mark("fail-prune");
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"image":{"reference":null},"snapshot":{"state":"missing"}}"#,
+    )
+    .unwrap();
+    let out = hub.run_with("auto-once", &copy, true);
     calls += &hub.lines("calls");
+    let guidance = format!(
+        "GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' environment ",
+        copy_home.display(),
+        hub.root().join("branvil").display(),
+        state.join("builds/current").display()
+    );
+    assert!(text(&out).contains(&format!("run: {guidance}prune")));
+    assert!(
+        hub.lines("notifications")
+            .contains(&format!("run {guidance}build"))
+    );
     assert!(state.join("auto-update.json").exists());
     assert!(
         fs::read_to_string(state.join("builds/current"))
@@ -1381,7 +1433,12 @@ fn cleanup_failure_keeps_the_activated_build_and_never_rolls_back() {
             &hub.lines("actions"),
             &["new|install", "new|environment|prune"],
         );
-        assert!(text(&out).contains("guildbotics environment prune"));
+        assert!(text(&out).contains(&format!(
+            "run: GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' environment prune",
+            hub.home.join(".guildbotics").display(),
+            hub.root().join("branvil").display(),
+            hub.builds().join("current").display()
+        )));
     }
 }
 

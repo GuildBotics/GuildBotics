@@ -60,7 +60,7 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。CLIを現行ビルドで配置し終えると、ほかの `builds/<commit>/` を削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルド以外の `builds/<commit>/` を削除します。実行ファイルは自分のビルドのソースを読むので、更新の前に起動したCLIのプロセスは、次の更新が始まるまで使い続けられます。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -229,7 +229,7 @@ originのmainをfetchします。登録時のPATHを保存し、サーバーの�
 （自動更新は `guildbotics-<名前>-update.log`）を使います。自動更新のLaunchAgentにもこの名前を記録します。
 実行ファイルの署名はHubと同じ識別子なので、キーチェーンの確認は出ません。
 
-名前に `update` は使えません。写しの通知と案内は、この名前を含めて表示します。
+名前に `update` は使えません。写しの通知とスクリプトの案内は、この名前を含めて表示します。案内のCLIのコマンドは、本番と同じく、そのHubの `builds/current` にそのHubの設定を付けた形です。
 
 写し専用のチェックアウトで、`install` の前に、`GUILDBOTICS_HOME`、`BRANVIL_DATA_DIR`、`GUILDBOTICS_SERVER_PORT` に
 Hubと別のものを設定し、`GUILDBOTICS_IDENTITY_ROOT` は外します（写しは `GUILDBOTICS_HOME` の下のidentityを使います）。

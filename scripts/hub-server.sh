@@ -329,20 +329,34 @@ read_plist() {
     GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
     export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
 }
+# Guidance runs this Hub's build with its settings: a bare guildbotics may run
+# another Hub's build against the default machine root.
+quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+cli_hint() {
+    for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT; do
+        eval "value=\${$key:-}"
+        if [ -n "$value" ]; then printf '%s=%s ' "$key" "$(quote "$value")"; fi
+    done
+    quote "$current"
+}
 install_assets() {
     stage="installing the CLI and skill"
-    if "$current" install; then
-        # The installed CLI now runs this build too. No other build is used, and
-        # each keeps a large source tree. A failed removal is retried next time.
-        if active=$(built_from "$current"); then
-            for build in "$builds"/*/; do
-                [ "${build%/}" = "${active%/*}" ] || rm -rf "${build%/}" || :
-            done
-        fi
-        return 0
-    fi
-    printf 'The Hub is running. Retry CLI and skill installation with: "%s" install\n' "$current" >&2
+    if "$current" install; then return 0; fi
+    printf 'The Hub is running. Retry CLI and skill installation with: %s install\n' "$(cli_hint)" >&2
     return 1
+}
+# Each build keeps a large source tree, which its executable reads at run time.
+# Keep the running build, the candidate, and the installed CLI's build: a
+# process started before this update runs one of them. A failed removal is
+# retried by the next update.
+remove_unused_builds() {
+    keep=" ${previous%/*} ${candidate%/*} "
+    if cli=$("$GUILDBOTICS_HOME/bin/guildbotics" server hub-probe --source 2>/dev/null); then
+        keep="$keep$builds/${cli##*/} "
+    fi
+    for build in "$builds"/*/; do
+        case "$keep" in *" ${build%/} "*) ;; *) rm -rf "${build%/}" || : ;; esac
+    done
 }
 complete_activation() {
     rm -f "$pending" "$builds/update-to" || return
@@ -351,7 +365,7 @@ complete_activation() {
     activation_install_status=0
     install_assets || activation_install_status=$?
     if ! "$current" environment prune; then
-        printf 'Snapshot cleanup deferred. After the environment build finishes, run: "%s" environment prune (guildbotics environment prune).\n' "$current" >&2
+        printf 'Snapshot cleanup deferred. After the environment build finishes, run: %s environment prune\n' "$(cli_hint)" >&2
     fi
     return "$activation_install_status"
 }
@@ -432,6 +446,7 @@ case "$action" in
             install_assets
             exit 0
         fi
+        remove_unused_builds
         # Copy while the server still runs; current stays until the switch.
         cp "$current" "$lock/update-from"
         backup_and_rehearse

@@ -113,7 +113,7 @@ case "$name" in
             *) exit 2 ;;
         esac
         ;;
-    current|guildbotics-bin|update-from|update-to)
+    current|guildbotics-bin|update-from|update-to|guildbotics)
         build=$(sed -n 's/^# build: //p' "$0")
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
@@ -187,7 +187,12 @@ case "$name" in
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
                 rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/service-running"
                 ;;
-            install:) [ "$build" != new ] || [ ! -f "$FAKE_ROOT/fail-install" ] ;;
+            install:)
+                [ "$build" = old ] || [ ! -f "$FAKE_ROOT/fail-install" ] || exit 1
+                # Like guildbotics install, copy this executable to the machine root.
+                mkdir -p "$GUILDBOTICS_HOME/bin"
+                cp "$0" "$GUILDBOTICS_HOME/bin/guildbotics"
+                ;;
             branvil:backup) touch "$6/manifest.json" ;;
             branvil:restore)
                 [ -f "$4/manifest.json" ] || exit 1
