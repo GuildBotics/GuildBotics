@@ -2,8 +2,8 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
-    io::Write,
+    collections::{BTreeMap, BTreeSet},
+    io::{Seek, Write},
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex},
@@ -60,7 +60,10 @@ fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
             cmd.env_remove(key);
         }
     }
-    let mut child = cmd
+    let mut data = tempfile::tempfile().map_err(|e| e.to_string())?;
+    data.write_all(input).map_err(|e| e.to_string())?;
+    data.rewind().map_err(|e| e.to_string())?;
+    let child = cmd
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", empty.path())
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -74,16 +77,10 @@ fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
         ])
         .args(args)
         .current_dir(root)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(data))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input)
         .map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -91,14 +88,20 @@ fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
     }
     Ok(output.stdout)
 }
-fn optional(root: &Path, name: &str) -> Result<Option<String>, String> {
+fn optional(root: &Path, name: &str) -> Result<Option<String>, CaptureError> {
     let path = root.join(name);
     match std::fs::symlink_metadata(&path) {
-        Ok(m) if !m.is_file() || m.len() > LIMIT as u64 => {
+        Ok(m) if m.len() > LIMIT as u64 => {
+            return Err(CaptureError::Limit {
+                files: 0,
+                history: usize::try_from(m.len()).unwrap_or(usize::MAX),
+            });
+        }
+        Ok(m) if !m.is_file() => {
             return Err("Unsafe Git metadata file".into());
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(e.to_string().into()),
         _ => {}
     }
     use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
@@ -115,12 +118,47 @@ fn optional(root: &Path, name: &str) -> Result<Option<String>, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > LIMIT {
-        return Err("Unsafe Git metadata file".into());
+        return Err(CaptureError::Limit {
+            files: 0,
+            history: bytes.len(),
+        });
     }
     Ok(Some(STANDARD.encode(bytes)))
 }
+#[derive(Debug)]
+pub enum CaptureError {
+    Limit { files: usize, history: usize },
+    Other(String),
+}
+impl From<String> for CaptureError {
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
+}
+impl From<&str> for CaptureError {
+    fn from(value: &str) -> Self {
+        Self::Other(value.into())
+    }
+}
+impl CaptureError {
+    pub fn sentence(self) -> crate::Sentence {
+        match self {
+            Self::Limit { files, history } => crate::Sentence::Key(
+                "cli.run.worktree_limit",
+                vec![
+                    ("files", files.to_string()),
+                    ("history", history.to_string()),
+                    ("limit", LIMIT.to_string()),
+                ],
+            ),
+            Self::Other(reason) => {
+                crate::Sentence::Key("cli.run.worktree_refused", vec![("reason", reason)])
+            }
+        }
+    }
+}
 impl Upload {
-    pub fn capture(copy: &super::Copy) -> Result<Self, String> {
+    pub fn capture(copy: &super::Copy) -> Result<Self, CaptureError> {
         copy.validate()?;
         let manifest =
             gb_base::worktree::list(&copy.host, &copy.excluded).map_err(|e| e.to_string())?;
@@ -148,7 +186,10 @@ impl Upload {
             }
             total += usize::try_from(metadata.len()).map_err(|e| e.to_string())?;
             if total > LIMIT {
-                return Err("Worktree upload exceeds 16 MiB".into());
+                return Err(CaptureError::Limit {
+                    files: total,
+                    history: 0,
+                });
             }
             let mut bytes = Vec::new();
             use std::io::Read;
@@ -157,7 +198,10 @@ impl Upload {
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
             if bytes.len() > LIMIT {
-                return Err("Worktree upload exceeds 16 MiB".into());
+                return Err(CaptureError::Limit {
+                    files: total,
+                    history: 0,
+                });
             }
             #[cfg(unix)]
             let executable = {
@@ -196,22 +240,21 @@ impl Upload {
                 .filter_map(|l| l.split_once(' '))
                 .map(|(a, b)| (a.to_owned(), b.to_owned()))
                 .collect();
+            let head_oid = git(&copy.host, &["rev-parse", "--verify", "HEAD"], &[])
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).trim().to_owned());
             let symbolic = git(&copy.host, &["symbolic-ref", "-q", "HEAD"], &[]).ok();
             let head = symbolic
                 .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
-                .unwrap_or_else(|| {
-                    String::from_utf8_lossy(
-                        &git(&copy.host, &["rev-parse", "HEAD"], &[]).unwrap_or_default(),
-                    )
-                    .trim()
-                    .to_owned()
-                });
+                .unwrap_or_else(|| head_oid.clone().unwrap_or_default());
             let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
             let bundle_path = tmp.path().join("history.bundle");
             let mut revisions = refs.keys().cloned().collect::<Vec<_>>();
-            if git(&copy.host, &["rev-parse", "--verify", "HEAD"], &[]).is_ok() {
+            if let Some(oid) = &head_oid {
                 revisions.push("HEAD".into());
+                revisions.push(oid.clone());
             }
+            revisions.extend(refs.values().cloned());
             let bundle = if revisions.is_empty() {
                 Vec::new()
             } else {
@@ -225,12 +268,17 @@ impl Upload {
                     ],
                     (revisions.join("\n") + "\n").as_bytes(),
                 )?;
-                if std::fs::metadata(&bundle_path)
-                    .map_err(|e| e.to_string())?
-                    .len()
-                    > (LIMIT - total) as u64
-                {
-                    return Err("Worktree upload exceeds 16 MiB".into());
+                let bundle_size = usize::try_from(
+                    std::fs::metadata(&bundle_path)
+                        .map_err(|e| e.to_string())?
+                        .len(),
+                )
+                .map_err(|e| e.to_string())?;
+                if bundle_size > LIMIT - total {
+                    return Err(CaptureError::Limit {
+                        files: total,
+                        history: bundle_size,
+                    });
                 }
                 git(
                     &copy.host,
@@ -260,33 +308,82 @@ impl Upload {
                 };
                 remotes.insert(name.to_owned(), clean);
             }
+            let present: BTreeSet<String> = if let Some(oid) = &head_oid {
+                git(
+                    &copy.host,
+                    &["ls-tree", "-r", "-z", "--format=%(objectname)", oid],
+                    &[],
+                )?
+                .split(|b| *b == 0)
+                .filter(|b| !b.is_empty())
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .collect()
+            } else {
+                BTreeSet::new()
+            };
             let staged = git(&copy.host, &["ls-files", "--stage", "-z"], &[])?;
-            let mut objects = BTreeMap::new();
+            let mut needed = BTreeSet::new();
             for entry in staged.split(|b| *b == 0).filter(|b| !b.is_empty()) {
-                let header = entry
-                    .split(|b| *b == b'\t')
-                    .next()
-                    .ok_or("Invalid index record")?;
-                let header = String::from_utf8_lossy(header);
+                let header = String::from_utf8_lossy(
+                    entry
+                        .split(|b| *b == b'\t')
+                        .next()
+                        .ok_or("Invalid index record")?,
+                );
                 let mut fields = header.split(' ');
                 if fields.next() == Some("160000") {
                     continue;
                 }
                 let object = fields.next().ok_or("Invalid index object")?;
-                if !objects.contains_key(object) {
-                    let size = git(&copy.host, &["cat-file", "-s", object], &[])?;
-                    let size: usize = String::from_utf8_lossy(&size)
-                        .trim()
-                        .parse::<usize>()
-                        .map_err(|e| e.to_string())?;
-                    total = total.checked_add(size).ok_or("Worktree size overflow")?;
-                    if total > LIMIT {
-                        return Err("Worktree upload exceeds 16 MiB".into());
+                if !present.contains(object) {
+                    needed.insert(object.to_owned());
+                }
+            }
+            let mut objects = BTreeMap::new();
+            if !needed.is_empty() {
+                let input =
+                    (needed.iter().cloned().collect::<Vec<_>>().join("\n") + "\n").into_bytes();
+                let sizes = git(
+                    &copy.host,
+                    &["cat-file", "--batch-check=%(objectsize)"],
+                    &input,
+                )?;
+                let extra =
+                    String::from_utf8_lossy(&sizes)
+                        .lines()
+                        .try_fold(0usize, |sum, line| {
+                            let size = line.parse::<usize>().map_err(|e| e.to_string())?;
+                            sum.checked_add(size)
+                                .ok_or_else(|| "Worktree size overflow".to_owned())
+                        })?;
+                if total + bundle.len() + extra > LIMIT {
+                    return Err(CaptureError::Limit {
+                        files: total,
+                        history: bundle.len() + extra,
+                    });
+                }
+                let bytes = git(&copy.host, &["cat-file", "--batch"], &input)?;
+                let mut rest = bytes.as_slice();
+                for object in needed {
+                    let end = rest
+                        .iter()
+                        .position(|b| *b == b'\n')
+                        .ok_or("Invalid batch header")?;
+                    let header = std::str::from_utf8(&rest[..end]).map_err(|e| e.to_string())?;
+                    let fields = header.split(' ').collect::<Vec<_>>();
+                    if fields.len() != 3 || fields[0] != object || fields[1] != "blob" {
+                        return Err("Invalid batch object".into());
                     }
-                    objects.insert(
-                        object.to_owned(),
-                        STANDARD.encode(git(&copy.host, &["cat-file", "blob", object], &[])?),
-                    );
+                    let size = fields[2].parse::<usize>().map_err(|e| e.to_string())?;
+                    rest = &rest[end + 1..];
+                    if rest.len() <= size || rest[size] != b'\n' {
+                        return Err("Invalid batch body".into());
+                    }
+                    objects.insert(object, STANDARD.encode(&rest[..size]));
+                    rest = &rest[size + 1..];
+                }
+                if !rest.is_empty() {
+                    return Err("Unexpected batch data".into());
                 }
             }
             let mut shared_indexes = BTreeMap::new();
@@ -331,6 +428,41 @@ impl Upload {
             nested,
             git: repository,
         };
+        let file_size = upload
+            .files
+            .iter()
+            .map(|f| {
+                STANDARD
+                    .decode(&f.content)
+                    .map(|b| b.len())
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .sum::<usize>();
+        let history_size = match &upload.git {
+            None => 0,
+            Some(g) => [Some(&g.bundle), g.index.as_ref(), g.exclude.as_ref()]
+                .into_iter()
+                .flatten()
+                .chain(g.objects.values())
+                .chain(g.shared_indexes.values())
+                .map(|b| {
+                    STANDARD
+                        .decode(b)
+                        .map(|b| b.len())
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .sum::<usize>(),
+        };
+        if file_size + history_size > LIMIT {
+            return Err(CaptureError::Limit {
+                files: file_size,
+                history: history_size,
+            });
+        }
         upload.validate()?;
         Ok(upload)
     }

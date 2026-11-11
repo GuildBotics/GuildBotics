@@ -294,13 +294,7 @@ pub async fn run_command(
         .as_ref()
         .map(gb_environment::worktree::transfer::Upload::capture)
         .transpose()
-        .map_err(|reason| {
-            anyhow::anyhow!(i18n::t(
-                language,
-                "cli.run.worktree_refused",
-                &[("reason", &reason)]
-            ))
-        })?;
+        .map_err(|error| anyhow::anyhow!(crate::i18n::say(error.sentence(), language)))?;
     let copied = request.upload.as_ref().map(|u| u.copied());
     request.preflight = false;
     request.request_id = Some(id.clone());
@@ -578,6 +572,20 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upload_limit_is_localized_with_sizes_and_alternative() {
+        for (language, expected) in [("ja", "読み書き可"), ("en", "read/write grant")] {
+            let error = gb_environment::worktree::transfer::CaptureError::Limit {
+                files: 123,
+                history: 456,
+            };
+            let text = crate::i18n::say(error.sentence(), language);
+            assert!(text.contains("123") && text.contains("456") && text.contains("16777216"));
+            assert!(text.contains(expected), "{text}");
+            assert!(!text.contains("%{"));
+        }
+    }
+
     use super::answer_git_credential;
 
     #[cfg(unix)]

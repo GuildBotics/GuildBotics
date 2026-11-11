@@ -8,3 +8,4 @@ ja:
   invalid_id: "実行 ID の形式が正しくありません。"
   resume_no_writeback: "実行 ID から取り直した結果は、手元のフォルダに書き戻せません。手元のファイルを編集するにはコマンドを再実行してください。"
   worktree_refused: "手元の作業フォルダを転送できません: %{reason}"
+  worktree_limit: "送る量（ファイル %{files} バイト、Git の履歴・index %{history} バイト）が上限 %{limit} バイトを超えました。読み書き可の許可先（受け渡しフォルダなど）かメンバーの clone の中で実行すると、写しを送らずに動きます。"

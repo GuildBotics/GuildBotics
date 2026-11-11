@@ -10,7 +10,7 @@ import pytest
 from guildbotics.guest.worktree_copy import changed_files, receive_tree
 
 
-def git(root, *args):
+def git(root, *args, input=None):
     return subprocess.run(
         [
             "git",
@@ -21,6 +21,7 @@ def git(root, *args):
             *args,
         ],
         cwd=root,
+        input=input,
         check=True,
         capture_output=True,
     ).stdout
@@ -152,3 +153,57 @@ def test_readonly_git_is_mounted_before_command(tmp_path, monkeypatch):
     list(receive_tree(tmp_path / "source", tmp_path / "guest", upload))
     assert calls[0][1] == "--bind"
     assert calls[1][1:3] == ["-o", "remount,bind,ro"]
+
+
+@pytest.mark.parametrize("state", ["clean", "staged", "unborn", "conflict"])
+def test_only_index_blobs_absent_from_exported_head_are_sent(tmp_path, exporter, state):
+    import random
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-b", "main")
+    # Incompressible data pins the regression: files + bundle fit, three copies do not.
+    (root / "file").write_bytes(random.Random(42).randbytes(6 * 1024 * 1024))
+    git(root, "add", ".")
+    expected = set()
+    original = git(root, "rev-parse", ":file").strip().decode()
+    if state != "unborn":
+        git(root, "commit", "-m", "fixture")
+    else:
+        expected.add(original)
+    if state == "staged":
+        (root / "file").write_bytes(b"staged\0content")
+        git(root, "add", ".")
+        expected.add(git(root, "rev-parse", ":file").strip().decode())
+    if state == "conflict":
+        other = (
+            git(root, "hash-object", "-w", "--stdin", input=b"other\0content")
+            .strip()
+            .decode()
+        )
+        git(
+            root,
+            "update-index",
+            "--index-info",
+            input=(
+                f"0 {'0' * 40}\tfile\n100644 {original} 1\tfile\n100644 {other} 2\tfile\n100644 {other} 3\tfile\n"
+            ).encode(),
+        )
+        expected.add(other)
+    upload = json.loads(subprocess.check_output([str(exporter), str(root)]))
+    assert set(upload["git"]["objects"]) == expected
+    root.rename(tmp_path / "hidden")
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    list(receive_tree(source, destination, upload, readonly=False))
+    git(destination, "diff", "--cached")
+
+
+def test_many_index_objects_are_batched_without_pipe_deadlock(tmp_path, exporter):
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init")
+    for i in range(1800):
+        (root / str(i)).write_bytes(str(i).encode() + b"x" * 100)
+    git(root, "add", ".")
+    upload = json.loads(subprocess.check_output([str(exporter), str(root)], timeout=30))
+    assert len(upload["git"]["objects"]) == 1800

@@ -8,3 +8,4 @@ en:
   invalid_id: "The run ID has an invalid format."
   resume_no_writeback: "Retrieving a result by ID does not write back the client worktree. Run the command again to edit local files."
   worktree_refused: "The client worktree could not be transferred: %{reason}"
+  worktree_limit: "The upload (files %{files} bytes, Git history/index %{history} bytes) exceeds the limit of %{limit} bytes. Run inside a read/write grant (such as the exchange folder) or a member clone to run without sending a copy."
