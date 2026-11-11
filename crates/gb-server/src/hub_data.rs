@@ -122,6 +122,18 @@ fn each(
 }
 
 fn backup(identity_root: &Path, roots: &[PathBuf], destination: &Path) -> anyhow::Result<()> {
+    backup_with(identity_root, roots, destination, &mut |file| {
+        fs::File::open(file)?.sync_all()
+    })
+}
+
+/// [`backup`], making each copied file durable with `flush`.
+fn backup_with(
+    identity_root: &Path,
+    roots: &[PathBuf],
+    destination: &Path,
+    flush: &mut impl FnMut(&Path) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
     let destination = host_path::directory(destination, true)?;
     let destination = destination.as_path();
     fs::create_dir_all(destination)?;
@@ -140,22 +152,33 @@ fn backup(identity_root: &Path, roots: &[PathBuf], destination: &Path) -> anyhow
             "backup destination is inside source data"
         );
     }
-    let mut identity = IdentityLock::acquire(identity_root, files::SHARED_WRITE_TIMEOUT)?;
-    for (index, root) in roots.iter().enumerate() {
-        let _workspace = identity.workspace(root, files::SHARED_WRITE_TIMEOUT)?;
-        let copied = destination.join(index.to_string()).join(".guildbotics");
-        fs::create_dir_all(&copied)?;
-        each(root, &mut |source, relative| {
-            let target = copied.join(relative);
-            if source.is_dir() {
-                fs::create_dir_all(&target)?;
-            } else {
-                fs::create_dir_all(target.parent().expect("data file has parent"))?;
-                files::atomic_write_mode(&target, &fs::read(source)?, Some(0o600))?;
-                fs::set_permissions(&target, fs::metadata(source)?.permissions())?;
-            }
-            Ok(())
-        })?;
+    // Copy under the writers' locks, so that the backup is one consistent
+    // state. Writers give up after SHARED_WRITE_TIMEOUT, so the locks cover
+    // only the copy, which clones on APFS; making it durable waits until after.
+    let mut copies = Vec::new();
+    {
+        let mut identity = IdentityLock::acquire(identity_root, files::SHARED_WRITE_TIMEOUT)?;
+        for (index, root) in roots.iter().enumerate() {
+            let _workspace = identity.workspace(root, files::SHARED_WRITE_TIMEOUT)?;
+            let copied = destination.join(index.to_string()).join(".guildbotics");
+            fs::create_dir_all(&copied)?;
+            each(root, &mut |source, relative| {
+                let target = copied.join(relative);
+                if source.is_dir() {
+                    fs::create_dir_all(&target)?;
+                } else {
+                    fs::create_dir_all(target.parent().expect("data file has parent"))?;
+                    // Copies the permissions too; the destination is private.
+                    fs::copy(source, &target)?;
+                    copies.push(target);
+                }
+                Ok(())
+            })?;
+        }
+    }
+    // The manifest marks the backup complete, after every copy is durable.
+    for copy in &copies {
+        flush(copy)?;
     }
     files::atomic_write(
         &destination.join("manifest.json"),
@@ -294,6 +317,33 @@ mod tests {
         );
         write(&archive.join("0"), "state/run.json", "malformed");
         assert!(check_archive(&archive).is_err());
+    }
+
+    #[test]
+    fn writers_wait_only_for_the_copy_not_for_making_it_durable() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = temp.path().join("identity");
+        let source = temp.path().join("workspace");
+        write(&identity, "state/member.json", "{}");
+        write(&source, "state/run.json", "{}");
+        let roots = [identity.clone(), source.clone()];
+        let mut flushed = 0;
+        backup_with(
+            &identity,
+            &roots,
+            &temp.path().join("backup"),
+            &mut |file| {
+                // A writer takes both locks, in the order writers take them.
+                let mut lock = IdentityLock::acquire(&identity, std::time::Duration::ZERO).unwrap();
+                lock.workspace(&source, std::time::Duration::ZERO).unwrap();
+                assert!(file.is_file());
+                flushed += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(flushed, 2);
+        assert!(temp.path().join("backup/manifest.json").is_file());
     }
 
     #[test]
