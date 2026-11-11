@@ -147,7 +147,7 @@ Commands:
   environment     Manage this device's isolated environment
   server          Run the server
   member          Operate as a configured member through the running server
-  git-credential  Supply Git with this machine's credential for the remote
+  git-credential  Supply Git with this machine's credential; issuing a token requires the server
   install         Install this executable and the GuildBotics skill for this user
   workspace       Select the active workspace for the server and AI CLI tools
   run             Run a command in the selected workspace's isolated environment
@@ -1290,7 +1290,7 @@ Usage: guildbotics member ticket update [OPTIONS]
 ## guildbotics git-credential
 
 ```text
-Supply Git with this machine's credential for the remote
+Supply Git with this machine's credential; issuing a token requires the server
 
 Usage: guildbotics git-credential <ACTION>
 

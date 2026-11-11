@@ -1,403 +1,126 @@
-//! The machine's owner token for Git. The member client never sees it.
-use std::{path::Path, time::Duration};
-
-use gb_base::{files, home, shared_writes::SharedWrites};
-use gb_config::secrets::{self, DeviceKey, Scope, SecretStore, SystemKeychain};
+//! Server-side issuance through the provider that owns the requested origin.
+use branvil::api::{DataApi, MemberApi, members};
 use gb_ports::GitCredential;
-use reqwest::{Method, StatusCode};
-use serde_json::{Value, json};
-
-const KEYCHAIN: &str = "GuildBotics/branvil-git";
 
 pub(in crate::factory) async fn credential(
     origin: &str,
-    device: impl FnOnce(&Path) -> anyhow::Result<(String, String)>,
+    data: &DataApi,
+    admin: &MemberApi,
+    device_id: &str,
+    display_name: &str,
 ) -> anyhow::Result<Option<GitCredential>> {
-    if origin.is_empty() {
+    if !origin.eq_ignore_ascii_case(data.base_url().trim_end_matches('/')) {
         return Ok(None);
     }
-    let identity = home::identity_root()?;
-    let Some(connection) =
-        files::read_if_present(&identity.join(".guildbotics/config/connections/branvil.yml"))?
-    else {
-        return Ok(None);
-    };
-    let connection = gb_config::yaml_value(std::str::from_utf8(&connection)?)?;
-    let url = connection["base_url"]
-        .as_str()
-        .unwrap_or_default()
-        .trim_end_matches('/');
-    if url.is_empty() || !origin.eq_ignore_ascii_case(url) {
-        return Ok(None);
-    }
-    let data = home::data()?;
-    let machine = home::machine_root()?;
-    let writes = SharedWrites::new(identity, None);
-    let secrets = SecretStore::new(
-        &writes,
-        Scope::Identity,
-        DeviceKey {
-            machine_root: machine,
-            keychain: &SystemKeychain,
-        },
-    )?;
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .timeout(Duration::from_secs(15))
-        .build()?;
-    let read = || secrets::get_os_credential(KEYCHAIN, url);
-    let keep = |token: &str| secrets::keep_os_credential(KEYCHAIN, url, token);
-    let admin = || secrets.get("BRANVIL_ADMIN_TOKEN");
-    acquire(&http, url, &data, read, keep, admin, device)
+    let owner = admin
+        .identity()
         .await
-        .map(Some)
-}
-
-async fn acquire(
-    http: &reqwest::Client,
-    url: &str,
-    data: &Path,
-    read: impl Fn() -> anyhow::Result<Option<String>>,
-    keep: impl Fn(&str) -> anyhow::Result<()>,
-    admin: impl FnOnce() -> anyhow::Result<Option<String>>,
-    device: impl FnOnce(&Path) -> anyhow::Result<(String, String)>,
-) -> anyhow::Result<GitCredential> {
-    let cached = || async {
-        let Some(token) = read()?.filter(|token| !token.is_empty()) else {
-            return Ok(None);
-        };
-        let api = Api {
-            http,
-            url,
-            token: &token,
-        };
-        match api.owner().await {
-            Ok(Some(username)) => Ok(Some(GitCredential {
-                username,
-                password: token,
-            })),
-            Ok(None) => Ok(None),
-            Err(error) => Err(error),
-        }
-    };
-    if let Some(credential) = cached().await? {
-        return Ok(credential);
-    }
-    let path = data.join("run/branvil-git.lock");
-    let _held =
-        tokio::task::spawn_blocking(move || files::FileLock::hold(&path, Duration::from_secs(60)))
-            .await??;
-    if let Some(credential) = cached().await? {
-        return Ok(credential);
-    }
-    let token = admin()?
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| diagnostic("integrations.branvil.api.not_connected"))?;
-    let api = Api {
-        http,
-        url,
-        token: &token,
-    };
-    let owner = api
-        .owner()
-        .await?
-        .ok_or_else(|| diagnostic("integrations.branvil.api.admin_refused"))?;
-    let (device_id, display_name) = device(data)?;
-    let id = &device_id[device_id.len() - 8..];
-    let suffix = format!("({id})");
-    let collection = format!("/members/{}/tokens", segment(&owner));
-    let mut cursor = String::new();
+        .map_err(|e| super::error(e, "identity"))?
+        .name;
+    let suffix = format!("({})", &device_id[device_id.len() - 8..]);
+    let mut cursor = None;
     let mut expired = Vec::new();
     loop {
-        let path = if cursor.is_empty() {
-            collection.clone()
-        } else {
-            format!("{collection}?cursor={}", segment(&cursor))
-        };
-        let page = api.json(api.request(Method::GET, &path)).await?;
-        let items = page["items"].as_array().ok_or_else(invalid)?;
-        for item in items {
-            let label = item["label"].as_str().unwrap_or_default();
-            if label.starts_with("git:") && label.ends_with(&suffix) {
-                expired.push(item["id"].as_str().ok_or_else(invalid)?.to_owned());
-            }
-        }
-        let Some(next) = page["next_cursor"].as_str().filter(|v| !v.is_empty()) else {
+        let page = admin
+            .page(
+                format!("owner-git:{device_id}"),
+                Some(100),
+                cursor.as_deref(),
+            )
+            .map_err(|e| super::error(e, "page"))?;
+        let page = admin
+            .members_list_tokens(owner.clone(), page)
+            .await
+            .map_err(|e| super::error(e, "members_list_tokens"))?;
+        expired.extend(
+            page.items
+                .into_iter()
+                .filter(|t| t.label.starts_with("git:") && t.label.ends_with(&suffix))
+                .map(|t| t.id),
+        );
+        cursor = page.next_cursor;
+        if cursor.is_none() {
             break;
-        };
-        anyhow::ensure!(next != cursor, invalid());
-        cursor = next.to_owned();
+        }
     }
     for id in expired {
-        let response = api
-            .send(api.request(Method::DELETE, &format!("{collection}/{}", segment(&id))))
-            .await?;
-        let status = response.status();
-        anyhow::ensure!(
-            status.is_success() || status == StatusCode::NOT_FOUND,
-            diagnostic("integrations.branvil.api.admin_refused")
-        );
+        if let Err(e) = admin.members_revoke_token(owner.clone(), id).await
+            && e.status.as_u16() != 404
+        {
+            return Err(super::error(e, "members_revoke_token").into());
+        }
     }
-    let issued = api
-        .json(
-            api.request(Method::POST, &collection)
-                .json(&json!({"label":format!("git:{display_name} {suffix}")})),
+    let issued = admin
+        .members_issue_token(
+            owner.clone(),
+            members::NewToken {
+                label: format!("git:{display_name} {suffix}"),
+                replace: false,
+            },
         )
-        .await?;
-    let password = issued["token"]
-        .as_str()
-        .filter(|token| !token.is_empty() && !token.contains(['\r', '\n']))
-        .ok_or_else(invalid)?;
-    keep(password)?;
-    Ok(GitCredential {
+        .await
+        .map_err(|e| super::error(e, "members_issue_token"))?;
+    Ok(Some(GitCredential {
         username: owner,
-        password: password.to_owned(),
-    })
-}
-
-fn segment(value: &str) -> String {
-    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
-}
-
-fn diagnostic(key: &'static str) -> anyhow::Error {
-    super::diagnostic(key, []).into()
-}
-
-fn invalid() -> anyhow::Error {
-    diagnostic("integrations.branvil.api.admin_refused")
-}
-
-struct Api<'a> {
-    http: &'a reqwest::Client,
-    url: &'a str,
-    token: &'a str,
-}
-
-impl Api<'_> {
-    fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
-        self.http
-            .request(method, format!("{}/api/v1{path}", self.url))
-            .bearer_auth(self.token)
-    }
-
-    fn transport_error(&self, error: reqwest::Error) -> anyhow::Error {
-        let args = [("base_url", self.url.to_owned())];
-        if error.is_timeout() {
-            super::diagnostic("integrations.branvil.api.timeout", args).into()
-        } else if error.is_decode() {
-            invalid()
-        } else {
-            super::diagnostic("integrations.branvil.api.unreachable", args).into()
-        }
-    }
-
-    async fn send(&self, request: reqwest::RequestBuilder) -> anyhow::Result<reqwest::Response> {
-        request
-            .send()
-            .await
-            .map_err(|error| self.transport_error(error))
-    }
-
-    async fn decode(&self, response: reqwest::Response) -> anyhow::Result<Value> {
-        anyhow::ensure!(response.status().is_success(), invalid());
-        response
-            .json()
-            .await
-            .map_err(|error| self.transport_error(error))
-    }
-
-    async fn owner(&self) -> anyhow::Result<Option<String>> {
-        let response = self.send(self.request(Method::GET, "/me")).await?;
-        if response.status() == StatusCode::UNAUTHORIZED {
-            return Ok(None);
-        }
-        let answer = self.decode(response).await?;
-        let name = answer["name"]
-            .as_str()
-            .filter(|name| !name.is_empty() && !name.contains(['\r', '\n']));
-        Ok(name
-            .filter(|_| answer["kind"] == "owner")
-            .map(str::to_owned))
-    }
-
-    async fn json(&self, request: reqwest::RequestBuilder) -> anyhow::Result<Value> {
-        self.decode(self.send(request).await?).await
-    }
+        password: issued.token,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        Router,
-        body::Bytes,
-        extract::State,
-        http::{HeaderMap, Uri},
-        response::{IntoResponse, Response},
-    };
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Default)]
-    struct Requests {
-        list: Vec<Value>,
-        revoked: Vec<String>,
-        issued: Vec<String>,
-    }
-
-    async fn double(
-        State(requests): State<Arc<Mutex<Requests>>>,
-        method: Method,
-        uri: Uri,
-        headers: HeaderMap,
-        body: Bytes,
-    ) -> Response {
-        let bearer = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        let mut requests = requests.lock().unwrap();
-        let path = uri.path();
-        if path == "/api/v1/me" {
-            let accepted = match bearer {
-                "Bearer admin-fixture" => Some("owner"),
-                "Bearer another-member" => Some("agent"),
-                _ if bearer.strip_prefix("Bearer ").is_some_and(|token| {
-                    requests
-                        .issued
-                        .iter()
-                        .enumerate()
-                        .any(|(i, _)| token == format!("issued-{i}"))
-                }) =>
-                {
-                    Some("owner")
-                }
-                _ => None,
-            };
-            return match accepted {
-                Some(kind) => axum::Json(json!({"kind":kind,"name":kind})).into_response(),
-                None => StatusCode::UNAUTHORIZED.into_response(),
-            };
-        }
-        assert_eq!(bearer, "Bearer admin-fixture");
-        if path == "/api/v1/members/owner/tokens" && method == Method::GET {
-            return axum::Json(json!({"items":requests.list,"next_cursor":null})).into_response();
-        }
-        if path == "/api/v1/members/owner/tokens" && method == Method::POST {
-            let request: Value = serde_json::from_slice(&body).unwrap();
-            let token = format!("issued-{}", requests.issued.len());
-            requests
-                .issued
-                .push(request["label"].as_str().unwrap().into());
-            return (StatusCode::CREATED, axum::Json(json!({"token":token}))).into_response();
-        }
-        if let Some(id) = path.strip_prefix("/api/v1/members/owner/tokens/")
-            && method == Method::DELETE
-        {
-            requests.revoked.push(id.into());
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        StatusCode::NOT_FOUND.into_response()
-    }
-
     #[tokio::test]
-    async fn owner_git_reuses_only_owner_tokens_and_rotates_this_devices_labels() {
+    async fn issuing_for_two_devices_preserves_the_other_devices_token() {
         let dir = tempfile::tempdir().unwrap();
-        let device_id = "019691c2-8dc0-7654-8000-0000abc01234";
-        let suffix = &device_id[device_id.len() - 8..];
-        let device = |_: &Path| Ok((device_id.into(), "Fixture machine".into()));
-        let requests = Arc::new(Mutex::new(Requests::default()));
-        let router = Router::new().fallback(double).with_state(requests.clone());
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        let root = dir.path().join("branvil");
+        let token = branvil::api::initialize(&root, "owner").unwrap();
+        let running = branvil::api::Running::start(
+            &root,
+            std::sync::Arc::new(branvil::vault::Memory::default()),
+        )
+        .await
+        .unwrap();
+        let admin = running.data.authenticate(token).await.unwrap();
+        let origin = running.data.base_url();
+        let first = "019691c2-8dc0-7654-8000-0000abc01234";
+        let second = "019691c2-8dc0-7654-8000-0000deadbeef";
+        let a = credential(origin, &running.data, &admin, first, "First")
+            .await
+            .unwrap()
+            .unwrap();
+        let b = credential(origin, &running.data, &admin, second, "Second")
+            .await
+            .unwrap()
+            .unwrap();
+        let renewed = credential(origin, &running.data, &admin, first, "Renamed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(running.data.authenticate(a.password).await.is_err());
+        assert!(running.data.authenticate(b.password).await.is_ok());
+        assert!(running.data.authenticate(renewed.password).await.is_ok());
+        assert!(
+            credential("http://127.0.0.1:1", &running.data, &admin, first, "First")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let page = admin.page("test".into(), Some(100), None).unwrap();
+        let tokens = admin
+            .members_list_tokens("owner".into(), page)
             .await
             .unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let http = reqwest::Client::builder().no_proxy().build().unwrap();
-        let cache = Mutex::new(None::<String>);
-        let read = || Ok(cache.lock().unwrap().clone());
-        let keep = |token: &str| {
-            *cache.lock().unwrap() = Some(token.into());
-            Ok(())
-        };
-        let admin = || Ok(Some("admin-fixture".to_owned()));
-        let acquire = || acquire(&http, &url, dir.path(), read, keep, admin, device);
-        let (first, raced) = tokio::join!(acquire(), acquire());
-        let first = first.unwrap();
-        assert_eq!(first.username, "owner");
-        assert_eq!(raced.unwrap().password, first.password);
-        assert_eq!(requests.lock().unwrap().issued.len(), 1);
-        assert_eq!(acquire().await.unwrap().password, first.password);
-        {
-            let mut observed = requests.lock().unwrap();
-            let first_label = observed.issued[0].clone();
-            observed.list = vec![
-                json!({"id":"first", "label":first_label}),
-                json!({"id":"old", "label":format!("git:Old machine ({suffix})")}),
-                json!({"id":"other", "label":"git:Other machine (deadbeef)"}),
-                json!({"id":"keep", "label":format!("app:Other app ({suffix})")}),
-            ];
-        }
-        *cache.lock().unwrap() = None;
-        let second = acquire().await.unwrap();
-        assert_ne!(second.password, first.password);
-        assert_eq!(requests.lock().unwrap().revoked, ["first", "old"]);
-        {
-            let mut observed = requests.lock().unwrap();
-            assert!(observed.issued[1].ends_with(&format!("({suffix})")));
-            observed
-                .list
-                .retain(|token| matches!(token["id"].as_str(), Some("other" | "keep")));
-        }
-        *cache.lock().unwrap() = Some("revoked-token".into());
-        assert_ne!(acquire().await.unwrap().password, second.password);
-        *cache.lock().unwrap() = Some("another-member".into());
-        assert_eq!(acquire().await.unwrap().username, "owner");
-        assert_eq!(requests.lock().unwrap().issued.len(), 4);
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn owner_git_fails_closed_without_admin_or_keychain() {
-        let dir = tempfile::tempdir().unwrap();
-        let http = reqwest::Client::builder().no_proxy().build().unwrap();
-        let unused = "http://127.0.0.1:1";
-        let no_admin = acquire(
-            &http,
-            unused,
-            dir.path(),
-            || Ok(None),
-            |_| unreachable!(),
-            || Ok(None),
-            |_| unreachable!(),
-        )
-        .await;
-        assert!(matches!(
-            no_admin
-                .err()
-                .unwrap()
-                .downcast_ref::<gb_ports::ServiceError>(),
-            Some(gb_ports::ServiceError::Diagnostic {
-                key: "integrations.branvil.api.not_connected",
-                ..
-            }),
-        ));
-        let locked = acquire(
-            &http,
-            unused,
-            dir.path(),
-            || Err(gb_config::secrets::KeychainFailure::Locked.into()),
-            |_| unreachable!(),
-            || unreachable!(),
-            |_| unreachable!(),
-        )
-        .await;
         assert!(
-            locked
-                .err()
-                .unwrap()
-                .is::<gb_config::secrets::KeychainFailure>()
+            tokens
+                .items
+                .iter()
+                .any(|t| t.label == "git:Renamed (abc01234)")
+        );
+        assert!(
+            tokens
+                .items
+                .iter()
+                .any(|t| t.label == "git:Second (deadbeef)")
         );
     }
 }

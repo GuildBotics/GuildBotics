@@ -43,11 +43,10 @@ AES-256-GCM、12 byte nonce、AAD `guildbotics.secrets.v1\0<store_id>`、
 base64 の nonce / ciphertext と `version: 1` は Rust の
 `gb_config::secrets::SecretStore` と同じ形式。
 
-人の git トークン（旧サービス `GuildBotics/branvil-git`、account は接続先 URL）は
-identity store に保存する。論理キー名は `git_token_key(origin)` が正本で、
-`BRANVIL_GIT_TOKEN_` に元 account の UTF-8 SHA-256（大文字16進数）を続ける。
-URL の正規化はしない。Rust 側の git credential の移行では、この命名規則で取得すること。
-このツールは旧 Python の git helper の読み取り先を切り替えない。
+人の git トークンは各マシンの OS の資格情報ストア（service `GuildBotics/branvil-git`、
+account は取得元の接続先 URL）に保存する。Rust の credential helper はこの場所を読み、
+identity store の `BRANVIL_GIT_TOKEN_*` は読まない。Hub の identity store にもこのキーはない。
+新規発行は起動中の GuildBotics サーバーが行い、CLI は管理者トークンを持たない。
 
 ## 中断した場合
 

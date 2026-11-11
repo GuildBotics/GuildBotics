@@ -15,6 +15,7 @@ use crate::{auth, i18n};
 
 pub mod connect;
 pub mod diagnostics;
+mod git_credentials;
 pub mod member;
 pub mod secrets;
 
@@ -218,7 +219,7 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
         std::io::stderr().lock(),
         language,
         async |origin: String| {
-            gb_integrations::factory::human_git_credential(&origin, |data| {
+            git_credentials::credential(&origin, |data| {
                 let device = gb_workspace::identity::ensure_device_identity(data)?;
                 Ok((device.device_id, device.display_name))
             })
