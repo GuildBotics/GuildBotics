@@ -1022,9 +1022,13 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
   It owns one listener and `app-api.lock` until both services exit. Branvil's
   `prepare_embedded` returns a router and data/shutdown handles without binding;
   its routes return 503 until recovery completes. GuildBotics routes take
-  precedence over Branvil's GUI fallback. `guildbotics server stop` refuses new
-  GuildBotics requests, keeps Branvil available while GuildBotics drains its
-  work, then lets Branvil wait for its CI jobs. Events close before the shared
+  precedence over Branvil's GUI fallback. `guildbotics server stop` drains
+  GuildBotics' work and Branvil's CI jobs together. Branvil gives out no more jobs from the start
+  of the stop. The screens and the CLI stay available meanwhile: the API refuses
+  only the routes that would start more work for the stop to wait for (`api::REFUSED_WHILE_STOPPING`:
+  runs, the service, environment builds, usage probes, workspace switches) with
+  `503 server_stopping`. Interactive member operations are answered until the
+  drain ends, and the event streams stay open until the listener closes. Events close before the shared
   listener's request grace and repository-operation drain. `--force` and SIGTERM skip the wait. The
   LaunchAgent runs the server directly and uses the CLI's forced-stop
   timeout for SIGTERM. The workspace's service settings control whether patrol and chat

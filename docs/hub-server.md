@@ -57,7 +57,7 @@ scripts/hub-server.sh update
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
 2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。GuildBotics も退避し、退避の写しに新ビルドの `server hub-data upgrade` と `check` を実行します。
-3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
+3. 検査が通ると、GuildBoticsの実行中の作業と、Branvilが実行中のCI（`ci.stop_wait_secs` の上限まで）を並べて待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
 状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
@@ -80,7 +80,7 @@ scripts/hub-server.sh recover
 "$HOME/Library/Application Support/GuildBotics/Hub/builds/current" install
 ```
 
-通常停止がBranvilのCIを待っている段階では、GuildBoticsのHTTPポートは閉じています。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。
+通常停止が作業とCIを待っている間も、画面とCLIは使えます。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。
 
 ## 署名を入れる前のHubを移す
 
@@ -196,7 +196,7 @@ scripts/hub-server.sh auto-uninstall
 
 自動更新の登録し直し・解除も `Hub/operation` を取得します。更新中なら操作を拒否し、更新の子プロセスを止めません。解除できなかった場合は更新が終わってから再実行します。
 
-更新中は作業の完了を待ち、新しい作業の受付が止まり、切り替え中は画面とCLIも使えません。
+更新中は実行中の作業とCIの完了を待ちます。その間も画面とCLIは使えますが、新しい実行・サービスの開始・実行環境のビルド・利用枠の確認・ワークスペースの切り替えは断り、新しいCIジョブも始めません。画面とCLIが使えないのは、新しいビルドへ切り替える間だけです。
 1時間経っても更新が終わらなければ通知しますが、待機は打ち切りません。
 `--force` は使いません。
 

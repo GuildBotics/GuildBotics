@@ -62,6 +62,9 @@ pub struct Api {
     /// The work the server started, which outlives the request that started
     /// it and which a stop waits for.
     pub work: tokio_util::task::TaskTracker,
+    /// The interactive member operations, which a stopping server keeps
+    /// answering until it closes its listener, after its work has drained.
+    pub(crate) member_work: tokio_util::task::TaskTracker,
     /// Cancelled when the server stops without waiting for its work.
     pub cancelled: tokio_util::sync::CancellationToken,
     /// The owner's home, holding the exchange directory.
@@ -123,6 +126,7 @@ impl Api {
             auth: Arc::new(auth),
             instance_id,
             work: tokio_util::task::TaskTracker::new(),
+            member_work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
             home: std::env::var_os("HOME")
                 .map(PathBuf::from)
@@ -802,9 +806,25 @@ pub fn router(api: Shared) -> Router {
 #[derive(Clone, Copy)]
 pub(crate) struct EmbeddedHost(pub bool);
 
+/// The routes that start work the server waits for when it stops: a run, the
+/// service, an environment build, a usage probe, or another selection. While
+/// the server drains, they are refused and every other route still answers.
+pub(crate) const REFUSED_WHILE_STOPPING: &[(&str, &str)] = &[
+    ("post", "/scheduler/start"),
+    ("post", "/commands/run"),
+    ("post", "/commands/author"),
+    ("post", "/verify"),
+    ("post", "/diagnostics/scenario"),
+    ("post", "/diagnostics/troubleshoot"),
+    ("post", "/intelligences/agent-environment/build"),
+    ("get", "/intelligences/cli-agents/{agent}/usage"),
+    ("post", "/workspace"),
+];
+
 pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
-    let owners =
-        owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
+    let owners = owner_routes()
+        .route_layer(middleware::from_fn_with_state(api.clone(), refuse_new_work))
+        .route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     let anyone = public_routes();
     let integrated = host.is_some();
     let host = host.unwrap_or_else(|| {
@@ -853,6 +873,30 @@ async fn guard(
     };
     loopback_auth::secure(response.headers_mut(), CSP);
     response
+}
+
+async fn refuse_new_work(State(api): State<Shared>, req: Request, next: Next) -> Response {
+    if api.shutdown.stopping() {
+        // HEAD runs the GET handler.
+        let method = if req.method() == axum::http::Method::HEAD {
+            "get".to_owned()
+        } else {
+            req.method().as_str().to_ascii_lowercase()
+        };
+        let route = req
+            .extensions()
+            .get::<axum::extract::MatchedPath>()
+            .map(|path| path.as_str().trim_start_matches("/-/guildbotics/api"));
+        if route.is_some_and(|route| REFUSED_WHILE_STOPPING.contains(&(method.as_str(), route))) {
+            return ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_stopping",
+                req.headers(),
+            )
+            .into_response();
+        }
+    }
+    next.run(req).await
 }
 
 async fn authenticate(State(api): State<Shared>, req: Request, next: Next) -> Response {
@@ -1484,6 +1528,203 @@ mod tests {
         }
     }
     use super::*;
+
+    /// Every route that changes something is either refused while the server
+    /// stops, or says why it starts nothing the stop waits for.
+    #[test]
+    fn every_mutating_route_is_classified_for_a_stopping_server() {
+        use std::collections::BTreeSet;
+        let allowed: &[((&str, &str), &str)] = &[
+            (("post", "/shutdown"), "asks for the stop itself"),
+            (("post", "/scheduler/stop"), "stops the service"),
+            (
+                ("post", "/member/run"),
+                "interactive member operations, drained last",
+            ),
+            (("post", "/member/plan"), "plans a member operation"),
+            (
+                ("post", "/member/git"),
+                "interactive repository exchange, drained last",
+            ),
+            (
+                ("post", "/commands/input-files"),
+                "stores inputs; a run starts apart",
+            ),
+            (("post", "/git-credentials"), "issues a token"),
+            (("post", "/chat/receive-state/reset"), "shared chat state"),
+            (("patch", "/service/settings"), "service settings"),
+            (("post", "/apps/authorizations"), "a consent code"),
+            (("post", "/apps/token"), "an app token"),
+            (("post", "/session"), "a browser session"),
+            (("post", "/session/links"), "an entry code"),
+            (("post", "/local-api/proof"), "a proof"),
+            (("post", "/system-alerts/dismiss"), "device-local alerts"),
+            (("put", "/runtime/debug"), "device-local debug settings"),
+            (
+                ("delete", "/device/workspaces"),
+                "forgets a registered workspace",
+            ),
+            (("post", "/config/init"), "writes configuration"),
+            (("put", "/config/intelligences"), "writes configuration"),
+            (
+                ("post", "/intelligences/decisions/credential"),
+                "stores a key",
+            ),
+            (("put", "/config/project"), "writes configuration"),
+            (
+                ("put", "/config/project/default-person"),
+                "writes configuration",
+            ),
+            (("post", "/config/members"), "writes configuration"),
+            (("put", "/config/members/{name}"), "writes configuration"),
+            (("delete", "/config/members/{name}"), "writes configuration"),
+            (
+                ("post", "/config/members/{name}/avatar"),
+                "writes configuration",
+            ),
+            (("delete", "/identities/{name}"), "writes an identity"),
+            (("put", "/transcripts/settings"), "writes configuration"),
+            (("post", "/commands/files"), "writes a command file"),
+            (("put", "/commands/files/{id}"), "writes a command file"),
+            (("delete", "/commands/files/{id}"), "writes a command file"),
+            (("post", "/commands/author/apply"), "writes command files"),
+            (
+                ("post", "/config/members/{name}/avatar/{provider}"),
+                "fetches an avatar",
+            ),
+            (
+                ("post", "/config/providers/slack/app-registrations"),
+                "builds a manifest URL",
+            ),
+            (
+                ("post", "/config/providers/slack/verify-tokens"),
+                "probes Slack",
+            ),
+            (
+                ("post", "/config/providers/branvil/connect"),
+                "a consent in memory",
+            ),
+            (
+                ("post", "/config/providers/branvil/connection"),
+                "reads a connection",
+            ),
+            (
+                ("post", "/config/providers/branvil/workspaces"),
+                "reads Branvil",
+            ),
+            (
+                ("post", "/config/providers/branvil/workspaces/create"),
+                "creates a Branvil workspace",
+            ),
+            (
+                ("post", "/config/providers/branvil/agents"),
+                "reads Branvil",
+            ),
+            (("post", "/config/providers/branvil/entry"), "an entry code"),
+        ];
+        let refused: BTreeSet<_> = REFUSED_WHILE_STOPPING.iter().copied().collect();
+        let routes: BTreeSet<_> = OWNER_ROUTES.iter().chain(PUBLIC_ROUTES).copied().collect();
+        assert!(
+            refused.is_subset(&routes),
+            "{:?}",
+            refused.difference(&routes)
+        );
+        let mutating: BTreeSet<_> = routes
+            .iter()
+            .copied()
+            .filter(|(method, _)| *method != "get")
+            .collect();
+        let classified: BTreeSet<_> = allowed
+            .iter()
+            .map(|(route, _)| *route)
+            .chain(
+                refused
+                    .iter()
+                    .copied()
+                    .filter(|(method, _)| *method != "get"),
+            )
+            .collect();
+        assert_eq!(classified, mutating);
+    }
+
+    #[tokio::test]
+    async fn a_stopping_server_refuses_only_what_starts_work() {
+        use tower::ServiceExt;
+        // No request here may reach the machine's keychain.
+        struct Untouchable;
+        impl gb_config::secrets::Keychain for Untouchable {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                panic!("the keychain was reached")
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("the keychain was reached")
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut api = Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "instance".into(),
+            root.path().into(),
+        );
+        api.keychain = Arc::new(Untouchable);
+        let api = Arc::new(api);
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let app = router(api.clone());
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        let refusals = async |path: &str, method: &str| {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method.to_uppercase().as_str())
+                        .uri(format!(
+                            "/-/guildbotics/api{}",
+                            variable.replace_all(path, "codex")
+                        ))
+                        .header("host", "127.0.0.1:8765")
+                        .header("authorization", format!("Bearer {}", token.trim()))
+                        // Not JSON: a handler that is reached refuses it first.
+                        .body(axum::body::Body::from("not json"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let code = serde_json::from_slice::<Value>(&body).unwrap_or_default()["code"].clone();
+            (status, code)
+        };
+        // Only requests that end before any handler does work: they reach
+        // neither the work nor the keychain.
+        assert_eq!(
+            refusals("/commands/run", "post").await,
+            (StatusCode::UNPROCESSABLE_ENTITY, json!("validation_error"))
+        );
+        api.shutdown.request(false);
+        for (method, path) in REFUSED_WHILE_STOPPING {
+            assert_eq!(
+                refusals(path, method).await,
+                (StatusCode::SERVICE_UNAVAILABLE, json!("server_stopping")),
+                "{path}"
+            );
+        }
+        // HEAD runs the GET handler, so it is refused alike.
+        assert_eq!(
+            refusals("/intelligences/cli-agents/{agent}/usage", "head")
+                .await
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        // The running work still reaches its members.
+        assert_eq!(
+            refusals("/member/plan", "post").await,
+            (StatusCode::UNPROCESSABLE_ENTITY, json!("validation_error"))
+        );
+    }
 
     #[test]
     fn every_mutating_route_is_classified_by_what_it_writes() {

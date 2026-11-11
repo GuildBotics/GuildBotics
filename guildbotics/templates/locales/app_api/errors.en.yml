@@ -20,6 +20,7 @@ en:
   command_workspace_changed: "The server's workspace changed before the command started. Run the command again."
   validation_error: "Request validation failed."
   secret_store_unavailable: "The OS secret store could not be used: %{reason}"
+  server_stopping: "The server is stopping. While it waits for the running work to end, no new work starts: runs of commands, assistants, diagnostics and checks, starting the service, environment builds, usage checks, and switching workspaces. Try again once the server has started again."
   config_busy: "Another save is still writing to this workspace, so nothing was saved. Try again in a moment."
   config_changed: "This screen was loaded before a more recent change, so nothing was saved. Reload it and make the change again."
   project_not_found: "Project config was not found."
