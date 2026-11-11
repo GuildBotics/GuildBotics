@@ -46,6 +46,9 @@ fn machine() -> Machine {
 
 fn command(machine: &Machine, path: PathBuf, inspects: Vec<InspectsItem>) -> Command {
     Command {
+        client_copy: false,
+        upload: None,
+        returned: Default::default(),
         config: std::sync::Arc::new(
             Configuration::copy(&machine.host, &machine.workspace).unwrap(),
         ),

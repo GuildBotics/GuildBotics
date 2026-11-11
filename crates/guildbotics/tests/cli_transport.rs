@@ -210,18 +210,14 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
     let root = gb_base::host_path::normalize(dir.path()).unwrap();
     let workspace = peer_workspace(&root);
     let peer = CliPeer::bind(&root).await;
+    let caller = root.join("caller");
+    let working = caller.join("work");
+    std::fs::create_dir_all(&working).unwrap();
     for (arguments, person, cwd, status, reply, expected_stdout, expected_error) in [
         (
-            vec![
-                "run",
-                "ask@alice",
-                "--cwd",
-                "workspace",
-                "topic=review",
-                "value",
-            ],
+            vec!["run", "ask@alice", "--cwd", "work", "topic=review", "value"],
             json!("alice"),
-            workspace.as_path(),
+            working.as_path(),
             "200 OK",
             Some(r#"{"output":"review output"}"#),
             "review output\n",
@@ -234,12 +230,12 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
                 "--person",
                 "alice",
                 "--cwd",
-                "workspace",
+                "work",
                 "topic=review",
                 "value",
             ],
             json!("alice"),
-            workspace.as_path(),
+            working.as_path(),
             "200 OK",
             Some(r#"{"output":"review output"}"#),
             "review output\n",
@@ -248,7 +244,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         (
             vec!["run", " ask ", "topic=review", "value"],
             Value::Null,
-            root.as_path(),
+            caller.as_path(),
             "200 OK",
             Some(r#"{"output":""}"#),
             "",
@@ -257,7 +253,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         (
             vec!["run", "ask", "topic=review", "value"],
             Value::Null,
-            root.as_path(),
+            caller.as_path(),
             "409 Conflict",
             Some(r#"{"code":"command_already_running","message":"実行中のため開始できません"}"#),
             "",
@@ -266,7 +262,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         (
             vec!["run", "ask", "topic=review", "value"],
             Value::Null,
-            root.as_path(),
+            caller.as_path(),
             "409 Conflict",
             Some(r#"{"code":"work_rejected","message":"実行中のため開始できません"}"#),
             "",
@@ -275,7 +271,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         (
             vec!["run", "ask", "topic=review", "value"],
             Value::Null,
-            root.as_path(),
+            caller.as_path(),
             "500 Internal Server Error",
             Some("Internal Server Error"),
             "",
@@ -284,14 +280,18 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         (
             vec!["run", "ask", "topic=review", "value"],
             Value::Null,
-            root.as_path(),
+            caller.as_path(),
             "",
             None,
             "",
             "",
         ),
     ] {
+        let read_only = person.is_null();
+        std::fs::write(cwd.join("input.txt"), "original").unwrap();
+        std::fs::write(cwd.join("remove.txt"), "before").unwrap();
         let mut child = peer_cli(&root, &arguments)
+            .current_dir(&caller)
             .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -314,18 +314,48 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             &json!({"workspace_id":"019691c2-8dc0-7654-8000-000000000042", "service_instance_id":"fixture", "command_time":100000}).to_string(),
         )
         .await;
+        let (socket, preflight) = peer.authorized("POST", "commands/run").await;
+        assert_eq!(
+            preflight,
+            json!({
+                "preflight":true,"client_copy":false,"upload":null,
+                "command":"ask","args":["topic=review","value"],"person":person,
+                "message":message,"cwd":cwd,"expected_workspace":"019691c2-8dc0-7654-8000-000000000042","request_id":null,
+            })
+        );
+        let resolved_person = person.as_str().unwrap_or("default-member");
+        CliPeer::respond(
+            socket,
+            "200 OK",
+            &json!({"output":json!({"read_only":read_only,"person":resolved_person}).to_string()})
+                .to_string(),
+        )
+        .await;
         let (socket, request) = peer.authorized("POST", "commands/run").await;
         let id = request["request_id"].as_str().unwrap();
         assert!(id.starts_with("fixture.100000."));
+        assert_eq!(request["preflight"], false);
+        assert_eq!(request["client_copy"], true);
+        assert_eq!(request["command"], "ask");
+        assert_eq!(request["args"], json!(["topic=review", "value"]));
+        assert_eq!(request["person"], resolved_person);
+        assert_eq!(request["message"], message);
+        assert_eq!(request["cwd"], json!(cwd));
         assert_eq!(
-            request,
-            json!({
-                "command": "ask", "args": ["topic=review", "value"],
-                "person": person, "message": message, "cwd": cwd,
-                "expected_workspace": "019691c2-8dc0-7654-8000-000000000042",
-                "request_id": id,
-            })
+            request["expected_workspace"],
+            "019691c2-8dc0-7654-8000-000000000042"
         );
+        if read_only {
+            assert!(request["upload"].is_null());
+        } else {
+            let files = request["upload"]["files"].as_array().unwrap();
+            assert_eq!(files.len(), 2);
+            assert!(
+                files
+                    .iter()
+                    .any(|f| f["path"] == "input.txt" && f["content"] == "b3JpZ2luYWw=")
+            );
+        }
         if reply.is_none() || status == "200 OK" {
             if reply.is_none() {
                 drop(socket);
@@ -336,8 +366,18 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             let (socket, _) = peer.authorized("GET", &path).await;
             CliPeer::respond(socket, "200 OK", r#"{"state":"running"}"#).await;
             let (socket, _) = peer.authorized("GET", &path).await;
-            let result: Value =
+            let mut result: Value =
                 serde_json::from_str(reply.unwrap_or(r#"{"output":"recovered"}"#)).unwrap();
+            if !read_only {
+                result["worktree_changes"] = json!(
+                    [
+                        json!({"path":"input.txt","content":"ZWRpdGVk"}).to_string(),
+                        json!({"path":"remove.txt","deleted":true}).to_string(),
+                        json!({"path":"new.txt","content":"Y3JlYXRlZA=="}).to_string(),
+                    ]
+                    .join("\n")
+                );
+            }
             CliPeer::respond(
                 socket,
                 "200 OK",
@@ -370,6 +410,24 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         } else {
             assert!(stderr.contains(expected_error), "{stderr}");
             assert!(!stderr.contains("command_not_found"), "{stderr}");
+        }
+        if !read_only && expected_error.is_empty() {
+            assert_eq!(
+                std::fs::read_to_string(cwd.join("input.txt")).unwrap(),
+                "edited"
+            );
+            assert!(!cwd.join("remove.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(cwd.join("new.txt")).unwrap(),
+                "created"
+            );
+            std::fs::remove_file(cwd.join("new.txt")).unwrap();
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(cwd.join("input.txt")).unwrap(),
+                "original"
+            );
+            assert!(cwd.join("remove.txt").exists());
         }
         peer.expect_no_retry().await;
     }

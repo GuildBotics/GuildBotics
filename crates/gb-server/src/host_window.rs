@@ -576,6 +576,9 @@ mod tests {
         std::fs::create_dir_all(&host.home).unwrap();
         let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
         let command = gb_environment::Command {
+            client_copy: false,
+            upload: None,
+            returned: Default::default(),
             path: copy.path().join("team/members/aiko/commands/probe.md"),
             config: copy.clone(),
             wants_result: false,
@@ -710,6 +713,9 @@ mod tests {
         std::fs::create_dir_all(project.parent().unwrap()).unwrap();
         std::fs::write(&project, "[").unwrap();
         let command = gb_environment::Command {
+            client_copy: false,
+            upload: None,
+            returned: Default::default(),
             config: Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap()),
             wants_result: false,
             invocation: None,

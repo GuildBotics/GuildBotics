@@ -573,25 +573,41 @@ pub async fn run_once_with_guest(
         let copied = match boot.worktree {
             None => None,
             Some(copy) => {
-                let host = copy.host.clone();
-                let excluded = copy.excluded.clone();
-                let manifest =
-                    tokio::task::spawn_blocking(move || gb_base::worktree::list(&host, &excluded))
-                        .await
-                        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?
+                if let Some(upload) = &copy.upload {
+                    let input = serde_json::to_vec(&**upload)
                         .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-                let input = serde_json::to_vec(&manifest)
-                    .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-                Some(
-                    capture(
-                        &sandbox,
-                        &worktree_argv("copy", copy),
-                        &input,
-                        process.env,
-                        64 * 1024 * 1024,
+                    Some(
+                        capture(
+                            &sandbox,
+                            &worktree_argv("receive", copy),
+                            &input,
+                            process.env,
+                            64 * 1024 * 1024,
+                        )
+                        .await?,
                     )
-                    .await?,
-                )
+                } else {
+                    let host = copy.host.clone();
+                    let excluded = copy.excluded.clone();
+                    let manifest = tokio::task::spawn_blocking(move || {
+                        gb_base::worktree::list(&host, &excluded)
+                    })
+                    .await
+                    .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?
+                    .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+                    let input = serde_json::to_vec(&manifest)
+                        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+                    Some(
+                        capture(
+                            &sandbox,
+                            &worktree_argv("copy", copy),
+                            &input,
+                            process.env,
+                            64 * 1024 * 1024,
+                        )
+                        .await?,
+                    )
+                }
             }
         };
         finish_command(execute(&sandbox, process).await, || async {
@@ -604,9 +620,13 @@ pub async fn run_once_with_guest(
                     1024 * 1024 * 1024,
                 )
                 .await?;
-                crate::worktree::write_back_async(copy, &copied, &changes)
-                    .await
-                    .map_err(Failure::Command)?;
+                if copy.upload.is_some() {
+                    *copy.returned.0.lock().unwrap() = Some(changes);
+                } else {
+                    crate::worktree::write_back_async(copy, &copied, &changes)
+                        .await
+                        .map_err(Failure::Command)?;
+                }
             }
             Ok(())
         })
@@ -2121,7 +2141,7 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
         let mount = mount.clone();
         builder = builder.volume(mount.guest.clone(), move |m| volume(m, &mount, scratch_mib));
     }
-    if let Some(copy) = boot.worktree {
+    if let Some(copy) = boot.worktree.filter(|copy| copy.upload.is_none()) {
         copy.validate()
             .map_err(|e| Failure::Command(Sentence::Text(e)))?;
         builder = builder.volume(crate::worktree::SOURCE, |m| m.bind(&copy.host).readonly());

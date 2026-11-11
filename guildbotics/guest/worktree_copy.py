@@ -38,7 +38,7 @@ import sys
 import unicodedata
 from collections.abc import Iterator, Set
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from guildbotics.intelligences.agent_runtime.wire import (
     ChangedFile,
@@ -61,6 +61,109 @@ class CopyManifest(TypedDict):
 
 class WorktreeCopyError(ValueError):
     """A copy whose changes cannot be told; the message says why."""
+
+
+def receive_tree(
+    source: Path, destination: Path, upload: dict[str, Any], *, readonly: bool = True
+) -> Iterator[CopiedFile]:
+    """Rebuild a client copy using only received data, never the client's path."""
+
+    def safe(name: str) -> Path:
+        parts = name.split("/")
+        if (
+            not name
+            or name.startswith("/")
+            or parts[0] == ".guildbotics"
+            or "\\" in name
+            or any(
+                part in ("", ".", "..") or part.casefold() == ".git" for part in parts
+            )
+        ):
+            raise WorktreeCopyError("Unsafe received worktree path")
+        return Path(name)
+
+    destination.mkdir(parents=True, exist_ok=True)
+    source.mkdir(parents=True, exist_ok=True)
+    for name in upload["directories"]:
+        (destination / safe(name)).mkdir(parents=True, exist_ok=True)
+    for item in upload["files"]:
+        name = safe(item["path"])
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as file:
+            file.write(base64.b64decode(item["content"], validate=True))
+        os.chmod(target, 0o755 if item["executable"] else 0o644)
+        yield CopiedFile(
+            path=item["path"], sha256=_sha256(target), executable=item["executable"]
+        )
+    for name in upload["nested"]:
+        (source / safe(name) / _GIT).mkdir(parents=True, exist_ok=True)
+    repository = upload["git"]
+    if repository is None:
+        return
+    gitdir = source / _GIT
+    object_format = repository["object_format"]
+    if object_format not in ("sha1", "sha256"):
+        raise WorktreeCopyError("Invalid Git object format")
+    subprocess.run(
+        ["git", "init", "--bare", f"--object-format={object_format}", str(gitdir)],
+        check=True,
+        capture_output=True,
+    )
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(
+            ["git", f"--git-dir={gitdir}", *args], check=True, capture_output=True
+        ).stdout
+
+    if repository["bundle"]:
+        bundle = source / "history.bundle"
+        bundle.write_bytes(base64.b64decode(repository["bundle"], validate=True))
+        git("bundle", "verify", str(bundle))
+        git("bundle", "unbundle", str(bundle))
+        bundle.unlink()
+    for expected, content in repository["objects"].items():
+        actual = (
+            subprocess.run(
+                ["git", f"--git-dir={gitdir}", "hash-object", "-w", "--stdin"],
+                input=base64.b64decode(content, validate=True),
+                check=True,
+                capture_output=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        if actual != expected:
+            raise WorktreeCopyError("Received index object hash mismatch")
+    for name, commit in repository["refs"].items():
+        if not name.startswith(("refs/heads/", "refs/remotes/", "refs/tags/")):
+            raise WorktreeCopyError("Invalid received Git ref")
+        git("update-ref", name, commit)
+    head = repository["head"]
+    if head.startswith("refs/heads/"):
+        git("symbolic-ref", "HEAD", head)
+    else:
+        git("update-ref", "--no-deref", "HEAD", head)
+    for name, content in (
+        ("index", repository["index"]),
+        ("info/exclude", repository["exclude"]),
+    ):
+        if content is not None:
+            (gitdir / name).write_bytes(base64.b64decode(content, validate=True))
+    for name, content in repository["shared_indexes"].items():
+        if not name.startswith("sharedindex.") or any(
+            c not in "0123456789abcdef" for c in name[12:]
+        ):
+            raise WorktreeCopyError("Invalid shared index name")
+        (gitdir / name).write_bytes(base64.b64decode(content, validate=True))
+    git("config", "core.bare", "false")
+    git("config", "core.worktree", str(destination))
+    for name, url in repository["remotes"].items():
+        git("config", f"remote.{name}.url", url)
+    (destination / _GIT).write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    if readonly:
+        subprocess.run(["mount", "--bind", str(gitdir), str(gitdir)], check=True)
+        subprocess.run(["mount", "-o", "remount,bind,ro", str(gitdir)], check=True)
 
 
 def copy_tree(
@@ -247,6 +350,11 @@ def main(argv: list[str]) -> int:
     out = sys.stdout
     try:
         match argv:
+            case ["receive", source, destination, *excluded]:
+                for copied in receive_tree(
+                    Path(source), Path(destination), json.load(sys.stdin)
+                ):
+                    out.write(json.dumps(copied) + "\n")
             case ["copy", source, destination, *excluded]:
                 for copied in copy_tree(
                     Path(source), Path(destination), json.load(sys.stdin)
@@ -263,7 +371,7 @@ def main(argv: list[str]) -> int:
                     out.write(json.dumps(changed) + "\n")
             case _:
                 raise WorktreeCopyError(f"Unknown arguments: {argv}")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(exc, file=sys.stderr)
         return 1
     out.flush()

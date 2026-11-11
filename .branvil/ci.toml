@@ -40,7 +40,7 @@ uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
 cargo build --locked -p gb-base --example worktree-list
-uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox -n auto --durations=30
+uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox --ignore=tests/integration -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
@@ -142,20 +142,21 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 # Drive the public command line and its HTTP server with the same Rust binary.
 [[jobs]]
 name = "rust-cli-blackbox"
-paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox/**", "tests/conftest.py", "docs/cli_reference.md", "pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
+paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox/**", "tests/integration/**", "tests/conftest.py", "docs/cli_reference.md", "pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0
 uv sync --extra test
 cargo build --locked -p gb-server --example browser-test-server
+cargo build --locked -p gb-environment --example worktree-transfer
 cargo build --locked -p guildbotics
 target/debug/guildbotics generate-cli-reference --check
 export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
 export GUILDBOTICS_BLACKBOX_MEMBER_CLI="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_SERVER="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_PROVIDER=local
-uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py
+uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py tests/integration/test_worktree_transfer.py
 ''']
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }

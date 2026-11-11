@@ -31,6 +31,11 @@ use crate::i18n;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunRequest {
+    #[serde(default)]
+    pub(crate) preflight: bool,
+    #[serde(default)]
+    pub(crate) client_copy: bool,
+    pub(crate) upload: Option<gb_environment::worktree::transfer::Upload>,
     pub(crate) command: String,
     #[serde(default)]
     pub(crate) args: Vec<String>,
@@ -110,9 +115,11 @@ async fn run_once(api: Shared, headers: HeaderMap, request: RunRequest) -> Respo
         return ApiError::new(StatusCode::CONFLICT, "command_workspace_changing", &headers)
             .into_response();
     };
+    let returned = gb_environment::worktree::transfer::Returned::default();
+    let upload_result = returned.clone();
     let launch = Launch::manual(&request.command);
-    match served(&api, &headers, request, launch, admitted).await {
-        Ok(ran) => Json(json!({"trace_id": ran.trace_id, "output": ran.output})).into_response(),
+    match served_returned(&api, &headers, request, launch, admitted, returned).await {
+        Ok(ran) => Json(json!({"trace_id": ran.trace_id, "output": ran.output, "worktree_changes": upload_result.0.lock().unwrap().as_ref().map(|b| String::from_utf8_lossy(b).to_string())})).into_response(),
         Err(refused) => refused,
     }
 }
@@ -125,6 +132,16 @@ pub(crate) async fn served(
     request: RunRequest,
     launch: Launch,
     admitted: tokio::sync::OwnedRwLockReadGuard<()>,
+) -> Result<Ran, Response> {
+    served_returned(api, headers, request, launch, admitted, Default::default()).await
+}
+async fn served_returned(
+    api: &Shared,
+    headers: &HeaderMap,
+    request: RunRequest,
+    launch: Launch,
+    admitted: tokio::sync::OwnedRwLockReadGuard<()>,
+    returned: gb_environment::worktree::transfer::Returned,
 ) -> Result<Ran, Response> {
     let selected = api.selected();
     let state = RunState {
@@ -141,7 +158,7 @@ pub(crate) async fn served(
         work: &api.work,
         cancelled: &api.cancelled,
     };
-    start(&state, headers, request, launch, Some(admitted)).await
+    start(&state, headers, request, launch, Some(admitted), returned).await
 }
 
 /// How a run is started and answered, beside what was asked: what its trace
@@ -211,9 +228,12 @@ async fn start(
     request: RunRequest,
     launch: Launch,
     admitted: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+    returned: gb_environment::worktree::transfer::Returned,
 ) -> Result<Ran, Response> {
     let error = |status, code| ApiError::new(status, code, headers);
-    if request.command.is_empty() {
+    if request.command.is_empty()
+        || (request.upload.is_some() && (!request.client_copy || request.preflight))
+    {
         return Err(error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error").into_response());
     }
     if request.expected_command_file_id.is_some()
@@ -344,6 +364,9 @@ async fn start(
                 .map_err(|e| internal(&e.to_string(), "OSError"))?;
             cwd.clone()
         }
+        (None, Some(cwd)) if request.preflight || request.client_copy => {
+            gb_base::host_path::normalize(cwd).map_err(|e| internal(&e.to_string(), "OSError"))?
+        }
         (None, Some(cwd)) => {
             working_directory(cwd, &host.home).map_err(|refused| match refused {
                 None => error(StatusCode::BAD_REQUEST, "command_cwd_not_absolute")
@@ -366,6 +389,52 @@ async fn start(
             .reason(configuration.spoken(&problem.to_string()))
             .into_response()
     })?;
+    if request.preflight || request.client_copy {
+        let registered = gb_environment::device::registered_workspaces(&host.data)
+            .map_err(|e| internal(&e, "OSError"))?;
+        let mut resolved = gb_environment::contract::resolve(
+            workspace,
+            &host.home,
+            &registered,
+            access.read_only,
+            false,
+        )
+        .map_err(|e| internal(&e, "OSError"))?;
+        let clones = workspace
+            .join(".guildbotics/local/clones")
+            .join(&person.person_id);
+        if request.preflight
+            && cwd
+                .strip_prefix(&clones)
+                .ok()
+                .and_then(|p| p.components().next())
+                .is_some_and(|c| {
+                    let n = c.as_os_str().to_string_lossy();
+                    n.len() == 64
+                        && n.bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                })
+        {
+            resolved
+                .denied
+                .retain(|p| *p != workspace.join(".guildbotics"));
+        }
+        // Name comparison only: the caller's directory may not exist here.
+        if gb_environment::contract::validate_client_name(&cwd, &resolved, access.read_only)
+            .is_err()
+        {
+            return Err(error(StatusCode::BAD_REQUEST, "command_error")
+                .key("command_client_cwd_refused", vec![])
+                .into_response());
+        }
+        if request.preflight {
+            return Ok(Ran {
+                trace_id: String::new(),
+                output: json!({"read_only":access.read_only,"person":person.person_id}).to_string(),
+                result: json!(null),
+            });
+        }
+    }
     // A stop that does not wait for the work refuses work not started yet.
     if api.cancelled.is_cancelled() {
         return Err(error(StatusCode::SERVICE_UNAVAILABLE, "command_cancelled").into_response());
@@ -414,6 +483,9 @@ async fn start(
         trace_id.clone()
     };
     let command = gb_environment::Command {
+        client_copy: request.client_copy,
+        upload: request.upload.map(std::sync::Arc::new),
+        returned,
         config: configuration,
         wants_result: launch.result.is_some(),
         invocation: None,

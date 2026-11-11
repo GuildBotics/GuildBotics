@@ -99,6 +99,9 @@ pub struct Host {
 /// resolved for it in the run's copy of the configuration, what it declared,
 /// and its arguments, working directory (as the host spells it) and input.
 pub struct Command {
+    pub client_copy: bool,
+    pub upload: Option<std::sync::Arc<worktree::transfer::Upload>>,
+    pub returned: worktree::transfer::Returned,
     /// The configuration the run reads, once: its file is in it.
     pub config: std::sync::Arc<Configuration>,
     pub wants_result: bool,
@@ -315,15 +318,26 @@ pub fn shape(
             code_path(host, &host.package.join("templates"))?,
         );
     }
-    let planned = contract::plan(
-        workspace,
-        &command.person_id,
-        &command.cwd,
-        &access,
-        mounts,
-        host.data.join("run/worktree-write-back.lock"),
-        command.access.read_only,
-    )
+    let planned = if command.client_copy {
+        contract::received_plan(
+            &command.cwd,
+            &access,
+            mounts,
+            command.access.read_only,
+            command.upload.clone(),
+            command.returned.clone(),
+        )
+    } else {
+        contract::plan(
+            workspace,
+            &command.person_id,
+            &command.cwd,
+            &access,
+            mounts,
+            host.data.join("run/worktree-write-back.lock"),
+            command.access.read_only,
+        )
+    }
     .map_err(|e| Failure::Command(Sentence::Text(e)))?;
     let mounts = planned.mounts;
     let cwd = planned.cwd;
