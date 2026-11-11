@@ -198,16 +198,18 @@ fn check_root(root: &Path) -> anyhow::Result<()> {
         }
         let bytes = fs::read(path)?;
         let invalid = || anyhow::anyhow!("invalid data file: {}", path.display());
-        let text = std::str::from_utf8(&bytes).map_err(|_| invalid())?;
         let values: Vec<Value> = match extension {
-            "yaml" | "yml" => vec![gb_config::yaml_value(text).map_err(|_| invalid())?],
-            "jsonl" => text
+            "yaml" | "yml" => vec![
+                gb_config::yaml_value(std::str::from_utf8(&bytes).map_err(|_| invalid())?)
+                    .map_err(|_| invalid())?,
+            ],
+            // Match the journal readers: a torn row does not invalidate other records.
+            "jsonl" => String::from_utf8_lossy(&bytes)
                 .lines()
-                .filter(|line| !line.is_empty())
-                .map(serde_json::from_str)
-                .collect::<Result<_, _>>()
-                .map_err(|_| invalid())?,
-            _ => vec![serde_json::from_str(text).map_err(|_| invalid())?],
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(Value::is_object)
+                .collect(),
+            _ => vec![serde_json::from_slice(&bytes).map_err(|_| invalid())?],
         };
         for value in values {
             if let Some(version) = value.get("schema_version") {
@@ -333,7 +335,6 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         for (name, text) in [
             ("state/item.json", r#"{"schema_version":5}"#),
-            ("state/item.jsonl", "{bad}\n"),
             ("config/item.yml", "key: ["),
             ("state/item.json", r#"{"schema_version":0}"#),
             ("state/item.json", r#"{"schema_version":"4"}"#),
@@ -349,6 +350,41 @@ mod tests {
                 &format!("{{\"schema_version\":{version}}}\n"),
             );
             check_root(temp.path()).unwrap();
+        }
+    }
+
+    #[test]
+    fn jsonl_skips_unreadable_rows_but_checks_every_readable_record_version() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "state/documents/memory_events/device.jsonl",
+            "state/activity/events.jsonl",
+            "local/services/chat/channel.jsonl",
+        ] {
+            for content in [
+                "{bad}\n",
+                "{\"schema_version\":4}\n{\"schema_ver",
+                "{bad}\n{\"schema_version\":4}\n{bad}\n{\"schema_version\":4}\n",
+                "\n[]\nnull\n42\n",
+            ] {
+                write(temp.path(), name, content);
+                check_root(temp.path()).unwrap();
+            }
+            for version in ["5", "0", "-1", "1.5", "null", "\"4\""] {
+                write(
+                    temp.path(),
+                    name,
+                    &format!("{{bad}}\n{{\"schema_version\":{version}}}\n{{bad}}"),
+                );
+                assert!(check_root(temp.path()).is_err(), "{name}: {version}");
+            }
+            // A torn UTF-8 sequence must not hide a readable future-version row.
+            let path = temp.path().join(".guildbotics").join(name);
+            fs::write(&path, b"{\"schema_version\":4}\n{\"text\":\"\xe3").unwrap();
+            check_root(temp.path()).unwrap();
+            fs::write(&path, b"{\"schema_version\":5,\"text\":\"\xe3\"}\n").unwrap();
+            assert!(check_root(temp.path()).is_err());
+            fs::remove_file(path).unwrap();
         }
     }
 
