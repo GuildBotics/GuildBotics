@@ -56,5 +56,14 @@
     "gone.txt"
   ],
   "copied_jsonl": "{\"path\":\"edit.txt\",\"sha256\":\"cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4\",\"executable\":false}\n{\"path\":\"gone.txt\",\"sha256\":\"283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247\",\"executable\":false}\n{\"path\":\"keep.txt\",\"sha256\":\"6ca7ea2feefc88ecb5ed6356ed963f47dc9137f82526fdd25d618ea626d0803f\",\"executable\":true}\n",
-  "changes_jsonl": "{\"path\":\"edit.txt\",\"content\":\"bmV3\"}\n{\"path\":\"new.txt\",\"content\":\"6L+95Yqg\",\"executable\":true}\n{\"path\":\"gone.txt\",\"deleted\":true}\n"
+  "changes_jsonl": "{\"path\":\"edit.txt\",\"content\":\"bmV3\"}\n{\"path\":\"new.txt\",\"content\":\"6L+95Yqg\",\"executable\":true}\n{\"path\":\"gone.txt\",\"deleted\":true}\n",
+  "copy_manifest": {
+    "directories": [],
+    "files": [
+      "edit.txt",
+      "gone.txt",
+      "keep.txt"
+    ],
+    "repository": false
+  }
 }

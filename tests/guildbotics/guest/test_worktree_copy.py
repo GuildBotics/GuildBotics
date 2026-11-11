@@ -39,8 +39,44 @@ def _repository(root: Path, tracked: dict[str, str]) -> Path:
     return root
 
 
+@pytest.fixture(scope="module", autouse=True)
+def host_selector():
+    """CI fetches dependencies before pytest; rebuild offline to reject stale binaries."""
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "-p",
+            "gb-base",
+            "--example",
+            "worktree-list",
+        ],
+        check=True,
+    )
+
+
+def _manifest(source: Path, excluded=frozenset()):
+    result = subprocess.run(
+        [
+            str(Path("target/debug/examples/worktree-list").resolve()),
+            str(source),
+            *excluded,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise WorktreeCopyError(result.stderr)
+    return json.loads(result.stdout)
+
+
 def _copied(source: Path, destination: Path, excluded=frozenset()):
-    return {each["path"]: each for each in copy_tree(source, destination, excluded)}
+    return {
+        each["path"]: each
+        for each in copy_tree(source, destination, _manifest(source, excluded))
+    }
 
 
 def _changes(source: Path, destination: Path, copied, excluded=frozenset()):
@@ -145,6 +181,16 @@ def test_a_name_the_disk_spells_otherwise_is_copied_as_the_disk_spells_it(
 
     assert sorted(copied) == [".gitignore", on_disk]
     assert _changes(source, destination, copied) == []
+    statuses = [
+        subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z"],
+            cwd=tree,
+            check=True,
+            capture_output=True,
+        ).stdout
+        for tree in (source, destination)
+    ]
+    assert statuses[0] == statuses[1]
 
 
 @pytest.mark.parametrize(
@@ -435,6 +481,7 @@ def test_the_entry_copies_and_tells_changes_as_json_lines(
     source = _tree(tmp_path / "source", {"a.txt": "a"})
     destination = tmp_path / "copy"
 
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_manifest(source))))
     assert worktree_copy.main(["copy", str(source), str(destination)]) == 0
     listed = capsys.readouterr().out
     assert [json.loads(line)["path"] for line in listed.splitlines()] == ["a.txt"]
@@ -447,3 +494,136 @@ def test_the_entry_copies_and_tells_changes_as_json_lines(
 
     assert worktree_copy.main(["unknown"]) == 1
     assert "Unknown arguments" in capsys.readouterr().err
+
+
+def test_host_git_ignores_user_system_and_inherited_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _repository(tmp_path / "source", {"tracked": "t"})
+    _tree(source, {"user-ignored": "u", "system-ignored": "s", "injected": "i"})
+    user_excludes = tmp_path / "user-excludes"
+    user_excludes.write_text("user-ignored\n", encoding="utf-8")
+    system_excludes = tmp_path / "system-excludes"
+    system_excludes.write_text("system-ignored\n", encoding="utf-8")
+    user = tmp_path / ".gitconfig"
+    user.write_text(f"[core]\nexcludesFile = {user_excludes}\n", encoding="utf-8")
+    system = tmp_path / "system.gitconfig"
+    system.write_text(f"[core]\nexcludesFile = {system_excludes}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert "user-ignored" in _manifest(source)["files"]
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(user))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(user_excludes))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "nonexistent-index"))
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nonexistent-repository"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "nonexistent-tree"))
+
+    assert sorted(_manifest(source)["files"]) == [
+        "injected",
+        "system-ignored",
+        "tracked",
+        "user-ignored",
+    ]
+
+
+def test_host_git_never_executes_repository_fsmonitor(tmp_path: Path) -> None:
+    source = _repository(tmp_path / "source", {"tracked": "t"})
+    marker = tmp_path / "executed"
+    script = tmp_path / "fsmonitor"
+    script.write_text(
+        f'#!/bin/sh\ntouch "{marker}"\nprintf "token\\\\0"\n', encoding="utf-8"
+    )
+    script.chmod(0o755)
+    _git(source, "config", "core.fsmonitor", str(script))
+    _git(source, "config", "core.hooksPath", str(tmp_path))
+
+    _git(
+        source, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"
+    )
+    assert marker.exists()
+    marker.unlink()
+    assert _manifest(source)["files"] == ["tracked"]
+    assert not marker.exists()
+
+
+def test_host_selection_excludes_workspace(tmp_path: Path) -> None:
+    source = _tree(tmp_path / "source", {".guildbotics/private": "x", "keep": "k"})
+    assert _manifest(source)["files"] == ["keep"]
+
+
+def test_guest_copy_obeys_manifest_without_asking_git(tmp_path: Path) -> None:
+    source = _repository(tmp_path / "source", {".gitignore": "*.log\n"})
+    _tree(source, {"selected.log": "s", "not-selected": "n"})
+    destination = tmp_path / "copy"
+    manifest = {"files": ["selected.log"], "directories": [], "repository": False}
+    assert [each["path"] for each in copy_tree(source, destination, manifest)] == [
+        "selected.log"
+    ]
+    assert not (destination / "not-selected").exists()
+
+
+@pytest.mark.parametrize("xdg", [False, True], ids=["home-default", "xdg"])
+def test_default_user_ignore_is_not_used(tmp_path, monkeypatch, xdg):
+    source = _repository(tmp_path / "source", {"tracked": "t"})
+    _tree(
+        source, {"user-hidden": "u", ".gitignore": "repo-hidden\n", "repo-hidden": "r"}
+    )
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    if xdg:
+        config = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    else:
+        config = home / ".config"
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    _tree(config, {"git/ignore": "user-hidden\n"})
+    assert sorted(_manifest(source)["files"]) == [
+        ".gitignore",
+        "tracked",
+        "user-hidden",
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires byte filenames")
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_non_utf8_names_not_selected_do_not_fail(tmp_path, kind):
+    source = _repository(tmp_path / "source", {".gitignore": "*.tmp\n"})
+    path = os.fsencode(source) + b"/bad\xff.tmp"
+    if kind == "file":
+        with open(path, "wb") as file:
+            file.write(b"ignored")
+    elif kind == "directory":
+        os.mkdir(path)
+        with open(path + b"/child", "wb") as file:
+            file.write(b"ignored")
+    else:
+        os.symlink(b"missing", path)
+    assert _manifest(source)["files"] == [".gitignore"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires byte filenames")
+@pytest.mark.parametrize("repository", [False, True])
+def test_unselected_byte_names_and_selected_byte_names_are_distinct(
+    tmp_path, repository
+):
+    source = (_repository if repository else _tree)(
+        tmp_path / "source", {"tracked": "t"}
+    )
+    raw = os.fsencode(source)
+    os.symlink(b"missing", raw + b"/link\xff")
+    os.mkfifo(raw + b"/fifo\xff")
+    os.mkdir(raw + b"/.guildbotics")
+    with open(raw + b"/.guildbotics/tracked\xff", "wb") as file:
+        file.write(b"private")
+    if repository:
+        _git(source, "add", "-f", ".guildbotics")
+    assert _manifest(source)["files"] == ["tracked"]
+    with open(raw + b"/selected\xff", "wb") as file:
+        file.write(b"selected")
+    with pytest.raises(WorktreeCopyError, match="Non-UTF-8"):
+        _manifest(source)

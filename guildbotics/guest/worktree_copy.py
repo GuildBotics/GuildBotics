@@ -8,18 +8,15 @@ The host never reads or writes the copy; it receives the changes as data and
 writes them back itself, so nothing the command leaves there -- a hook, a
 link, a configuration git would follow -- reaches the host.
 
-Only directories and regular files are copied, and only regular files are
-reported; ``.git`` is neither copied nor reported. Of a directory whose
-``.git`` is a directory, what git ignores is not copied, and a new file is
-not reported when git ignores it or it is in a repository of its own (a
-submodule, a nested repository). Git is asked in both with the original's
-``.git``, whatever the command did to the copy's, and names what it ignores
-as it reads it from the disk. What git tracks is copied even when git here
-takes it for an ignored one: the index of a repository made on macOS spells
-it in another Unicode form than the disk. Any other directory is copied
-whole. The copy gets a gitfile naming the read-only
-original's ``.git``, so ``git status`` and ``git diff`` work while nothing
-can be committed.
+The host selects directories and regular files with ``gb_base::worktree``,
+using the original repository and isolated host Git configuration. ``copy``
+reads that manifest from standard input and materializes it without querying
+Git. The copy gets a gitfile naming the read-only original's ``.git`` when
+its root has a repository directory.
+
+Change detection still asks the microVM's Git against the original's ``.git``
+and preserves its Unicode handling. It neither trusts the copy's gitfile
+nor reports new files inside submodules or nested repositories.
 
 ``copy <source> <destination> [<excluded>...]`` writes one JSON line per file
 copied (:class:`CopiedFile`). ``changes <source> <destination> [<excluded>...]``
@@ -41,6 +38,7 @@ import sys
 import unicodedata
 from collections.abc import Iterator, Set
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 from guildbotics.intelligences.agent_runtime.wire import (
     ChangedFile,
@@ -53,33 +51,36 @@ _CHUNK_BYTES = 1 << 20
 _IGNORED = ("--others", "--ignored", "--exclude-standard")
 
 
+class CopyManifest(TypedDict):
+    """The host's selection, with on-disk spelling."""
+
+    directories: list[str]
+    files: list[str]
+    repository: bool
+
+
 class WorktreeCopyError(ValueError):
     """A copy whose changes cannot be told; the message says why."""
 
 
 def copy_tree(
-    source: Path, destination: Path, excluded: frozenset[str]
+    source: Path, destination: Path, manifest: CopyManifest
 ) -> Iterator[CopiedFile]:
-    """Copy the directories and regular files of ``source`` to
-    ``destination``, but what git ignores when ``source`` is a repository.
-
-    Raises:
-        WorktreeCopyError: When git cannot list the repository.
-    """
+    """Materialize exactly the host-selected directories and regular files."""
     destination.mkdir(parents=True, exist_ok=True)
-    repository = _repository(source)
-    ignored = set() if repository is None else _ignored(repository, source)
-    for path, info in _walk(source, excluded | ignored):
+    for path in manifest["directories"]:
+        (destination / path).mkdir(exist_ok=True)
+    for path in manifest["files"]:
+        info = (source / path).lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise WorktreeCopyError(f"'{path}' is no longer a regular file.")
         target = destination / path
-        if stat.S_ISDIR(info.st_mode):
-            target.mkdir(exist_ok=True)
-            continue
         shutil.copyfile(source / path, target, follow_symlinks=False)
         executable = _executable(info)
         os.chmod(target, 0o755 if executable else 0o644)
         yield CopiedFile(path=path, sha256=_sha256(target), executable=executable)
-    if repository is not None:
-        (destination / _GIT).write_text(f"gitdir: {repository}\n", encoding="utf-8")
+    if manifest["repository"]:
+        (destination / _GIT).write_text(f"gitdir: {source / _GIT}\n", encoding="utf-8")
 
 
 def changed_files(
@@ -248,7 +249,7 @@ def main(argv: list[str]) -> int:
         match argv:
             case ["copy", source, destination, *excluded]:
                 for copied in copy_tree(
-                    Path(source), Path(destination), frozenset(excluded)
+                    Path(source), Path(destination), json.load(sys.stdin)
                 ):
                     out.write(json.dumps(copied) + "\n")
             case ["changes", source, destination, *excluded]:

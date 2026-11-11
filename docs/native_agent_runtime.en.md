@@ -211,6 +211,9 @@ opening it.
   working directory -- a repository named with `guildbotics run --cwd`, for
   example -- is bound read-only, its `.git` included, copied onto the
   microVM's own disk at the same path, and the command works on the copy.
+  The host selects the paths in Rust using its own git, with system/global
+  configuration and inherited `GIT_*` variables disabled, and fsmonitor and
+  hooks disabled. The microVM copies exactly that manifest.
   When the working directory's `.git` is a directory, what git ignores is
   not copied: untracked files the repository's own ignore rules
   (`.gitignore`, `.git/info/exclude`; not your global git configuration)
@@ -218,7 +221,7 @@ opening it.
   or the index spells their name in another Unicode form than the disk --
   and a submodule or a nested repository whole, without its `.git`. Ignored
   files -- build output, a `.venv`, `node_modules` -- are not in the copy,
-  and a command that needs them makes them again there. When the environment's git cannot read the repository
+  and a command that needs them makes them again there. When the host's git cannot list the repository
   (an extension of a newer git, for example), the copy cannot be made and the
   command fails. Any other working directory is copied whole.
   When the command ends well, the host writes back the regular files that

@@ -572,16 +572,27 @@ pub async fn run_once_with_guest(
         }
         let copied = match boot.worktree {
             None => None,
-            Some(copy) => Some(
-                capture(
-                    &sandbox,
-                    &worktree_argv("copy", copy),
-                    &[],
-                    process.env,
-                    64 * 1024 * 1024,
+            Some(copy) => {
+                let host = copy.host.clone();
+                let excluded = copy.excluded.clone();
+                let manifest =
+                    tokio::task::spawn_blocking(move || gb_base::worktree::list(&host, &excluded))
+                        .await
+                        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?
+                        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+                let input = serde_json::to_vec(&manifest)
+                    .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+                Some(
+                    capture(
+                        &sandbox,
+                        &worktree_argv("copy", copy),
+                        &input,
+                        process.env,
+                        64 * 1024 * 1024,
+                    )
+                    .await?,
                 )
-                .await?,
-            ),
+            }
         };
         finish_command(execute(&sandbox, process).await, || async {
             if let (Some(copy), Some(copied)) = (boot.worktree, copied) {
