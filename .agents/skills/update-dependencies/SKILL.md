@@ -356,6 +356,12 @@ pending task or a condition for creating this PR. Do not call the new pins
 Immediately after the unverified statement, add: **For optional real-device
 verification during review, request `$verify-ai-cli-tools` on this PR.**
 
+Before merging a recipe-changing PR, a human must prebuild its snapshot on the
+Hub host with the executable built from the PR head, using the Hub's machine
+root and production workspace. Load the declared custom base image first when
+applicable. Follow [the Hub prebuild procedure](../../../docs/hub-server.md#レシピ変更のマージ前にスナップショットを用意する).
+This is a human pre-merge step, not an unattended real-device action.
+
 After the merge, each device's snapshot turns `stale` when a pin, Node.js, or
 `requirements.txt` changed: a running service rebuilds it once it runs the new
 code, and `guildbotics environment build` rebuilds it by hand. The code host

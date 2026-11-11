@@ -190,8 +190,8 @@ export async function tick() {
       stage = 'snapshot';
       const after = await cli('environment', 'status', '--format', 'json');
       clearBlocker(stage);
-      if (['missing', 'stale', 'failed'].includes(after.snapshot?.state)) {
-        await notify(sha, stage, `Snapshot is ${after.snapshot.state}`, 'run guildbotics environment build');
+      if (['missing', 'stale', 'failed', 'building'].includes(after.snapshot?.state)) {
+        await notify(sha, stage, `Snapshot is ${after.snapshot.state}`, 'run guildbotics environment build (or wait for the running build), then guildbotics environment prune');
       }
     }
   } catch (error) {

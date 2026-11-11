@@ -141,6 +141,10 @@ case "$name" in
                 ;;
             service:start) touch "$FAKE_ROOT/service-running" ;;
             service:stop) rm -f "$FAKE_ROOT/service-running" ;;
+            environment:prune)
+                [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub/builds/update-from" ] || exit 1
+                [ ! -f "$FAKE_ROOT/fail-prune" ] || exit 1
+                ;;
             environment:status)
                 if [ -f "$FAKE_ROOT/environment" ]; then cat "$FAKE_ROOT/environment"
                 else printf '{"image":{"reference":null},"snapshot":{"state":"ready"}}\n'; fi

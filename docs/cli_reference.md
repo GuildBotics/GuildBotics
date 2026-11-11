@@ -16,6 +16,7 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics environment`](#guildbotics-environment)
 - [`guildbotics environment status`](#guildbotics-environment-status)
 - [`guildbotics environment build`](#guildbotics-environment-build)
+- [`guildbotics environment prune`](#guildbotics-environment-prune)
 - [`guildbotics environment remove`](#guildbotics-environment-remove)
 - [`guildbotics environment login`](#guildbotics-environment-login)
 - [`guildbotics environment usage`](#guildbotics-environment-usage)
@@ -177,6 +178,7 @@ Usage: guildbotics environment [OPTIONS] <COMMAND>
 Commands:
   status  Read the device's environment and refusal or warning
   build   Build the declared environment on this device
+  prune   Remove obsolete snapshots after a successful Hub activation
   remove  Remove device snapshots while preserving provider logins
   login   Log in to a provider in its private environment
   usage   Probe provider usage in its private environment
@@ -220,6 +222,18 @@ Options:
       --force
           Rebuild even when the snapshot already matches the declaration
 
+  -h, --help
+          Print help
+```
+
+## guildbotics environment prune
+
+```text
+Remove obsolete snapshots after a successful Hub activation
+
+Usage: guildbotics environment prune
+
+Options:
   -h, --help
           Print help
 ```

@@ -680,7 +680,7 @@ pub enum BuildOutcome {
     Built(PathBuf),
 }
 
-/// Build from one declaration reading; only a completed replacement prunes old snapshots.
+/// Build from one declaration reading, preserving other recipes.
 pub async fn build(
     workspace: &std::path::Path,
     data: &std::path::Path,
@@ -748,7 +748,6 @@ pub async fn build(
             )
             .await
         },
-        runtime::remove_snapshot,
     )
     .await
     .map_err(anyhow::Error::msg)?;
