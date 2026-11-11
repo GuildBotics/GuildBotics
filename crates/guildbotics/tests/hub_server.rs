@@ -891,6 +891,7 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
         "dirty",
         "diverged",
         "unresponsive",
+        "service-error",
         "image",
         "manual",
     ] {
@@ -904,7 +905,7 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
             "interrupted" => fs::write(hub.builds().join("update-from"), "interrupted").unwrap(),
             "dirty" => fs::write(hub.repo.join("untracked"), "change").unwrap(),
             "diverged" => hub.commit("local"),
-            "unresponsive" => hub.mark("unresponsive"),
+            "unresponsive" | "service-error" => hub.mark(condition),
             "image" => fs::write(
                 hub.root().join("environment"),
                 r#"{"image":{"reference":"custom:latest","present":false}}"#,
@@ -990,7 +991,16 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
         include_str!("../../../rust-toolchain.toml"),
     )
     .unwrap();
+    hub.mark("auto-loaded");
     hub.run("auto-install", None, true);
+    assert!(
+        hub.lines("calls").contains("sleep|1")
+            || hub
+                .lines("calls")
+                .matches("launchctl|print|gui/1234/local.guildbotics.update")
+                .count()
+                >= 3
+    );
     let plist = hub
         .home
         .join("Library/LaunchAgents/local.guildbotics.update.plist");
@@ -1002,4 +1012,151 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
     hub.run("auto-uninstall", None, true);
     assert!(!plist.exists());
     assert_eq!(hub.lines("holder"), "42\n");
+}
+
+#[test]
+fn auto_registration_refuses_every_operation_before_bootout() {
+    for action in ["auto-install", "auto-uninstall"] {
+        let hub = Hub::new();
+        hub.install();
+        let lock = hub.builds().parent().unwrap().join("operation");
+        fs::create_dir(&lock).unwrap();
+        let out = hub.run(action, None, false);
+        assert!(text(&out).contains("Another Hub operation"));
+        assert!(!hub.lines("calls").contains("launchctl|bootout"));
+        assert!(lock.exists());
+        assert_eq!(hub.lines("holder"), "42\n");
+    }
+}
+
+#[test]
+fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
+    for stage in ["operation", "recovery", "preflight", "service"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        fs::write(hub.root().join("checks"), "pending").unwrap();
+        for episode in 1..=2 {
+            let file = match stage {
+                "operation" => hub.builds().parent().unwrap().join("operation"),
+                "recovery" => hub.builds().join("update-from"),
+                "preflight" => hub.root().join("origin.git"),
+                _ => hub.root().join("unresponsive"),
+            };
+            match stage {
+                "operation" => fs::create_dir(&file).unwrap(),
+                "preflight" => fs::rename(&file, hub.root().join("offline.git")).unwrap(),
+                _ => fs::write(&file, "").unwrap(),
+            }
+            if stage == "service" {
+                fs::write(hub.root().join("checks"), "success").unwrap();
+            }
+            hub.run("auto-once", None, true);
+            if stage == "operation" {
+                // Ordinary short operations do not notify, and a new lock has a fresh delay.
+                assert_eq!(hub.root().join("notifications").exists(), episode > 1);
+                let mut state = hub.auto_state();
+                state["blockers"][stage]["since"] = serde_json::json!(0);
+                fs::write(
+                    hub.builds().parent().unwrap().join("auto-update.json"),
+                    state.to_string(),
+                )
+                .unwrap();
+                hub.run("auto-once", None, true);
+            }
+            assert_eq!(hub.lines("notifications").lines().count(), episode);
+            hub.run("auto-once", None, true);
+            assert_eq!(hub.lines("notifications").lines().count(), episode);
+            match stage {
+                "operation" => fs::remove_dir(&file).unwrap(),
+                "preflight" => fs::rename(hub.root().join("offline.git"), &file).unwrap(),
+                _ => fs::remove_file(&file).unwrap(),
+            }
+            if ["operation", "recovery"].contains(&stage) {
+                continue;
+            }
+            // Allow service status to succeed without actually running update.
+            if stage == "service" {
+                hub.mark("fail-sign");
+            }
+            hub.run("auto-once", None, true);
+            if stage == "service" {
+                // A failed update would suppress the next status read; clear only test attempt.
+                let mut state = hub.auto_state();
+                state["attempt"] = serde_json::Value::Null;
+                fs::write(
+                    hub.builds().parent().unwrap().join("auto-update.json"),
+                    state.to_string(),
+                )
+                .unwrap();
+                fs::remove_file(hub.root().join("fail-sign")).unwrap();
+                // Keep only the service notices in this test's observation.
+                let notices = hub.lines("notifications");
+                fs::write(
+                    hub.root().join("notifications"),
+                    notices
+                        .lines()
+                        .filter(|line| line.contains(": service:"))
+                        .map(|line| format!("{line}\n"))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn auto_failed_update_notification_contains_its_stage_and_recovery_requirement() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.fail_start("new");
+    hub.mark("change-schema");
+    hub.run("auto-once", None, true);
+    let notice = hub.lines("notifications");
+    assert!(notice.contains("activating the new build"));
+    assert!(notice.contains("recovery required"));
+}
+
+#[test]
+fn auto_retries_unsent_notifications_even_after_the_build_is_current() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"image":{"reference":null},"snapshot":{"state":"missing"}}"#,
+    )
+    .unwrap();
+    hub.mark("fail-notify");
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("new");
+    assert!(!hub.root().join("notifications").exists());
+    fs::remove_file(hub.root().join("fail-notify")).unwrap();
+    hub.run("auto-once", None, true);
+    assert!(hub.lines("notifications").contains("Snapshot is missing"));
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.lines("notifications").lines().count(), 1);
+}
+
+#[test]
+fn auto_invalid_migration_is_one_failure_episode() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    fs::write(
+        hub.repo.join("hub-update.json"),
+        r#"{"manual_update_version":"invalid"}"#,
+    )
+    .unwrap();
+    hub.commit("invalid-migration");
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", "HEAD~2"]);
+    for _ in 0..2 {
+        hub.run("auto-once", None, true);
+    }
+    assert_eq!(hub.lines("notifications").lines().count(), 1);
+    hub.assert_runs_signed("old");
 }

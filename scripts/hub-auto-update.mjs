@@ -1,4 +1,5 @@
 // The macOS agent owns one loop; hub-server.sh owns each server operation.
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import path from 'node:path';
@@ -42,17 +43,49 @@ async function readAgent() {
     catch (error) { if (key !== 'GUILDBOTICS_SERVER_PORT') throw error; }
   }
 }
-async function notify(sha, stage, reason, next) {
-  const key = `${sha}:${stage}`;
+async function notify(sha, stage, reason, next, key = `${sha}:${stage}`) {
   if (state.notified?.includes(key)) return;
   const message = `Hub ${sha}: ${stage}: ${reason}. Next: ${next}.`;
   console.error(`${new Date().toISOString()} ${message}`);
+  state.pendingNotices ??= {};
+  state.pendingNotices[key] = message;
+  save();
+  await deliver(key, message);
+}
+async function deliver(key, message) {
   try {
     // With no webhook, the agent's stderr log is the notification destination.
     await run(current, ['server', 'hub-notify'], message);
     state.notified = [...(state.notified ?? []), key];
+    delete state.pendingNotices[key];
     save();
   } catch (error) { console.error(error.message); }
+}
+// State-derived failures have an episode lifetime independent of commits.
+function clearBlocker(stage) {
+  if (state.blockers?.[stage]) {
+    delete state.blockers[stage];
+    save();
+  }
+}
+function fileIdentity(file) {
+  const stat = fs.statSync(file);
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+async function blocker(sha, stage, reason, next, identity = reason, delay = 0) {
+  state.blockers ??= {};
+  if (state.blockers[stage]?.identity !== identity) {
+    state.blockers[stage] = { identity, since: Date.now(), key: randomUUID() };
+    save();
+  }
+  const episode = state.blockers[stage];
+  if (Date.now() - episode.since >= delay * 1000) {
+    await notify(sha, stage, reason, next, episode.key);
+  }
+}
+function failureRecord() {
+  try { return fs.readFileSync(path.join(hub, 'last-failure'), 'utf8').trim(); }
+  catch (error) { if (error.code === 'ENOENT') return ''; throw error; }
 }
 async function restoreService() {
   if (typeof state.serviceBefore === 'boolean') {
@@ -69,20 +102,27 @@ export async function tick() {
   let sha = state.attempt ?? 'unknown';
   let stage = 'preflight';
   try {
+    for (const [key, message] of Object.entries(state.pendingNotices ?? {})) await deliver(key, message);
     if (fs.existsSync(path.join(hub, 'operation'))) {
-      await notify(sha, 'operation', 'Another operation or an abandoned lock exists', 'wait; if it persists, verify that its processes ended before removing Hub/operation');
+      await blocker(sha, 'operation', 'The same Hub operation lock has persisted', 'verify that its processes ended before removing Hub/operation', fileIdentity(path.join(hub, 'operation')), waitNotice);
       return;
     }
+    clearBlocker('operation');
     if (fs.existsSync(path.join(hub, 'builds/update-from'))) {
-      await notify(sha, 'recovery', 'An interrupted update remains', 'run scripts/hub-server.sh recover');
+      await blocker(sha, 'recovery', 'An interrupted update remains', 'run scripts/hub-server.sh recover', fileIdentity(path.join(hub, 'builds/update-from')));
       return;
     }
+    clearBlocker('recovery');
     await restoreService();
     await git('fetch', 'origin', 'main');
     sha = await git('rev-parse', '--verify', 'FETCH_HEAD^{commit}');
     const source = await run(current, ['server', 'hub-probe', '--source']);
+    clearBlocker('preflight');
     if (path.basename(source) === sha) return;
-    if (state.attempt === sha && ['failed', 'updating'].includes(state.result)) return;
+    if (state.attempt === sha && ['failed', 'updating'].includes(state.result)) {
+      if (state.result === 'updating') await notify(sha, 'update', 'Previous automatic attempt ended without an outcome', 'inspect the Hub log; recover if needed or update manually');
+      return;
+    }
     if (await git('status', '--porcelain')) {
       await notify(sha, 'checkout', 'Checkout has uncommitted changes', 'commit or remove the changes');
       return;
@@ -94,6 +134,7 @@ export async function tick() {
     }
     stage = 'checks';
     const checks = await cli('server', 'hub-checks', '--checkout', repo, '--sha', sha);
+    clearBlocker(stage);
     if (checks.state === 'failure') {
       await notify(sha, stage, 'Required checks failed', 'inspect or rerun the checks');
       return;
@@ -104,19 +145,25 @@ export async function tick() {
     const migration = declared ? JSON.parse(await git('show', `${sha}:hub-update.json`)) : { manual_update_version: 0 };
     const installed = await cli('server', 'hub-migration');
     if (!Number.isSafeInteger(migration.manual_update_version)) throw new Error('Invalid migration declaration');
+    clearBlocker(stage);
     if (migration.manual_update_version > installed.manual_update_version) {
       await notify(sha, stage, `Manual update required: ${migration.instructions}`, 'follow those instructions and update manually');
       return;
     }
     stage = 'image';
     const environment = await cli('environment', 'status', '--format', 'json');
+    clearBlocker(stage);
     if (environment.image?.reference && environment.image.present !== true) {
       await notify(sha, stage, `Custom base image is not loaded: ${environment.image.reference}`, 'load the declared image with guildbotics environment image load');
       return;
     }
     stage = 'service';
     const service = await cli('service', 'status');
-    if (!service.server_running) return;
+    if (!service.server_running) {
+      await blocker(sha, stage, 'Server is not running', 'inspect the server log and run restart or recover');
+      return;
+    }
+    clearBlocker(stage);
     state.serviceBefore = service.running;
     // Persist intent before moving HEAD: a terminated update must not retry.
     state.attempt = sha;
@@ -124,6 +171,7 @@ export async function tick() {
     save();
     stage = 'update';
     await git('merge', '--ff-only', sha);
+    const previousFailure = failureRecord();
     try {
       const output = await run('sh', ['scripts/hub-server.sh', 'update'], undefined,
         () => notify(sha, 'waiting', 'Update is still waiting or building', 'keep waiting; inspect the Hub log'));
@@ -131,19 +179,23 @@ export async function tick() {
       state.result = 'success';
     } catch (error) {
       state.result = 'failed';
-      await notify(sha, stage, error.message, 'inspect the Hub log; recover if needed; a new commit is required for automatic retry');
+      const failure = failureRecord();
+      const detail = failure && failure !== previousFailure ? failure : error.message;
+      const recovery = fs.existsSync(path.join(hub, 'builds/update-from')) ? ' Interrupted update remains; recovery required.' : '';
+      await notify(sha, stage, detail + recovery, 'inspect the Hub log; recover if needed; a new commit is required for automatic retry');
     }
     save();
     if (!fs.existsSync(path.join(hub, 'builds/update-from'))) await restoreService();
     if (state.result === 'success') {
       stage = 'snapshot';
       const after = await cli('environment', 'status', '--format', 'json');
+      clearBlocker(stage);
       if (['missing', 'stale', 'failed'].includes(after.snapshot?.state)) {
         await notify(sha, stage, `Snapshot is ${after.snapshot.state}`, 'run guildbotics environment build');
       }
     }
   } catch (error) {
-    await notify(sha, stage, error.message, 'inspect the auto-update log and correct the cause');
+    await blocker(sha, stage, error.message, 'inspect the auto-update log and correct the cause');
   }
 }
 

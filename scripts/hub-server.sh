@@ -52,13 +52,40 @@ backups=$hub/backups
 
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
 
-# The loop must not hold the operation lock while invoking update.
+# The loop invokes update, which acquires its own operation lock.
+if [ "$action" = auto-once ]; then exec node "$repo/scripts/hub-auto-update.mjs" --once; fi
+
+# Use one lock for the build pointer, backup rotation and LaunchAgent changes.
+mkdir -p "$builds"
+lock=$hub/operation
+mkdir "$lock" 2>/dev/null || fail "Another Hub operation holds $lock. See docs/hub-server.md."
+stage=setup
+finish() {
+    if [ "$1" -ne 0 ]; then
+        running=$("$current" server hub-probe --source 2>/dev/null || true)
+        message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
+        printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
+    fi
+    rm -rf "$lock"
+}
+trap 'finish "$?"' 0
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+
 case "$action" in
-    auto-once) exec node "$repo/scripts/hub-auto-update.mjs" --once ;;
     auto-install|auto-uninstall)
         auto_label=local.guildbotics.update
         auto_plist=$HOME/Library/LaunchAgents/$auto_label.plist
-        launchctl bootout "$domain/$auto_label" 2>/dev/null || true
+        auto_target=$domain/$auto_label
+        if launchctl print "$auto_target" >/dev/null 2>&1; then
+            launchctl bootout "$auto_target" || true
+            auto_waited=0
+            while launchctl print "$auto_target" >/dev/null 2>&1; do
+                [ "$auto_waited" -lt 30 ] || fail "The automatic update agent did not stop."
+                sleep 1
+                auto_waited=$((auto_waited + 1))
+            done
+        fi
         if [ "$action" = auto-uninstall ]; then rm -f "$auto_plist"; exit 0; fi
         node --version | grep -Eq '^v24\.' || fail "Node.js 24 must be in PATH."
         npm --version >/dev/null
@@ -83,24 +110,6 @@ case "$action" in
         exit 0
         ;;
 esac
-
-# Use one lock for the build pointer, backup rotation and LaunchAgent changes.
-mkdir -p "$builds"
-lock=$hub/operation
-mkdir "$lock" 2>/dev/null || fail "Another Hub operation holds $lock. See docs/hub-server.md."
-stage=setup
-finish() {
-    if [ "$1" -ne 0 ]; then
-        running=$(built_from "$current" 2>/dev/null || true)
-        running=${running%/*}
-        message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
-        printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
-    fi
-    rm -rf "$lock"
-}
-trap 'finish "$?"' 0
-trap 'exit 130' INT
-trap 'exit 143' HUP TERM
 
 loaded() { launchctl print "$target" >/dev/null 2>&1; }
 # launchctl bootout can return, or fail with "Operation now in progress",
