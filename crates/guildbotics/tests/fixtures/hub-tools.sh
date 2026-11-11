@@ -10,6 +10,7 @@ case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
     npm) : ;;
+    node) printf 'v24.0.0\n' ;;
     rustc) printf 'rustc %s (fixture)\n' "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" ;;
     cargo)
         while [ "$1" != --target-dir ]; do shift; done
@@ -56,7 +57,7 @@ case "$name" in
     launchctl)
         case "$1" in
             print)
-                case "$2" in */local.guildbotics.update)
+                case "$2" in */local.guildbotics*.update)
                     [ -f "$FAKE_ROOT/auto-loaded" ] || exit 1
                     if [ -f "$FAKE_ROOT/auto-unloading" ]; then rm -f "$FAKE_ROOT/auto-loaded" "$FAKE_ROOT/auto-unloading"; fi
                     exit 0 ;;
@@ -81,7 +82,7 @@ case "$name" in
                 ;;
             enable|disable) : ;;
             bootstrap)
-                case "$3" in *local.guildbotics.update.plist) exit 0 ;; esac
+                case "$3" in *local.guildbotics*.update.plist) exit 0 ;; esac
                 # Like launchd, refuse a job that is still listed.
                 if [ -f "$FAKE_ROOT/loaded" ]; then
                     printf 'Bootstrap failed: 5: Input/output error\n' >&2
@@ -99,7 +100,7 @@ case "$name" in
                 fi
                 ;;
             bootout)
-                case "$2" in */local.guildbotics.update) touch "$FAKE_ROOT/auto-unloading"; exit 0 ;; esac
+                case "$2" in */local.guildbotics*.update) touch "$FAKE_ROOT/auto-unloading"; exit 0 ;; esac
                 if [ -f "$FAKE_ROOT/job-pid" ]; then rm -f "$FAKE_ROOT/holder"; fi
                 rm -f "$FAKE_ROOT/job-pid" "$FAKE_ROOT/start-failed"
                 if [ -f "$FAKE_ROOT/slow-bootout" ]; then
@@ -113,8 +114,12 @@ case "$name" in
             *) exit 2 ;;
         esac
         ;;
-    current|guildbotics-bin|update-from|update-to)
+    current|guildbotics-bin|update-from|update-to|guildbotics)
         build=$(sed -n 's/^# build: //p' "$0")
+        # The settings this program runs with, as pasted guidance gives them.
+        printf 'home=%s branvil=%s identity=%s port=%s\n' "${GUILDBOTICS_HOME-unset}" \
+            "${BRANVIL_DATA_DIR-unset}" "${GUILDBOTICS_IDENTITY_ROOT-unset}" "${GUILDBOTICS_SERVER_PORT-unset}" \
+            >"$FAKE_ROOT/settings"
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
@@ -143,9 +148,12 @@ case "$name" in
                 state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
                 printf '{"state":"%s"}\n' "$state"
                 ;;
+            # The loop and the build removal under test are the real ones.
+            server:hub-auto-update|server:hub-prune) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;
             server:hub-migration) printf '{"manual_update_version":0,"instructions":null}\n' ;;
             server:hub-notify)
                 [ ! -f "$FAKE_ROOT/fail-notify" ] || exit 1
+                printf '%s\n' "${GUILDBOTICS_IDENTITY_ROOT:-}" >"$FAKE_ROOT/notify-identity-root"
                 cat >>"$FAKE_ROOT/notifications"
                 printf '\n' >>"$FAKE_ROOT/notifications"
                 printf '{"sent":false}\n'
@@ -162,7 +170,7 @@ case "$name" in
             service:start) touch "$FAKE_ROOT/service-running" ;;
             service:stop) rm -f "$FAKE_ROOT/service-running" ;;
             environment:prune)
-                [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub/builds/update-from" ] || exit 1
+                [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub${GUILDBOTICS_HUB_INSTANCE:+-$GUILDBOTICS_HUB_INSTANCE}/builds/update-from" ] || exit 1
                 [ ! -f "$FAKE_ROOT/fail-prune" ] || exit 1
                 ;;
             environment:status)
@@ -186,7 +194,12 @@ case "$name" in
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
                 rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/service-running"
                 ;;
-            install:) [ "$build" != new ] || [ ! -f "$FAKE_ROOT/fail-install" ] ;;
+            install:)
+                [ "$build" = old ] || [ ! -f "$FAKE_ROOT/fail-install" ] || exit 1
+                # Like guildbotics install, copy this executable to the machine root.
+                mkdir -p "$GUILDBOTICS_HOME/bin"
+                cp "$0" "$GUILDBOTICS_HOME/bin/guildbotics"
+                ;;
             branvil:backup) touch "$6/manifest.json" ;;
             branvil:restore)
                 [ -f "$4/manifest.json" ] || exit 1
