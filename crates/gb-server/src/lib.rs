@@ -23,6 +23,7 @@ pub mod events;
 pub mod execution;
 mod health;
 pub mod host_window;
+pub mod hub_data;
 pub mod i18n;
 mod input_files;
 mod intelligences;
