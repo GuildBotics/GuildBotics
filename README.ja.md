@@ -519,7 +519,7 @@ guildbotics open
 
 - `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。すべてのワークスペースで 1 つです。ホストがメンバーの用意と Branvil の GUI を開くのに使います
 - `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行し、すべてのワークスペースで使います（Branvil での名前はメンバーの `identity.yml` の `account_info.branvil_username`）
-- 自分の git の Branvil トークン: マシンごとに 1 つのオーナーのトークン。自分の git が `guildbotics git-credential` に最初に求めたときに発行し、そのマシンの OS キーチェーンにだけ保存して共有しません（→ [自分のチェックアウトで Branvil を使う](docs/branvil_integration.ja.md#自分のチェックアウトで-branvil-を使う)）
+- 自分の git の Branvil トークン: マシンごとに 1 つのオーナーのトークン。自分の git が `guildbotics git-credential` に最初に求めたときに起動中の GuildBotics サーバーが発行し、そのマシンの OS キーチェーンにだけ保存して共有しません（→ [自分のチェックアウトで Branvil を使う](docs/branvil_integration.ja.md#自分のチェックアウトで-branvil-を使う)）
 
 GuildBoticsは暗号化ストアを自動で読み込みます。GuildBotics はワークスペースの `.env` を読みません。
 

@@ -26,7 +26,7 @@ fn answer(home: &Path, action: &str, request: &str) -> Output {
 }
 
 #[test]
-fn git_credential_protocol_ignores_non_get_and_unserved_remotes() {
+fn git_credential_protocol_ignores_non_get_without_reading_identity() {
     let home = tempfile::tempdir().unwrap();
     let request =
         "protocol=https\nhost=forge.example.invalid:9443\npath=a/b\npassword=fake-do-not-echo\n";
@@ -35,51 +35,34 @@ fn git_credential_protocol_ignores_non_get_and_unserved_remotes() {
         assert!(response.status.success());
         assert!(response.stdout.is_empty() && response.stderr.is_empty());
     }
-    let response = answer(home.path(), "get", request);
-    assert!(response.status.success() && response.stdout.is_empty());
-    let error = String::from_utf8_lossy(&response.stderr);
-    assert!(error.contains("https://forge.example.invalid:9443"));
-    assert!(!error.contains("fake-do-not-echo") && !error.contains("/a/b"));
     assert!(!home.path().join(".guildbotics").exists());
 }
 
 #[test]
-fn git_credential_refuses_origins_other_than_the_configured_branvil() {
+fn git_credential_ignores_invalid_origins_without_reading_identity_or_keychain() {
     let home = tempfile::tempdir().unwrap();
     let identity = home.path().join("identity/.guildbotics/config");
     std::fs::create_dir_all(identity.join("connections")).unwrap();
-    std::fs::write(
-        identity.join("connections/branvil.yml"),
-        "base_url: http://127.0.0.1:7878\n",
-    )
-    .unwrap();
-    // A store that cannot be read makes accidental credential access observable.
+    // Neither identity configuration nor the OS keychain is needed to reject malformed input.
+    std::fs::write(identity.join("connections/branvil.yml"), "broken: [").unwrap();
     std::fs::write(identity.join("secrets.yml"), "broken: [").unwrap();
-    for (protocol, host) in [
-        ("http", "127.0.0.1:7879"),
-        ("https", "127.0.0.1:7878"),
-        ("https", "github.com"),
+    for request in [
+        "protocol=http\nhost=owner@127.0.0.1:7878\n",
+        "protocol=https\nhost=forge.example.invalid/path\n",
+        "protocol=http+unsafe\nhost=127.0.0.1:7878\n",
+        "host=127.0.0.1:7878\n",
     ] {
         let response = answer(
             home.path(),
             "get",
-            &format!("protocol={protocol}\nhost={host}\n\n"),
+            &format!("{request}password=fake-do-not-echo\n\n"),
         );
-        assert!(
-            response.status.success() && response.stdout.is_empty(),
-            "{response:?}"
-        );
+        assert!(response.status.success());
+        assert!(response.stdout.is_empty());
         assert_eq!(
             String::from_utf8(response.stderr).unwrap(),
-            format!(
-                "GuildBotics is connected to no service at {protocol}://{host} on this machine.\n"
-            ),
+            "GuildBotics is connected to no service at  on this machine.\n"
         );
     }
-    assert!(
-        !home
-            .path()
-            .join(".guildbotics/data/run/branvil-git.lock")
-            .exists()
-    );
+    assert!(!home.path().join(".guildbotics").exists());
 }

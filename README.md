@@ -521,7 +521,7 @@ The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in 
 
 - `BRANVIL_ADMIN_TOKEN`: the token Branvil issues GuildBotics when its owner allows the connection, one for every workspace; the host uses it to set up members and to open Branvil's GUI
 - `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved and used in every workspace (its Branvil name is `account_info.branvil_username` in the member's `identity.yml`)
-- Your own git's Branvil token: one owner token per machine, issued the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use Branvil from your own checkouts](docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts))
+- Your own git's Branvil token: one owner token per machine, issued by the running GuildBotics server the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use Branvil from your own checkouts](docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts))
 
 GuildBotics reads the encrypted stores automatically. GuildBotics does not read a workspace `.env`.
 

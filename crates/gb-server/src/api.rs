@@ -323,6 +323,12 @@ routes!(
     (
         OwnerSession,
         post,
+        "/git-credentials",
+        crate::git_credentials::issue
+    ),
+    (
+        OwnerSession,
+        post,
         "/config/providers/slack/app-registrations",
         crate::provider_api::slack::registration
     ),
@@ -1487,6 +1493,10 @@ mod tests {
         // for each of these.
         let config: &[(&str, &str)] = crate::config_api::tests::CONFIG_WRITERS;
         let elsewhere = [
+            (
+                ("post", "/git-credentials"),
+                "rotates provider tokens without writing shared configuration",
+            ),
             (
                 ("post", "/system-alerts/dismiss"),
                 "writes device-local system-alerts.json only",

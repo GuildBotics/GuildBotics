@@ -282,8 +282,10 @@ token. GuildBotics hands git yours, so git never asks for a name or a password:
    be asked to store the token, so keep them last.
 3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
 
-On its first request, GuildBotics issues the owner a token for the machine with its
-connection. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
+On its first request, the helper asks the running GuildBotics server to issue the owner a token
+for the requesting machine. The CLI reads neither the administrator token nor identity connection
+settings. A valid cached token is checked directly at its own origin and reused without asking
+the GuildBotics API; issuance requires the server to be running. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
 and kept in the machine's OS keychain only. It is never written to a URL, a git configuration,
 your shell history, or a workspace file. You can revoke it under Branvil's **Settings → Members →
 owner → Tokens**. Once Branvil no longer accepts the token, the next request issues a new one in

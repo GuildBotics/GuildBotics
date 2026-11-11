@@ -48,7 +48,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,
     },
-    /// Supply Git with this machine's credential for the remote
+    /// Supply Git with this machine's credential; issuing a token requires the server
     GitCredential {
         /// Credential helper action from Git
         action: String,

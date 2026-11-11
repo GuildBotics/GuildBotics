@@ -15,6 +15,7 @@ use crate::{auth, i18n};
 
 pub mod connect;
 pub mod diagnostics;
+mod git_credentials;
 pub mod member;
 pub mod secrets;
 
@@ -218,7 +219,7 @@ pub async fn git_credential(action: &str) -> anyhow::Result<()> {
         std::io::stderr().lock(),
         language,
         async |origin: String| {
-            gb_integrations::factory::human_git_credential(&origin, |data| {
+            git_credentials::credential(&origin, |data| {
                 let device = gb_workspace::identity::ensure_device_identity(data)?;
                 Ok((device.device_id, device.display_name))
             })
@@ -588,6 +589,51 @@ mod tests {
                 "{mode}"
             );
             peer.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn git_helper_distinguishes_unserved_origin_from_missing_backend() {
+        let input = b"protocol=https\nhost=forge.example.invalid:9443\npath=a/b\npassword=fake-do-not-echo\n\n";
+        for language in ["en", "ja"] {
+            for missing_backend in [false, true] {
+                let mut output = Vec::new();
+                let mut error = Vec::new();
+                let required = crate::i18n::t(language, "cli.git_credential.backend_required", &[]);
+                answer_git_credential(
+                    "get",
+                    &input[..],
+                    &mut output,
+                    &mut error,
+                    language,
+                    async |origin| {
+                        assert_eq!(origin, "https://forge.example.invalid:9443");
+                        if missing_backend {
+                            anyhow::bail!(required.clone());
+                        }
+                        Ok(None)
+                    },
+                )
+                .await
+                .unwrap();
+                let error = String::from_utf8(error).unwrap();
+                if missing_backend {
+                    assert_eq!(output, b"quit=1\n");
+                    assert!(error.contains(&required));
+                    assert!(!required.contains("cli.git_credential.backend_required"));
+                } else {
+                    assert!(output.is_empty());
+                    assert_eq!(
+                        error.trim(),
+                        crate::i18n::t(
+                            language,
+                            "cli.git_credential.not_served",
+                            &[("origin", "https://forge.example.invalid:9443")]
+                        )
+                    );
+                }
+                assert!(!error.contains("fake-do-not-echo") && !error.contains("a/b"));
+            }
         }
     }
 

@@ -58,3 +58,5 @@ pub use server::{
 };
 
 mod provider_api;
+
+mod git_credentials;
