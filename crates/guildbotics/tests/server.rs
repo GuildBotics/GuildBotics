@@ -1716,7 +1716,7 @@ fn assert_service_status(root: &Path, running: bool) {
 }
 
 #[test]
-fn run_accepts_options_after_the_command_and_executes_with_or_without_a_server() {
+fn run_accepts_options_after_the_command_but_requires_a_server() {
     let dir = tempfile::tempdir().unwrap();
     let root = host_name(dir.path());
     let workspace = workspace_with_a_member(&root);
@@ -1741,18 +1741,23 @@ fn run_accepts_options_after_the_command_and_executes_with_or_without_a_server()
             .unwrap()
     };
     let via_server = run();
+    assert!(!via_server.status.success());
+    assert!(via_server.stdout.is_empty());
+    let error = String::from_utf8_lossy(&via_server.stderr);
+    assert!(
+        error.contains("unknown") && error.contains("yuki"),
+        "{error}"
+    );
     server.stop();
-    let local = run();
-    for output in [&via_server, &local] {
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            error.contains("unknown") && error.contains("yuki"),
-            "{error}"
-        );
-    }
-    assert_eq!(local.stderr, via_server.stderr);
+    let without_server = run();
+    assert!(!without_server.status.success());
+    assert!(without_server.stdout.is_empty());
+    let error = String::from_utf8_lossy(&without_server.stderr);
+    assert!(
+        error.contains("guildbotics run requires a running GuildBotics server."),
+        "{error}"
+    );
+    assert!(!error.contains("unknown"), "{error}");
 }
 
 #[test]
