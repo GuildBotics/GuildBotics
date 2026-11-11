@@ -10,7 +10,8 @@ an endpoint, this file changes in the same commit.
 ## Integrated browser sessions
 
 When embedded in GuildBotics, the host supplies `browser_session::BrowserSession`
-to `prepare_embedded`. `GET /api/v1/session` resolves the host's live owner cookie
+to `prepare_embedded`. `GET /api/v1/session` includes `host_navigation: {label, url}` supplied by the embedding host
+(`null` on a standalone server), and resolves the host's live owner cookie
 to Branvil's owner member and returns the host CSRF value. Writes still send
 `x-branvil-csrf`. Only the port-specific `guildbotics_session_<port>` cookie is
 accepted; old Branvil cookies are not accepted in this mode. Bearer tokens retain

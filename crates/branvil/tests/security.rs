@@ -226,6 +226,7 @@ async fn entry_links_are_the_owners_work_once_and_end_with_the_process() {
     let resp = s.enter(&code).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
+    assert_eq!(body.get("host_navigation"), Some(&Value::Null));
     assert_eq!(
         (&body["me"]["name"], &body["me"]["kind"]),
         (&json!("alice"), &json!("owner"))

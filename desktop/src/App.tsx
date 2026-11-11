@@ -184,7 +184,7 @@ export function App() {
             <GuardedNavLink className="nav-item" to="/setup">
               <Settings size={18} /> {t("app.nav.setup")}
             </GuardedNavLink>
-            {configured ? <BranvilNavItem /> : null}
+            {config.data?.branvil_available ? <BranvilNavItem /> : null}
           </nav>
           <Select
             className="sidebar-language"

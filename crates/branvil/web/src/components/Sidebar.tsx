@@ -2,10 +2,11 @@
 // pages, and the display language at the bottom.
 
 import { Select, Stack, Text } from "@mantine/core";
-import { GitPullRequest, Settings, SquareKanban, Workflow } from "lucide-react";
+import { ArrowLeftRight, GitPullRequest, Settings, SquareKanban, Workflow } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useI18n, type Language } from "../i18n";
 import { Link, navigate } from "../router/Router";
+import { useSession } from "../query/hooks";
 import { href, type Route } from "../router/routes";
 import { NewWorkspaceModal } from "./NewWorkspace";
 
@@ -55,6 +56,7 @@ export function Sidebar({
   showBoard: boolean;
 }) {
   const { t, lang, setLang } = useI18n();
+  const navigation = useSession().data?.host_navigation;
   const [creating, setCreating] = useState(false);
   const page = pageOf(route);
   const choose = (name: string | null) => {
@@ -108,6 +110,7 @@ export function Sidebar({
         <NavItem to={href.settings()} active={page === "settings"} icon={<Settings size={18} />}>
           {t("nav.settings")}
         </NavItem>
+        {navigation && <a className="nav-item" href={navigation.url}><ArrowLeftRight size={18} aria-hidden="true" /><span>{navigation.label}</span></a>}
       </nav>
       <Stack gap={6} className="sidebar-language">
         <Text component="label" htmlFor="language-switch" className="sidebar-field-label">

@@ -1,6 +1,12 @@
 //! Browser authentication supplied by an embedding host. Bearer tokens remain
 //! Branvil credentials; a host session always identifies Branvil's owner.
 
+#[derive(serde::Serialize, Debug)]
+pub struct Navigation {
+    pub label: String,
+    pub url: String,
+}
+
 pub enum Denied {
     Unauthorized,
     CsrfMismatch,
@@ -13,4 +19,6 @@ pub trait BrowserSession: Send + Sync {
     fn entry_link(&self) -> (String, String);
     /// Where a browser without an entry code obtains sign-in guidance.
     fn entry_path(&self) -> &str;
+    /// The embedding host's main screen, shown in the browser shell.
+    fn navigation(&self) -> Navigation;
 }

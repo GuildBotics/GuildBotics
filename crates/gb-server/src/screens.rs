@@ -53,12 +53,15 @@ pub(crate) fn answer(result: anyhow::Result<Value>, headers: &HeaderMap) -> Resp
     }
 }
 
-pub(crate) async fn config_status(State(api): State<Shared>) -> Response {
-    Json(status(&api).await).into_response()
+pub(crate) async fn config_status(
+    State(api): State<Shared>,
+    axum::Extension(host): axum::Extension<crate::api::EmbeddedHost>,
+) -> Response {
+    Json(status(&api, host).await).into_response()
 }
 
 /// Where the selected workspace keeps what, as the setup screens show it.
-pub(crate) async fn status(api: &crate::api::Api) -> Value {
+pub(crate) async fn status(api: &crate::api::Api, host: crate::api::EmbeddedHost) -> Value {
     let input_store_problem = api.inputs.problem().await;
     let workspace = &api.selected().workspace;
     let config = workspace.as_ref().map(|w| w.join(".guildbotics/config"));
@@ -68,7 +71,7 @@ pub(crate) async fn status(api: &crate::api::Api) -> Value {
         .err()
         .map(|error| crate::workspace::registry_error(error, language).to_string())
         .unwrap_or_default();
-    json!({"workspace_problem":workspace_problem,"input_store_problem":input_store_problem,
+    json!({"branvil_available":host.0,"workspace_problem":workspace_problem,"input_store_problem":input_store_problem,
         "cwd":api.home.join(gb_environment::EXCHANGE),
         "workspace":workspace,"config_dir":config,"project_file":project,
         "project_file_exists":project.as_ref().is_some_and(|p| p.exists()),"storage_dir":workspace,

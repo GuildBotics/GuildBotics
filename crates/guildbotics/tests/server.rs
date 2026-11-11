@@ -231,10 +231,13 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         )
         .unwrap()
     };
+    // Host topology was added after the Python fixture; this server has no Branvil.
+    let mut expected_status = expected["status"].clone();
+    expected_status["branvil_available"] = json!(false);
     let mut urls = vec![
         (
             "/-/guildbotics/api/config/status".to_owned(),
-            expected["status"].clone(),
+            expected_status,
         ),
         (
             "/-/guildbotics/api/team".to_owned(),

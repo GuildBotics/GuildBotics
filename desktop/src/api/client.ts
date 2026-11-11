@@ -72,6 +72,7 @@ export function memberAvatarUrl(personId: string, cacheBust?: number | string): 
 }
 
 export type ConfigStatus = {
+  branvil_available?: boolean;
   workspace_problem?: string;
   input_store_problem?: string;
   cwd: string;

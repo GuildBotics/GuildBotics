@@ -54,7 +54,7 @@ export const resources = {
         retry: "Retry",
         guide: {
           title: "Open GuildBotics from the server machine",
-          run: "Run this on the machine the GuildBotics server runs on. It opens GuildBotics in that machine's browser:",
+          run: "Run this on the machine the GuildBotics server runs on. It opens GuildBotics in that machine's browser.",
           remote:
             "If this browser is on another machine, run this in a terminal on the browser's machine (<server> is the server machine's SSH host), then paste the printed link into this browser's address bar:",
           expired: "This link has already been used or has expired. Get a new one.",
@@ -72,7 +72,7 @@ export const resources = {
           deny: "Deny",
           invalid: "This request from an app is not valid ({{fields}}). Start again from the app.",
           enterFirst:
-            "To allow {{client}}, open GuildBotics in this browser first. Within 10 minutes, entering brings you back to this page.",
+            "To allow {{client}}, open the shared GuildBotics entry link in this browser first. Within 10 minutes, entering brings you back to this page.",
         },
       },
       systemAlerts: {
@@ -1488,7 +1488,7 @@ export const resources = {
           invalid:
             "アプリからの要求が正しくありません（{{fields}}）。アプリからやり直してください。",
           enterFirst:
-            "{{client}} を許可するには、先にこのブラウザで GuildBotics を開いてください。10 分以内に開くと、このページに戻ります。",
+            "{{client}} を許可するには、先にこのブラウザで共通の入口リンクを開いてください。10 分以内に開くと、このページに戻ります。",
         },
       },
       systemAlerts: {

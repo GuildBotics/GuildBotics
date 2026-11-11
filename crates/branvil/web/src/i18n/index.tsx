@@ -30,8 +30,7 @@ export function format(template: string, params?: Record<string, string | number
 export function I18nProvider({ children, initial }: { children: ReactNode; initial?: Language }) {
   const [{ i18n }] = useState(() => createAppI18n({
     resources: { en: { translation: en }, ja: { translation: ja } },
-    storageKey: "branvil.language",
-    initialLanguage: initial ?? detectLanguage(),
+    initialLanguage: initial,
     flat: true,
   }));
   return <I18nextProvider i18n={i18n}>{children}</I18nextProvider>;
@@ -42,7 +41,6 @@ export function useI18n() {
   const lang = i18n.language as Language;
   const setLang = useCallback((next: Language) => {
     void i18n.changeLanguage(next);
-    document.documentElement.lang = next;
   }, [i18n]);
   const t = useCallback<Translate>((key, params) => translate(key, params), [translate]);
   return useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);

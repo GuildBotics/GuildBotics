@@ -793,6 +793,9 @@ pub fn router(api: Shared) -> Router {
     router_with_host(api, None)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddedHost(pub bool);
+
 pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
     let owners =
         owner_routes().route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
@@ -809,6 +812,7 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
         .merge(crate::ui::router(crate::ui::directory()))
         .with_state(api.clone())
         .merge(host)
+        .layer(axum::Extension(EmbeddedHost(integrated)))
         .layer(middleware::from_fn_with_state((api, integrated), guard))
 }
 
@@ -1052,6 +1056,77 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn config_reports_embedded_topology_before_branvil_is_ready() {
+        use tower::ServiceExt;
+        struct EmptyKeychain;
+        impl gb_config::secrets::Keychain for EmptyKeychain {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                Ok(None)
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("the topology test never creates a key")
+            }
+        }
+        for embedded in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut api = Api::new(
+                Selected::default(),
+                crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+                ServerAuth::open(root.path(), 8765).unwrap(),
+                "fixture".into(),
+                root.path().into(),
+            );
+            api.keychain = Arc::new(EmptyKeychain);
+            let api = Arc::new(api);
+            assert!(api.branvil.get().is_none());
+            let host = embedded.then(Router::new);
+            let link = api.auth.entry_link("/");
+            let (cookie, csrf) = api
+                .auth
+                .start_session(link.url.split_once('#').unwrap().1)
+                .unwrap()
+                .unwrap();
+            let cookie = format!("{}={cookie}", api.auth.cookie);
+            let app = router_with_host(api, host);
+            let workspace = root.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            for (method, path, input, nested) in [
+                ("GET", "/config/status", json!({}), false),
+                (
+                    "POST",
+                    "/workspace",
+                    json!({"workspace_dir": workspace}),
+                    false,
+                ),
+                ("POST", "/verify", json!({}), true),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .method(method)
+                            .uri(format!("/-/guildbotics/api{path}"))
+                            .header("host", "127.0.0.1:8765")
+                            .header("cookie", &cookie)
+                            .header(crate::auth::CSRF_HEADER, &csrf)
+                            .header("content-type", "application/json")
+                            .body(axum::body::Body::from(input.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let config = if nested { &body["config"] } else { &body };
+                assert_eq!(config["branvil_available"], embedded, "{path}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn classified_routes_cover_the_combined_guard_and_reserved_namespace() {
         assert_eq!(OUTER_ROUTES.len(), OUTER_CLASSIFIED.len());

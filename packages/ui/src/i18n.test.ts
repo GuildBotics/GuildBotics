@@ -23,3 +23,17 @@ describe("application language instances", () => {
     expect(make("desktop.language", "Reloaded").i18n.t("title")).toBe("Reloaded-ja");
   });
 });
+
+it("shares the language across entry points while keeping their resources", async () => {
+  const resources = {
+    en: { translation: { title: "English" } },
+    ja: { translation: { title: "日本語" } },
+  };
+  const first = createAppI18n({ resources });
+  await first.setAppLanguage("ja");
+  const second = createAppI18n({ resources });
+  expect(second.i18n.language).toBe("ja");
+  await second.i18n.changeLanguage("en");
+  expect(createAppI18n({ resources }).i18n.language).toBe("en");
+  expect(document.documentElement.lang).toBe("en");
+});
