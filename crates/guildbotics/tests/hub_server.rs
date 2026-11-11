@@ -454,8 +454,8 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "guildbotics-bin|branvil|admin|upgrade|",
             "guildbotics-bin|branvil|admin|check|",
             "launchctl|bootstrap|",
-            "current|environment|prune",
             "current|install",
+            "current|environment|prune",
         ],
     );
     // The identity install recorded signs the new build; macOS does not ask again.
@@ -659,6 +659,7 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
     assert!(hub.root().join("loaded").exists());
     assert!(!hub.builds().join("update-from").exists());
     assert!(text(&out).contains("installing the CLI and skill"));
+    assert!(hub.lines("actions").contains("new|environment|prune"));
     let failure = fs::read_to_string(hub.builds().parent().unwrap().join("last-failure")).unwrap();
     assert!(failure.contains("installing the CLI and skill"));
     assert!(failure.contains(new.parent().unwrap().file_name().unwrap().to_str().unwrap()));
@@ -939,10 +940,13 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
 
 #[test]
 fn auto_update_reports_missing_snapshot_after_activation() {
-    for snapshot in ["missing", "stale", "failed", "ready"] {
+    for snapshot in ["missing", "stale", "failed", "building", "ready"] {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
+        if snapshot != "ready" {
+            hub.mark("fail-prune");
+        }
         fs::write(
             hub.root().join("environment"),
             format!(r#"{{"image":{{"reference":null}},"snapshot":{{"state":"{snapshot}"}}}}"#),
@@ -954,6 +958,14 @@ fn auto_update_reports_missing_snapshot_after_activation() {
             hub.root().join("notifications").exists(),
             snapshot != "ready"
         );
+        assert!(hub.lines("actions").contains("new|install"));
+        if snapshot != "ready" {
+            assert!(hub.lines("notifications").contains("environment prune"));
+            assert!(
+                !hub.lines("notifications")
+                    .contains("a new commit is required")
+            );
+        }
     }
 }
 
@@ -1165,12 +1177,34 @@ fn auto_invalid_migration_is_one_failure_episode() {
 
 #[test]
 fn cleanup_failure_keeps_the_activated_build_and_never_rolls_back() {
-    let hub = Hub::new();
-    hub.install();
-    hub.commit("new");
-    hub.mark("fail-prune");
-    hub.run("update", None, false);
-    hub.assert_runs_signed("new");
-    assert!(!hub.builds().join("update-from").exists());
-    assert!(hub.lines("actions").contains("new|environment|prune\n"));
+    for recovery in [0, 1, 2] {
+        let hub = Hub::new();
+        hub.install();
+        let old = fs::read(hub.builds().join("current")).unwrap();
+        hub.commit("new");
+        if recovery != 0 {
+            hub.run("update", None, true);
+            if recovery == 2 {
+                let new = fs::read(hub.builds().join("current")).unwrap();
+                for name in ["holder", "job-pid", "loaded"] {
+                    fs::remove_file(hub.root().join(name)).unwrap();
+                }
+                for (name, bytes) in [("current", old.clone()), ("update-to", new)] {
+                    fs::write(hub.builds().join(name), bytes).unwrap();
+                    fs::set_permissions(hub.builds().join(name), fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+            }
+            fs::write(hub.builds().join("update-from"), old).unwrap();
+        }
+        hub.mark("fail-prune");
+        let out = hub.run(if recovery != 0 { "recover" } else { "update" }, None, true);
+        hub.assert_runs_signed("new");
+        assert!(!hub.builds().join("update-from").exists());
+        in_order(
+            &hub.lines("actions"),
+            &["new|install", "new|environment|prune"],
+        );
+        assert!(text(&out).contains("guildbotics environment prune"));
+    }
 }

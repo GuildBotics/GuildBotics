@@ -307,10 +307,14 @@ install_assets() {
 }
 complete_activation() {
     rm -f "$pending" "$builds/update-to" || return
-    stage="pruning obsolete snapshots"
-    # Activation is committed: cleanup must never trigger a rollback.
-    "$current" environment prune || return
-    install_assets
+    # Activation is committed: cleanup must not block asset installation or
+    # turn a successful update into a failure in the automatic update loop.
+    activation_install_status=0
+    install_assets || activation_install_status=$?
+    if ! "$current" environment prune; then
+        printf 'Snapshot cleanup deferred. After the environment build finishes, run: "%s" environment prune (guildbotics environment prune).\n' "$current" >&2
+    fi
+    return "$activation_install_status"
 }
 rollback() {
     # The start failed before its authenticated readiness was observed.
