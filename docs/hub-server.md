@@ -56,7 +56,7 @@ scripts/hub-server.sh update
 ```
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
-2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。
+2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。GuildBotics も退避し、退避の写しに新ビルドの `server hub-data upgrade` と `check` を実行します。
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
@@ -249,3 +249,15 @@ Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワ�
 エラーとして報告し、その場合も削除を試みます。起動済みの新版は維持します。必要なビルドを終えてから
 同じ Hub 設定・ワークスペースで `guildbotics environment prune` を再実行してください。
 通常の upkeep は削除しないので、その後に次の更新を事前ビルドしても保持されます。
+
+## GuildBotics のデータの退避と検査
+
+更新候補の隠しコマンド `guildbotics server hub-data backup --to <空のディレクトリ>` が、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` を退避します。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
+
+再作成可能な `local/clones`、`local/cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。
+
+`backups/guildbotics-update-<時刻>.<乱数>/` の `manifest.json` に元の root と完了を記録し、`0/.guildbotics`、`1/.guildbotics`…にデータを置きます。Branvil とは別に直近3世代を残し、不完全な退避は次の退避時に削除します。更新前の退避には、その後に完了した仕事の書き込みは含まれません。
+
+`server hub-data upgrade --data-dir <退避の写し>` と `check --data-dir <退避の写し>` は番号付きの写しだけを扱い、manifest の元のパスへはアクセスしません。JSON・JSONL・YAML の構文と記録の schema_version を検査します。版1〜4は項目追加だけなので変換しません。将来、互換性を壊す版では直前の1版からの変換と検査を追加します。それ以前の形式を並行サポートしません。`--data-dir` を省略すると登録済みの本物を対象にします。更新ではサーバー停止後に本物へ `upgrade`、`check` を行い、その成功後だけ起動します。`recover` も候補の変換と検査を再実行します。
+
+旧ビルドへ戻す場合も両サービスの検査が必要です。GuildBotics の検査に通らない場合はデータを残して停止し、退避の親ディレクトリを表示します。この内部コマンドがまだない旧ビルドへの復旧も、安全のため停止します。オーナーは退避後の書き込みを確認し、停止中に manifest の root と番号付きの写しを照合して、戻す対象を決めてください。自動では実データを退避で上書きしません。
