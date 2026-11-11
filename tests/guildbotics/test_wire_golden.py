@@ -147,6 +147,7 @@ async def test_worktree_producer_and_host_consumers(tmp_path, monkeypatch):
         arg.replace("{source}", str(source)).replace("{destination}", str(destination))
         for arg in case["argv"][operation]
     ]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(case["copy_manifest"])))
     assert worktree_copy.main(argv("copy")) == 0
     assert _jsonl(sys.stdout.getvalue()) == _jsonl(case["copied_jsonl"])
     assert not (destination / "mounted").exists()

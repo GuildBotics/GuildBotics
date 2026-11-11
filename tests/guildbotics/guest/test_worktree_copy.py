@@ -41,9 +41,18 @@ def _repository(root: Path, tracked: dict[str, str]) -> Path:
 
 @pytest.fixture(scope="module", autouse=True)
 def host_selector():
-    """Build the real Rust selector once; copy rules have no Python test double."""
+    """CI fetches dependencies before pytest; rebuild offline to reject stale binaries."""
     subprocess.run(
-        ["cargo", "build", "--locked", "-p", "gb-base", "--example", "worktree-list"],
+        [
+            "cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "-p",
+            "gb-base",
+            "--example",
+            "worktree-list",
+        ],
         check=True,
     )
 
@@ -501,6 +510,7 @@ def test_host_git_ignores_user_system_and_inherited_configuration(
     system = tmp_path / "system.gitconfig"
     system.write_text(f"[core]\nexcludesFile = {system_excludes}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     assert "user-ignored" in _manifest(source)["files"]
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(user))
@@ -540,7 +550,7 @@ def test_host_git_never_executes_repository_fsmonitor(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-def test_host_selection_excludes_workspace_and_ignores_links(tmp_path: Path) -> None:
+def test_host_selection_excludes_workspace(tmp_path: Path) -> None:
     source = _tree(tmp_path / "source", {".guildbotics/private": "x", "keep": "k"})
     assert _manifest(source)["files"] == ["keep"]
 
@@ -554,3 +564,66 @@ def test_guest_copy_obeys_manifest_without_asking_git(tmp_path: Path) -> None:
         "selected.log"
     ]
     assert not (destination / "not-selected").exists()
+
+
+@pytest.mark.parametrize("xdg", [False, True], ids=["home-default", "xdg"])
+def test_default_user_ignore_is_not_used(tmp_path, monkeypatch, xdg):
+    source = _repository(tmp_path / "source", {"tracked": "t"})
+    _tree(
+        source, {"user-hidden": "u", ".gitignore": "repo-hidden\n", "repo-hidden": "r"}
+    )
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    if xdg:
+        config = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    else:
+        config = home / ".config"
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    _tree(config, {"git/ignore": "user-hidden\n"})
+    assert sorted(_manifest(source)["files"]) == [
+        ".gitignore",
+        "tracked",
+        "user-hidden",
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires byte filenames")
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_non_utf8_names_not_selected_do_not_fail(tmp_path, kind):
+    source = _repository(tmp_path / "source", {".gitignore": "*.tmp\n"})
+    path = os.fsencode(source) + b"/bad\xff.tmp"
+    if kind == "file":
+        with open(path, "wb") as file:
+            file.write(b"ignored")
+    elif kind == "directory":
+        os.mkdir(path)
+        with open(path + b"/child", "wb") as file:
+            file.write(b"ignored")
+    else:
+        os.symlink(b"missing", path)
+    assert _manifest(source)["files"] == [".gitignore"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires byte filenames")
+@pytest.mark.parametrize("repository", [False, True])
+def test_unselected_byte_names_and_selected_byte_names_are_distinct(
+    tmp_path, repository
+):
+    source = (_repository if repository else _tree)(
+        tmp_path / "source", {"tracked": "t"}
+    )
+    raw = os.fsencode(source)
+    os.symlink(b"missing", raw + b"/link\xff")
+    os.mkfifo(raw + b"/fifo\xff")
+    os.mkdir(raw + b"/.guildbotics")
+    with open(raw + b"/.guildbotics/tracked\xff", "wb") as file:
+        file.write(b"private")
+    if repository:
+        _git(source, "add", "-f", ".guildbotics")
+    assert _manifest(source)["files"] == ["tracked"]
+    with open(raw + b"/selected\xff", "wb") as file:
+        file.write(b"selected")
+    with pytest.raises(WorktreeCopyError, match="Non-UTF-8"):
+        _manifest(source)

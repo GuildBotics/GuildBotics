@@ -89,6 +89,7 @@ uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
 uv run --no-sync python scripts/generate-wire-schema.py --check
+cargo build --locked -p gb-base --example worktree-list
 uv run --no-sync pytest tests/ --ignore=tests/blackbox -n auto
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings

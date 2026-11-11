@@ -2,7 +2,12 @@
 use anyhow::{Context, Result, bail};
 use cap_fs_ext::DirExt;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::Path, process::Command};
+use std::{
+    collections::BTreeSet,
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use unicode_normalization::UnicodeNormalization;
 
 /// Paths are relative, spelled as on disk, and contain no links or special files.
@@ -13,11 +18,14 @@ pub struct Manifest {
     pub repository: bool,
 }
 
-fn composed(value: &str) -> String {
-    value.nfc().collect()
+fn composed(value: &Path) -> PathBuf {
+    value
+        .to_str()
+        .map(|s| PathBuf::from(s.nfc().collect::<String>()))
+        .unwrap_or_else(|| value.to_owned())
 }
 
-fn git(root: &Path, global: &Path, args: &[&str]) -> Result<BTreeSet<String>> {
+fn git(root: &Path, global: &Path, args: &[OsString]) -> Result<BTreeSet<PathBuf>> {
     let mut command = Command::new("git");
     for (key, _) in std::env::vars_os() {
         if key
@@ -37,11 +45,19 @@ fn git(root: &Path, global: &Path, args: &[&str]) -> Result<BTreeSet<String>> {
             "core.fsmonitor=false",
             "-c",
             "core.hooksPath=",
+            "-c",
         ])
+        .arg({
+            let mut setting = OsString::from("core.excludesFile=");
+            setting.push(global);
+            setting
+        })
         // Keep disk spelling even on macOS; the index may use NFC.
         .args(["-c", "core.precomposeunicode=false"])
-        .arg(format!("--git-dir={}", root.join(".git").display()))
-        .arg(format!("--work-tree={}", root.display()))
+        .arg("--git-dir")
+        .arg(root.join(".git"))
+        .arg("--work-tree")
+        .arg(root)
         .args(["ls-files", "-z"])
         .args(args)
         .current_dir(root)
@@ -54,7 +70,17 @@ fn git(root: &Path, global: &Path, args: &[&str]) -> Result<BTreeSet<String>> {
         .stdout
         .split(|b| *b == 0)
         .filter(|s| !s.is_empty())
-        .map(|s| Ok(std::str::from_utf8(s)?.trim_end_matches('/').to_owned()))
+        .map(|s| {
+            let s = s.strip_suffix(b"/").unwrap_or(s);
+            #[cfg(unix)]
+            let name = {
+                use std::os::unix::ffi::OsStringExt;
+                OsString::from_vec(s.to_vec())
+            };
+            #[cfg(not(unix))]
+            let name = OsString::from(std::str::from_utf8(s)?);
+            Ok(PathBuf::from(name))
+        })
         .collect()
 }
 
@@ -66,25 +92,35 @@ pub fn list(root: &Path, excluded: &[String]) -> Result<Manifest> {
     let mut ignored = BTreeSet::new();
     if repository {
         let global = tempfile::NamedTempFile::new()?;
-        let tracked: BTreeSet<_> = git(root, global.path(), &["--cached"])?
+        let tracked: BTreeSet<_> = git(root, global.path(), &["--cached".into()])?
             .iter()
             .map(|s| composed(s))
             .collect();
         let holding: BTreeSet<_> = tracked
             .iter()
-            .flat_map(|s| s.match_indices('/').map(|(index, _)| s[..index].to_owned()))
+            .flat_map(|s| s.ancestors().skip(1).map(Path::to_owned))
             .collect();
-        let flags = ["--others", "--ignored", "--exclude-standard"];
+        let flags: Vec<OsString> = ["--others", "--ignored", "--exclude-standard"]
+            .map(Into::into)
+            .to_vec();
         for path in git(
             root,
             global.path(),
-            &[flags.as_slice(), &["--directory"]].concat(),
+            &[flags.as_slice(), &["--directory".into()]].concat(),
         )? {
             if holding.contains(&composed(&path)) {
                 ignored.extend(git(
                     root,
                     global.path(),
-                    &[flags.as_slice(), &["--", &format!("{path}/")]].concat(),
+                    &[
+                        flags.as_slice(),
+                        &["--".into(), {
+                            let mut p = path.as_os_str().to_owned();
+                            p.push("/");
+                            p
+                        }],
+                    ]
+                    .concat(),
                 )?);
             } else {
                 ignored.insert(path);
@@ -97,39 +133,34 @@ pub fn list(root: &Path, excluded: &[String]) -> Result<Manifest> {
         files: vec![],
         repository,
     };
-    walk(&dir, "", excluded, &ignored, &mut manifest)?;
+    walk(&dir, Path::new(""), excluded, &ignored, &mut manifest)?;
     Ok(manifest)
 }
 
 fn walk(
     dir: &cap_std::fs::Dir,
-    prefix: &str,
+    prefix: &Path,
     excluded: &[String],
-    ignored: &BTreeSet<String>,
+    ignored: &BTreeSet<PathBuf>,
     out: &mut Manifest,
 ) -> Result<()> {
     let mut entries = dir.entries()?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("Non-UTF-8 worktree path"))?;
-        let path = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if name.eq_ignore_ascii_case(".git")
-            || path == ".guildbotics"
-            || excluded.contains(&path)
+        let name = entry.file_name();
+        let path = prefix.join(&name);
+        if name
+            .to_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(".git"))
+            || path == Path::new(".guildbotics")
+            || excluded.iter().any(|s| Path::new(s) == path)
             || ignored.contains(&path)
         {
             continue;
         }
         let kind = entry.file_type()?;
         if kind.is_dir() {
-            out.directories.push(path.clone());
+            out.directories.push(manifest_path(&path)?);
             walk(
                 &dir.open_dir_nofollow(&name)?,
                 &path,
@@ -138,10 +169,17 @@ fn walk(
                 out,
             )?;
         } else if kind.is_file() {
-            out.files.push(path);
+            out.files.push(manifest_path(&path)?);
         }
     }
     Ok(())
+}
+
+fn manifest_path(path: &Path) -> Result<String> {
+    path.iter()
+        .map(|part| part.to_str().context("Non-UTF-8 worktree path"))
+        .collect::<Result<Vec<_>>>()
+        .map(|parts| parts.join("/"))
 }
 
 #[cfg(test)]
