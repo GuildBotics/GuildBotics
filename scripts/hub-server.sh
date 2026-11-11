@@ -5,7 +5,7 @@ umask 077
 
 usage() {
     cat <<'EOF'
-Usage: scripts/hub-server.sh install | update | restart | status | recover | uninstall
+Usage: scripts/hub-server.sh install | update | restart | status | recover | uninstall | auto-install | auto-uninstall | auto-once
 
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
            Set BRANVIL_DATA_DIR to the absolute path of the initialized data,
@@ -15,6 +15,9 @@ restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
 recover    Resume an interrupted update or return to the previous build.
 uninstall  Let in-flight work finish and remove the LaunchAgent.
+auto-install    Register the main-watching update agent using this PATH.
+auto-uninstall  Stop and unregister automatic updates.
+auto-once       Run one automatic update inspection (also used by tests).
 
 Run install and update from the Hub owner's macOS desktop session. See
 docs/hub-server.md for Keychain prompts, backup locations, and recovery.
@@ -25,7 +28,7 @@ action=${1:-help}
 [ "$#" -le 1 ] || fail "No options are accepted."
 case "$action" in
     -h|--help|help) usage; exit 0 ;;
-    install|update|restart|status|recover|uninstall) ;;
+    install|update|restart|status|recover|uninstall|auto-install|auto-uninstall|auto-once) ;;
     *) usage >&2; exit 2 ;;
 esac
 [ "$(uname -s)" = Darwin ] || fail "Supported system: macOS."
@@ -48,6 +51,38 @@ signing=$hub/signing-identity
 backups=$hub/backups
 
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
+
+# The loop must not hold the operation lock while invoking update.
+case "$action" in
+    auto-once) exec node "$repo/scripts/hub-auto-update.mjs" --once ;;
+    auto-install|auto-uninstall)
+        auto_label=local.guildbotics.update
+        auto_plist=$HOME/Library/LaunchAgents/$auto_label.plist
+        launchctl bootout "$domain/$auto_label" 2>/dev/null || true
+        if [ "$action" = auto-uninstall ]; then rm -f "$auto_plist"; exit 0; fi
+        node --version | grep -Eq '^v24\.' || fail "Node.js 24 must be in PATH."
+        npm --version >/dev/null
+        git --version >/dev/null
+        rust_version=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$repo/rust-toolchain.toml")
+        rustc --version | grep -F "rustc $rust_version " >/dev/null || fail "Put the declared Rust toolchain in PATH."
+        mkdir -p "$(dirname "$auto_plist")" "$HOME/Library/Logs"
+        auto_xml() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+        {
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict>'
+            printf '<key>Label</key><string>%s</string>\n' "$auto_label"
+            printf '<key>ProgramArguments</key><array><string>%s</string><string>%s</string></array>\n' "$(auto_xml "$(command -v node)")" "$(auto_xml "$repo/scripts/hub-auto-update.mjs")"
+            printf '<key>WorkingDirectory</key><string>%s</string>\n' "$(auto_xml "$repo")"
+            printf '<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string><key>HOME</key><string>%s</string></dict>\n' "$(auto_xml "$PATH")" "$(auto_xml "$HOME")"
+            printf '%s\n' '<key>RunAtLoad</key><true/>' '<key>KeepAlive</key><true/>' '<key>ThrottleInterval</key><integer>15</integer>'
+            printf '<key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string>\n' "$(auto_xml "$HOME/Library/Logs/guildbotics-update.log")" "$(auto_xml "$HOME/Library/Logs/guildbotics-update.log")"
+            printf '%s\n' '</dict></plist>'
+        } >"$auto_plist"
+        plutil -lint "$auto_plist"
+        launchctl enable "$domain/$auto_label"
+        launchctl bootstrap "$domain" "$auto_plist"
+        exit 0
+        ;;
+esac
 
 # Use one lock for the build pointer, backup rotation and LaunchAgent changes.
 mkdir -p "$builds"
@@ -204,11 +239,12 @@ backup_and_rehearse() {
     "$current" branvil backup --data-dir "$BRANVIL_DATA_DIR" --to "$backup"
     printf 'Backup before update: %s\n' "$backup"
 
-    # Keep the latest three completed backups. Incomplete backups have no manifest.
+    # No other backup writer can run under operation. Remove interrupted copies.
     set --
     for saved in "$backups"/branvil-update-*; do
-        if [ "$saved" != "$backup" ] && [ -d "$saved" ] && [ ! -L "$saved" ] && [ -f "$saved/manifest.json" ]; then
-            set -- "$@" "$saved"
+        if [ "$saved" != "$backup" ] && [ -d "$saved" ] && [ ! -L "$saved" ]; then
+            if [ -f "$saved/manifest.json" ]; then set -- "$@" "$saved"
+            else rm -rf "$saved"; fi
         fi
     done
     while [ "$#" -gt 2 ]; do rm -rf "$1"; shift; done
@@ -261,7 +297,7 @@ install_assets() {
     return 1
 }
 complete_activation() {
-    rm -f "$pending" && install_assets
+    rm -f "$pending" "$builds/update-to" && install_assets
 }
 rollback() {
     # The start failed before its authenticated readiness was observed.
@@ -271,10 +307,11 @@ rollback() {
     # The previous build may refuse the upgraded schema. Leave the data in
     # place and stay stopped for the operator to decide how to restore it.
     if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR"; then
+        launchctl disable "$target" || return
         printf 'The previous build cannot check the live data. See docs/hub-server.md before restarting.\n' >&2
         return 1
     fi
-    start_agent && rm -f "$pending"
+    start_agent && rm -f "$pending" "$builds/update-to"
 }
 
 if [ "$action" != install ]; then
@@ -344,6 +381,7 @@ case "$action" in
         stage="stopping the previous build"
         stop_agent
         assert_stopped "$current"
+        cp "$candidate" "$builds/update-to"
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
         if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&
@@ -367,7 +405,15 @@ case "$action" in
         if agent_ready; then
             complete_activation
         else
-            rollback
+            unload
+            assert_stopped "$current"
+            if [ -x "$builds/update-to" ] &&
+                "$builds/update-to" branvil admin check --data-dir "$BRANVIL_DATA_DIR" &&
+                point_current "$builds/update-to" && start_agent; then
+                complete_activation
+            else
+                rollback
+            fi
         fi
         ;;
     uninstall)

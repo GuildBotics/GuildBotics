@@ -9,6 +9,7 @@ use std::{
 };
 
 const SCRIPT: &str = include_str!("../../../scripts/hub-server.sh");
+const AUTO: &str = include_str!("../../../scripts/hub-auto-update.mjs");
 const TOOLS: &str = include_str!("fixtures/hub-tools.sh");
 const IDENTITY: &str = "0123ABCD";
 const IDENTITIES: &str =
@@ -39,6 +40,12 @@ impl Hub {
         }
         symlink(root.join("home with spaces"), &home).unwrap();
         fs::write(repo.join("scripts/hub-server.sh"), SCRIPT).unwrap();
+        fs::write(repo.join("scripts/hub-auto-update.mjs"), AUTO).unwrap();
+        fs::write(
+            repo.join("hub-update.json"),
+            "{\"manual_update_version\":0,\"instructions\":null}",
+        )
+        .unwrap();
         fs::write(root.join("os"), "Darwin\n").unwrap();
         fs::write(root.join("identities"), IDENTITIES).unwrap();
         let stub = tools.join("stub");
@@ -53,10 +60,11 @@ impl Hub {
             "plutil",
             "security",
             "codesign",
+            "rustc",
         ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
-        let path = format!("{}:/usr/bin:/bin", tools.display());
+        let path = format!("{}:/usr/local/bin:/usr/bin:/bin", tools.display());
         let hub = Self {
             temp,
             home,
@@ -110,7 +118,7 @@ impl Hub {
 
     fn commit(&self, name: &str) {
         fs::write(self.repo.join("build-id"), name).unwrap();
-        self.git(&["add", "scripts/hub-server.sh", "build-id"]);
+        self.git(&["add", "scripts", "build-id", "hub-update.json"]);
         self.git(&["commit", "-qm", name]);
     }
 
@@ -760,10 +768,11 @@ fn update_keeps_only_three_complete_backup_generations() {
     hub.commit("new");
     hub.run("update", None, true);
     assert!(!backups.join("branvil-update-2000").exists());
-    for stamp in ["2001", "2002", "2003"] {
+    for stamp in ["2001", "2002"] {
         assert!(backups.join(format!("branvil-update-{stamp}")).exists());
     }
-    assert_eq!(fs::read_dir(backups).unwrap().count(), 4);
+    assert!(!backups.join("branvil-update-2003").exists());
+    assert_eq!(fs::read_dir(backups).unwrap().count(), 3);
 }
 
 #[test]
@@ -793,4 +802,204 @@ fn only_macos_is_supported() {
     fs::write(hub.root().join("os"), "Linux\n").unwrap();
     assert!(text(&hub.run("install", None, false)).contains("macOS"));
     assert!(!hub.plist().exists());
+}
+
+impl Hub {
+    fn auto_candidate(&self) {
+        self.git(&["branch", "-M", "main"]);
+        let remote = self.root().join("origin.git");
+        self.git(&["clone", "--bare", ".", remote.to_str().unwrap()]);
+        self.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        self.commit("new");
+        self.git(&["push", "origin", "main"]);
+        self.git(&["reset", "--hard", "HEAD^"]);
+    }
+
+    fn auto_state(&self) -> serde_json::Value {
+        serde_json::from_str(
+            &fs::read_to_string(self.builds().parent().unwrap().join("auto-update.json")).unwrap(),
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn auto_update_requires_successful_checks_and_notifies_failure_once() {
+    for checks in ["pending", "unregistered", "failure", "success"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        fs::write(hub.root().join("checks"), checks).unwrap();
+        hub.run("auto-once", None, true);
+        if checks == "success" {
+            hub.assert_runs_signed("new");
+        } else {
+            hub.assert_runs_signed("old");
+            hub.run("auto-once", None, true);
+            if checks == "failure" {
+                assert_eq!(hub.lines("notifications").lines().count(), 1);
+                // A rerun on the same commit can turn a failed check green.
+                fs::write(hub.root().join("checks"), "success").unwrap();
+                hub.run("auto-once", None, true);
+                hub.assert_runs_signed("new");
+            } else {
+                assert!(!hub.root().join("notifications").exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn auto_update_resumes_only_a_previously_running_service_even_after_rollback() {
+    for running in [true, false] {
+        for rollback in [true, false] {
+            let hub = Hub::new();
+            hub.install();
+            hub.auto_candidate();
+            hub.mark("service-autostart");
+            if running {
+                hub.mark("service-running");
+            }
+            if rollback {
+                hub.fail_start("new");
+            }
+            hub.run("auto-once", None, true);
+            assert_eq!(hub.root().join("service-running").exists(), running);
+            assert_eq!(
+                hub.auto_state()["result"],
+                if rollback { "failed" } else { "success" }
+            );
+            if rollback {
+                hub.assert_runs_signed("old");
+                fs::remove_file(hub.root().join("fail-start")).unwrap();
+                hub.run("auto-once", None, true);
+                assert!(!hub.lines("calls").contains("npm|"));
+                hub.assert_runs_signed("old");
+                assert_eq!(hub.lines("notifications").lines().count(), 1);
+            } else {
+                hub.assert_runs_signed("new");
+            }
+        }
+    }
+}
+
+#[test]
+fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
+    for condition in [
+        "operation",
+        "interrupted",
+        "dirty",
+        "diverged",
+        "unresponsive",
+        "image",
+        "manual",
+    ] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        match condition {
+            "operation" => {
+                fs::create_dir(hub.builds().parent().unwrap().join("operation")).unwrap()
+            }
+            "interrupted" => fs::write(hub.builds().join("update-from"), "interrupted").unwrap(),
+            "dirty" => fs::write(hub.repo.join("untracked"), "change").unwrap(),
+            "diverged" => hub.commit("local"),
+            "unresponsive" => hub.mark("unresponsive"),
+            "image" => fs::write(
+                hub.root().join("environment"),
+                r#"{"image":{"reference":"custom:latest","present":false}}"#,
+            )
+            .unwrap(),
+            "manual" => {
+                hub.git(&["merge", "--ff-only", "origin/main"]);
+                fs::write(
+                    hub.repo.join("hub-update.json"),
+                    r#"{"manual_update_version":1,"instructions":"docs/hub-server.md"}"#,
+                )
+                .unwrap();
+                hub.commit("manual");
+                hub.git(&["push", "origin", "main"]);
+                hub.git(&["reset", "--hard", "HEAD~2"]);
+            }
+            _ => unreachable!(),
+        }
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("old");
+        assert!(!hub.lines("actions").contains("server|stop"));
+        if condition != "operation" {
+            assert!(!hub.lines("notifications").is_empty());
+            hub.run("auto-once", None, true);
+            assert_eq!(hub.lines("notifications").lines().count(), 1);
+        }
+    }
+}
+
+#[test]
+fn auto_update_reports_missing_snapshot_after_activation() {
+    for snapshot in ["missing", "stale", "failed", "ready"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        fs::write(
+            hub.root().join("environment"),
+            format!(r#"{{"image":{{"reference":null}},"snapshot":{{"state":"{snapshot}"}}}}"#),
+        )
+        .unwrap();
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("new");
+        assert_eq!(
+            hub.root().join("notifications").exists(),
+            snapshot != "ready"
+        );
+    }
+}
+
+#[test]
+fn recover_starts_the_saved_candidate_when_live_data_has_already_been_upgraded() {
+    let hub = Hub::new();
+    hub.install();
+    let old = fs::read(hub.builds().join("current")).unwrap();
+    hub.commit("new");
+    hub.mark("change-schema");
+    hub.run("update", None, true);
+    let new = fs::read(hub.builds().join("current")).unwrap();
+    for name in ["holder", "job-pid", "loaded"] {
+        fs::remove_file(hub.root().join(name)).unwrap();
+    }
+    // A reboot interrupted activation, leaving old current and upgraded data.
+    for (name, bytes) in [
+        ("current", old.clone()),
+        ("update-from", old),
+        ("update-to", new),
+    ] {
+        fs::write(hub.builds().join(name), bytes).unwrap();
+        fs::set_permissions(hub.builds().join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    hub.run("recover", None, true);
+    hub.assert_runs_signed("new");
+    assert!(!hub.builds().join("update-from").exists());
+    assert!(!hub.builds().join("update-to").exists());
+}
+
+#[test]
+fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
+    let hub = Hub::new();
+    hub.install();
+    fs::write(
+        hub.repo.join("rust-toolchain.toml"),
+        include_str!("../../../rust-toolchain.toml"),
+    )
+    .unwrap();
+    hub.run("auto-install", None, true);
+    let plist = hub
+        .home
+        .join("Library/LaunchAgents/local.guildbotics.update.plist");
+    let contents = fs::read_to_string(&plist).unwrap();
+    assert!(contents.contains("local.guildbotics.update"));
+    assert!(contents.contains("hub-auto-update.mjs"));
+    assert!(contents.contains(&hub.path));
+    assert_eq!(hub.lines("holder"), "42\n");
+    hub.run("auto-uninstall", None, true);
+    assert!(!plist.exists());
+    assert_eq!(hub.lines("holder"), "42\n");
 }

@@ -60,19 +60,19 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は更新のあいだだけある、切り替える前に動いていたコピーで、失敗したときはこれに戻します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
 更新が失敗すると、実行したターミナルに理由が出ます。Hubの `last-failure` には直近の失敗の時刻、段階、リビジョンが残ります。サーバーの起動エラーは `~/Library/Logs/guildbotics.log` にあります。写しでの検査までに失敗した場合は、現行ビルドで稼働を続けます。
 
-新ビルドが起動する前に切り替えが失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残して停止します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[Branvilのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
+新ビルドが起動する前に切り替えが失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残し、LaunchAgentを disable して停止します。次のログインでも起動しません。復旧時の bootstrap は enable してから起動します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[Branvilのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
 
 ```sh
 scripts/hub-server.sh recover
 ```
 
-更新の途中でマシンを再起動した場合も、`builds/update-from` が残っていれば `recover` を実行します。現在のビルドが応答していればそのまま使い、応答していなければ前のビルドの検査と起動をやり直します。強制終了でHubの `operation` ディレクトリが残った場合は、先に更新やビルドのプロセスが終わっていることを確かめてから、そのディレクトリを取り除きます。サーバーが停止していて `builds/update-from` がなければ、`restart` で現在のビルドを起動できます。
+更新の途中でマシンを再起動した場合も、`builds/update-from` が残っていれば `recover` を実行します。現在のビルドが応答していればそのまま使い、応答していなければ保存した更新候補で実データを検査して起動します。それが失敗した場合だけ前のビルドの検査と起動をやり直します。強制終了でHubの `operation` ディレクトリが残った場合は、先に更新やビルドのプロセスが終わっていることを確かめてから、そのディレクトリを取り除きます。サーバーが停止していて `builds/update-from` がなければ、`restart` で現在のビルドを起動できます。
 
 起動確認後にCLIやスキルの配置が失敗した場合、起動済みのサーバーは稼働を続けます。チェックアウトの `HEAD` が現在のビルドと同じなら、`scripts/hub-server.sh update` で配置だけを再試行できます。ビルドを変えずに配置を再試行するには、登録時と同じ環境設定で次を実行します。
 
@@ -165,3 +165,55 @@ scripts/hub-server.sh recover
 `scripts/dev.sh` は両方を 8866（変更時は `GUILDBOTICS_SERVER_PORT`）で起動する。
 既存の開発用 Branvil のデータはそのまま使う。`branvil.toml` の 7879 の `listen` や
 `base_url` は統合サーバーでは使わない。開発ワークスペースの Branvil 接続設定も共通 URL に変更する。
+
+
+## main を見張る自動更新
+
+Hubのチェックアウトで、上記と同じRust、Node.js 24、npm、GitをPATHに入れ、
+オーナーのデスクトップセッションから登録します。実機への登録と確認は #186 で行います。
+
+```sh
+scripts/hub-server.sh auto-install
+# 停止して登録を解除（サーバーの登録には影響しない）
+scripts/hub-server.sh auto-uninstall
+```
+
+別のLaunchAgent `local.guildbotics.update` がログイン時に起動し、起動直後と5分ごとに
+originのmainをfetchします。登録時のPATHを保存し、サーバーのデータとポートは
+`local.guildbotics.plist` から読みます。チェックアウトは自動更新専用にしてください。
+必須チェックがすべて成功し、手動更新版の番号が現行以下、独自ベースイメージが
+読み込み済みのときだけfast-forwardして通常の `update` を実行します。
+独自イメージとスナップショットはCLIで選択中のワークスペースについて確認します。
+チェック失敗は通知し、次の回で再確認します。未登録・未完了のチェックは次の回を待ちます。
+
+更新前にGuildBoticsのサービスが動いていた場合だけ、更新後やロールバック後に
+`guildbotics service start` で再開します。途中で停止した場合も、再開の意図を保存しておき、
+人が復旧した後の次の回で再開します。新ビルドのスナップショットがmissing・stale・failedなら
+`guildbotics environment build` が必要なことを通知します。ループ自身が変わったときは
+終了し、launchdが新しいスクリプトで起動し直します。
+
+更新中は作業の完了を待ち、新しい作業の受付が止まり、切り替え中は画面とCLIも使えません。
+1時間経っても更新が終わらなければ通知しますが、待機は打ち切りません。
+`--force` は使いません。
+
+通知は `server hub-notify` を使います。webhook未設定時も、コミット・段階・理由・
+次にすることが `~/Library/Logs/guildbotics-update.log` に残ります。
+同じコミットの同じ段階の通知は一度だけです。送信エラーは次の回で再試行します。
+`Hub/auto-update.json` に試行したコミット、結果、通知、サービス再開の意図を保存し、
+`Hub/last-failure` は判定に使いません。
+
+止まった場合はログの段階に応じて対処します。
+
+- 手動更新版：通知の `docs/` の手順を読み、手動更新を済ませます。以後は自動で続行します。
+- 独自イメージ未読込：`guildbotics environment image load <archive.tar>` で読み込みます。
+- チェックアウトの変更・分岐：未コミットの変更を解消し、origin/mainへfast-forwardできる状態に戻します。
+- `builds/update-from` が残る：上の復旧手順で `recover` を実行します。自動では復旧を始めません。
+- `operation` が残る：ほかの操作中なら待ちます。古いロックかをPIDだけで決めず、更新とビルドの
+  プロセスが終わったことを確認してから取り除きます。自動削除はしません。
+- サーバー無応答：サーバーログを確認し、必要なら `restart` または `recover` を実行します。
+- 更新失敗：同じコミットでは再試行しません。手で対処するか、新しいコミットを待ちます。
+  更新途中でループが終了し、結果を記録できなかった場合も同じ扱いです。
+
+診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。
+ループの間隔は起動時の `GUILDBOTICS_HUB_UPDATE_INTERVAL`（秒、既定300）、
+長時間通知は `GUILDBOTICS_HUB_WAIT_NOTICE`（秒、既定3600）で指定できます。
