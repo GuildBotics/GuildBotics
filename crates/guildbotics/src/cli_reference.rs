@@ -27,6 +27,7 @@ fn verify_catalog() -> anyhow::Result<()> {
     let commands = grammar
         .keys()
         .filter_map(|name| name.split_whitespace().next())
+        .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let mut options = grammar
         .values()
@@ -35,19 +36,21 @@ fn verify_catalog() -> anyhow::Result<()> {
                 .options
                 .iter()
                 .flat_map(|option| option.spelling.split('/'))
+                .map(str::to_owned)
         })
         .collect::<BTreeSet<_>>();
     let cli = Cli::command();
     let run = cli.find_subcommand("run").expect("run CLI");
-    // Agent instructions also use the run command's working directory option.
-    if run.get_arguments().any(|arg| arg.get_long() == Some("cwd")) {
-        options.insert("--cwd");
-    }
-    options.extend(["--help", "--workspace"]);
+    // Agent instructions may use every long option of the run command.
+    options.extend(
+        run.get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .map(|long| format!("--{long}")),
+    );
+    options.extend(["--help".to_owned(), "--workspace".to_owned()]);
     let catalog: Value = serde_json::from_str(CATALOG)?;
     for (field, actual) in [("member_commands", commands), ("options", options)] {
         let expected: BTreeSet<String> = serde_json::from_value(catalog[field].clone())?;
-        let expected = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
         anyhow::ensure!(
             expected == actual,
             "member/catalog.json {field} differs from the Rust CLI. Missing: {:?}; obsolete: {:?}",
