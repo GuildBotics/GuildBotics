@@ -110,6 +110,8 @@ mod diagnostics_cli;
 mod environment_cli;
 mod hub_cli;
 mod hub_data;
+#[cfg(unix)]
+mod hub_update;
 mod install_cli;
 mod secrets_cli;
 mod service_cli;
@@ -149,6 +151,25 @@ enum ServerCommand {
     /// Print the manual-update declaration embedded in this binary
     #[command(hide = true)]
     HubMigration,
+    /// Watch origin/main of the Hub checkout and update the Hub (its LaunchAgent)
+    #[command(hide = true)]
+    HubAutoUpdate {
+        /// The Hub checkout
+        #[arg(long)]
+        checkout: std::path::PathBuf,
+        /// Inspect once instead of every interval
+        #[arg(long)]
+        once: bool,
+    },
+    /// Remove the Hub's build source trees that no process holds, except those kept
+    #[command(hide = true)]
+    HubPrune {
+        /// The name of a build directory to keep
+        #[arg(long)]
+        keep: Vec<std::ffi::OsString>,
+        /// The directory of the builds
+        builds: std::path::PathBuf,
+    },
     /// Run the server in the foreground until SIGINT or SIGTERM (a first
     /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
     /// cancels them): GuildBotics
@@ -183,6 +204,8 @@ enum ServerCommand {
 
 fn main() -> ExitCode {
     startup::initialize();
+    #[cfg(unix)]
+    gb_base::home::hold_source_tree();
     // Started by Git as GIT_ASKPASS when Branvil talks to an upstream host.
     if let Some(code) = branvil::askpass_main() {
         return code;
@@ -255,6 +278,17 @@ fn main() -> ExitCode {
         Command::Server {
             command: ServerCommand::HubMigration,
         } => outcome(hub_cli::migration().map(|()| 0)),
+        #[cfg(unix)]
+        Command::Server {
+            command: ServerCommand::HubAutoUpdate { checkout, once },
+        } => outcome(hub_update::run(checkout, once).map(|()| 0)),
+        #[cfg(not(unix))]
+        Command::Server {
+            command: ServerCommand::HubAutoUpdate { .. },
+        } => outcome(Err(anyhow::anyhow!("The Hub runs only on macOS"))),
+        Command::Server {
+            command: ServerCommand::HubPrune { keep, builds },
+        } => outcome(hub_cli::prune(&builds, &keep).map(|()| 0)),
         Command::Server {
             command:
                 ServerCommand::HubData {

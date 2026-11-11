@@ -60,7 +60,7 @@ scripts/hub-server.sh update
 3. 検査が通ると、Branvilを稼働させたままGuildBoticsの実行中の作業を待ちます。次にBranvilが実行中のCIを `ci.stop_wait_secs` の上限まで待ち、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルド以外の `builds/<commit>/` を削除します。実行ファイルは自分のビルドのソースを読むので、更新の前に起動したCLIのプロセスは、次の更新が始まるまで使い続けられます。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -170,7 +170,7 @@ scripts/hub-server.sh recover
 ## main を見張る自動更新
 
 Hubのチェックアウトで、上記と同じRust、Node.js 24、npm、GitをPATHに入れ、
-オーナーのデスクトップセッションから登録します。実機への登録と確認は #186 で行います。
+オーナーのデスクトップセッションから、サーバーを `install` したあとに登録します。
 
 ```sh
 scripts/hub-server.sh auto-install
@@ -178,8 +178,10 @@ scripts/hub-server.sh auto-install
 scripts/hub-server.sh auto-uninstall
 ```
 
-別のLaunchAgent `local.guildbotics.update` がログイン時に起動し、起動直後と5分ごとに
-originのmainをfetchします。登録時のPATHを保存し、サーバーのデータ、identity root、ポートは
+別のLaunchAgent `local.guildbotics.update` がログイン時に、署名した現行ビルド `builds/current` の
+隠しコマンド `server hub-auto-update` を起動し、起動直後と5分ごとにoriginのmainをfetchします。
+常駐するのはGuildBoticsの実行ファイルだけで、ログイン項目やアクセスの確認にもその署名で表示されます。
+チェックアウトの場所は登録時に引数として記録します。登録時のPATHは更新のビルドのために保存し、サーバーのデータ、identity root、ポートは
 `local.guildbotics.plist` から読みます。チェックアウトは自動更新専用にしてください。
 必須チェックがすべて成功し、手動更新版の番号が現行以下、独自ベースイメージが
 読み込み済みのときだけfast-forwardして通常の `update` を実行します。
@@ -189,8 +191,8 @@ originのmainをfetchします。登録時のPATHを保存し、サーバーの�
 更新前にGuildBoticsのサービスが動いていた場合だけ、更新後やロールバック後に
 `guildbotics service start` で再開します。途中で停止した場合も、再開の意図を保存しておき、
 人が復旧した後の次の回で再開します。新ビルドのスナップショットがmissing・stale・failedなら
-`guildbotics environment build` が必要なことを通知します。ループ自身が変わったときは
-終了し、launchdが新しいスクリプトで起動し直します。
+`guildbotics environment build` が必要なことを通知します。現行ビルドが入れ替わると
+ループは終了し、launchdが新しいビルドで起動し直します。
 
 自動更新の登録し直し・解除も `Hub/operation` を取得します。更新中なら操作を拒否し、更新の子プロセスを止めません。解除できなかった場合は更新が終わってから再実行します。
 
@@ -219,6 +221,22 @@ originのmainをfetchします。登録時のPATHを保存し、サーバーの�
 診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。
 ループの間隔は起動時の `GUILDBOTICS_HUB_UPDATE_INTERVAL`（秒、既定300）、
 長時間通知は `GUILDBOTICS_HUB_WAIT_NOTICE`（秒、既定3600）で指定できます。
+
+## 自動更新をGuildBoticsの実行ファイルへ移す版への切り替え
+
+この版の `manual_update_version` は 4。それまでの自動更新（Node.jsで動く `scripts/hub-auto-update.mjs`）は、
+この版を見ると手作業が必要として通知し、更新しません。そのスクリプトはこの版で無くなるので、
+先に止めてからチェックアウトを進めます。Hubのチェックアウトの同じターミナルで続けて実行します。
+
+```sh
+scripts/hub-server.sh auto-uninstall
+git fetch origin main
+git merge --ff-only FETCH_HEAD
+scripts/hub-server.sh update
+scripts/hub-server.sh auto-install
+```
+
+ログイン項目の `node` が無くなり、自動更新は署名した実行ファイルとして動きます。
 
 ## Hubの写しで更新を確かめる
 

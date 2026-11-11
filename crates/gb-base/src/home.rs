@@ -2,7 +2,7 @@
 //! workspace, as the Python version does: `~/.guildbotics`.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Names another machine root than `~/.guildbotics`, so a version under
 /// development never touches the machine's own records.
@@ -51,6 +51,39 @@ pub fn python_package() -> PathBuf {
     crates.parent().expect("the checkout").join("guildbotics")
 }
 
+/// A file of every source tree, locked while a process reads the tree.
+const SOURCE_MARK: &str = "Cargo.toml";
+
+/// Marks this executable's source tree in use until the process exits: the
+/// Hub update removes a build's source tree only when no process holds it.
+/// Only advisory locks leave the tree's files writable, so Windows holds none.
+#[cfg(unix)]
+pub fn hold_source_tree() {
+    static SOURCE: std::sync::OnceLock<Option<std::fs::File>> = std::sync::OnceLock::new();
+    SOURCE.get_or_init(|| {
+        let file = std::fs::File::open(python_package().parent()?.join(SOURCE_MARK)).ok()?;
+        // Waits only while an update removes this very tree, which then fails anyway.
+        file.lock_shared().ok()?;
+        Some(file)
+    });
+}
+
+/// Removes the source tree `tree` unless a process holds it, and says whether
+/// it did. A tree without its mark is an interrupted build that never ran.
+pub fn remove_unused_tree(tree: &Path) -> std::io::Result<bool> {
+    let _lock = match std::fs::File::open(tree.join(SOURCE_MARK)) {
+        Ok(file) => match file.try_lock() {
+            Ok(()) => Some(file),
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    std::fs::remove_dir_all(tree)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +101,25 @@ mod tests {
         assert!(root_from(Some("".into()), Some("/home/o".into())).is_err());
         assert!(root_from(None, None).is_err());
         assert!(root_from(None, Some("".into())).is_err());
+    }
+
+    #[test]
+    fn a_source_tree_is_removed_only_once_no_process_holds_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let tree = temp.path().join("build");
+        std::fs::create_dir_all(tree.join("guildbotics")).unwrap();
+        std::fs::write(tree.join(SOURCE_MARK), "").unwrap();
+        let holder = std::fs::File::open(tree.join(SOURCE_MARK)).unwrap();
+        holder.lock_shared().unwrap();
+        assert!(!remove_unused_tree(&tree).unwrap());
+        assert!(tree.join("guildbotics").exists());
+        drop(holder);
+        assert!(remove_unused_tree(&tree).unwrap());
+        assert!(!tree.exists());
+
+        let interrupted = temp.path().join("interrupted");
+        std::fs::create_dir_all(interrupted.join("node_modules")).unwrap();
+        assert!(remove_unused_tree(&interrupted).unwrap());
+        assert!(!interrupted.exists());
     }
 }

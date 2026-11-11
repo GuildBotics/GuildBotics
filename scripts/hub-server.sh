@@ -25,6 +25,7 @@ Set GUILDBOTICS_HUB_INSTANCE to run a separate Hub copy beside the Hub.
 EOF
 }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
+quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 action=${1:-help}
 [ "$#" -le 1 ] || fail "No options are accepted."
 case "$action" in
@@ -41,8 +42,10 @@ case "$instance" in
     # "update" would take the Hub's own automatic update agent and log.
     *[!a-z0-9-]*|update) fail "GUILDBOTICS_HUB_INSTANCE must be lowercase letters, digits and hyphens, other than \"update\"." ;;
 esac
-# Guidance names the copy, so that pasting it never operates the Hub.
-self="${instance:+GUILDBOTICS_HUB_INSTANCE=$instance }$0"
+# Guidance runs this checkout's script for this Hub, whatever the shell sets.
+if [ -n "$instance" ]; then self="env GUILDBOTICS_HUB_INSTANCE=$instance"
+else self="env -u GUILDBOTICS_HUB_INSTANCE"; fi
+self="$self $(quote "$repo/scripts/hub-server.sh")"
 label=local.guildbotics${instance:+.$instance}
 domain=gui/$(id -u)
 target=$domain/$label
@@ -63,7 +66,7 @@ backups=$hub/backups
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
 
 # The loop invokes update, which acquires its own operation lock.
-if [ "$action" = auto-once ]; then exec node "$repo/scripts/hub-auto-update.mjs" --once; fi
+if [ "$action" = auto-once ]; then exec "$current" server hub-auto-update --checkout "$repo" --once; fi
 
 # Use one lock for the build pointer, backup rotation and LaunchAgent changes.
 mkdir -p "$builds"
@@ -97,6 +100,9 @@ case "$action" in
             done
         fi
         if [ "$action" = auto-uninstall ]; then rm -f "$auto_plist"; exit 0; fi
+        # launchd runs the loop from the signed build, which names it to macOS.
+        [ -x "$current" ] || fail "The integrated LaunchAgent is not installed. Run: $self install"
+        # Updates build with these tools from the recorded PATH.
         node --version | grep -Eq '^v24\.' || fail "Node.js 24 must be in PATH."
         npm --version >/dev/null
         git --version >/dev/null
@@ -107,7 +113,7 @@ case "$action" in
         {
             printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict>'
             printf '<key>Label</key><string>%s</string>\n' "$auto_label"
-            printf '<key>ProgramArguments</key><array><string>%s</string><string>%s</string></array>\n' "$(auto_xml "$(command -v node)")" "$(auto_xml "$repo/scripts/hub-auto-update.mjs")"
+            printf '<key>ProgramArguments</key><array><string>%s</string><string>server</string><string>hub-auto-update</string><string>--checkout</string><string>%s</string></array>\n' "$(auto_xml "$current")" "$(auto_xml "$repo")"
             printf '<key>WorkingDirectory</key><string>%s</string>\n' "$(auto_xml "$repo")"
             printf '<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string><key>HOME</key><string>%s</string>' "$(auto_xml "$PATH")" "$(auto_xml "$HOME")"
             if [ -n "$instance" ]; then printf '<key>GUILDBOTICS_HUB_INSTANCE</key><string>%s</string>' "$instance"; fi
@@ -249,7 +255,7 @@ build_head() {
     printf '%s\n' "$team" | grep -Eq '^[0-9A-Z]{10}$' ||
         fail "\"$identity\" has no Team ID, so macOS would ask for Keychain access after every update. See docs/hub-server.md."
     [ "$team" = "${running_team-$team}" ] ||
-        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, run $self uninstall, then install again. See docs/hub-server.md."
+        fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, $(reinstall_hint). See docs/hub-server.md."
     mv -f "$candidate.new" "$candidate"
 }
 backup_and_rehearse() {
@@ -329,15 +335,23 @@ read_plist() {
     GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
     export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
 }
-# Guidance runs this Hub's build with its settings: a bare guildbotics may run
-# another Hub's build against the default machine root.
-quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-cli_hint() {
+# Guidance runs with this Hub's settings, whatever the shell it is pasted into
+# sets: a bare guildbotics may run another Hub's build against other data.
+hub_env() {
+    unset_settings= settings=
     for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT; do
         eval "value=\${$key:-}"
-        if [ -n "$value" ]; then printf '%s=%s ' "$key" "$(quote "$value")"; fi
+        if [ -n "$value" ]; then settings="$settings$key=$(quote "$value") "
+        else unset_settings="$unset_settings-u $key "; fi
     done
-    quote "$current"
+    if [ -n "$instance" ]; then settings="${settings}GUILDBOTICS_HUB_INSTANCE=$instance "
+    else unset_settings="$unset_settings-u GUILDBOTICS_HUB_INSTANCE "; fi
+    printf 'env %s%s' "$unset_settings" "$settings"
+}
+cli_hint() { printf '%s%s' "$(hub_env)" "$(quote "$current")"; }
+reinstall_hint() {
+    printf 'run %s uninstall, then: GUILDBOTICS_HUB_SIGNING_IDENTITY=<identity> %s%s install' \
+        "$self" "$(hub_env)" "$(quote "$repo/scripts/hub-server.sh")"
 }
 install_assets() {
     stage="installing the CLI and skill"
@@ -346,17 +360,17 @@ install_assets() {
     return 1
 }
 # Each build keeps a large source tree, which its executable reads at run time.
-# Keep the running build, the candidate, and the installed CLI's build: a
-# process started before this update runs one of them. A failed removal is
-# retried by the next update.
+# Keep the running build, the candidate, and the installed CLI's build, which
+# may start at any time; hub-prune also keeps every tree a process holds.
+# A failed removal is retried by the next update.
 remove_unused_builds() {
-    keep=" ${previous%/*} ${candidate%/*} "
+    running_tree=${previous%/*}
+    candidate_tree=${candidate%/*}
+    set -- --keep "${running_tree##*/}" --keep "${candidate_tree##*/}"
     if cli=$("$GUILDBOTICS_HOME/bin/guildbotics" server hub-probe --source 2>/dev/null); then
-        keep="$keep$builds/${cli##*/} "
+        set -- "$@" --keep "${cli##*/}"
     fi
-    for build in "$builds"/*/; do
-        case "$keep" in *" ${build%/} "*) ;; *) rm -rf "${build%/}" || : ;; esac
-    done
+    "$candidate" server hub-prune "$@" "$builds" || :
 }
 complete_activation() {
     rm -f "$pending" "$builds/update-to" || return
@@ -436,7 +450,7 @@ case "$action" in
         agent_ready ||
             fail "Start the installed LaunchAgent before updating. Run: $self restart"
         [ -f "$signing" ] ||
-            fail "No signing identity is recorded. Run $self uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY. See docs/hub-server.md."
+            fail "No signing identity is recorded: $(reinstall_hint). See docs/hub-server.md."
         identity=$(cat "$signing")
         running_team=$(team_of "$current")
         build_head

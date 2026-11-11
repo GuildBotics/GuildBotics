@@ -10,6 +10,7 @@ case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
     npm) : ;;
+    node) printf 'v24.0.0\n' ;;
     rustc) printf 'rustc %s (fixture)\n' "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" ;;
     cargo)
         while [ "$1" != --target-dir ]; do shift; done
@@ -115,6 +116,10 @@ case "$name" in
         ;;
     current|guildbotics-bin|update-from|update-to|guildbotics)
         build=$(sed -n 's/^# build: //p' "$0")
+        # The settings this program runs with, as pasted guidance gives them.
+        printf 'home=%s branvil=%s identity=%s port=%s\n' "${GUILDBOTICS_HOME-unset}" \
+            "${BRANVIL_DATA_DIR-unset}" "${GUILDBOTICS_IDENTITY_ROOT-unset}" "${GUILDBOTICS_SERVER_PORT-unset}" \
+            >"$FAKE_ROOT/settings"
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
@@ -143,6 +148,8 @@ case "$name" in
                 state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
                 printf '{"state":"%s"}\n' "$state"
                 ;;
+            # The loop and the build removal under test are the real ones.
+            server:hub-auto-update|server:hub-prune) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;
             server:hub-migration) printf '{"manual_update_version":0,"instructions":null}\n' ;;
             server:hub-notify)
                 [ ! -f "$FAKE_ROOT/fail-notify" ] || exit 1

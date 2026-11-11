@@ -2366,6 +2366,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "branvil",
+ "chrono",
  "clap",
  "crossterm",
  "flate2",

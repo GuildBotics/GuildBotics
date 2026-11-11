@@ -9,7 +9,6 @@ use std::{
 };
 
 const SCRIPT: &str = include_str!("../../../scripts/hub-server.sh");
-const AUTO: &str = include_str!("../../../scripts/hub-auto-update.mjs");
 const TOOLS: &str = include_str!("fixtures/hub-tools.sh");
 const IDENTITY: &str = "0123ABCD";
 const IDENTITIES: &str =
@@ -40,7 +39,12 @@ impl Hub {
         }
         symlink(root.join("home with spaces"), &home).unwrap();
         fs::write(repo.join("scripts/hub-server.sh"), SCRIPT).unwrap();
-        fs::write(repo.join("scripts/hub-auto-update.mjs"), AUTO).unwrap();
+        // As Git checks it out, so that guidance can run it by its path.
+        fs::set_permissions(
+            repo.join("scripts/hub-server.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(
             repo.join("hub-update.json"),
             "{\"manual_update_version\":0,\"instructions\":null}",
@@ -56,6 +60,7 @@ impl Hub {
             "id",
             "launchctl",
             "npm",
+            "node",
             "cargo",
             "plutil",
             "security",
@@ -64,12 +69,6 @@ impl Hub {
         ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
-        // The loop runs on the Node.js that runs the tests, wherever it is installed.
-        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-            .map(|directory| directory.join("node"))
-            .find(|node| node.is_file())
-            .expect("Node.js must be in PATH");
-        symlink(node, tools.join("node")).unwrap();
         let path = format!("{}:/usr/local/bin:/usr/bin:/bin", tools.display());
         let hub = Self {
             temp,
@@ -104,6 +103,7 @@ impl Hub {
             .env("HOME", &self.home)
             .env("PATH", &self.path)
             .env("FAKE_ROOT", self.root())
+            .env("GUILDBOTICS_TEST_BINARY", env!("CARGO_BIN_EXE_guildbotics"))
             .env("BRANVIL_DATA_DIR", self.root().join("branvil"))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -152,6 +152,10 @@ impl Hub {
             .unwrap();
         assert_eq!(result.status.success(), success, "{}", text(&result));
         result
+    }
+
+    fn calls_contain(&self, call: &str) -> bool {
+        self.lines("calls").contains(call)
     }
 
     fn lines(&self, name: &str) -> String {
@@ -218,6 +222,30 @@ impl Hub {
         trees
     }
 
+    /// Runs pasted guidance in a shell that sets another Hub's settings, and
+    /// returns the settings the Hub program then ran with.
+    fn run_guidance(&self, command: &str) -> String {
+        let _ = fs::remove_file(self.root().join("settings"));
+        self.command("sh")
+            .args(["-c", command])
+            .env("GUILDBOTICS_HOME", "/other/home")
+            .env("BRANVIL_DATA_DIR", "/other/branvil")
+            .env("GUILDBOTICS_IDENTITY_ROOT", "/other/identity")
+            .env("GUILDBOTICS_SERVER_PORT", "1")
+            .env("GUILDBOTICS_HUB_INSTANCE", "other")
+            .output()
+            .unwrap();
+        self.lines("settings")
+    }
+
+    fn settings(&self, home: &Path) -> String {
+        format!(
+            "home={} branvil={} identity=unset port=unset\n",
+            home.display(),
+            self.root().join("branvil").display()
+        )
+    }
+
     fn installed_tree(&self) -> String {
         let build = self.installed_build();
         build
@@ -228,6 +256,12 @@ impl Hub {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+/// The command a message gives between `before` and `after`.
+fn guidance(message: &str, before: &str, after: &str) -> String {
+    let rest = &message[message.find(before).expect(before) + before.len()..];
+    rest[..rest.find(after).expect(after)].to_owned()
 }
 
 fn text(result: &Output) -> String {
@@ -512,7 +546,7 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
 }
 
 #[test]
-fn an_update_removes_builds_that_no_process_started_before_it_runs() {
+fn an_update_removes_only_builds_that_nothing_runs() {
     let hub = Hub::new();
     hub.install();
     let old = hub.installed_tree();
@@ -530,18 +564,116 @@ fn an_update_removes_builds_that_no_process_started_before_it_runs() {
     fs::remove_file(hub.root().join("fail-start")).unwrap();
     hub.run("update", None, true);
     let new = hub.installed_tree();
-    // A process started before this update still runs the old build.
     let mut kept = vec![old.clone(), new.clone()];
     kept.sort();
     assert_eq!(hub.source_trees(), kept);
     assert!(elsewhere.exists());
 
-    hub.commit("newer");
+    // A process started on the old build still runs across two updates.
+    let mark = hub.builds().join(&old).join("Cargo.toml");
+    fs::write(&mark, "").unwrap();
+    let process = fs::File::open(&mark).unwrap();
+    process.lock_shared().unwrap();
+    for build in ["newer", "newest"] {
+        hub.commit(build);
+        hub.run("update", None, true);
+        assert!(hub.calls_contain("guildbotics-bin|server|hub-prune|--keep|"));
+    }
+    let newest = hub.installed_tree();
+    assert!(hub.builds().join(&old).join("build-id").exists());
+    assert!(!hub.source_trees().contains(&new));
+
+    drop(process);
+    hub.commit("final");
     hub.run("update", None, true);
-    let mut kept = vec![new, hub.installed_tree()];
+    let mut kept = vec![newest, hub.installed_tree()];
     kept.sort();
     assert_eq!(hub.source_trees(), kept);
     assert!(hub.builds().join("current").exists());
+}
+
+#[test]
+fn a_guildbotics_process_takes_its_source_tree_before_it_starts() {
+    let mark = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let update = fs::File::open(&mark).unwrap();
+    // Processes of other tests hold the tree for moments; wait for them to end.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while update.try_lock().is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the checkout's tree stays held"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut process = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+        .arg("version")
+        .env("HOME", temp.path())
+        .env("GUILDBOTICS_HOME", temp.path().join("machine"))
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // An update holds the tree while it removes it: the process waits.
+    assert!(process.try_wait().unwrap().is_none());
+    update.unlock().unwrap();
+    assert!(process.wait().unwrap().success());
+}
+
+#[test]
+fn hub_prune_removes_every_unused_build_it_can() {
+    let temp = tempfile::tempdir().unwrap();
+    let builds = temp.path().join("builds");
+    for tree in ["kept", "unused", "interrupted", "held", "stuck/inner"] {
+        fs::create_dir_all(builds.join(tree)).unwrap();
+    }
+    for tree in ["kept", "unused", "held", "stuck"] {
+        fs::write(builds.join(tree).join("Cargo.toml"), "").unwrap();
+    }
+    fs::write(builds.join("stuck/inner/file"), "").unwrap();
+    fs::set_permissions(
+        builds.join("stuck/inner"),
+        fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
+    fs::write(builds.join("current"), "").unwrap();
+    let elsewhere = temp.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    symlink(&elsewhere, builds.join("linked")).unwrap();
+    let process = fs::File::open(builds.join("held/Cargo.toml")).unwrap();
+    process.lock_shared().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+        .args(["server", "hub-prune", "--keep", "kept"])
+        .arg(&builds)
+        .env("HOME", temp.path())
+        .env("GUILDBOTICS_HOME", temp.path().join("machine"))
+        .output()
+        .unwrap();
+    fs::set_permissions(
+        builds.join("stuck/inner"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    // A build that cannot be removed fails the run, after the others.
+    assert!(!out.status.success());
+    assert!(text(&out).contains("is in use"));
+    for (entry, kept) in [
+        ("kept", true),
+        ("unused", false),
+        ("interrupted", false),
+        ("held", true),
+        ("stuck", true),
+        ("current", true),
+        ("linked", true),
+    ] {
+        assert_eq!(
+            builds.join(entry).symlink_metadata().is_ok(),
+            kept,
+            "{entry}"
+        );
+    }
+    assert!(elsewhere.exists());
 }
 
 #[test]
@@ -669,11 +801,24 @@ fn update_needs_the_identity_recorded_by_install() {
     fs::remove_file(hub.builds().parent().unwrap().join("signing-identity")).unwrap();
     hub.commit("new");
     let out = hub.run("update", None, false);
-    assert!(
-        text(&out).contains("uninstall, then install again with GUILDBOTICS_HUB_SIGNING_IDENTITY")
-    );
     assert!(!hub.lines("calls").contains("npm|"));
     hub.assert_still_runs_old(&old);
+    // Pasted where the shell sets another Hub's data, it reinstalls this Hub.
+    let message = text(&out);
+    hub.run_guidance(&format!(
+        "{} uninstall",
+        guidance(&message, "recorded: run ", " uninstall")
+    ));
+    assert!(!hub.plist().exists());
+    let install = guidance(&message, "then: ", " install.").replace("<identity>", IDENTITY);
+    assert_eq!(
+        hub.run_guidance(&format!("{install} install")),
+        hub.settings(&hub.home.join(".guildbotics"))
+    );
+    assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
+        "<key>BRANVIL_DATA_DIR</key><string>{}</string>",
+        hub.root().join("branvil").display()
+    )));
 }
 
 #[test]
@@ -721,9 +866,10 @@ fn failed_start_with_an_incompatible_schema_stays_stopped_for_recovery() {
     assert!(!hub.root().join("loaded").exists());
     assert!(hub.builds().join("update-from").exists());
     assert!(text(&out).contains("cannot check the live data"));
-    hub.run("restart", None, false);
+    let out = hub.run("restart", None, false);
     fs::remove_file(hub.root().join("new-schema")).unwrap();
-    hub.run("recover", None, true);
+    // Pasted where the shell names a copy, the guidance recovers this Hub.
+    hub.run_guidance(&guidance(&text(&out), "Run: ", "\n"));
     assert_eq!(hub.lines("holder"), "42\n");
     assert!(!hub.builds().join("update-from").exists());
 }
@@ -752,12 +898,11 @@ fn asset_install_failure_keeps_the_activated_build_and_can_be_retried() {
     assert!(!hub.lines("actions").contains("new|server|stop"));
     // The CLI that was installed still runs the old build, from its source tree.
     assert!(old.exists());
-    assert!(text(&out).contains(&format!(
-        "Retry CLI and skill installation with: GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' install",
-        hub.home.join(".guildbotics").display(),
-        hub.root().join("branvil").display(),
-        hub.builds().join("current").display()
-    )));
+    let retry = guidance(&text(&out), "installation with: ", "\n");
+    assert_eq!(
+        hub.run_guidance(&retry),
+        hub.settings(&hub.home.join(".guildbotics"))
+    );
 
     fs::remove_file(hub.root().join("fail-install")).unwrap();
     hub.run("update", None, true);
@@ -1112,7 +1257,12 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
         .join("Library/LaunchAgents/local.guildbotics.update.plist");
     let contents = fs::read_to_string(&plist).unwrap();
     assert!(contents.contains("local.guildbotics.update"));
-    assert!(contents.contains("hub-auto-update.mjs"));
+    // launchd runs the loop from the signed build, not an interpreter.
+    assert!(contents.contains(&format!(
+        "<key>ProgramArguments</key><array><string>{}</string><string>server</string><string>hub-auto-update</string><string>--checkout</string><string>{}</string></array>",
+        hub.builds().join("current").display(),
+        hub.repo.canonicalize().unwrap().display()
+    )));
     assert!(contents.contains(&hub.path));
     assert_eq!(hub.lines("holder"), "42\n");
     hub.run("auto-uninstall", None, true);
@@ -1165,17 +1315,16 @@ fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
     .unwrap();
     let out = hub.run_with("auto-once", &copy, true);
     calls += &hub.lines("calls");
-    let guidance = format!(
-        "GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' environment ",
-        copy_home.display(),
-        hub.root().join("branvil").display(),
-        state.join("builds/current").display()
-    );
-    assert!(text(&out).contains(&format!("run: {guidance}prune")));
-    assert!(
-        hub.lines("notifications")
-            .contains(&format!("run {guidance}build"))
-    );
+    let notifications = hub.lines("notifications");
+    for command in [
+        guidance(&text(&out), "run: ", "\n"),
+        format!(
+            "{} environment build",
+            guidance(&notifications, "Next: run ", " environment build")
+        ),
+    ] {
+        assert_eq!(hub.run_guidance(&command), hub.settings(&copy_home));
+    }
     assert!(state.join("auto-update.json").exists());
     assert!(
         fs::read_to_string(state.join("builds/current"))
@@ -1215,14 +1364,25 @@ fn a_hub_copy_runs_beside_the_hub_under_its_own_names() {
     fs::remove_dir(state.join("operation")).unwrap();
     fs::write(state.join("builds/update-from"), "interrupted").unwrap();
     hub.run_with("auto-once", &copy, true);
-    assert!(
-        hub.lines("notifications")
-            .contains("Hub copy copy (GUILDBOTICS_HUB_INSTANCE=copy) ")
-    );
+    let notifications = hub.lines("notifications");
+    assert!(notifications.contains("Hub copy copy (GUILDBOTICS_HUB_INSTANCE=copy) "));
     let out = hub.run_with("restart", &copy, false);
-    assert!(
-        text(&out).contains("Run: GUILDBOTICS_HUB_INSTANCE=copy scripts/hub-server.sh recover")
-    );
+    for command in [
+        guidance(&text(&out), "Run: ", "\n"),
+        guidance(
+            &notifications[notifications.find(": recovery: ").unwrap()..],
+            "Next: run ",
+            ".\n",
+        ),
+    ] {
+        // Pasted where the shell names another copy, it recovers this copy.
+        assert!(command.ends_with(" recover"), "{command}");
+        fs::write(state.join("builds/update-from"), "interrupted").unwrap();
+        fs::write(hub.root().join("calls"), "").unwrap();
+        hub.run_guidance(&command);
+        assert!(!state.join("builds/update-from").exists());
+        assert!(!hub.calls_contain("Hub-other"));
+    }
 
     // "update" would be the Hub's own automatic update agent.
     for name in ["Copy/1", "update"] {
@@ -1254,6 +1414,54 @@ fn auto_update_uses_the_agents_identity_root_instead_of_the_shells() {
             format!("{}\n", identity.unwrap_or_default())
         );
     }
+}
+
+#[test]
+fn the_loop_ends_once_the_active_build_is_another() {
+    let hub = Hub::new();
+    hub.install();
+    let current = hub.builds().join("current");
+    let built = fs::read_to_string(&current).unwrap();
+    // The loop under test is this checkout's build: make it the active one.
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let source = built
+        .lines()
+        .find(|line| line.starts_with("# source: "))
+        .unwrap();
+    fs::write(
+        &current,
+        built.replace(source, &format!("# source: {}", checkout.display())),
+    )
+    .unwrap();
+    let start = || {
+        hub.command(env!("CARGO_BIN_EXE_guildbotics"))
+            .args(["server", "hub-auto-update", "--checkout"])
+            .arg(&hub.repo)
+            .env("GUILDBOTICS_HUB_UPDATE_INTERVAL", "1")
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut running = start();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert!(running.try_wait().unwrap().is_none());
+    running.kill().unwrap();
+    running.wait().unwrap();
+
+    // Another build became active: launchd starts the loop from it.
+    fs::write(&current, built).unwrap();
+    let mut superseded = start();
+    let ended = (0..300).find_map(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        superseded.try_wait().unwrap()
+    });
+    if ended.is_none() {
+        superseded.kill().unwrap();
+    }
+    assert!(ended.is_some_and(|status| status.success()));
 }
 
 #[test]
@@ -1433,12 +1641,12 @@ fn cleanup_failure_keeps_the_activated_build_and_never_rolls_back() {
             &hub.lines("actions"),
             &["new|install", "new|environment|prune"],
         );
-        assert!(text(&out).contains(&format!(
-            "run: GUILDBOTICS_HOME='{}' BRANVIL_DATA_DIR='{}' '{}' environment prune",
-            hub.home.join(".guildbotics").display(),
-            hub.root().join("branvil").display(),
-            hub.builds().join("current").display()
-        )));
+        let prune = guidance(&text(&out), "run: ", "\n");
+        assert!(prune.ends_with(" environment prune"));
+        assert_eq!(
+            hub.run_guidance(&prune),
+            hub.settings(&hub.home.join(".guildbotics"))
+        );
     }
 }
 

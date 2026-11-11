@@ -51,6 +51,33 @@ pub async fn notify() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Removes the build directories under `builds` that are not kept and that no
+/// process holds. A tree in use stays until a later update finds it unused,
+/// and one that cannot be removed never keeps the others.
+pub fn prune(builds: &std::path::Path, keep: &[std::ffi::OsString]) -> anyhow::Result<()> {
+    let mut failures = 0;
+    for entry in std::fs::read_dir(builds)? {
+        let removed = entry.and_then(|entry| {
+            if !entry.file_type()?.is_dir() || keep.contains(&entry.file_name()) {
+                return Ok(());
+            }
+            if !gb_base::home::remove_unused_tree(&entry.path())? {
+                eprintln!(
+                    "{} is in use; a later update removes it.",
+                    entry.path().display()
+                );
+            }
+            Ok(())
+        });
+        if let Err(error) = removed {
+            eprintln!("{error}");
+            failures += 1;
+        }
+    }
+    anyhow::ensure!(failures == 0, "{failures} builds could not be removed");
+    Ok(())
+}
+
 fn declaration(text: &str) -> anyhow::Result<Value> {
     let value: Value = serde_json::from_str(text)?;
     let version = value
