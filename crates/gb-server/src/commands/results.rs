@@ -9,16 +9,24 @@ use axum::{
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-const TTL: u64 = 24 * 60 * 60;
+const TTL: u64 = 24 * 60 * 60 * 1_000_000_000;
 const CAPACITY: usize = 256;
 const MAX_RESULT: usize = 1 << 20;
 
 #[derive(Default)]
-pub(crate) struct Results(Mutex<HashMap<String, Entry>>);
+pub(crate) struct Results(Mutex<Store>);
+#[derive(Default)]
+struct Store {
+    entries: HashMap<String, Entry>,
+    retired_through: u64,
+}
 struct Entry {
     issued: u64,
     result: Option<(u16, Value)>,
@@ -33,11 +41,18 @@ impl Results {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs(),
+                    .as_nanos() as u64,
                 Instant::now(),
             )
         });
-        epoch.saturating_add(started.elapsed().as_secs())
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        let now = epoch.saturating_add(started.elapsed().as_nanos() as u64);
+        let previous = LAST
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+                Some(now.max(last + 1))
+            })
+            .unwrap();
+        now.max(previous + 1)
     }
 
     fn timestamp(id: &str, instance: &str, now: u64) -> Option<u64> {
@@ -56,45 +71,59 @@ impl Results {
     }
 }
 
-pub(super) async fn submit(api: Shared, headers: HeaderMap, request: RunRequest) -> Response {
-    let id = request.request_id.clone().unwrap();
-    {
-        let mut entries = api.command_results.0.lock().unwrap();
-        let now = Results::now();
-        Results::prune(&mut entries, now);
-        if entries.contains_key(&id) {
-            drop(entries);
-            return get(&api, &headers, &id);
+impl Store {
+    fn admit(&mut self, id: &str, instance: &str, now: u64) -> Result<(), &'static str> {
+        let issued = Results::timestamp(id, instance, now)
+            .filter(|issued| *issued > self.retired_through)
+            .ok_or("command_result_missing")?;
+        if self.entries.len() >= CAPACITY {
+            let oldest = self
+                .entries
+                .iter()
+                .filter(|(_, entry)| entry.result.is_some())
+                .min_by_key(|(_, entry)| entry.issued)
+                .map(|(id, entry)| (id.clone(), entry.issued))
+                .ok_or("command_results_full")?;
+            // A delayed, previously unseen request must not pass the new floor.
+            if issued <= oldest.1 {
+                return Err("command_result_missing");
+            }
+            self.retired_through = self.retired_through.max(oldest.1);
+            self.entries.remove(&oldest.0);
         }
-        let Some(issued) = Results::timestamp(&id, &api.instance_id, now) else {
-            return ApiError::new(StatusCode::NOT_FOUND, "command_result_missing", &headers)
-                .into_response();
-        };
-        if entries.len() >= CAPACITY {
-            return ApiError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "command_results_full",
-                &headers,
-            )
-            .into_response();
-        }
-        entries.insert(
-            id.clone(),
+        self.entries.insert(
+            id.to_owned(),
             Entry {
                 issued,
                 result: None,
             },
         );
+        Ok(())
+    }
+}
+
+pub(super) async fn submit(api: Shared, headers: HeaderMap, request: RunRequest) -> Response {
+    let id = request.request_id.clone().unwrap();
+    {
+        let mut store = api.command_results.0.lock().unwrap();
+        let now = Results::now();
+        Results::prune(&mut store.entries, now);
+        if store.entries.contains_key(&id) {
+            drop(store);
+            return get(&api, &headers, &id);
+        }
+        if let Err(code) = store.admit(&id, &api.instance_id, now) {
+            let status = if code == "command_results_full" {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            return ApiError::new(status, code, &headers).into_response();
+        }
         // Insert and spawn without an await: dropping the HTTP request cannot
         // leave an accepted ID without a worker.
-        let weak = std::sync::Arc::downgrade(&api);
-        // Expire idle receipts too; this timer must not delay server shutdown.
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(TTL - (now - issued))).await;
-            if let Some(api) = weak.upgrade() {
-                Results::prune(&mut api.command_results.0.lock().unwrap(), Results::now());
-            }
-        });
+        // Prune on access and completion; per-ID timers would outlive eviction
+        // and make memory grow with throughput rather than CAPACITY.
         let worker_api = api.clone();
         let worker_id = id.clone();
         api.work.spawn(async move {
@@ -113,12 +142,13 @@ pub(super) async fn submit(api: Shared, headers: HeaderMap, request: RunRequest)
                 .0
                 .lock()
                 .unwrap()
+                .entries
                 .get_mut(&worker_id)
             {
                 entry.result = Some(answer);
             }
             Results::prune(
-                &mut worker_api.command_results.0.lock().unwrap(),
+                &mut worker_api.command_results.0.lock().unwrap().entries,
                 Results::now(),
             );
         });
@@ -152,9 +182,9 @@ async fn retain(response: Response, headers: &HeaderMap) -> (u16, Value) {
 }
 
 pub(super) fn get(api: &Shared, headers: &HeaderMap, id: &str) -> Response {
-    let mut entries = api.command_results.0.lock().unwrap();
-    Results::prune(&mut entries, Results::now());
-    match entries.get(id) {
+    let mut store = api.command_results.0.lock().unwrap();
+    Results::prune(&mut store.entries, Results::now());
+    match store.entries.get(id) {
         Some(entry) => Json(match &entry.result {
             None => json!({"request_id": id, "state": "running"}),
             Some((status, answer)) => {
@@ -243,6 +273,95 @@ mod tests {
                 .unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn completed_receipts_make_room_without_replaying_retired_ids() {
+        let mut store = Store::default();
+        let id = |time| format!("server.{time}.{}", uuid::Uuid::new_v4());
+        let first_time = Results::now();
+        let running = id(first_time);
+        store.admit(&running, "server", Results::now()).unwrap();
+        let mut retired = Vec::new();
+        for _ in 0..CAPACITY * 2 {
+            let time = Results::now();
+            let next = id(time);
+            store.admit(&next, "server", Results::now()).unwrap();
+            store.entries.get_mut(&next).unwrap().result = Some((200, json!({})));
+            retired.push((next, time));
+            assert!(store.entries.contains_key(&running));
+            assert!(store.entries.len() <= CAPACITY);
+        }
+        let (old, time) = &retired[0];
+        assert!(!store.entries.contains_key(old));
+        for old in [old.clone(), id(*time), id(first_time)] {
+            assert_eq!(
+                store.admit(&old, "server", Results::now()),
+                Err("command_result_missing")
+            );
+        }
+        assert!(Results::now() > store.retired_through);
+        // A delayed ID newer than the current floor but older than the next
+        // eviction must fail without losing another retained result.
+        let floor = store.retired_through;
+        let next_evicted = store
+            .entries
+            .values()
+            .filter(|entry| entry.result.is_some())
+            .map(|entry| entry.issued)
+            .min()
+            .unwrap();
+        assert_eq!(
+            store.admit(&id(next_evicted), "server", Results::now()),
+            Err("command_result_missing")
+        );
+        assert_eq!(store.retired_through, floor);
+        assert_eq!(store.entries.len(), CAPACITY);
+        store.entries.remove(&retired.last().unwrap().0);
+        assert_eq!(
+            store.admit(old, "server", Results::now()),
+            Err("command_result_missing")
+        );
+    }
+
+    #[test]
+    fn eviction_floor_never_moves_backwards() {
+        let mut store = Store {
+            retired_through: 20,
+            ..Default::default()
+        };
+        for n in 0..CAPACITY {
+            store.entries.insert(
+                n.to_string(),
+                Entry {
+                    issued: n as u64 + 1,
+                    result: Some((200, json!({}))),
+                },
+            );
+        }
+        let id = format!("server.1000.{}", uuid::Uuid::new_v4());
+        store.admit(&id, "server", 1000).unwrap();
+        assert_eq!(store.retired_through, 20);
+        assert!(store.entries.contains_key("1"));
+    }
+
+    #[test]
+    fn health_times_remain_unique_across_concurrent_callers() {
+        let times = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| (0..256).map(|_| Results::now()).collect::<Vec<_>>()))
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| {
+                    let times = worker.join().unwrap();
+                    assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+                    times
+                })
+                .collect::<Vec<_>>()
+        });
+        let unique: std::collections::HashSet<_> = times.iter().collect();
+        assert_eq!(unique.len(), times.len());
     }
 
     #[tokio::test]
@@ -360,11 +479,86 @@ mod tests {
         assert_eq!(refused["status"], 409);
         assert_eq!(refused["result"]["code"], "command_workspace_changed");
         assert_eq!(factory.1.load(Ordering::SeqCst), 1);
-        // A full store rejects new IDs without discarding old receipts.
+        // Force eviction of the second receipt while an older running receipt
+        // remains accessible. Reposting an evicted ID must not spawn work.
+        let held = format!("fixture.{}.{}", Results::now(), uuid::Uuid::new_v4());
         {
-            let mut entries = api.command_results.0.lock().unwrap();
-            for n in entries.len()..CAPACITY {
-                entries.insert(
+            let mut store = api.command_results.0.lock().unwrap();
+            for n in store.entries.len()..CAPACITY {
+                store.entries.insert(
+                    format!("finished-{n}"),
+                    Entry {
+                        issued: Results::now(),
+                        result: Some((200, json!({}))),
+                    },
+                );
+            }
+            let running = store.entries.get_mut(&id).unwrap();
+            running.result = None;
+        }
+        let accepted = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/commands/run",
+                json!({"command":"functions/probe", "request_id":held}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        api.work.wait().await;
+        let before = factory.1.load(Ordering::SeqCst);
+        let replayed = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/commands/run",
+                json!({"command":"functions/probe", "request_id":wrong}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(replayed.status(), StatusCode::NOT_FOUND);
+        assert_eq!(factory.1.load(Ordering::SeqCst), before);
+        let running = body(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    "/commands/run",
+                    json!({"command":"functions/probe", "request_id":id}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(running["state"], "running");
+        {
+            api.command_results
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .get_mut(&id)
+                .unwrap()
+                .result = Some((200, json!({})));
+        }
+        let finished = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/commands/run",
+                json!({"command":"functions/probe", "request_id":id}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(finished.status(), StatusCode::OK);
+        assert_eq!(body(finished).await["state"], "finished");
+        assert_eq!(factory.1.load(Ordering::SeqCst), before);
+        // A store filled entirely with running work rejects new IDs.
+        {
+            let mut store = api.command_results.0.lock().unwrap();
+            store.entries.clear();
+            for n in 0..CAPACITY {
+                store.entries.insert(
                     format!("held-{n}"),
                     Entry {
                         issued: Results::now(),
@@ -376,13 +570,8 @@ mod tests {
         let refused = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "request_id":format!("fixture.{}.{}", Results::now(), uuid::Uuid::new_v4())}))).await.unwrap();
         assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
-            body(
-                app.oneshot(request("GET", &path, Value::Null))
-                    .await
-                    .unwrap()
-            )
-            .await,
-            result
+            api.command_results.0.lock().unwrap().entries.len(),
+            CAPACITY
         );
     }
 }

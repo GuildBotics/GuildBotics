@@ -175,7 +175,7 @@ pub async fn run_command(
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.backend_required", &[])))?;
     anyhow::ensure!(
         health["workspace_id"] == workspace_id,
-        i18n::t(language, "app_api.errors.command_workspace_changed", &[])
+        i18n::t(language, "cli.run.workspace_mismatch", &[])
     );
     let instance = health["service_instance_id"]
         .as_str()
@@ -246,7 +246,7 @@ async fn collect_command(owner: &OwnerClient, id: &str, language: &str) -> anyho
         id.bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
             && !id.is_empty(),
-        i18n::t(language, "cli.run.invalid_output", &[])
+        i18n::t(language, "cli.run.invalid_id", &[])
     );
     loop {
         let response = checked(

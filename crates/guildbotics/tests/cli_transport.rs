@@ -843,9 +843,13 @@ async fn run_cli_never_falls_back_when_the_peer_cannot_confirm_the_workspace() {
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(
-            stderr.contains("requires a running") || stderr.contains("workspace changed"),
+            stderr.contains("requires a running")
+                || stderr.contains("different workspace selected"),
             "{state}: {stderr}"
         );
+        if state == "other-workspace" || state == "malformed" {
+            assert!(stderr.contains(&gb_server::i18n::t("en", "cli.run.workspace_mismatch", &[])));
+        }
         peer.expect_no_retry().await;
     }
 }
@@ -1005,4 +1009,22 @@ async fn resume_only_reads_the_receipt_without_workspace_or_stdin() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"recovered\n");
     peer.expect_no_retry().await;
+}
+
+#[tokio::test]
+async fn invalid_resume_id_has_a_localized_input_error() {
+    for language in ["en", "ja"] {
+        let dir = tempfile::tempdir().unwrap();
+        let peer = CliPeer::bind(dir.path()).await;
+        let mut cli = peer_cli(dir.path(), &["run", "--resume", "bad/id"]);
+        cli.env("LANGUAGE", language);
+        let running = tokio::spawn(async move { cli.output().await.unwrap() });
+        peer.prove().await;
+        let output = running.await.unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&gb_server::i18n::t(language, "cli.run.invalid_id", &[])));
+        assert!(!stderr.contains(&gb_server::i18n::t(language, "cli.run.invalid_output", &[])));
+        peer.expect_no_retry().await;
+    }
 }
