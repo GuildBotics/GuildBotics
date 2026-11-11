@@ -10,6 +10,7 @@ case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
     npm) : ;;
+    rustc) printf 'rustc %s (fixture)\n' "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" ;;
     cargo)
         while [ "$1" != --target-dir ]; do shift; done
         mkdir -p "$2/release"
@@ -55,6 +56,11 @@ case "$name" in
     launchctl)
         case "$1" in
             print)
+                case "$2" in */local.guildbotics.update)
+                    [ -f "$FAKE_ROOT/auto-loaded" ] || exit 1
+                    if [ -f "$FAKE_ROOT/auto-unloading" ]; then rm -f "$FAKE_ROOT/auto-loaded" "$FAKE_ROOT/auto-unloading"; fi
+                    exit 0 ;;
+                esac
                 # After a slow bootout, launchd lists the job for one more look.
                 if [ -f "$FAKE_ROOT/unloading" ]; then
                     rm -f "$FAKE_ROOT/unloading"
@@ -73,8 +79,9 @@ case "$name" in
                     fi
                 fi
                 ;;
-            enable) : ;;
+            enable|disable) : ;;
             bootstrap)
+                case "$3" in *local.guildbotics.update.plist) exit 0 ;; esac
                 # Like launchd, refuse a job that is still listed.
                 if [ -f "$FAKE_ROOT/loaded" ]; then
                     printf 'Bootstrap failed: 5: Input/output error\n' >&2
@@ -88,9 +95,11 @@ case "$name" in
                 else
                     printf '42\n' >"$FAKE_ROOT/job-pid"
                     printf '42\n' >"$FAKE_ROOT/holder"
+                    if [ -f "$FAKE_ROOT/service-autostart" ]; then touch "$FAKE_ROOT/service-running"; fi
                 fi
                 ;;
             bootout)
+                case "$2" in */local.guildbotics.update) touch "$FAKE_ROOT/auto-unloading"; exit 0 ;; esac
                 if [ -f "$FAKE_ROOT/job-pid" ]; then rm -f "$FAKE_ROOT/holder"; fi
                 rm -f "$FAKE_ROOT/job-pid" "$FAKE_ROOT/start-failed"
                 if [ -f "$FAKE_ROOT/slow-bootout" ]; then
@@ -104,12 +113,38 @@ case "$name" in
             *) exit 2 ;;
         esac
         ;;
-    current|guildbotics-bin|update-from)
+    current|guildbotics-bin|update-from|update-to)
         build=$(sed -n 's/^# build: //p' "$0")
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
         case "$1:${2:-}" in
+            server:hub-checks)
+                state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
+                printf '{"state":"%s"}\n' "$state"
+                ;;
+            server:hub-migration) printf '{"manual_update_version":0,"instructions":null}\n' ;;
+            server:hub-notify)
+                [ ! -f "$FAKE_ROOT/fail-notify" ] || exit 1
+                cat >>"$FAKE_ROOT/notifications"
+                printf '\n' >>"$FAKE_ROOT/notifications"
+                printf '{"sent":false}\n'
+                ;;
+            service:status)
+                [ ! -f "$FAKE_ROOT/service-error" ] || exit 1
+                if [ -f "$FAKE_ROOT/unresponsive" ]; then
+                    printf '{"server_running":false,"running":false,"state":"stopped"}\n'
+                    exit 0
+                fi
+                if [ -f "$FAKE_ROOT/service-running" ]; then active=true; else active=false; fi
+                printf '{"server_running":true,"running":%s}\n' "$active"
+                ;;
+            service:start) touch "$FAKE_ROOT/service-running" ;;
+            service:stop) rm -f "$FAKE_ROOT/service-running" ;;
+            environment:status)
+                if [ -f "$FAKE_ROOT/environment" ]; then cat "$FAKE_ROOT/environment"
+                else printf '{"image":{"reference":null},"snapshot":{"state":"ready"}}\n'; fi
+                ;;
             server:hub-probe)
                 if [ "${3:-}" = --source ]; then
                     sed -n 's/^# source: //p' "$0"
@@ -125,7 +160,7 @@ case "$name" in
                 ;;
             server:stop)
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
-                rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid"
+                rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/service-running"
                 ;;
             install:) [ "$build" != new ] || [ ! -f "$FAKE_ROOT/fail-install" ] ;;
             branvil:backup) touch "$6/manifest.json" ;;
