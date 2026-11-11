@@ -149,8 +149,7 @@ pub(crate) fn command_output(answer: Value, language: &str) -> anyhow::Result<St
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))
 }
 
-/// Run on the server that has this workspace open, or use the same execution
-/// boundary locally when there is no matching server. Never retry after POST.
+/// Run only on the selected workspace's server, retaining its receipt ID.
 pub async fn run_command(
     spec: &str,
     args: Vec<String>,
@@ -158,56 +157,126 @@ pub async fn run_command(
     message: impl FnOnce() -> std::io::Result<String>,
     cwd: Option<std::path::PathBuf>,
 ) -> anyhow::Result<String> {
-    use crate::commands::RunRequest;
-    use gb_base::host_path;
     let language = language().await;
+    let (owner, data) = command_server(language).await?;
+    let workspace = crate::workspace::resolve(&data, None, language)?;
+    let workspace_id = gb_workspace::identity::read_workspace_identity(&workspace)?
+        .ok_or_else(|| {
+            anyhow::anyhow!(i18n::t(
+                language,
+                "cli.member.client.workspace_required",
+                &[]
+            ))
+        })?
+        .workspace_id;
+    let health = owner
+        .health()
+        .await
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.backend_required", &[])))?;
+    anyhow::ensure!(
+        health["workspace_id"] == workspace_id,
+        i18n::t(language, "app_api.errors.command_workspace_changed", &[])
+    );
+    let instance = health["service_instance_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?;
+    let time = health["command_time"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?;
+    let id = format!("{instance}.{time}.{}", uuid::Uuid::new_v4());
     let (name, inline) = spec.split_once('@').unwrap_or((spec, ""));
     let name = name.trim();
     anyhow::ensure!(
         !name.is_empty(),
         i18n::t(language, "cli.run.empty_command", &[])
     );
-    let data = gb_base::home::data()?;
-    let workspace = crate::workspace::resolve(&data, None, language)?;
-    let cwd = host_path::normalize(&match cwd {
-        Some(cwd) => cwd,
-        None => std::env::current_dir()?,
-    })?;
-    let request = RunRequest {
+    let request = crate::commands::RunRequest {
         command: name.to_owned(),
         args,
-        person: person.filter(|person| !person.is_empty()).or_else(|| {
+        person: person.filter(|p| !p.is_empty()).or_else(|| {
             let inline = inline.trim();
             (!inline.is_empty()).then(|| inline.to_owned())
         }),
         message: message()?,
-        cwd: Some(cwd),
-        expected_workspace: Some(workspace.clone()),
+        cwd: Some(gb_base::host_path::normalize(&match cwd {
+            Some(cwd) => cwd,
+            None => std::env::current_dir()?,
+        })?),
+        expected_workspace: Some(workspace_id),
+        request_id: Some(id.clone()),
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };
-    if let Some(running) = crate::server::running(&data, language)?
-        && let Some(owner) = OwnerClient::connect(&data, running.port, language).await?
-        && let Some(health) = owner.health().await
-        && health["workspace"] == json!(workspace)
+    eprintln!(
+        "{}",
+        i18n::t(language, "cli.run.receipt", &[("id", id.as_str())])
+    );
+    // Only POST once. A transport failure may mean it was already accepted.
+    if let Ok(response) = owner
+        .request(reqwest::Method::POST, "/commands/run")
+        .json(&request)
+        .timeout(TIMEOUT)
+        .send()
+        .await
     {
-        let response = owner
-            .request(reqwest::Method::POST, "/commands/run")
-            .json(&request)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let text = response.text().await?;
-            let error = serde_json::from_str::<Value>(&text).unwrap_or_default();
-            if let Some(message) = error["message"].as_str() {
-                anyhow::bail!("{message}");
-            }
-            anyhow::bail!("HTTP {status}: {text}");
-        }
-        return command_output(response.json().await?, language);
+        checked(response).await?;
     }
-    crate::commands::run_locally(request, &workspace, &data, language).await
+    collect_command(&owner, &id, language).await
+}
+
+async fn command_server(language: &'static str) -> anyhow::Result<(OwnerClient, PathBuf)> {
+    let data = gb_base::home::data()?;
+    let required = || anyhow::anyhow!(i18n::t(language, "cli.run.backend_required", &[]));
+    let running = crate::server::running(&data, language)?.ok_or_else(required)?;
+    let owner = OwnerClient::connect(&data, running.port, language)
+        .await?
+        .ok_or_else(required)?;
+    Ok((owner, data))
+}
+
+/// Read an existing receipt without submitting a command or reading stdin.
+pub async fn resume_command(id: &str) -> anyhow::Result<String> {
+    let language = language().await;
+    let (owner, _) = command_server(language).await?;
+    collect_command(&owner, id, language).await
+}
+
+async fn collect_command(owner: &OwnerClient, id: &str, language: &str) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        id.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+            && !id.is_empty(),
+        i18n::t(language, "cli.run.invalid_output", &[])
+    );
+    loop {
+        let response = checked(
+            owner
+                .request(reqwest::Method::GET, &format!("/commands/runs/{id}"))
+                .timeout(TIMEOUT)
+                .send()
+                .await?,
+        )
+        .await?;
+        let answer: Value = response.json().await?;
+        match answer["state"].as_str() {
+            Some("running") => tokio::time::sleep(Duration::from_millis(500)).await,
+            Some("finished") => {
+                let status = answer["status"]
+                    .as_u64()
+                    .and_then(|s| u16::try_from(s).ok())
+                    .and_then(|s| reqwest::StatusCode::from_u16(s).ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[]))
+                    })?;
+                anyhow::ensure!(
+                    status.is_success(),
+                    response_error(status, &answer["result"])
+                );
+                return command_output(answer["result"].clone(), language);
+            }
+            _ => anyhow::bail!(i18n::t(language, "cli.run.invalid_output", &[])),
+        }
+    }
 }
 
 pub async fn git_credential(action: &str) -> anyhow::Result<()> {

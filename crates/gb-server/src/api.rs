@@ -52,6 +52,7 @@ pub struct Api {
         tokio::sync::Mutex<std::collections::BTreeMap<String, crate::provider_api::Consent>>,
     pub events: Arc<crate::events::EventBus>,
     /// The one manual run that writes, by its trace, while it runs.
+    pub(crate) command_results: crate::commands::Results,
     pub(crate) manual: Arc<std::sync::Mutex<Option<String>>>,
     pub inputs: crate::input_files::InputFileStore,
     pub auth: Arc<ServerAuth>,
@@ -119,6 +120,7 @@ impl Api {
             consents: Default::default(),
             events,
             manual: Arc::default(),
+            command_results: Default::default(),
             inputs,
             auth: Arc::new(auth),
             instance_id,
@@ -433,6 +435,12 @@ routes!(
     (OwnerSession, post, "/apps/authorizations", authorize_app),
     (Session, get, "/session", session),
     (OwnerSession, post, "/commands/run", crate::commands::run),
+    (
+        OwnerSession,
+        get,
+        "/commands/runs/{id}",
+        crate::commands::result
+    ),
     (
         OwnerSession,
         post,
@@ -904,6 +912,7 @@ async fn health(State(api): State<Shared>) -> Response {
         "version": selected.member.as_ref().map(|v|v.version.as_str()).unwrap_or(env!("CARGO_PKG_VERSION")),
         "workspace_id": selected.member.as_ref().map(|v|v.workspace_id.as_str()).or(workspace_id.as_deref()),
         "service_instance_id": api.instance_id,
+        "command_time": crate::commands::Results::now(),
         "workspace": selected.workspace,
         "machine_name": machine_name,
     }))

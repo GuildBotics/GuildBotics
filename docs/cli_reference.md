@@ -150,7 +150,7 @@ Commands:
   git-credential  Supply Git with this machine's credential; issuing a token requires the server
   install         Install this executable and the GuildBotics skill for this user
   workspace       Select the active workspace for the server and AI CLI tools
-  run             Run a command in the selected workspace's isolated environment
+  run             Run a command on the server in the selected workspace's isolated environment
   diagnostics     Read a workspace's recorded diagnostics
   version         Print the binary's version
   secrets         Manage workspace or shared identity secrets
@@ -1394,12 +1394,12 @@ Options:
 ## guildbotics run
 
 ```text
-Run a command in the selected workspace's isolated environment
+Run a command on the server in the selected workspace's isolated environment
 
-Usage: guildbotics run [OPTIONS] <COMMAND> [ARGS]...
+Usage: guildbotics run [OPTIONS] [COMMAND] [ARGS]...
 
 Arguments:
-  <COMMAND>
+  [COMMAND]
           Command name, optionally followed by @PERSON
 
   [ARGS]...
@@ -1411,6 +1411,9 @@ Options:
 
       --cwd <CWD>
           Working directory for the command
+
+      --resume <RESUME>
+          Retrieve a prior run by ID without executing it again
 
   -h, --help
           Print help

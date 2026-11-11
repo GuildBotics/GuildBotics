@@ -1299,7 +1299,7 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
     let unselected = Server::start(dir.path());
     let (status, refused) = unselected
         .run(
-            json!({"command": "look", "expected_workspace": dir.path()}),
+            json!({"command": "look", "expected_workspace": "other-workspace-id"}),
             "en",
         )
         .await;
@@ -1332,7 +1332,7 @@ async fn a_command_is_refused_before_it_starts_when_it_cannot_be_run_as_asked() 
             "command_file_not_found",
         ),
         (
-            json!({"command": "look", "expected_workspace": dir.path().join("other")}),
+            json!({"command": "look", "expected_workspace": "other-workspace-id"}),
             StatusCode::CONFLICT,
             "command_workspace_changed",
         ),

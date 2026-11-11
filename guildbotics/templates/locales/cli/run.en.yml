@@ -1,3 +1,6 @@
 en:
   empty_command: "Command name cannot be empty."
   invalid_output: "The GuildBotics server returned an invalid command result."
+
+  backend_required: "guildbotics run requires a running GuildBotics server. Start it with guildbotics server start."
+  receipt: "Run ID: %{id}. Retrieve the result with guildbotics run --resume %{id}."

@@ -118,6 +118,7 @@ pub(crate) async fn author(
         message: pipe(&request, available).to_string(),
         cwd: None,
         expected_workspace: None,
+        request_id: None,
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };
