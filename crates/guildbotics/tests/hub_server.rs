@@ -454,6 +454,7 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "guildbotics-bin|branvil|admin|upgrade|",
             "guildbotics-bin|branvil|admin|check|",
             "launchctl|bootstrap|",
+            "current|environment|prune",
             "current|install",
         ],
     );
@@ -619,6 +620,7 @@ fn failed_start_returns_to_the_previous_compatible_build() {
                 old.parent().unwrap().file_name().unwrap().to_str().unwrap()
             ))
     );
+    assert!(!hub.lines("actions").contains("|environment|prune\n"));
     assert!(!hub.lines("actions").contains("|install\n"));
 }
 
@@ -1159,4 +1161,16 @@ fn auto_invalid_migration_is_one_failure_episode() {
     }
     assert_eq!(hub.lines("notifications").lines().count(), 1);
     hub.assert_runs_signed("old");
+}
+
+#[test]
+fn cleanup_failure_keeps_the_activated_build_and_never_rolls_back() {
+    let hub = Hub::new();
+    hub.install();
+    hub.commit("new");
+    hub.mark("fail-prune");
+    hub.run("update", None, false);
+    hub.assert_runs_signed("new");
+    assert!(!hub.builds().join("update-from").exists());
+    assert!(hub.lines("actions").contains("new|environment|prune\n"));
 }

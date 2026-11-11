@@ -156,45 +156,83 @@ where
     Ok(removed)
 }
 
+/// Delete obsolete recipes only after activation, while retaining a ready recipe.
+pub async fn prune<F, Fut>(
+    workspace: &Path,
+    name: &str,
+    mut perform: F,
+) -> Result<Vec<String>, String>
+where
+    F: FnMut(PathBuf) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    ready(workspace, name).map_err(|e| format!("{e:?}"))?;
+    let directory = snapshots_dir(workspace);
+    let _held = FileLock::try_hold(&directory.join(LOCK_FILE))
+        .map_err(|e| e.to_string())?
+        .ok_or("An environment build is already running")?;
+    // A concurrent build or removal may have finished before we acquired the lock.
+    if !std::fs::symlink_metadata(directory.join(name))
+        .map_err(|e| e.to_string())?
+        .is_dir()
+        || directory
+            .join(format!("{name}{FAILED_SUFFIX}"))
+            .try_exists()
+            .map_err(|e| e.to_string())?
+    {
+        return Err("The active snapshot is not ready".into());
+    }
+    let mut removed = Vec::new();
+    for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let other = entry.file_name().to_string_lossy().into_owned();
+        if other == name || !other.starts_with(PREFIX) {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_dir() {
+            perform(entry.path()).await?;
+            removed.push(other);
+        } else if kind.is_file() && other.ends_with(FAILED_SUFFIX) {
+            std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+        }
+    }
+    removed.sort();
+    Ok(removed)
+}
+
 /// Serialize builds across processes, remember failure only for this recipe,
-/// and prune old artifacts only after a successful replacement.
-pub async fn build<F, Fut, R, Removed>(
+/// retaining other recipes for prebuilding and rollback.
+pub async fn build<F, Fut>(
     workspace: &Path,
     name: &str,
     timeout_detail: String,
     perform: F,
-    remove: R,
 ) -> Result<Status, String>
 where
     F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
     Fut: Future<Output = Result<PathBuf, String>> + Send,
-    R: FnMut(PathBuf) -> Removed + Send + 'static,
-    Removed: Future<Output = Result<(), String>> + Send,
 {
     owned_build(
         workspace,
         name,
         timeout_detail,
         perform,
-        remove,
         std::time::Duration::from_secs(30 * 60),
     )
     .await
 }
 
-async fn owned_build<F, Fut, R, Removed>(
+async fn owned_build<F, Fut>(
     workspace: &Path,
     name: &str,
     timeout_detail: String,
     perform: F,
-    remove: R,
     timeout: std::time::Duration,
 ) -> Result<Status, String>
 where
     F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
     Fut: Future<Output = Result<PathBuf, String>> + Send,
-    R: FnMut(PathBuf) -> Removed + Send + 'static,
-    Removed: Future<Output = Result<(), String>> + Send,
 {
     let workspace = workspace.to_owned();
     let name = name.to_owned();
@@ -208,7 +246,6 @@ where
                 &name,
                 timeout_detail,
                 perform,
-                remove,
                 timeout,
                 cancelled,
             )
@@ -220,20 +257,17 @@ where
     result
 }
 
-async fn build_with_timeout<F, Fut, R, Removed>(
+async fn build_with_timeout<F, Fut>(
     workspace: &Path,
     name: &str,
     timeout_detail: String,
     perform: F,
-    mut remove: R,
     timeout: std::time::Duration,
     cancelled: tokio_util::sync::CancellationToken,
 ) -> Result<Status, String>
 where
     F: FnOnce(PathBuf, tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
     Fut: Future<Output = Result<PathBuf, String>> + Send,
-    R: FnMut(PathBuf) -> Removed + Send + 'static,
-    Removed: Future<Output = Result<(), String>> + Send,
 {
     status(workspace, name).map_err(|e| e.to_string())?;
     let directory = snapshots_dir(workspace);
@@ -278,36 +312,7 @@ where
             cancelled.cancel();
             timeout_detail
         }
-        End::Finished(Ok(status)) => {
-            // Readiness is committed before optional garbage collection starts.
-            let path = &status.path;
-            let prune = async {
-                for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    let other = entry.path();
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if other != *path && name.starts_with(PREFIX) {
-                        let kind = entry.file_type().map_err(|e| e.to_string())?;
-                        if kind.is_dir() {
-                            remove(other).await?;
-                        } else if name.ends_with(FAILED_SUFFIX) {
-                            std::fs::remove_file(other).map_err(|e| e.to_string())?;
-                        }
-                    }
-                }
-
-                Ok::<(), String>(())
-            };
-            tokio::select! {
-                biased;
-                _ = cancelled.cancelled() => tracing::warn!("Snapshot pruning cancelled after a successful build"),
-                _ = tokio::time::sleep_until(deadline) => tracing::warn!("Snapshot pruning exceeded the build deadline"),
-                result = prune => if let Err(error) = result {
-                    tracing::warn!("Snapshot pruning failed after a successful build: {error}");
-                },
-            }
-            return Ok(status);
-        }
+        End::Finished(Ok(status)) => return Ok(status),
         End::Finished(Err(reason)) => reason,
     };
     gb_base::files::atomic_write(&marker, format!("{reason}\n").as_bytes())
@@ -363,7 +368,6 @@ mod tests {
                                 std::future::pending().await
                             }
                         },
-                        |_| async { panic!("unfinished builds must not prune") },
                         if abort {
                             std::time::Duration::from_secs(60)
                         } else {
@@ -413,91 +417,11 @@ mod tests {
                         std::fs::create_dir(&path).unwrap();
                         Ok(path)
                     },
-                    |_| async { Ok(()) },
                 )
                 .await
                 .unwrap();
                 assert_eq!(retried.state, State::Ready);
             }
-        }
-    }
-    #[tokio::test]
-    async fn cancellation_after_save_preserves_the_valid_snapshot_without_a_failure_marker() {
-        let root = tempfile::tempdir().unwrap();
-        let name = "guildbotics-0123456789abcdef";
-        let directory = snapshots_dir(root.path());
-        std::fs::create_dir_all(directory.join("guildbotics-1111111111111111")).unwrap();
-        let (pruning, started) = tokio::sync::oneshot::channel();
-        let mut pruning = Some(pruning);
-        let workspace = root.path().to_owned();
-        let waiter = tokio::spawn(async move {
-            owned_build(
-                &workspace,
-                name,
-                "timeout".into(),
-                move |directory, _| async move {
-                    let path = directory.join(name);
-                    std::fs::create_dir(&path).unwrap();
-                    Ok(path)
-                },
-                move |_| {
-                    let _ = pruning.take().unwrap().send(());
-                    std::future::pending()
-                },
-                std::time::Duration::from_secs(60),
-            )
-            .await
-        });
-        started.await.unwrap();
-        waiter.abort();
-        let _ = waiter.await;
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while status(root.path(), name).unwrap().state == State::Building {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(status(root.path(), name).unwrap().state, State::Ready);
-        assert!(!directory.join(format!("{name}{FAILED_SUFFIX}")).exists());
-    }
-    #[tokio::test]
-    async fn pruning_is_covered_by_the_build_deadline() {
-        for failed in [false, true] {
-            let root = tempfile::tempdir().unwrap();
-            let name = "guildbotics-0123456789abcdef";
-            let old = snapshots_dir(root.path()).join("guildbotics-1111111111111111");
-            std::fs::create_dir_all(old).unwrap();
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                owned_build(
-                    root.path(),
-                    name,
-                    "localized timeout".into(),
-                    move |directory, _| async move {
-                        let path = directory.join(name);
-                        std::fs::create_dir(&path).unwrap();
-                        Ok(path)
-                    },
-                    move |_| async move {
-                        if failed {
-                            Err("cannot prune".into())
-                        } else {
-                            std::future::pending().await
-                        }
-                    },
-                    std::time::Duration::from_millis(10),
-                ),
-            )
-            .await
-            .expect("pruning must finish within the build deadline");
-            assert_eq!(result.unwrap().state, State::Ready);
-            assert_eq!(status(root.path(), name).unwrap().state, State::Ready);
-            assert!(
-                !snapshots_dir(root.path())
-                    .join(format!("{name}{FAILED_SUFFIX}"))
-                    .exists()
-            );
         }
     }
     #[tokio::test]
@@ -515,7 +439,6 @@ mod tests {
                 cancelled.cancelled().await;
                 Err("cancelled".into())
             },
-            |_| async { panic!("timed-out build must not prune") },
             std::time::Duration::from_millis(10),
         )
         .await;

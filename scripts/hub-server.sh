@@ -306,7 +306,11 @@ install_assets() {
     return 1
 }
 complete_activation() {
-    rm -f "$pending" "$builds/update-to" && install_assets
+    rm -f "$pending" "$builds/update-to" || return
+    stage="pruning obsolete snapshots"
+    # Activation is committed: cleanup must never trigger a rollback.
+    "$current" environment prune || return
+    install_assets
 }
 rollback() {
     # The start failed before its authenticated readiness was observed.

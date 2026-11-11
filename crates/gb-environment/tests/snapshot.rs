@@ -124,110 +124,110 @@ fn a_link_is_not_a_built_snapshot() {
 }
 
 #[tokio::test]
-async fn failed_builds_are_remembered_and_only_success_prunes_old_snapshots() {
+async fn prebuild_and_upkeep_rebuild_preserve_both_recipes_until_activation() {
     let root = tempfile::tempdir().unwrap();
-    let name = "guildbotics-0123456789abcdef";
-    let old =
-        gb_environment::snapshot::snapshots_dir(root.path()).join("guildbotics-1111111111111111");
-    std::fs::create_dir_all(&old).unwrap();
-    assert!(
+    let directory = snapshots_dir(root.path());
+    std::fs::create_dir_all(directory.join(OTHER)).unwrap();
+    for name in [NAME, OTHER] {
         gb_environment::snapshot::build(
             root.path(),
             name,
             "timeout".into(),
-            |_, _| async { Err("broken".into()) },
-            |_| async { panic!("failed build must not prune") }
+            move |directory, _| async move {
+                let path = directory.join(name);
+                std::fs::create_dir_all(&path).unwrap();
+                Ok(path)
+            },
         )
+        .await
+        .unwrap();
+        assert_eq!(status(root.path(), NAME).unwrap().state, State::Ready);
+        assert_eq!(status(root.path(), OTHER).unwrap().state, State::Ready);
+    }
+    // A failed activation can return to the old recipe without rebuilding it.
+    assert_eq!(ready(root.path(), OTHER).unwrap(), directory.join(OTHER));
+    std::fs::write(directory.join(format!("{OTHER}.failed")), "old failure").unwrap();
+    std::fs::create_dir(directory.join("unrelated")).unwrap();
+    let lock_directory = directory.clone();
+    let removed = gb_environment::snapshot::prune(root.path(), NAME, move |path| {
+        assert!(
+            FileLock::try_hold(&lock_directory.join("build.lock"))
+                .unwrap()
+                .is_none()
+        );
+        async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(removed, vec![OTHER]);
+    assert!(!directory.join(OTHER).exists());
+    assert!(!directory.join(format!("{OTHER}.failed")).exists());
+    assert!(directory.join("unrelated").exists());
+    assert_eq!(status(root.path(), NAME).unwrap().state, State::Ready);
+}
+
+#[tokio::test]
+async fn pruning_requires_a_ready_active_recipe_and_keeps_it_on_removal_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = snapshots_dir(root.path());
+    std::fs::create_dir_all(directory.join(OTHER)).unwrap();
+    for failed in [false, true] {
+        if failed {
+            std::fs::create_dir_all(directory.join(NAME)).unwrap();
+            std::fs::write(directory.join(format!("{NAME}.failed")), "failed").unwrap();
+        }
+        assert!(
+            gb_environment::snapshot::prune(root.path(), NAME, |_| async {
+                panic!("unready recipe must not prune")
+            })
+            .await
+            .is_err()
+        );
+        assert!(directory.join(OTHER).exists());
+    }
+    std::fs::remove_file(directory.join(format!("{NAME}.failed"))).unwrap();
+    let held = FileLock::try_hold(&directory.join("build.lock"))
+        .unwrap()
+        .unwrap();
+    assert!(
+        gb_environment::snapshot::prune(root.path(), NAME, |_| async {
+            panic!("concurrent build must not prune")
+        })
+        .await
+        .is_err()
+    );
+    drop(held);
+    assert!(
+        gb_environment::snapshot::prune(root.path(), NAME, |_| async {
+            Err("runtime removal failed".into())
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(status(root.path(), NAME).unwrap().state, State::Ready);
+    assert!(directory.join(OTHER).exists());
+}
+
+#[tokio::test]
+async fn failed_builds_are_remembered_and_preserve_old_snapshots() {
+    let root = tempfile::tempdir().unwrap();
+    let old = snapshots_dir(root.path()).join(OTHER);
+    std::fs::create_dir_all(&old).unwrap();
+    assert!(
+        gb_environment::snapshot::build(root.path(), NAME, "timeout".into(), |_, _| async {
+            Err("broken".into())
+        })
         .await
         .is_err()
     );
     assert_eq!(
-        gb_environment::snapshot::status(root.path(), name)
-            .unwrap()
-            .state,
-        gb_environment::snapshot::State::Failed("broken".into())
+        status(root.path(), NAME).unwrap().state,
+        State::Failed("broken".into())
     );
     assert!(old.exists());
-    assert!(!gb_environment::snapshot::needs_build(
-        &gb_environment::snapshot::State::Failed("broken".into())
-    ));
-    let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let removed_by_build = removed.clone();
-    let result = gb_environment::snapshot::build(
-        root.path(),
-        name,
-        "timeout".into(),
-        move |directory, _| async move {
-            let path = directory.join(name);
-            std::fs::create_dir(&path).unwrap();
-            Ok(path)
-        },
-        move |path| {
-            removed_by_build.lock().unwrap().push(path.clone());
-            async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(*removed.lock().unwrap(), vec![old.clone()]);
-    assert_eq!(result.state, gb_environment::snapshot::State::Ready);
-    assert!(!old.exists());
-}
-
-#[tokio::test]
-async fn pruning_runs_under_build_lock_and_preserves_ready_on_runtime_failure() {
-    let root = tempfile::tempdir().unwrap();
-    let directory = snapshots_dir(root.path());
-    let old = directory.join(OTHER);
-    std::fs::create_dir_all(&old).unwrap();
-    let cleanup_directory = directory.clone();
-    let cleanup_old = old.clone();
-    let result = gb_environment::snapshot::build(
-        root.path(),
-        NAME,
-        "timeout".into(),
-        move |directory, _| async move {
-            let path = directory.join(NAME);
-            std::fs::create_dir(&path).unwrap();
-            Ok(path)
-        },
-        move |path| {
-            assert_eq!(path, cleanup_old);
-            assert!(
-                FileLock::try_hold(&cleanup_directory.join("build.lock"))
-                    .unwrap()
-                    .is_none()
-            );
-            async { Err("runtime metadata removal failed".into()) }
-        },
-    )
-    .await;
-    assert_eq!(result.unwrap().state, State::Ready);
-    assert_eq!(status(root.path(), NAME).unwrap().state, State::Ready);
-    assert!(!directory.join(format!("{NAME}.failed")).exists());
-    assert!(old.is_dir());
-    assert!(directory.join(NAME).is_dir());
-}
-
-#[tokio::test]
-async fn a_second_build_is_refused_without_running_or_pruning() {
-    let root = tempfile::tempdir().unwrap();
-    let directory = snapshots_dir(root.path());
-    let _held = FileLock::try_hold(&directory.join("build.lock"))
-        .unwrap()
-        .unwrap();
-    let result = gb_environment::snapshot::build(
-        root.path(),
-        NAME,
-        "timeout".into(),
-        |_, _| async { panic!("locked build must not run") },
-        |_| async { panic!("locked build must not prune") },
-    )
-    .await;
-    assert_eq!(
-        result,
-        Err("An environment build is already running".into())
-    );
+    assert!(!gb_environment::snapshot::needs_build(&State::Failed(
+        "broken".into()
+    )));
 }
 
 #[test]

@@ -17,6 +17,8 @@ pub(crate) enum EnvironmentCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Remove obsolete snapshots after a successful Hub activation
+    Prune,
     /// Remove device snapshots while preserving provider logins
     Remove,
     /// Log in to a provider in its private environment
@@ -74,6 +76,29 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
     let language = gb_server::client::language().await;
     let usage = matches!(&command, EnvironmentCommand::Usage { .. });
     match command {
+        EnvironmentCommand::Prune => {
+            let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+            let host = gb_environment::Host {
+                data,
+                home,
+                package: gb_base::home::python_package(),
+                identity_root: gb_base::home::identity_root()?,
+            };
+            let device = gb_environment::device::read(&host, &workspace).await;
+            let name = device.view["snapshot"]["name"].as_str().unwrap_or_default();
+            gb_environment::snapshot::ready(&workspace, name)
+                .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?;
+            gb_environment::snapshot::prune(
+                &workspace,
+                name,
+                gb_environment::runtime::remove_snapshot,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        }
         EnvironmentCommand::Remove => {
             let removed = gb_environment::runtime::remove_snapshots(
                 &runtime,

@@ -219,3 +219,32 @@ originのmainをfetchします。登録時のPATHを保存し、サーバーの�
 診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。
 ループの間隔は起動時の `GUILDBOTICS_HUB_UPDATE_INTERVAL`（秒、既定300）、
 長時間通知は `GUILDBOTICS_HUB_WAIT_NOTICE`（秒、既定3600）で指定できます。
+
+## レシピ変更のマージ前にスナップショットを用意する
+
+AI CLI・Node.js・Python 依存・ベースイメージを変える PR は、マージの前に
+人が Hub ホストで次を実施します。動いているサーバーの checkout は変更せず、
+PR head を別の checkout に用意し、そこで `cargo build --release --locked -p guildbotics`
+を実行します。生成した実行ファイルはその checkout のレシピを使います。
+Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワークスペースを使います。
+
+```sh
+# PR head の checkout で実行する。パスは実際の運用先に置き換える。
+# 独自ベースイメージを宣言している場合は、先に Hub の CPU 用 archive を読み込む。
+./target/release/guildbotics environment image load /absolute/path/to/arm64-image.tar
+./target/release/guildbotics environment --workspace /absolute/path/to/workspace build
+./target/release/guildbotics environment --workspace /absolute/path/to/workspace status --format json
+```
+
+既定のイメージなら `image load` は不要です。独自イメージは宣言した digest と
+一致するものを読み込み、`snapshot.state` が `ready` であることを確認してから
+マージします。ビルドと稼働中の upkeep はほかのレシピを削除しないので、
+切り替えまでは新旧両方のディスク容量が必要です。
+
+`scripts/hub-server.sh update` / `recover` は、新版の認証付き起動確認後に
+更新途中の記録を消し、`guildbotics environment prune` で選択中ワークスペースの
+現在のレシピ以外を削除します。ロールバックでは実行しません。
+現在のスナップショットが未完成、またはビルド中なら削除を拒否し、更新コマンドは
+エラーを返しますが、起動済みの新版は維持します。必要なビルドを終えてから
+同じ Hub 設定・ワークスペースで `guildbotics environment prune` を再実行してください。
+通常の upkeep は削除しないので、その後に次の更新を事前ビルドしても保持されます。
