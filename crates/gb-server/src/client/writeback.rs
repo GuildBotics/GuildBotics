@@ -75,7 +75,26 @@ fn root_identity(path: &Path) -> std::io::Result<(u64, u64)> {
 }
 
 pub(super) fn remove(data: &Path, id: &str) -> anyhow::Result<()> {
-    std::fs::remove_file(path(data, id)?)?;
+    match std::fs::remove_file(path(data, id)?) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+// A transport failure or server error can hide accepted work. Only a
+// definitive client rejection makes the export baseline disposable here.
+pub(super) async fn submission(
+    response: reqwest::Response,
+    data: &Path,
+    id: &str,
+) -> anyhow::Result<()> {
+    if response.status().is_client_error()
+        && response.status() != reqwest::StatusCode::REQUEST_TIMEOUT
+    {
+        remove(data, id)?;
+    }
+    super::checked(response).await?;
     Ok(())
 }
 
@@ -84,6 +103,141 @@ mod tests {
     use super::super::{OwnerClient, collect_command};
     use super::*;
     use gb_environment::worktree::transfer::Upload;
+
+    async fn serve(
+        status: reqwest::StatusCode,
+        answer: serde_json::Value,
+    ) -> (OwnerClient, tokio::task::JoinHandle<()>) {
+        let router = axum::Router::new().route(
+            "/commands/runs/{id}",
+            axum::routing::get(move || {
+                let answer = answer.clone();
+                async move { (status, axum::Json(answer)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let owner = OwnerClient {
+            http: super::super::http().unwrap(),
+            base: format!("http://{}", listener.local_addr().unwrap()),
+            token: "test".into(),
+            language: "en",
+        };
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (owner, server)
+    }
+
+    #[test]
+    fn absent_receipt_message_explains_completed_writeback_in_both_languages() {
+        for (language, expected) in [("en", "already written back"), ("ja", "書き戻し済み")] {
+            assert!(
+                crate::i18n::t(language, "cli.run.resume_no_writeback", &[]).contains(expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_receipts_are_removed_but_uncertain_results_remain() {
+        for (status, answer, remains) in [
+            (
+                200,
+                serde_json::json!({"state":"finished","status":500}),
+                false,
+            ),
+            (
+                200,
+                serde_json::json!({"state":"finished","status":200,"result":{"output":"done"}}),
+                false,
+            ),
+            (
+                404,
+                serde_json::json!({"code":"command_result_missing"}),
+                true,
+            ),
+            (500, serde_json::json!({}), true),
+            (401, serde_json::json!({}), true),
+            (200, serde_json::json!({"state":"broken"}), true),
+            (
+                200,
+                serde_json::json!({"state":"finished","status":200,"result":null}),
+                true,
+            ),
+            (
+                200,
+                serde_json::json!({"state":"finished","status":200,"result":{"output":"done","worktree_changes":42}}),
+                true,
+            ),
+        ] {
+            let data = tempfile::tempdir().unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let copy = Copy::new(
+                root.path().into(),
+                "/work".into(),
+                vec![],
+                data.path().join("lock"),
+            )
+            .unwrap();
+            save(data.path(), "run.2", &copy, b"").unwrap();
+            let succeeds = status == 200 && !remains && answer["status"] == 200;
+            let (owner, server) =
+                serve(reqwest::StatusCode::from_u16(status).unwrap(), answer).await;
+            for _ in 0..2 {
+                let result = collect_command(&owner, "run.2", "en", data.path()).await;
+                assert_eq!(result.is_ok(), succeeds);
+                assert_eq!(
+                    load(data.path(), "run.2").unwrap().is_some(),
+                    remains,
+                    "HTTP {status}"
+                );
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn submission_rejections_discard_only_definitive_failures() {
+        for (status, remains) in [
+            (200, true),
+            (409, false),
+            (422, false),
+            (404, false),
+            (429, false),
+            (408, true),
+            (500, true),
+        ] {
+            let data = tempfile::tempdir().unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let copy = Copy::new(
+                root.path().into(),
+                "/work".into(),
+                vec![],
+                data.path().join("lock"),
+            )
+            .unwrap();
+            save(data.path(), "run.3", &copy, b"").unwrap();
+            let (owner, server) = serve(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                serde_json::json!({}),
+            )
+            .await;
+            let response = owner
+                .request(reqwest::Method::GET, "/commands/runs/run.3")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                submission(response, data.path(), "run.3").await.is_ok(),
+                status == 200
+            );
+            assert_eq!(
+                load(data.path(), "run.3").unwrap().is_some(),
+                remains,
+                "HTTP {status}"
+            );
+            server.abort();
+        }
+    }
 
     #[cfg(unix)]
     #[test]
@@ -135,23 +289,7 @@ mod tests {
             b"{\"path\":\"a\",\"content\":\"bmV3\"}\n{\"path\":\"b\",\"content\":\"bmV3\"}";
         let answer = serde_json::json!({"state":"finished","status":200,
             "result":{"output":"done", "worktree_changes":std::str::from_utf8(changes).unwrap()}});
-        let router = axum::Router::new().route(
-            "/commands/runs/run.1",
-            axum::routing::get(move || {
-                let answer = answer.clone();
-                async move { axum::Json(answer) }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let owner = OwnerClient {
-            http: super::super::http().unwrap(),
-            base: format!("http://{}", listener.local_addr().unwrap()),
-            token: "test".into(),
-            language: "en",
-        };
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
+        let (owner, server) = serve(reqwest::StatusCode::OK, answer).await;
         std::fs::write(root.path().join("b"), "edited").unwrap();
         let error = collect_command(&owner, "run.1", "en", data.path())
             .await

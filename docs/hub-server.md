@@ -313,3 +313,5 @@ Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワ�
 利用者が編集したスキルは `guildbotics install` で置き直されないため、`skills/guildbotics/SKILL.md` の
 `run ask` の説明を手で取り込んでください。読み書き可の許可先やメンバー clone 内の cwd も
 写しで実行します。そこでの commit、ignore されるファイルの生成は、書き戻し後に対話の側で行ってください。
+
+cwd はリポジトリのルートにしてください。下位フォルダだけを写すと、許可先や clone の親にある本物の `.git` が見えるため、実行中に commit すると本物の履歴を変更します。

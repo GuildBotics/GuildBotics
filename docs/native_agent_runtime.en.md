@@ -206,6 +206,10 @@ opening it.
 
 CLI `guildbotics run` always sends a data copy, including cwd inside read/write grants and member clones. The server reconstructs it at the client spelling in private microVM storage, shadowing only cwd inside a grant; other granted paths stay mounted. The CLI saves exported file hashes locally per run ID before submission. On the same device, `--resume` also writes back with the original conflict checks, deleting the record after success. Commit after write-back in the interactive session. The following path-based rules apply only to server-initiated runs.
 
+Use the repository root as cwd. Copying only a subdirectory can leave the original parent `.git` visible through a grant or clone mount, so committing during execution changes the original history.
+
+Records are also removed on failed execution or definitive submission rejection. Transport errors and write-back conflicts retain them for retrieval. Records whose results are lost to retention limits or server restart are not automatically removed. After confirming a run is no longer needed, manually delete only its `run/worktree-receipts/<ID>.json` file under the CLI data directory.
+
 - **Working directory**: the working directory itself opens nothing for
   writing; only a grant does. A command that may write works in it directly,
   bound read/write at its host path, only when a read/write grant (a document

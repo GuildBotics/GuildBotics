@@ -308,7 +308,7 @@ pub async fn run_command(
         .send()
         .await
     {
-        checked(response).await?;
+        writeback::submission(response, &data, &id).await?;
     }
     collect_command(&owner, &id, language, &data).await
 }
@@ -363,11 +363,20 @@ async fn collect_command(
                     .ok_or_else(|| {
                         anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[]))
                     })?;
+                if !status.is_success() {
+                    writeback::remove(data, id)?;
+                }
                 anyhow::ensure!(
                     status.is_success(),
                     response_error(status, &answer["result"])
                 );
-                if let Some(changes) = answer["result"]["worktree_changes"].as_str() {
+                let output = command_output(answer["result"].clone(), language)?;
+                let changes = &answer["result"]["worktree_changes"];
+                anyhow::ensure!(
+                    changes.is_null() || changes.is_string(),
+                    i18n::t(language, "cli.run.invalid_output", &[])
+                );
+                if let Some(changes) = changes.as_str() {
                     if let Some(saved) = &saved {
                         let copy = saved.copy(data).map_err(|error| {
                             anyhow::anyhow!(i18n::t(
@@ -383,12 +392,12 @@ async fn collect_command(
                         )
                         .await
                         .map_err(|e| anyhow::anyhow!(crate::i18n::say(e, language)))?;
-                        writeback::remove(data, id)?;
                     } else {
                         eprintln!("{}", i18n::t(language, "cli.run.resume_no_writeback", &[]));
                     }
                 }
-                return command_output(answer["result"].clone(), language);
+                writeback::remove(data, id)?;
+                return Ok(output);
             }
             _ => anyhow::bail!(i18n::t(language, "cli.run.invalid_output", &[])),
         }

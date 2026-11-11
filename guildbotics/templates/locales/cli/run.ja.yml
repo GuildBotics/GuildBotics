@@ -6,6 +6,6 @@ ja:
   receipt: "実行 ID: %{id}。guildbotics run --resume %{id} で結果を取り直せます。"
   workspace_mismatch: "サーバーは別のワークスペースを選んでいます。実行中の作業を終え、guildbotics server stop、guildbotics workspace use <パス>、guildbotics server start の順に切り替えてください。"
   invalid_id: "実行 ID の形式が正しくありません。"
-  resume_no_writeback: "この実行 ID の書き戻し記録が手元にないため、結果の出力だけを取得しました。"
+  resume_no_writeback: "この実行は書き戻し済みか、この端末から送った実行ではないため、結果の出力だけを取得しました。"
   worktree_refused: "手元の作業フォルダを転送できません: %{reason}"
   worktree_limit: "送る量（ファイル %{files} バイト、Git の履歴・index %{history} バイト）が上限 %{limit} バイトを超えました。小さい作業ディレクトリを選ぶか、ファイルと Git の履歴を減らしてください。"
