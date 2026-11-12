@@ -116,7 +116,13 @@ pub(super) async fn submit(api: Shared, headers: HeaderMap, mut request: RunRequ
     {
         return get(&api, &headers, &id);
     }
-    if super::history::complete(&api, &mut request).await.is_err() {
+    if !tokio::time::timeout(
+        super::HISTORY_TIMEOUT,
+        super::history::complete(&api, &mut request),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
+    {
         return ApiError::new(StatusCode::CONFLICT, "command_history_required", &headers)
             .into_response();
     }

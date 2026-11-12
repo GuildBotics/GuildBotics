@@ -415,39 +415,24 @@ impl Origin {
             self.deadline,
         )
         .await?;
+        // The caller holds the member Git lock through the final self-contained export.
+        // Borrow only private objects; never import fetched refs or expose alternates to guests.
+        let mut alternates = String::new();
         for origin in std::iter::once(self).chain(others.iter()) {
-            let fetched = origin.refs(&["refs/remotes/origin/", "refs/tags/"]).await?;
-            let revisions = fetched.keys().cloned().collect::<Vec<_>>().join("\n") + "\n";
-            if !fetched.is_empty() {
-                let bundle = origin
-                    .command_at(
-                        &origin.directory,
-                        vec![
-                            "bundle".into(),
-                            "create".into(),
-                            "-".into(),
-                            "--stdin".into(),
-                        ],
-                        BTreeMap::new(),
-                        revisions.into_bytes(),
-                        MAX_BUNDLE,
-                    )
-                    .await?
-                    .checked_bundle()?;
-                let path = temporary.path().join("base.bundle");
-                std::fs::write(&path, bundle.stdout).map_err(io_error)?;
-                assembled
-                    .git(
-                        &[
-                            "bundle",
-                            "unbundle",
-                            path.to_str().ok_or_else(|| failure("path"))?,
-                        ],
-                        vec![],
-                    )
-                    .await?;
+            let objects =
+                std::fs::canonicalize(origin.directory.join("objects")).map_err(io_error)?;
+            let objects = objects.to_str().ok_or_else(|| failure("path"))?;
+            if objects.contains(['\n', '\r']) {
+                return Err(failure("path"));
             }
+            alternates.push_str(objects);
+            alternates.push('\n');
         }
+        std::fs::write(
+            assembled.directory.join("objects/info/alternates"),
+            alternates,
+        )
+        .map_err(io_error)?;
         if !incoming.is_empty() {
             let path = temporary.path().join("delta.bundle");
             std::fs::write(&path, incoming).map_err(io_error)?;

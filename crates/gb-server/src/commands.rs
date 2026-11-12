@@ -8,6 +8,8 @@
 //! trace. Screen requests additionally compare the selected shared file's
 //! identity and revision with this member's runtime target before starting.
 
+/// History preparation includes provider calls and the member Git lock wait.
+pub(crate) const HISTORY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 mod history;
 mod results;
 pub(crate) use crate::i18n::say;

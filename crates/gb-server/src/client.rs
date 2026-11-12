@@ -99,6 +99,13 @@ impl OwnerClient {
             .ok()
     }
 
+    /// Both initial submission and explicit full-history retry may prepare history before admission.
+    fn command_submission(&self, request: &crate::commands::RunRequest) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::POST, "/commands/run")
+            .json(request)
+            .timeout(crate::commands::HISTORY_TIMEOUT.saturating_add(TIMEOUT))
+    }
+
     pub async fn post(
         &self,
         path: &str,
@@ -309,13 +316,7 @@ pub async fn run_command(
         i18n::t(language, "cli.run.receipt", &[("id", id.as_str())])
     );
     // Only POST once. A transport failure may mean it was already accepted.
-    if let Ok(response) = owner
-        .request(reqwest::Method::POST, "/commands/run")
-        .json(&request)
-        .timeout(TIMEOUT)
-        .send()
-        .await
-    {
+    if let Ok(response) = owner.command_submission(&request).send().await {
         if response.status() == reqwest::StatusCode::CONFLICT {
             let status = response.status();
             let answer: Value = response.json().await?;
@@ -337,13 +338,7 @@ pub async fn run_command(
                     writeback::save(&data, &id, copy, &request.upload.as_ref().unwrap().copied())?;
                 }
                 // Retry only an explicit refusal before execution, using the same receipt ID.
-                if let Ok(response) = owner
-                    .request(reqwest::Method::POST, "/commands/run")
-                    .json(&request)
-                    .timeout(TIMEOUT)
-                    .send()
-                    .await
-                {
+                if let Ok(response) = owner.command_submission(&request).send().await {
                     writeback::submission(response, &data, &id).await?;
                 }
             } else {

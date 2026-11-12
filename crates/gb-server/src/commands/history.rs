@@ -3,10 +3,7 @@ use super::RunRequest;
 use crate::api::Shared;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gb_config::{commands::CommandRoots, resolved_guest, secrets::*};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
 async fn service(
     api: &Shared,
@@ -74,6 +71,7 @@ pub(super) async fn recognized(
 }
 
 pub(super) async fn complete(api: &Shared, request: &mut RunRequest) -> anyhow::Result<()> {
+    let deadline = Instant::now() + super::HISTORY_TIMEOUT;
     let Some(upload) = request.upload.as_mut() else {
         return Ok(());
     };
@@ -98,9 +96,12 @@ pub(super) async fn complete(api: &Shared, request: &mut RunRequest) -> anyhow::
             .ok_or_else(|| anyhow::anyhow!("workspace missing"))?
             .join(".guildbotics/local/member_git")
             .join(person);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let _lock =
-            gb_base::files::FileLock::hold(&root.join("git.lock"), Duration::from_secs(60))?;
+        let _lock = gb_base::files::FileLock::hold(
+            &root.join("git.lock"),
+            deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| anyhow::anyhow!("history deadline elapsed"))?,
+        )?;
         let mut repositories = std::collections::BTreeSet::new();
         for base in &git.bases {
             anyhow::ensure!(git.refs.contains_key(base), "unknown tracking ref");
