@@ -76,8 +76,8 @@ if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules
   npm ci
 fi
 npm run build --workspace desktop --workspace crates/branvil/web
-# Through the development image's cargo, which cleans a target directory built
-# under other build conditions first (in the image, `cargo` is that wrapper).
+# Through the development image's cargo and the repository housekeeping hook
+# (in the image, `cargo` is that wrapper).
 REAL_CARGO="${REAL_CARGO:-$(type -P cargo)}" docker/agent-environment/cargo-wrapper.sh \
   build --manifest-path "$repo/crates/guildbotics/Cargo.toml" --target-dir "$repo/target"
 binary="$repo/target/debug/guildbotics"
