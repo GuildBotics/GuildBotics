@@ -404,7 +404,7 @@ impl BranvilService {
             threads,
         }
     }
-    async fn pull_interactive(&self, p: &Value) -> Result<bool, ServiceError> {
+    pub(super) async fn pull_interactive(&self, p: &Value) -> Result<bool, ServiceError> {
         for link in array(p, "tickets") {
             let url = text(link, "url");
             if self.item(url, "tickets").is_ok() {

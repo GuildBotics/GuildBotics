@@ -32,6 +32,8 @@ These are saved in the workspace's `.guildbotics/local/service.yml` on the machi
 
 The per-member settings above are stored in the workspace's `team/members/<person_id>/member.yml` (the member's participation in that workspace) as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file by hand.
 
+Patrol and scheduled ticket workflows defer only new ready-lane tickets while the member has reached the open PR limit (default 2, range 1–20). Drafts and PRs without tickets count; PRs linked to interactive tickets, including inherited interactive settings, do not. Counts are refreshed when listing candidates and immediately before starting work; merging or closing a PR frees capacity. Working-lane resumes, comments and mentions, PR feedback, reviews, CI resumes, and manual runs continue. Set the shared limit for all members on the Service screen; it applies from the next service start. While running, the screen shows each member’s last observed count / limit and whether new work is deferred.
+
 ## Patrol Commands
 
 **Patrol commands** (`routine_commands`) are executed continuously in round-robin order.

@@ -82,6 +82,49 @@ pub trait Runner: Send + Sync {
     ) -> Pending<'a, ()>;
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PullRequestLoad {
+    pub count: usize,
+    pub limit: u8,
+    pub deferred: bool,
+}
+
+pub struct PullRequestQuota {
+    limit: u8,
+    last: std::sync::Mutex<Option<PullRequestLoad>>,
+}
+impl PullRequestQuota {
+    pub fn new(limit: u8) -> Self {
+        Self {
+            limit,
+            last: std::sync::Mutex::new(None),
+        }
+    }
+    pub fn snapshot(&self) -> Option<PullRequestLoad> {
+        self.last.lock().unwrap().clone()
+    }
+    async fn observe(&self, code: &dyn CodeHostingService) -> bool {
+        let count = match code.authored_open_pull_requests().await {
+            Ok(pulls) => pulls.len(),
+            Err(error) => {
+                *self.last.lock().unwrap() = None;
+                tracing::warn!(
+                    ?error,
+                    "Could not count authored open PRs; deferring new ready work"
+                );
+                return true;
+            }
+        };
+        let deferred = count >= usize::from(self.limit);
+        *self.last.lock().unwrap() = Some(PullRequestLoad {
+            count,
+            limit: self.limit,
+            deferred,
+        });
+        deferred
+    }
+}
+
 pub struct Selector<'a> {
     pub diagnostics: &'a Diagnostics,
     pub person: &'a str,
@@ -90,6 +133,7 @@ pub struct Selector<'a> {
     pub ticket: &'a dyn TicketService,
     pub code: Option<&'a dyn CodeHostingService>,
     pub runner: &'a dyn Runner,
+    pub quota: Option<&'a PullRequestQuota>,
 }
 
 impl Selector<'_> {
@@ -106,6 +150,9 @@ impl Selector<'_> {
         Ok(None)
     }
     pub async fn candidates(&self) -> Result<Vec<Task>, ServiceError> {
+        if let (Some(quota), Some(code)) = (self.quota, self.code) {
+            quota.observe(code).await;
+        }
         let mut candidates = Vec::new();
         if let Some(code) = self.code {
             for task in code.pull_request_candidates().await? {
@@ -134,7 +181,20 @@ impl Selector<'_> {
             self.hand_over(&task).await;
             return Ok(None);
         }
+        if self.defer_ready(&task).await {
+            return Ok(None);
+        }
         self.invocation(&task).map(Some)
+    }
+
+    async fn defer_ready(&self, task: &Task) -> bool {
+        if self.source != "manual"
+            && task.trigger_reason.as_deref() == Some("ready_lane")
+            && let (Some(quota), Some(code)) = (self.quota, self.code)
+        {
+            return quota.observe(code).await;
+        }
+        false
     }
 
     pub fn invocation(&self, task: &Task) -> Result<WorkflowInvocation, ServiceError> {
@@ -186,6 +246,9 @@ impl Selector<'_> {
         invocation
             .payload
             .insert("max_completion_attempts".into(), json!(attempts.max(1)));
+        if self.defer_ready(task).await {
+            return Ok(CommandReply::default());
+        }
         let result = async {
             let mention = invocation
                 .work

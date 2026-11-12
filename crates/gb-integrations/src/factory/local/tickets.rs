@@ -8,7 +8,7 @@ impl LocalService {
         self.store.scope.authorize(&r.place)?;
         Ok(r.url())
     }
-    fn ancestor(&self, v: &Value) -> Result<Option<String>, ServiceError> {
+    pub(super) fn ancestor(&self, v: &Value) -> Result<Option<String>, ServiceError> {
         let mut v = v.clone();
         let mut seen = BTreeSet::new();
         loop {

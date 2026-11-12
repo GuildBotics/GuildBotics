@@ -142,6 +142,7 @@ export type RuntimeUnitStatus = {
   /** The provider of the listened chat, whose credentials failed. */
   events_chat_provider: string;
   member_routines: RuntimeMemberRoutine[];
+  member_pull_requests: Record<string, { count: number; limit: number; deferred: boolean }>;
 };
 
 export type RuntimeActiveWork = {
@@ -175,6 +176,7 @@ export type ServiceSettings = {
   event_queue: boolean;
   routine_interval_minutes: number;
   max_consecutive_errors: number;
+  max_open_pull_requests: number;
 };
 
 export type SchedulerStopRequest = {

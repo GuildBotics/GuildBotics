@@ -481,6 +481,7 @@ impl Fixture {
             ticket: self.ticket.as_ref(),
             code: Some(self.code.as_ref()),
             runner: &self.runner,
+            quota: None,
             diagnostics: &self.diagnostics,
         }
     }
@@ -1042,6 +1043,7 @@ struct CodeFaults {
     inner: Arc<dyn CodeHostingService>,
     draft: Option<ServiceError>,
     fail_comment: bool,
+    quota_error: Option<ServiceError>,
 }
 impl CodeFaults {
     fn new(inner: Arc<dyn CodeHostingService>) -> Self {
@@ -1052,6 +1054,7 @@ impl CodeFaults {
             block: None,
             draft: None,
             fail_comment: false,
+            quota_error: None,
         }
     }
 }
@@ -1174,6 +1177,13 @@ impl CodeHostingService for CodeFaults {
     fn repository_from_remote(&self, remote_url: &str) -> Option<String> {
         self.inner.repository_from_remote(remote_url)
     }
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+        if let Some(error) = &self.quota_error {
+            Box::pin(async move { Err(error.clone()) })
+        } else {
+            self.inner.authored_open_pull_requests()
+        }
+    }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         if let Some(tasks) = &self.candidates {
             Box::pin(async { Ok(tasks.clone()) })
@@ -1231,6 +1241,7 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
             inner: f.code.clone(),
             draft: Some(error.clone()),
             fail_comment: false,
+            quota_error: None,
         };
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
@@ -1288,6 +1299,7 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
         inner: f.code.clone(),
         draft: None,
         fail_comment: true,
+        quota_error: None,
     };
     let mut selector = f.selector("routine");
     selector.code = Some(&faults);
@@ -1318,6 +1330,7 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
             inner: f.code.clone(),
             draft: None,
             fail_comment: false,
+            quota_error: None,
         };
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
@@ -1382,5 +1395,194 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+#[tokio::test]
+async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_other_work() {
+    for source in ["routine", "scheduled", "manual"] {
+        let f = Fixture::new();
+        let quota = PullRequestQuota::new(2);
+        let mut selector = f.selector(source);
+        selector.quota = Some(&quota);
+        let first = f.task().await;
+        let second = f.task().await;
+        let third = f.task().await;
+        let candidates = selector.candidates().await.unwrap();
+        assert_eq!(quota.snapshot().unwrap().count, 0);
+        assert!(candidates.iter().any(|t| t.url == third.url));
+        f.pull_branch("one").await;
+        f.pull_branch("two").await;
+        assert_eq!(
+            selector.refresh(&third).await.unwrap().is_none(),
+            source != "manual"
+        );
+        // PR feedback still wins selection while ready tickets are deferred.
+        assert!(
+            selector
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .0
+                .pull_request_url
+                .is_some()
+        );
+        selector
+            .run(
+                &third,
+                selector.invocation(&third).unwrap(),
+                &f.trace(source),
+                5,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.runner.calls.lock().unwrap().len(),
+            usize::from(source == "manual")
+        );
+        let detail = f
+            .ticket
+            .read(Resource::Tickets, third.url.as_deref().unwrap(), None, "")
+            .await
+            .unwrap();
+        assert_eq!(
+            detail.items()[0]["lane"],
+            if source == "manual" {
+                "in_progress"
+            } else {
+                "ready"
+            }
+        );
+        if source != "manual" {
+            assert!(quota.snapshot().unwrap().deferred);
+            for reason in [
+                "working_lane",
+                "issue_comment",
+                "issue_mention",
+                "pull_request_feedback",
+                "pull_request_review",
+                "pull_request_checks",
+            ] {
+                let mut work = first.clone();
+                work.status = "in_progress".into();
+                work.trigger_reason = Some(reason.into());
+                selector
+                    .run(
+                        &work,
+                        selector.invocation(&work).unwrap(),
+                        &f.trace(source),
+                        5,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(f.runner.calls.lock().unwrap().len(), 6);
+            let paths = f.root.path().join("services/code/acme%2Frepo/pulls");
+            let path = std::fs::read_dir(paths)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+                .unwrap();
+            let mut pull: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            pull["state"] = json!("closed");
+            std::fs::write(path, serde_json::to_vec(&pull).unwrap()).unwrap();
+            selector
+                .run(
+                    &second,
+                    selector.invocation(&second).unwrap(),
+                    &f.trace(source),
+                    5,
+                )
+                .await
+                .unwrap();
+            assert_eq!(f.runner.calls.lock().unwrap().len(), 7);
+            assert_eq!(quota.snapshot().unwrap().count, 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
+    for source in ["routine", "scheduled", "manual"] {
+        for error in [
+            ServiceError::NotFound,
+            ServiceError::Failed,
+            ServiceError::Unavailable,
+        ] {
+            let f = Fixture::new();
+            let ready = f.task().await;
+            let pull = f.pull().await;
+            let quota = PullRequestQuota::new(2);
+            let mut selector = f.selector(source);
+            selector.quota = Some(&quota);
+            selector.candidates().await.unwrap();
+            assert!(quota.snapshot().is_some());
+            let mut faults = CodeFaults::new(f.code.clone());
+            faults.quota_error = Some(error);
+            selector.code = Some(&faults);
+            assert!(!selector.candidates().await.unwrap().is_empty());
+            assert!(quota.snapshot().is_none());
+            assert_eq!(selector.next().await.unwrap().unwrap().0.url, pull.url);
+            assert_eq!(
+                selector.refresh(&ready).await.unwrap().is_none(),
+                source != "manual"
+            );
+            selector
+                .run(
+                    &ready,
+                    selector.invocation(&ready).unwrap(),
+                    &f.trace(source),
+                    5,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                f.runner.calls.lock().unwrap().len(),
+                usize::from(source == "manual")
+            );
+            for reason in [
+                "working_lane",
+                "issue_comment",
+                "issue_mention",
+                "pull_request_feedback",
+                "pull_request_review",
+                "pull_request_checks",
+            ] {
+                let mut task = ready.clone();
+                task.status = "in_progress".into();
+                task.trigger_reason = Some(reason.into());
+                selector
+                    .run(
+                        &task,
+                        selector.invocation(&task).unwrap(),
+                        &f.trace(source),
+                        5,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                f.runner.calls.lock().unwrap().len(),
+                6 + usize::from(source == "manual")
+            );
+            let working = f.task().await;
+            f.ticket
+                .move_ticket(&working, MoveLane::InProgress)
+                .await
+                .unwrap();
+            let mut working = working;
+            working.status = "in_progress".into();
+            let mut working_faults = CodeFaults::new(f.code.clone());
+            working_faults.quota_error = faults.quota_error.clone();
+            working_faults.candidates = Some(vec![ready.clone(), working.clone()]);
+            selector.code = Some(&working_faults);
+            if source != "manual" {
+                assert_eq!(selector.next().await.unwrap().unwrap().0.url, working.url);
+            }
+            selector.code = Some(f.code.as_ref());
+            selector.candidates().await.unwrap();
+            assert!(quota.snapshot().is_some());
+        }
     }
 }
