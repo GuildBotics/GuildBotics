@@ -230,6 +230,13 @@ Records are also removed on failed execution or definitive submission rejection.
   and a command that needs them makes them again there. When the host's git cannot list the repository
   (an extension of a newer git, for example), the copy cannot be made and the
   command fails. Any other working directory is copied whole.
+  The CLI asks the server whether its remote URLs belong to the configured code host.
+  For recognized remotes it bundles only commits absent from local tracking branches.
+  The server fetches missing objects with the executing member's credentials and sends
+  a complete bundle to the microVM, keeping the client's branch, tracking branch, tag,
+  and HEAD values. Credentials never enter the microVM. If prerequisites cannot be
+  obtained, the server asks the CLI to resend the complete bundle. The command runs
+  only once in either case.
   When the command ends well, the host writes back the regular files that
   changed in the copy -- those copied, and the new files git does not
   ignore, never one inside a submodule or a nested repository -- reaching

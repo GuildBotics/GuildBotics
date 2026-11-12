@@ -8,6 +8,7 @@
 //! trace. Screen requests additionally compare the selected shared file's
 //! identity and revision with this member's runtime target before starting.
 
+mod history;
 mod results;
 pub(crate) use crate::i18n::say;
 pub(crate) use results::Results;
@@ -33,6 +34,8 @@ use crate::i18n;
 pub(crate) struct RunRequest {
     #[serde(default)]
     pub(crate) preflight: bool,
+    #[serde(default)]
+    pub(crate) remotes: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) client_cwd: Option<PathBuf>,
     pub(crate) upload: Option<gb_environment::worktree::transfer::Upload>,
@@ -158,7 +161,17 @@ async fn served_returned(
         work: &api.work,
         cancelled: &api.cancelled,
     };
-    start(&state, headers, request, launch, Some(admitted), returned).await
+    let remotes = request.remotes.clone();
+    let preflight = request.preflight;
+    let mut ran = start(&state, headers, request, launch, Some(admitted), returned).await?;
+    if preflight {
+        let mut declaration: serde_json::Value = serde_json::from_str(&ran.output).unwrap();
+        declaration["remotes"] = json!(
+            history::recognized(api, declaration["person"].as_str().unwrap(), &remotes).await
+        );
+        ran.output = declaration.to_string();
+    }
+    Ok(ran)
 }
 
 /// How a run is started and answered, beside what was asked: what its trace

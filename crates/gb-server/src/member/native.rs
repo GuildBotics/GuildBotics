@@ -5171,7 +5171,7 @@ pub(crate) mod tests {
         );
         String::from_utf8(output.stdout).unwrap().trim().into()
     }
-    fn seed_code(native: &Native, root: &Path) -> (PathBuf, PathBuf, String) {
+    pub(crate) fn seed_code(native: &Native, root: &Path) -> (PathBuf, PathBuf, String) {
         let seed = root.join("seed");
         std::fs::create_dir(&seed).unwrap();
         git(&seed, &["init", "-qb", "main"]);

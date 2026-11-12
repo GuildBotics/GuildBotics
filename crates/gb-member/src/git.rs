@@ -398,6 +398,102 @@ impl Origin {
         let refs = self.refs(&["refs/remotes/origin/", "refs/tags/"]).await?;
         self.remember(refs.values().cloned().collect()).await
     }
+    /// Combine host-fetched objects with client history in a disposable repository.
+    /// Only the client's refs select the returned bundle; fetched refs never escape.
+    pub async fn complete_history(
+        &self,
+        incoming: &[u8],
+        others: &[Origin],
+        refs: &BTreeMap<String, String>,
+        head: &str,
+    ) -> Result<Vec<u8>> {
+        let temporary = tempfile::tempdir().map_err(io_error)?;
+        let assembled = Origin::open(
+            temporary.path(),
+            "copy/repository",
+            String::new(),
+            self.deadline,
+        )
+        .await?;
+        for origin in std::iter::once(self).chain(others.iter()) {
+            let fetched = origin.refs(&["refs/remotes/origin/", "refs/tags/"]).await?;
+            let revisions = fetched.keys().cloned().collect::<Vec<_>>().join("\n") + "\n";
+            if !fetched.is_empty() {
+                let bundle = origin
+                    .command_at(
+                        &origin.directory,
+                        vec![
+                            "bundle".into(),
+                            "create".into(),
+                            "-".into(),
+                            "--stdin".into(),
+                        ],
+                        BTreeMap::new(),
+                        revisions.into_bytes(),
+                        MAX_BUNDLE,
+                    )
+                    .await?
+                    .checked_bundle()?;
+                let path = temporary.path().join("base.bundle");
+                std::fs::write(&path, bundle.stdout).map_err(io_error)?;
+                assembled
+                    .git(
+                        &[
+                            "bundle",
+                            "unbundle",
+                            path.to_str().ok_or_else(|| failure("path"))?,
+                        ],
+                        vec![],
+                    )
+                    .await?;
+            }
+        }
+        if !incoming.is_empty() {
+            let path = temporary.path().join("delta.bundle");
+            std::fs::write(&path, incoming).map_err(io_error)?;
+            let path = path.to_str().ok_or_else(|| failure("path"))?;
+            assembled.git(&["bundle", "verify", path], vec![]).await?;
+            assembled.git(&["bundle", "unbundle", path], vec![]).await?;
+        }
+        let mut revisions = Vec::new();
+        for (name, oid) in refs {
+            if !name.starts_with("refs/heads/")
+                && !name.starts_with("refs/remotes/")
+                && !name.starts_with("refs/tags/")
+            {
+                return Err(failure("bundle"));
+            }
+            object(oid)?;
+            assembled.git(&["update-ref", name, oid], vec![]).await?;
+            revisions.push(name.clone());
+        }
+        if !head.starts_with("refs/heads/") {
+            object(head)?;
+            assembled
+                .git(&["update-ref", "refs/guildbotics/detached", head], vec![])
+                .await?;
+            revisions.push("refs/guildbotics/detached".into());
+        }
+        if revisions.is_empty() {
+            return Ok(vec![]);
+        }
+        Ok(assembled
+            .command_at(
+                &assembled.directory,
+                vec![
+                    "bundle".into(),
+                    "create".into(),
+                    "-".into(),
+                    "--stdin".into(),
+                ],
+                BTreeMap::new(),
+                (revisions.join("\n") + "\n").into_bytes(),
+                MAX_BUNDLE,
+            )
+            .await?
+            .checked_bundle()?
+            .stdout)
+    }
     pub async fn remember(&self, names: Vec<String>) -> Result<()> {
         let mut input = String::new();
         for name in names.into_iter().collect::<std::collections::BTreeSet<_>>() {
@@ -1719,6 +1815,108 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+    #[tokio::test]
+    async fn completed_history_keeps_stale_client_refs_and_requires_available_bases() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = seeded(temp.path());
+        let base = git(&upstream, &["rev-parse", "HEAD"]);
+        let client = temp.path().join("client");
+        git(
+            temp.path(),
+            &[
+                "clone",
+                "-q",
+                upstream.to_str().unwrap(),
+                client.to_str().unwrap(),
+            ],
+        );
+        git(&client, &["checkout", "-qb", "topic"]);
+        std::fs::write(client.join("readme"), "local").unwrap();
+        git(&client, &["commit", "-qam", "local"]);
+        git(&client, &["tag", "-a", "local-tag", "-m", "tag"]);
+        let topic = git(&client, &["rev-parse", "HEAD"]);
+        let tag = git(&client, &["rev-parse", "local-tag"]);
+        let delta = temp.path().join("delta.bundle");
+        git(
+            &client,
+            &[
+                "bundle",
+                "create",
+                delta.to_str().unwrap(),
+                "topic",
+                "local-tag",
+                "^refs/remotes/origin/main",
+            ],
+        );
+        let incoming = std::fs::read(&delta).unwrap();
+        let refs = BTreeMap::from([
+            ("refs/heads/topic".into(), topic.clone()),
+            ("refs/remotes/origin/main".into(), base.clone()),
+            ("refs/tags/local-tag".into(), tag),
+        ]);
+        // The server's code host advances while the client's tracking ref stays old.
+        std::fs::write(upstream.join("readme"), "server").unwrap();
+        git(&upstream, &["commit", "-qam", "server"]);
+        let origin = origin(temp.path(), &upstream).await;
+        assert!(
+            origin
+                .complete_history(&incoming, &[], &refs, "refs/heads/topic")
+                .await
+                .is_err()
+        );
+        origin.fetch(None).await.unwrap();
+        for (bundle, selected, head) in [
+            (incoming.as_slice(), refs.clone(), "refs/heads/topic"),
+            (
+                &[][..],
+                BTreeMap::from([("refs/remotes/origin/main".into(), base.clone())]),
+                base.as_str(),
+            ),
+        ] {
+            let complete = origin
+                .complete_history(bundle, &[], &selected, head)
+                .await
+                .unwrap();
+            std::fs::write(&delta, complete).unwrap();
+            let restored = tempfile::tempdir().unwrap();
+            git(restored.path(), &["init", "--bare", "-q"]);
+            git(
+                restored.path(),
+                &["bundle", "verify", delta.to_str().unwrap()],
+            );
+            git(
+                restored.path(),
+                &["bundle", "unbundle", delta.to_str().unwrap()],
+            );
+            for (name, oid) in &selected {
+                git(restored.path(), &["update-ref", name, oid]);
+            }
+            assert_eq!(
+                git(restored.path(), &["rev-parse", "refs/remotes/origin/main"]),
+                base
+            );
+            assert_eq!(
+                git(
+                    restored.path(),
+                    &["log", "--format=%H", "refs/remotes/origin/main"]
+                ),
+                git(&client, &["log", "--format=%H", "origin/main"])
+            );
+            if selected.len() > 1 {
+                assert_eq!(
+                    git(restored.path(), &["log", "--format=%H", "refs/heads/topic"]),
+                    git(&client, &["log", "--format=%H", "topic"])
+                );
+            }
+            assert!(
+                !git(
+                    restored.path(),
+                    &["bundle", "list-heads", delta.to_str().unwrap()]
+                )
+                .contains(&git(&upstream, &["rev-parse", "HEAD"]))
+            );
+        }
     }
     #[tokio::test]
     async fn default_history_is_fresh_and_object_reads_preserve_kinds() {
