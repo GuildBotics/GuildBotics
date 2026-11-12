@@ -6,7 +6,8 @@ set -u
 hook_dir="$PWD"
 while :; do
   if [[ -f "$hook_dir/.cargo/before-cargo.sh" ]]; then
-    bash "$hook_dir/.cargo/before-cargo.sh" "$@"
+    # Keep Cargo's input and machine-readable output separate from the hook.
+    bash "$hook_dir/.cargo/before-cargo.sh" "$@" </dev/null >&2
     break
   fi
   [[ "$hook_dir" == / ]] && break

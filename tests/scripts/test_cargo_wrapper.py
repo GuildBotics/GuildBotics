@@ -81,7 +81,10 @@ elif args[:1] == ["clean"]:
     if "--workspace" not in args:
         shutil.rmtree(entry["removed"])
 else:
-    print("real cargo ran")
+    if args[:1] == ["run"]:
+        print(sys.stdin.read(), end="")
+    else:
+        print("real cargo ran")
     sys.exit(int(os.environ.get("CARGO_EXIT", "0")))
 """
 
@@ -121,7 +124,7 @@ class Cargo:
         (self.project / "Cargo.toml").write_text(MANIFEST, encoding="utf-8")
 
     def __call__(
-        self, *args: str, cwd: Path | None = None
+        self, *args: str, cwd: Path | None = None, input_text: str = ""
     ) -> subprocess.CompletedProcess[str]:
         self.log.write_text("", encoding="utf-8")
         return subprocess.run(
@@ -142,6 +145,7 @@ class Cargo:
                 **self.env,
             },
             capture_output=True,
+            input=input_text,
             text=True,
             encoding="utf-8",
             check=False,
@@ -399,8 +403,36 @@ def test_nearest_hook_failure_does_not_stop_cargo(cargo: Cargo) -> None:
     hook.write_text('printf "%s\\n" "$@"; exit 9\n', encoding="utf-8")
     result = cargo("build", "argument with spaces")
     assert result.returncode == 0
-    assert result.stdout == "build\nargument with spaces\nreal cargo ran\n"
+    assert result.stdout == "real cargo ran\n"
+    assert result.stderr == "build\nargument with spaces\n"
     assert cargo.calls() == [["build", "argument with spaces"]]
+
+
+@pytest.mark.parametrize("hook_at", ["parent", "project"])
+@pytest.mark.parametrize("hook_exit", [0, 9])
+def test_hook_io_is_isolated(cargo: Cargo, hook_at: str, hook_exit: int) -> None:
+    root = cargo.project if hook_at == "project" else cargo.project.parent
+    hook = root / ".cargo/before-cargo.sh"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(
+        "echo hook-output\necho hook-error >&2\n"
+        'if IFS= read -r line; then echo "consumed: $line" >&2; fi\n'
+        f"exit {hook_exit}\n",
+        encoding="utf-8",
+    )
+
+    result = cargo("metadata", "--no-deps", "--format-version", "1")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["workspace_root"] == str(cargo.project)
+    assert result.stderr == "hook-output\nhook-error\n"
+    assert cargo.calls() == [["metadata", "--no-deps", "--format-version", "1"]]
+
+    cargo.env["CARGO_EXIT"] = "7"
+    result = cargo("run", "--", "argument with spaces", input_text="program input\n")
+    assert result.returncode == 7
+    assert result.stdout == "program input\n"
+    assert result.stderr == "hook-output\nhook-error\n"
+    assert cargo.calls() == [["run", "--", "argument with spaces"]]
 
 
 @pytest.mark.parametrize("change", ["branch", "lock", "detached"])
