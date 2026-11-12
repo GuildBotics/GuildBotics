@@ -711,6 +711,8 @@ capability boundary.
 
 ### Member git and the member's clones
 
+Clones for assigned tickets and authored PRs stay with their work even when clean and fully pushed. On allocation, the current ticket or PR is read: a closed ticket or a ticket in the done lane, and a merged or closed PR, release the clone if Git has no unfinished state. Author feedback uses the ticket work ID when exactly one linked open ticket is assigned to the author; the same AI CLI also continues its session. With zero or multiple matching tickets it uses the PR work ID. Resuming pending checks preserves the original work ID. Reviews, mentions, chat, manual commands, and scheduled commands retain Git-based reuse. One idle clone per repository is kept and the rest are removed. Cargo artifacts are cleaned on work changes according to `.cargo/before-cargo.sh`.
+
 The member's clones (`<workspace>/.guildbotics/local/clones/<person_id>`) are
 written by the turns, and a repository decides what its git runs (hooks,
 filters, `core.fsmonitor`), where it fetches from and pushes to, and which
@@ -724,11 +726,10 @@ the broker's token, or a login stand-in.
 The member's Branvil token is used only on the host, by a bare repository of the
 host's own per repository of the code host under
 `<workspace>/.guildbotics/local/member_git/<person_id>/` that no environment
-mounts, toward the URL the host derives. `prepare` places a clone at the
-repository's whole path (`clones/<person_id>/<owner>/<repo>` on Branvil), so
-repositories of one name in two namespaces -- a fork and its upstream among
-them -- have a clone each, and records which repository the clone pushes to;
-a clone `prepare` did not check out is not pushed.
+mounts, toward the URL the host derives. `prepare` places a clone at
+`clones/<person_id>/<slot digest>` and records its repository, work digest,
+target URL, and requested branch on the host. A clone that `prepare` did not
+assign cannot be pushed.
 History crosses between the two as git bundles streamed over the process's
 standard streams, incrementally: the host takes of what the clone sends only
 `refs/heads/<branch>` (a name git itself accepts as a branch name; at most

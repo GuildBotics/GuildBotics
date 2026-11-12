@@ -698,6 +698,8 @@ fn tree_kind(mode: &str) -> &'static str {
 struct Checkout {
     repository: String,
     owner: String,
+    #[serde(default)]
+    target: Option<(gb_ports::WorkKind, String)>,
     branch: String,
     #[serde(default)]
     discarded: bool,
@@ -900,6 +902,49 @@ impl Workspace<'_> {
             Err(error) => receipt["pull_requests_error"] = (self.render_error)(&error).into(),
         }
         Ok((receipt, vec![]))
+    }
+    fn target(&self) -> Option<(gb_ports::WorkKind, String)> {
+        self.work.and_then(|(kind, url)| match kind {
+            "ticket" => Some((gb_ports::WorkKind::Ticket, url.into())),
+            "pull_request" => Some((gb_ports::WorkKind::PullRequest, url.into())),
+            _ => None,
+        })
+    }
+    async fn active(&self, record: &Checkout) -> Result<bool> {
+        use gb_ports::{Lane, Resource, WorkKind};
+        let Some((kind, url)) = &record.target else {
+            return Ok(false);
+        };
+        let page = match kind {
+            WorkKind::Ticket => {
+                self.services
+                    .tickets()?
+                    .read(Resource::Tickets, url, None, "")
+                    .await?
+            }
+            WorkKind::PullRequest => {
+                self.code()?
+                    .read(Resource::PullRequests, url, None, "")
+                    .await?
+            }
+        };
+        let value = page
+            .items()
+            .first()
+            .ok_or(gb_ports::ServiceError::InvalidResult)?
+            .clone();
+        Ok(match kind {
+            WorkKind::Ticket => {
+                let t: gb_ports::Ticket = serde_json::from_value(value)
+                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                t.state == "open" && t.lane != Some(Lane::Done)
+            }
+            WorkKind::PullRequest => {
+                let p: gb_ports::PullRequest = serde_json::from_value(value)
+                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                p.state == "open" && !p.merged
+            }
+        })
     }
     fn owner(&self) -> Result<String> {
         self.work.map(digest).ok_or_else(|| failure("work"))
@@ -1225,13 +1270,17 @@ impl Workspace<'_> {
             if record.repository != repository || record.discarded {
                 continue;
             }
-            if record.owner == owner && record.branch == requested {
+            if record.owner == owner
+                && (record.branch == requested
+                    || (record.target.is_some() && record.target == self.target()))
+            {
                 owned = Some(slot.clone());
             }
-            if self
-                .reusable(&origin, &self.clones.join(slot), &public)
-                .await
-                .unwrap_or(false)
+            if !self.active(record).await?
+                && self
+                    .reusable(&origin, &self.clones.join(slot), &public)
+                    .await
+                    .unwrap_or(false)
             {
                 idle.push(slot.clone());
             }
@@ -1256,6 +1305,7 @@ impl Workspace<'_> {
         let record = Checkout {
             repository: repository.into(),
             owner,
+            target: self.target(),
             branch: requested.into(),
             discarded: false,
             removed: false,

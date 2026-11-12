@@ -564,6 +564,8 @@ execution leaseのもとで、そのprocessが選択中のworkspaceに対して�
 
 ### member git とメンバーの clone
 
+担当チケットと自分が作者の PR の clone は、変更がなく push 済みでも作業が終わるまで保持します。チケットは closed または完了レーン、PR は merged または closed になったとき、次の割り当て時に現在の状態を読み、Git の未完了状態がなければ再利用できます。指摘対応は、PR に結び付く開いた担当チケットがちょうど 1 枚ならそのチケットと同じ作業 ID を使い、同じ AI CLI のセッションも継続します。0 枚または複数なら PR の作業 ID を使います。CI 待ちからの再開は元の作業 ID を引き継ぎます。レビュー・メンション・チャット・手動・定期コマンドは Git の状態で再利用を決めます。空きはリポジトリごとに 1 clone を残し、ほかを削除します。作業切り替え時の Cargo 成果物は `.cargo/before-cargo.sh` の規則で片付けます。
+
 メンバーのclone（`<workspace>/.guildbotics/local/clones/<person_id>`）はturnが書き込み、
 repositoryはそのgitが何を実行するか（hooks、filter、`core.fsmonitor`）、どこからfetchしどこへ
 pushするか、どのディレクトリを扱うかを決めます。そのためmember CLIはhostでcloneのgitを実行しません。
@@ -574,10 +576,9 @@ member modeの`member git prepare` / `commit` / `push` / `publish`は、cloneの
 
 メンバーのBranvil tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
 の下にコードホストのリポジトリごとに持つhost専用のbare repository（どの環境にもmountしません）から、
-hostが導出したURLへ送ります。`prepare`はcloneをリポジトリのパス全体の場所（Branvilなら
-`clones/<person_id>/<owner>/<repo>`）に置くので、名前空間が違う同名のリポジトリ（forkとupstreamも）は
-別々のcloneになります。`prepare`はcloneがどのリポジトリへpushするかを記録し、`prepare`でcheckout
-していないcloneはpushしません。
+hostが導出したURLへ送ります。`prepare` は `clones/<person_id>/<slot digest>` に clone を置き、
+リポジトリ・作業の digest・作業対象 URL・要求されたブランチを host に記録します。
+`prepare` で割り当てていない clone は push しません。
 両者の間は、processの標準入出力で少しずつ流すgit bundleで受け渡し、増分だけを送ります。hostは
 cloneから受け取るもののうち`refs/heads/<branch>`（gitがブランチ名として受け付ける名前。1 GiBまで）
 だけを取り込み、pushするcommitは自分のrepositoryから読み直し、完全形のrefspecでpushします。

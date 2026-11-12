@@ -354,7 +354,7 @@ impl Native {
                 work_identity,
                 subject_type,
                 subject_id: &subject_id,
-                subject_url: if matches!(kind, "ticket" | "ticket_mention") {
+                subject_url: if matches!(kind, "ticket" | "ticket_mention" | "pull_request" | "pull_request_review") {
                     work_identity
                 } else {
                     ""

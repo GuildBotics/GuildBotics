@@ -50,6 +50,25 @@ impl BranvilService {
     }
 }
 impl CodeHostingService for BranvilService {
+    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+        Box::pin(async move {
+            let (repo, key) = self.item(url, "pulls")?;
+            let p = self
+                .member()
+                .await?
+                .pulls_get(&repo, number(&key)?)
+                .await
+                .map_err(|e| error(e, "pulls_get"))?;
+            Ok(p.tickets
+                .into_iter()
+                .map(|t| TicketLink {
+                    url: t.url,
+                    closes: t.closes,
+                })
+                .collect())
+        })
+    }
+
     fn read<'a>(
         &'a self,
         resource: Resource,

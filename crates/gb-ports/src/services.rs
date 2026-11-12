@@ -209,6 +209,11 @@ pub trait TicketService: Send + Sync {
     fn aclose(&self) -> ServiceFuture<'_, ()>;
 }
 pub trait CodeHostingService: Send + Sync {
+    /// Canonical ticket links, including reference-only links.
+    fn linked_tickets<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+        Box::pin(async { Err(ServiceError::Unsupported) })
+    }
+
     fn read<'a>(
         &'a self,
         resource: Resource,
