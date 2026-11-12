@@ -1419,3 +1419,96 @@ async fn author_feedback_keeps_the_ticket_clone_after_the_agent_chooses_a_branch
     assert_eq!(feedback["branch"], "agent/chosen");
     assert_ne!(f.prepare("other", "other").await, path);
 }
+
+#[tokio::test]
+async fn unreadable_targets_stay_reserved_without_blocking_other_work() {
+    for kind in ["ticket", "pull_request"] {
+        for error in [
+            ServiceError::NotFound,
+            ServiceError::Unavailable,
+            ServiceError::OutOfScope,
+            ServiceError::InvalidResult,
+        ] {
+            let mut f = Fixture::new();
+            f.services.error = Some(error.clone());
+            lifecycle_page(&mut f, kind, "gone", "open", false, false);
+            let mut w = f.workspace("gone");
+            w.work = Some((kind, "gone"));
+            let first = w.prepare("owner/repo", "first").await.unwrap();
+            f.services.pages.insert(
+                format!(
+                    "{}|gone|",
+                    if kind == "ticket" {
+                        "tickets"
+                    } else {
+                        "pull_requests"
+                    }
+                ),
+                Err(error),
+            );
+            for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
+                let mut other = f.workspace("other");
+                other.work = Some((other_kind, "other"));
+                let next = other.prepare("owner/repo", "next").await.unwrap();
+                assert_ne!(first["repo_path"], next["repo_path"]);
+                assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn resumed_work_keeps_identity_but_records_the_canonical_target_kind() {
+    let mut f = Fixture::new();
+    f.services.error = Some(ServiceError::NotFound);
+    lifecycle_page(&mut f, "pull_request", "pr", "open", false, false);
+    let mut resumed = f.workspace("pr");
+    resumed.work = Some(("ticket", "pr"));
+    let first = resumed.prepare("owner/repo", "feature").await.unwrap();
+    let path = Path::new(first["repo_path"].as_str().unwrap());
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(f.temp.path().join("host/checkouts").join(format!(
+            "{}.json",
+            path.file_name().unwrap().to_str().unwrap()
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["target"], json!(["pull_request", "pr"]));
+    let record_path = f.temp.path().join("host/checkouts").join(format!(
+        "{}.json",
+        path.file_name().unwrap().to_str().unwrap()
+    ));
+    let mut old = record.clone();
+    old["target"] = json!(["ticket", "pr"]);
+    std::fs::write(&record_path, serde_json::to_vec(&old).unwrap()).unwrap();
+    git(path, &["switch", "-c", "agent/renamed"]);
+    assert_eq!(
+        resumed
+            .prepare("owner/repo", "agent/renamed")
+            .await
+            .unwrap()["repo_path"],
+        first["repo_path"]
+    );
+    let repaired: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+    assert_eq!(repaired["target"], json!(["pull_request", "pr"]));
+
+    let other = f.prepare("other", "other").await;
+    assert_ne!(other, path);
+    std::fs::write(other.join("dirty"), "keep").unwrap();
+    lifecycle_page(&mut f, "pull_request", "pr", "closed", false, true);
+    assert_eq!(f.prepare("final", "final").await, path);
+}
+
+#[tokio::test]
+async fn initially_unknown_target_is_not_treated_as_unreserved_work() {
+    let mut f = Fixture::new();
+    f.services.error = Some(ServiceError::Unavailable);
+    let mut w = f.workspace("unknown");
+    w.work = Some(("ticket", "unknown"));
+    let first = w.prepare("owner/repo", "first").await.unwrap();
+    assert_ne!(
+        f.prepare("other", "other").await.to_str().unwrap(),
+        first["repo_path"]
+    );
+}

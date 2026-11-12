@@ -903,18 +903,44 @@ impl Workspace<'_> {
         }
         Ok((receipt, vec![]))
     }
-    fn target(&self) -> Option<(gb_ports::WorkKind, String)> {
-        self.work.and_then(|(kind, url)| match kind {
-            "ticket" => Some((gb_ports::WorkKind::Ticket, url.into())),
-            "pull_request" => Some((gb_ports::WorkKind::PullRequest, url.into())),
-            _ => None,
-        })
-    }
-    async fn active(&self, record: &Checkout) -> Result<bool> {
-        use gb_ports::{Lane, Resource, WorkKind};
-        let Some((kind, url)) = &record.target else {
-            return Ok(false);
+    async fn target(&self) -> Option<(gb_ports::WorkKind, String)> {
+        use gb_ports::WorkKind;
+        let (kind, url) = self.work?;
+        let kind = match kind {
+            "ticket" => WorkKind::Ticket,
+            "pull_request" => WorkKind::PullRequest,
+            _ => return None,
         };
+        // Conversation identity is independent of the provider's target kind.
+        let canonical = self.state(kind, url).await.map(|v| v.0).unwrap_or(kind);
+        Some((canonical, url.into()))
+    }
+    async fn state(
+        &self,
+        kind: gb_ports::WorkKind,
+        url: &str,
+    ) -> Result<(gb_ports::WorkKind, bool)> {
+        use gb_ports::WorkKind;
+        match self.read_state(kind, url).await {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                self.read_state(
+                    match kind {
+                        WorkKind::Ticket => WorkKind::PullRequest,
+                        WorkKind::PullRequest => WorkKind::Ticket,
+                    },
+                    url,
+                )
+                .await
+            }
+        }
+    }
+    async fn read_state(
+        &self,
+        kind: gb_ports::WorkKind,
+        url: &str,
+    ) -> Result<(gb_ports::WorkKind, bool)> {
+        use gb_ports::{Lane, Resource, WorkKind};
         let page = match kind {
             WorkKind::Ticket => {
                 self.services
@@ -937,14 +963,21 @@ impl Workspace<'_> {
             WorkKind::Ticket => {
                 let t: gb_ports::Ticket = serde_json::from_value(value)
                     .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
-                t.state == "open" && t.lane != Some(Lane::Done)
+                (t.kind, t.state == "open" && t.lane != Some(Lane::Done))
             }
             WorkKind::PullRequest => {
                 let p: gb_ports::PullRequest = serde_json::from_value(value)
                     .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
-                p.state == "open" && !p.merged
+                (p.kind, p.state == "open" && !p.merged)
             }
         })
+    }
+    async fn active(&self, record: &Checkout) -> bool {
+        let Some((kind, url)) = &record.target else {
+            return false;
+        };
+        // Unknown state must retain the checkout without blocking other work.
+        self.state(*kind, url).await.map(|v| v.1).unwrap_or(true)
     }
     fn owner(&self) -> Result<String> {
         self.work.map(digest).ok_or_else(|| failure("work"))
@@ -1264,6 +1297,7 @@ impl Workspace<'_> {
             .refs(&["refs/remotes/origin/", "refs/tags/", PUBLIC])
             .await?;
         let records = self.records()?;
+        let target = self.target().await;
         let mut owned = None;
         let mut idle = vec![];
         for (slot, record) in &records {
@@ -1272,11 +1306,11 @@ impl Workspace<'_> {
             }
             if record.owner == owner
                 && (record.branch == requested
-                    || (record.target.is_some() && record.target == self.target()))
+                    || matches!((&record.target, &target), (Some((_, old)), Some((_, current))) if old == current))
             {
                 owned = Some(slot.clone());
             }
-            if !self.active(record).await?
+            if !self.active(record).await
                 && self
                     .reusable(&origin, &self.clones.join(slot), &public)
                     .await
@@ -1305,7 +1339,7 @@ impl Workspace<'_> {
         let record = Checkout {
             repository: repository.into(),
             owner,
-            target: self.target(),
+            target,
             branch: requested.into(),
             discarded: false,
             removed: false,

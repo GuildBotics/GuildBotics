@@ -142,8 +142,9 @@ impl Selector<'_> {
                 .pull_request_url
                 .as_deref()
                 .ok_or(ServiceError::InvalidResult)?;
-            if let Some(ticket) =
-                gb_member::repository::author_ticket(code, self.ticket, url).await?
+            if let Some(ticket) = gb_member::repository::author_ticket(code, self.ticket, url)
+                .await
+                .unwrap_or(None)
             {
                 invocation.work = Some(
                     serde_json::from_value(json!({"kind":"ticket", "identity":ticket}))
