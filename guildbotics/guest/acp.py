@@ -182,101 +182,107 @@ class AcpAdapterBase(JsonRpcAdapter):
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_started(context, emit)
-        await self._prepare_turn(context)
-        self._warn_unusable_settings(context)
-        self._unhandled = {}
-        self._tool_kinds = {}
-        self._context_used = 0
-        self._context_size = 0
-        self._turn_rate_limit = {}
-        await publish(
-            emit,
-            AgentEvent(
-                AgentEventKind.APPROVAL,
-                "policy",
-                approval="never",
-                details=self._policy_details(context),
-            ),
-        )
-        session_id = await self._resolve_session(context, conversation, emit)
-        conversation.provider_session_id = session_id
-        self._active_session_id = session_id
-        events: list[AgentEvent] = []
-        chunks = _AssistantBuffer()
-        usage: dict[str, int] = {}
-
-        async def record(event: AgentEvent) -> None:
-            events.append(event)
-            await publish(emit, event)
-
-        prompt_task = asyncio.create_task(
-            self._transport.request(
-                "session/prompt",
-                {
-                    "sessionId": session_id,
-                    "prompt": [
-                        {"type": "text", "text": self._member_broker.prompt(prompt)}
-                    ],
-                },
-                # ACP answers session/prompt only when the turn ends, so a
-                # per-request deadline would cut real work short. The whole turn
-                # is bounded by _consume_turn's timeout instead.
-                timeout=None,
-            )
-        )
         try:
-            stop_reason = await self._consume_turn(
-                prompt_task, session_id, record, chunks, usage
-            )
-            output = chunks.text().strip()
-            if stop_reason == "end_turn" and output:
-                # ACP has no terminal assistant update, but every adapter must
-                # end a finished stream with the whole reply: the display layer
-                # drops the per-chunk records once it arrives.
-                await record(
+            async with turn_deadline(self.agent_label, self._timeout, self.interrupt):
+                await self._ensure_started(context, emit)
+                await self._prepare_turn(context)
+                self._warn_unusable_settings(context)
+                self._unhandled = {}
+                self._tool_kinds = {}
+                self._context_used = 0
+                self._context_size = 0
+                self._turn_rate_limit = {}
+                await publish(
+                    emit,
                     AgentEvent(
-                        AgentEventKind.ASSISTANT,
-                        "completed",
-                        message=output,
-                        provider_session_id=session_id,
+                        AgentEventKind.APPROVAL,
+                        "policy",
+                        approval="never",
+                        details=self._policy_details(context),
+                    ),
+                )
+                session_id = await self._resolve_session(context, conversation, emit)
+                conversation.provider_session_id = session_id
+                self._active_session_id = session_id
+                events: list[AgentEvent] = []
+                chunks = _AssistantBuffer()
+                usage: dict[str, int] = {}
+
+                async def record(event: AgentEvent) -> None:
+                    events.append(event)
+                    await publish(emit, event)
+
+                prompt_task = asyncio.create_task(
+                    self._transport.request(
+                        "session/prompt",
+                        {
+                            "sessionId": session_id,
+                            "prompt": [
+                                {
+                                    "type": "text",
+                                    "text": self._member_broker.prompt(prompt),
+                                }
+                            ],
+                        },
+                        # ACP answers session/prompt only when the turn ends, so a
+                        # per-request deadline would cut real work short. The whole turn
+                        # is bounded by the adapter's turn deadline instead.
+                        timeout=None,
                     )
                 )
-        except RpcError as exc:
-            raise self._agent_error_from_rpc(exc) from exc
-        finally:
-            prompt_task.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await prompt_task
-            self._active_session_id = ""
-            with suppress(Exception):
-                await self._publish_extension_summary(emit, session_id)
+                try:
+                    stop_reason = await self._consume_turn(
+                        prompt_task, session_id, record, chunks, usage
+                    )
+                    output = chunks.text().strip()
+                    if stop_reason == "end_turn" and output:
+                        # ACP has no terminal assistant update, but every adapter must
+                        # end a finished stream with the whole reply: the display layer
+                        # drops the per-chunk records once it arrives.
+                        await record(
+                            AgentEvent(
+                                AgentEventKind.ASSISTANT,
+                                "completed",
+                                message=output,
+                                provider_session_id=session_id,
+                            )
+                        )
+                except RpcError as exc:
+                    raise self._agent_error_from_rpc(exc) from exc
+                finally:
+                    prompt_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await prompt_task
+                    with suppress(Exception):
+                        await self._publish_extension_summary(emit, session_id)
 
-        if stop_reason != "end_turn":
-            raise self._stop_reason_error(stop_reason)
-        if not output:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                f"{self.agent_label} completed the turn without a terminal response.",
-                rotate_session=True,
-            )
-        if self._context_size > 0:
-            usage["context_used_tokens"] = self._context_used
-            usage["context_size_tokens"] = self._context_size
-        effective_model, effective_effort = self._effective_settings(context)
-        return AgentTerminalResult(
-            output=output,
-            events=tuple(events),
-            provider_session_id=session_id,
-            # ACP has no standard provider turn identifier; JSON-RPC request ids
-            # are transport-local and must not be persisted as one.
-            provider_turn_id="",
-            finish_reason="completed",
-            usage=usage,
-            stderr=self._transport.stderr_text(),
-            model=effective_model,
-            effort=effective_effort,
-        )
+                if stop_reason != "end_turn":
+                    raise self._stop_reason_error(stop_reason)
+                if not output:
+                    raise AgentRuntimeError(
+                        AgentRuntimeErrorCategory.PROTOCOL,
+                        f"{self.agent_label} completed the turn without a terminal response.",
+                        rotate_session=True,
+                    )
+                if self._context_size > 0:
+                    usage["context_used_tokens"] = self._context_used
+                    usage["context_size_tokens"] = self._context_size
+                effective_model, effective_effort = self._effective_settings(context)
+                return AgentTerminalResult(
+                    output=output,
+                    events=tuple(events),
+                    provider_session_id=session_id,
+                    # ACP has no standard provider turn identifier; JSON-RPC request ids
+                    # are transport-local and must not be persisted as one.
+                    provider_turn_id="",
+                    finish_reason="completed",
+                    usage=usage,
+                    stderr=self._transport.stderr_text(),
+                    model=effective_model,
+                    effort=effective_effort,
+                )
+        finally:
+            self._active_session_id = ""
 
     async def _cancel_turn(self) -> None:
         if self._active_session_id:
@@ -458,33 +464,32 @@ class AcpAdapterBase(JsonRpcAdapter):
 
         next_message = asyncio.create_task(self._transport.next_notification())
         try:
-            async with turn_deadline(self.agent_label, self._timeout, self.interrupt):
-                while True:
-                    await asyncio.wait(
-                        {next_message, prompt_task},
-                        return_when=asyncio.FIRST_COMPLETED,
+            while True:
+                await asyncio.wait(
+                    {next_message, prompt_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if next_message.done():
+                    message = next_message.result()
+                    next_message = asyncio.create_task(
+                        self._transport.next_notification()
                     )
-                    if next_message.done():
-                        message = next_message.result()
-                        next_message = asyncio.create_task(
-                            self._transport.next_notification()
+                    if str(message.get("method", "")) == FATAL_NOTIFICATION:
+                        if prompt_task.done():
+                            break
+                        raise self._transport.fatal_error or AgentRuntimeError(
+                            AgentRuntimeErrorCategory.PROCESS,
+                            f"{self.product_label} stopped unexpectedly.",
+                            rotate_session=True,
                         )
-                        if str(message.get("method", "")) == FATAL_NOTIFICATION:
-                            if prompt_task.done():
-                                break
-                            raise self._transport.fatal_error or AgentRuntimeError(
-                                AgentRuntimeErrorCategory.PROCESS,
-                                f"{self.product_label} stopped unexpectedly.",
-                                rotate_session=True,
-                            )
-                        await apply(message)
-                        continue
-                    break
-                # The prompt response is the turn boundary, but updates queued
-                # just before it must still reach the transcript.
-                for queued in self._transport.drain_notifications():
-                    if str(queued.get("method", "")) != FATAL_NOTIFICATION:
-                        await apply(queued)
+                    await apply(message)
+                    continue
+                break
+            # The prompt response is the turn boundary, but updates queued
+            # just before it must still reach the transcript.
+            for queued in self._transport.drain_notifications():
+                if str(queued.get("method", "")) != FATAL_NOTIFICATION:
+                    await apply(queued)
         finally:
             next_message.cancel()
             with suppress(asyncio.CancelledError, Exception):
