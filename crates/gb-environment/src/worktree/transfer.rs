@@ -30,6 +30,8 @@ pub struct File {
 #[serde(deny_unknown_fields)]
 pub struct Git {
     pub bundle: String,
+    #[serde(default)]
+    pub bases: Vec<String>,
     pub object_format: String,
     pub head: String,
     pub refs: BTreeMap<String, String>,
@@ -87,6 +89,33 @@ fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Worktree Git export failed".into());
     }
     Ok(output.stdout)
+}
+pub fn remotes(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    if !root.join(".git").exists() {
+        return Ok(BTreeMap::new());
+    }
+    let names = git(root, &["remote"], &[])?;
+    let mut remotes = BTreeMap::new();
+    for name in String::from_utf8_lossy(&names).lines() {
+        let raw = git(root, &["remote", "get-url", name], &[])?;
+        let raw = String::from_utf8_lossy(&raw);
+        let raw = raw.trim();
+        let clean = if let Ok(mut url) = url::Url::parse(raw) {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.to_string()
+        } else if !Path::new(raw).is_absolute()
+            && raw
+                .split_once(':')
+                .is_some_and(|(host, _)| host.contains('@'))
+        {
+            raw.split_once('@').unwrap().1.to_owned()
+        } else {
+            raw.to_owned()
+        };
+        remotes.insert(name.to_owned(), clean);
+    }
+    Ok(remotes)
 }
 fn optional(root: &Path, name: &str) -> Result<Option<String>, CaptureError> {
     let path = root.join(name);
@@ -159,6 +188,12 @@ impl CaptureError {
 }
 impl Upload {
     pub fn capture(copy: &super::Copy) -> Result<Self, CaptureError> {
+        Self::capture_incremental(copy, &[])
+    }
+    pub fn capture_incremental(
+        copy: &super::Copy,
+        accepted_remotes: &[String],
+    ) -> Result<Self, CaptureError> {
         copy.validate()?;
         let manifest =
             gb_base::worktree::list(&copy.host, &copy.excluded).map_err(|e| e.to_string())?;
@@ -255,7 +290,25 @@ impl Upload {
                 revisions.push(oid.clone());
             }
             revisions.extend(refs.values().cloned());
-            let bundle = if revisions.is_empty() {
+            let bases: Vec<String> = refs
+                .keys()
+                .filter(|name| {
+                    accepted_remotes
+                        .iter()
+                        .any(|remote| name.starts_with(&format!("refs/remotes/{remote}/")))
+                })
+                .cloned()
+                .collect();
+            revisions.extend(bases.iter().map(|name| format!("^{name}")));
+            let pending = !revisions.is_empty()
+                && (bases.is_empty()
+                    || !git(
+                        &copy.host,
+                        &["rev-list", "--objects", "--max-count=1", "--stdin"],
+                        (revisions.join("\n") + "\n").as_bytes(),
+                    )?
+                    .is_empty());
+            let bundle = if !pending {
                 Vec::new()
             } else {
                 git(
@@ -287,27 +340,7 @@ impl Upload {
                 )?;
                 std::fs::read(bundle_path).map_err(|e| e.to_string())?
             };
-            let names = git(&copy.host, &["remote"], &[])?;
-            let mut remotes = BTreeMap::new();
-            for name in String::from_utf8_lossy(&names).lines() {
-                let raw = git(&copy.host, &["remote", "get-url", name], &[])?;
-                let raw = String::from_utf8_lossy(&raw);
-                let raw = raw.trim();
-                let clean = if let Ok(mut url) = url::Url::parse(raw) {
-                    let _ = url.set_username("");
-                    let _ = url.set_password(None);
-                    url.to_string()
-                } else if !Path::new(raw).is_absolute()
-                    && raw
-                        .split_once(':')
-                        .is_some_and(|(host, _)| host.contains('@'))
-                {
-                    raw.split_once('@').unwrap().1.to_owned()
-                } else {
-                    raw.to_owned()
-                };
-                remotes.insert(name.to_owned(), clean);
-            }
+            let remotes = remotes(&copy.host)?;
             let present: BTreeSet<String> = if let Some(oid) = &head_oid {
                 git(
                     &copy.host,
@@ -413,6 +446,7 @@ impl Upload {
                 shared_indexes,
                 objects,
                 bundle: STANDARD.encode(bundle),
+                bases,
                 head,
                 refs,
                 index: optional(&copy.host, ".git/index")?,
@@ -535,6 +569,97 @@ mod tests {
             nested: vec![],
             git: None,
         }
+    }
+    #[test]
+    fn incremental_capture_excludes_tracking_history_and_handles_no_new_commits() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        git(path, &["init", "-q", "-b", "main"], &[]).unwrap();
+        std::fs::write(path.join("file"), "base").unwrap();
+        git(path, &["add", "."], &[]).unwrap();
+        let commit = |message| {
+            git(
+                path,
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-qm",
+                    message,
+                ],
+                &[],
+            )
+            .unwrap();
+        };
+        commit("base");
+        let base = String::from_utf8(git(path, &["rev-parse", "HEAD"], &[]).unwrap()).unwrap();
+        git(
+            path,
+            &["update-ref", "refs/remotes/origin/main", base.trim()],
+            &[],
+        )
+        .unwrap();
+        git(
+            path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/repo.git",
+            ],
+            &[],
+        )
+        .unwrap();
+        let copy =
+            super::super::Copy::new(path.into(), "/work".into(), vec![], path.join("write.lock"))
+                .unwrap();
+        let capture = || Upload::capture_incremental(&copy, &["origin".into()]).unwrap();
+        let empty = capture();
+        assert!(empty.git.as_ref().unwrap().bundle.is_empty());
+        assert_eq!(
+            empty.git.as_ref().unwrap().bases,
+            ["refs/remotes/origin/main"]
+        );
+        git(
+            path,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "tag",
+                "-a",
+                "tag-only",
+                "-m",
+                "tag",
+            ],
+            &[],
+        )
+        .unwrap();
+        assert!(!capture().git.as_ref().unwrap().bundle.is_empty());
+        std::fs::write(path.join("file"), "local").unwrap();
+        git(path, &["add", "."], &[]).unwrap();
+        commit("local");
+        let full = Upload::capture(&copy).unwrap();
+        let delta = capture();
+        assert_eq!(delta.files, full.files);
+        assert_eq!(
+            delta.git.as_ref().unwrap().refs,
+            full.git.as_ref().unwrap().refs
+        );
+        let bundle = root.path().join("delta.bundle");
+        std::fs::write(
+            &bundle,
+            STANDARD
+                .decode(&delta.git.as_ref().unwrap().bundle)
+                .unwrap(),
+        )
+        .unwrap();
+        let bytes = std::fs::read(bundle).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains(&format!("-{} ", base.trim())));
+        assert!(full.git.as_ref().unwrap().bases.is_empty());
     }
     #[test]
     fn received_plan_never_opens_client_directory_and_rejects_protected_population() {

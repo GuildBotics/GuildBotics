@@ -318,7 +318,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         assert_eq!(
             preflight,
             json!({
-                "preflight":true,"client_cwd":cwd,"upload":null,
+                "preflight":true,"remotes":{},"client_cwd":cwd,"upload":null,
                 "command":"ask","args":["topic=review","value"],"person":person,
                 "message":message,"cwd":null,"expected_workspace":"019691c2-8dc0-7654-8000-000000000042","request_id":null,
             })
@@ -327,11 +327,21 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         CliPeer::respond(
             socket,
             "200 OK",
-            &json!({"output":json!({"read_only":read_only,"person":resolved_person}).to_string()})
+            &json!({"output":json!({"read_only":read_only,"person":resolved_person,"remotes":[]}).to_string()})
                 .to_string(),
         )
         .await;
         let (socket, request) = peer.authorized("POST", "commands/run").await;
+        // Delay acceptance beyond the ordinary API timeout, as history completion can.
+        if arguments[1] == "ask@alice" {
+            tokio::time::sleep(Duration::from_secs(11)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), peer.listener.accept())
+                    .await
+                    .is_err(),
+                "CLI must not collect a receipt before slow submission is accepted"
+            );
+        }
         let id = request["request_id"].as_str().unwrap();
         assert!(id.starts_with("fixture.100000."));
         assert_eq!(request["preflight"], false);

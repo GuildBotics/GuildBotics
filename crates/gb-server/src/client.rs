@@ -99,6 +99,13 @@ impl OwnerClient {
             .ok()
     }
 
+    /// Both initial submission and explicit full-history retry may prepare history before admission.
+    fn command_submission(&self, request: &crate::commands::RunRequest) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::POST, "/commands/run")
+            .json(request)
+            .timeout(crate::commands::HISTORY_TIMEOUT.saturating_add(TIMEOUT))
+    }
+
     pub async fn post(
         &self,
         path: &str,
@@ -193,6 +200,7 @@ pub async fn run_command(
     );
     let mut request = crate::commands::RunRequest {
         preflight: true,
+        remotes: Default::default(),
         upload: None,
         command: name.to_owned(),
         args,
@@ -211,6 +219,9 @@ pub async fn run_command(
         expected_command_file_id: None,
         expected_command_file_revision: None,
     };
+    request.remotes =
+        gb_environment::worktree::transfer::remotes(request.client_cwd.as_ref().unwrap())
+            .map_err(anyhow::Error::msg)?;
     request.request_id = None;
     let preflight = owner
         .post(
@@ -286,9 +297,13 @@ pub async fn run_command(
             })?,
         )
     };
+    let accepted_remotes: Vec<String> = serde_json::from_value(declaration["remotes"].clone())
+        .map_err(|_| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?;
     request.upload = copy
         .as_ref()
-        .map(gb_environment::worktree::transfer::Upload::capture)
+        .map(|copy| {
+            gb_environment::worktree::transfer::Upload::capture_incremental(copy, &accepted_remotes)
+        })
         .transpose()
         .map_err(|error| anyhow::anyhow!(crate::i18n::say(error.sentence(), language)))?;
     if let Some(copy) = &copy {
@@ -301,14 +316,37 @@ pub async fn run_command(
         i18n::t(language, "cli.run.receipt", &[("id", id.as_str())])
     );
     // Only POST once. A transport failure may mean it was already accepted.
-    if let Ok(response) = owner
-        .request(reqwest::Method::POST, "/commands/run")
-        .json(&request)
-        .timeout(TIMEOUT)
-        .send()
-        .await
-    {
-        writeback::submission(response, &data, &id).await?;
+    if let Ok(response) = owner.command_submission(&request).send().await {
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            let status = response.status();
+            let answer: Value = response.json().await?;
+            if answer["code"] == "command_history_required"
+                && request
+                    .upload
+                    .as_ref()
+                    .and_then(|u| u.git.as_ref())
+                    .is_some_and(|g| !g.bases.is_empty())
+            {
+                request.upload = copy
+                    .as_ref()
+                    .map(gb_environment::worktree::transfer::Upload::capture)
+                    .transpose()
+                    .map_err(|error| {
+                        anyhow::anyhow!(crate::i18n::say(error.sentence(), language))
+                    })?;
+                if let Some(copy) = &copy {
+                    writeback::save(&data, &id, copy, &request.upload.as_ref().unwrap().copied())?;
+                }
+                // Retry only an explicit refusal before execution, using the same receipt ID.
+                if let Ok(response) = owner.command_submission(&request).send().await {
+                    writeback::submission(response, &data, &id).await?;
+                }
+            } else {
+                anyhow::bail!("{}: {}", status, answer["message"].as_str().unwrap_or(""));
+            }
+        } else {
+            writeback::submission(response, &data, &id).await?;
+        }
     }
     collect_command(&owner, &id, language, &data).await
 }

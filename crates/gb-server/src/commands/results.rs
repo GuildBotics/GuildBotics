@@ -102,8 +102,30 @@ impl Store {
     }
 }
 
-pub(super) async fn submit(api: Shared, headers: HeaderMap, request: RunRequest) -> Response {
+pub(super) async fn submit(api: Shared, headers: HeaderMap, mut request: RunRequest) -> Response {
     let id = request.request_id.clone().unwrap();
+    // Missing prerequisites are refused before admitting the receipt or starting work.
+    // A repeated accepted ID never imports or runs anything again.
+    if api
+        .command_results
+        .0
+        .lock()
+        .unwrap()
+        .entries
+        .contains_key(&id)
+    {
+        return get(&api, &headers, &id);
+    }
+    if !tokio::time::timeout(
+        super::HISTORY_TIMEOUT,
+        super::history::complete(&api, &mut request),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
+    {
+        return ApiError::new(StatusCode::CONFLICT, "command_history_required", &headers)
+            .into_response();
+    }
     {
         let mut store = api.command_results.0.lock().unwrap();
         let now = Results::now();
@@ -368,6 +390,8 @@ mod tests {
     async fn http_receipts_survive_a_dropped_response_and_never_repeat_work() {
         let root = tempfile::tempdir().unwrap();
         let native = crate::member::native::tests::fixture(root.path());
+        let (seed, bare, _) = crate::member::native::tests::seed_code(&native, root.path());
+        let remote = url::Url::from_file_path(bare).unwrap().to_string();
         let workspace = native.workspace.clone();
         let identity = gb_workspace::identity::ensure_workspace_identity(&workspace).unwrap();
         let path = workspace.join(".guildbotics/config/commands/functions/probe.py");
@@ -382,7 +406,7 @@ mod tests {
         });
         let count = Arc::new(AtomicUsize::new(0));
         let factory = crate::keep_awake::test_count(&workspace, count);
-        let api = Arc::new(crate::api::Api::new(
+        let mut api = crate::api::Api::new(
             crate::api::Selected {
                 workspace: Some(workspace),
                 service: crate::service_runtime::Controller::new(native.clone(), host),
@@ -391,8 +415,11 @@ mod tests {
             crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
             crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
             "fixture".into(),
-            native.data,
-        ));
+            native.data.clone(),
+        );
+        api.identity_root = native.identity_root.clone();
+        api.keychain = native.keychain.clone();
+        let api = Arc::new(api);
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let app = crate::api::router(api.clone());
         let request = |method: &str, path: &str, data: Value| {
@@ -418,7 +445,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mixed.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let preflight = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "person":"aiko", "preflight":true, "client_cwd":root.path().join("client-only/absent"), "expected_workspace":identity.workspace_id}))).await.unwrap();
+        let preflight = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "person":"aiko", "preflight":true, "client_cwd":root.path().join("client-only/absent"), "expected_workspace":identity.workspace_id, "remotes":{"origin":remote, "external":"https://unavailable.invalid/repo.git"}}))).await.unwrap();
         let status = preflight.status();
         let bytes = axum::body::to_bytes(preflight.into_body(), MAX_RESULT)
             .await
@@ -432,10 +459,35 @@ mod tests {
         let answer: Value = serde_json::from_slice(&bytes).unwrap();
         let declaration: Value = serde_json::from_str(answer["output"].as_str().unwrap()).unwrap();
         assert_eq!(declaration["read_only"], false);
+        assert_eq!(declaration["remotes"], json!(["origin"]));
         assert!(api.command_results.0.lock().unwrap().entries.is_empty());
         assert!(!root.path().join("client-only").exists());
         let id = format!("fixture.{}.{}", Results::now(), uuid::Uuid::new_v4());
-        let data = json!({"command":"functions/probe", "person":"aiko", "request_id":id, "expected_workspace":identity.workspace_id});
+        let copy = gb_environment::worktree::Copy::new(
+            seed,
+            "/work".into(),
+            vec![],
+            root.path().join("write.lock"),
+        )
+        .unwrap();
+        let full = gb_environment::worktree::transfer::Upload::capture(&copy).unwrap();
+        let data = json!({"command":"functions/probe", "person":"aiko", "request_id":id, "expected_workspace":identity.workspace_id,
+            "client_cwd":root.path().join("client-only/absent"), "upload": full});
+        let mut incremental = data.clone();
+        incremental["client_cwd"] = json!(root.path().join("client-only/absent"));
+        incremental["upload"] = json!({"directories":[], "files":[], "nested":[], "git": {
+            "bundle":"", "bases":["refs/remotes/origin/main"], "object_format":"sha1", "head":"refs/heads/main",
+            "refs":{}, "index":null, "exclude":null, "remotes":{"origin":"https://unavailable.invalid/repo.git"}, "objects":{}, "shared_indexes":{}
+        }});
+        let refused = app
+            .clone()
+            .oneshot(request("POST", "/commands/run", incremental))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(body(refused).await["code"], "command_history_required");
+        assert!(api.command_results.0.lock().unwrap().entries.is_empty());
+        assert_eq!(factory.1.load(Ordering::SeqCst), 0);
         let first = app
             .clone()
             .oneshot(request("POST", "/commands/run", data.clone()))
