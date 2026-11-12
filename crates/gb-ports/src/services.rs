@@ -280,6 +280,9 @@ pub trait CodeHostingService: Send + Sync {
     fn check_push(&self, repository: &str) -> Result<(), ServiceError>;
     fn commit_url(&self, repository: &str, sha: &str) -> String;
     fn repository_from_remote(&self, remote_url: &str) -> Option<String>;
+    /// Open PRs authored by this member in patrol scope, including drafts,
+    /// excluding links to interactive tickets or their descendants.
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>>;
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>>;
     fn refresh_pull_request<'a>(&'a self, task: &'a Task) -> ServiceFuture<'a, Option<Task>>;
     fn convert_pull_request_to_draft<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool>;

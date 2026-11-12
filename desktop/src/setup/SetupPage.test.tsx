@@ -250,6 +250,7 @@ vi.mock("../api/client", async (importOriginal) => {
         events_missing_credential_count: 0,
         events_missing_credential_persons: [],
         member_routines: [],
+        member_pull_requests: {},
       },
       events: {
         target: "events",
@@ -276,6 +277,7 @@ vi.mock("../api/client", async (importOriginal) => {
         events_missing_credential_count: 0,
         events_missing_credential_persons: [],
         member_routines: [],
+        member_pull_requests: {},
       },
       active_works: [],
     })),

@@ -315,6 +315,7 @@ function serviceServer(): MockServer {
     event_queue: true,
     routine_interval_minutes: 10,
     max_consecutive_errors: 3,
+    max_open_pull_requests: 2,
   };
   return new MockServer()
     .on("GET", "/service/settings", () => ({ body: settings }))

@@ -73,6 +73,7 @@ beforeEach(() => {
     event_queue: true,
     routine_interval_minutes: 10,
     max_consecutive_errors: 3,
+    max_open_pull_requests: 2,
   };
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getTeamMock.mockReset().mockResolvedValue({
@@ -548,6 +549,7 @@ describe("Service Runtime screen", () => {
           events_auth_failed_persons: ["yuki"],
           events_chat_provider: "slack",
           member_routines: [],
+          member_pull_requests: {},
         }),
       }),
     );
@@ -570,6 +572,7 @@ describe("Service Runtime screen", () => {
           events_missing_credential_persons: ["yuki"],
           events_chat_provider: "slack",
           member_routines: [],
+          member_pull_requests: {},
         }),
       }),
     );
@@ -844,6 +847,46 @@ function runtimeUnit(
     events_missing_credential_persons: [],
     events_chat_provider: "",
     member_routines: [],
+    member_pull_requests: {},
     ...overrides,
   };
 }
+
+it("shows each member's counted PRs only while running and saves the shared limit", async () => {
+  getSchedulerStatusMock.mockResolvedValue(
+    runtimeStatus({
+      scheduler: runtimeUnit("scheduler", {
+        state: "running",
+        running: true,
+        member_pull_requests: {
+          alice: { count: 2, limit: 2, deferred: true },
+          bob: { count: 1, limit: 2, deferred: false },
+        },
+      }),
+    }),
+  );
+  const user = userEvent.setup();
+  renderApp("/service");
+  expect(await screen.findByText(/alice: 2 \/ 2 open PRs/)).toHaveTextContent(
+    t("service.pullRequestDeferred"),
+  );
+  expect(screen.getByText(/bob: 1 \/ 2 open PRs/)).toHaveTextContent(
+    t("service.pullRequestAvailable"),
+  );
+  const input = screen.getByRole("textbox", { name: t("service.openPullRequestLimit") });
+  await user.clear(input);
+  await user.type(input, "4");
+  await waitFor(() => expect(saved.max_open_pull_requests).toBe(4));
+});
+it("hides counted PRs when the service is stopped", async () => {
+  getSchedulerStatusMock.mockResolvedValue(
+    runtimeStatus({
+      scheduler: runtimeUnit("scheduler", {
+        member_pull_requests: { alice: { count: 2, limit: 2, deferred: true } },
+      }),
+    }),
+  );
+  renderApp("/service");
+  await screen.findByRole("textbox", { name: t("service.openPullRequestLimit") });
+  expect(screen.queryByText(/alice: 2 \/ 2 open PRs/)).not.toBeInTheDocument();
+});

@@ -481,6 +481,7 @@ impl Fixture {
             ticket: self.ticket.as_ref(),
             code: Some(self.code.as_ref()),
             runner: &self.runner,
+            quota: None,
             diagnostics: &self.diagnostics,
         }
     }
@@ -1174,6 +1175,9 @@ impl CodeHostingService for CodeFaults {
     fn repository_from_remote(&self, remote_url: &str) -> Option<String> {
         self.inner.repository_from_remote(remote_url)
     }
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+        self.inner.authored_open_pull_requests()
+    }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         if let Some(tasks) = &self.candidates {
             Box::pin(async { Ok(tasks.clone()) })
@@ -1382,5 +1386,109 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+#[tokio::test]
+async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_other_work() {
+    for source in ["routine", "scheduled", "manual"] {
+        let f = Fixture::new();
+        let quota = PullRequestQuota::new(2);
+        let mut selector = f.selector(source);
+        selector.quota = Some(&quota);
+        let first = f.task().await;
+        let second = f.task().await;
+        let third = f.task().await;
+        let candidates = selector.candidates().await.unwrap();
+        assert_eq!(quota.snapshot().unwrap().count, 0);
+        assert!(candidates.iter().any(|t| t.url == third.url));
+        f.pull_branch("one").await;
+        f.pull_branch("two").await;
+        assert_eq!(
+            selector.refresh(&third).await.unwrap().is_none(),
+            source != "manual"
+        );
+        // PR feedback still wins selection while ready tickets are deferred.
+        assert!(
+            selector
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .0
+                .pull_request_url
+                .is_some()
+        );
+        selector
+            .run(
+                &third,
+                selector.invocation(&third).unwrap(),
+                &f.trace(source),
+                5,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.runner.calls.lock().unwrap().len(),
+            usize::from(source == "manual")
+        );
+        let detail = f
+            .ticket
+            .read(Resource::Tickets, third.url.as_deref().unwrap(), None, "")
+            .await
+            .unwrap();
+        assert_eq!(
+            detail.items()[0]["lane"],
+            if source == "manual" {
+                "in_progress"
+            } else {
+                "ready"
+            }
+        );
+        if source != "manual" {
+            assert!(quota.snapshot().unwrap().deferred);
+            for reason in [
+                "working_lane",
+                "issue_comment",
+                "issue_mention",
+                "pull_request_feedback",
+                "pull_request_review",
+                "pull_request_checks",
+            ] {
+                let mut work = first.clone();
+                work.status = "in_progress".into();
+                work.trigger_reason = Some(reason.into());
+                selector
+                    .run(
+                        &work,
+                        selector.invocation(&work).unwrap(),
+                        &f.trace(source),
+                        5,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(f.runner.calls.lock().unwrap().len(), 6);
+            let paths = f.root.path().join("services/code/acme%2Frepo/pulls");
+            let path = std::fs::read_dir(paths)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+                .unwrap();
+            let mut pull: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            pull["state"] = json!("closed");
+            std::fs::write(path, serde_json::to_vec(&pull).unwrap()).unwrap();
+            selector
+                .run(
+                    &second,
+                    selector.invocation(&second).unwrap(),
+                    &f.trace(source),
+                    5,
+                )
+                .await
+                .unwrap();
+            assert_eq!(f.runner.calls.lock().unwrap().len(), 7);
+            assert_eq!(quota.snapshot().unwrap().count, 1);
+        }
     }
 }

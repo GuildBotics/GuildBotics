@@ -1,3 +1,4 @@
+use super::patrol::fold;
 use super::*;
 use branvil::api::{pulls, tickets};
 use std::collections::BTreeMap;
@@ -520,6 +521,43 @@ impl CodeHostingService for BranvilService {
             .strip_prefix(&format!("{}/git/", self.api.base_url()))?;
         let repo = path.strip_suffix(".git").unwrap_or(path);
         crate::valid_repository_path(repo).then(|| repo.into())
+    }
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+        Box::pin(async {
+            let member = self.member().await?;
+            let mut out = Vec::new();
+            let mut cursor = None;
+            loop {
+                let page = member
+                    .page("gb:authored_open".into(), Some(100), cursor.as_deref())
+                    .map_err(|e| error(e, "page"))?;
+                let page = member
+                    .pulls_patrol(
+                        pulls::PatrolQuery {
+                            involves: Some("me".into()),
+                            state: Some("open".into()),
+                            draft: None,
+                        },
+                        page,
+                    )
+                    .await
+                    .map_err(|e| error(e, "pulls_patrol"))?;
+                for pull in page.items {
+                    let pull = value(pull)?;
+                    if fold(text(&pull, "author")) == fold(&self.username)
+                        && self.scope.authorize(text(&pull, "repository")).is_ok()
+                        && !self.pull_interactive(&pull).await?
+                    {
+                        out.push(text(&pull, "url").into());
+                    }
+                }
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            Ok(out)
+        })
     }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         Box::pin(self.pull_candidates())

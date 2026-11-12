@@ -34,6 +34,7 @@ pub struct Settings {
     pub event_queue: bool,
     pub routine_interval_minutes: u16,
     pub max_consecutive_errors: u8,
+    pub max_open_pull_requests: u8,
 }
 
 impl Default for Settings {
@@ -46,6 +47,7 @@ impl Default for Settings {
             event_queue: true,
             routine_interval_minutes: 10,
             max_consecutive_errors: 3,
+            max_open_pull_requests: 2,
         }
     }
 }
@@ -60,6 +62,7 @@ pub struct Change {
     pub event_queue: Option<bool>,
     pub routine_interval_minutes: Option<u16>,
     pub max_consecutive_errors: Option<u8>,
+    pub max_open_pull_requests: Option<u8>,
 }
 
 impl Settings {
@@ -67,6 +70,7 @@ impl Settings {
         if !(self.scheduled || self.routine || self.event_queue)
             || !(1..=1440).contains(&self.routine_interval_minutes)
             || !(1..=20).contains(&self.max_consecutive_errors)
+            || !(1..=20).contains(&self.max_open_pull_requests)
         {
             return Err(InvalidValues.into());
         }
@@ -122,7 +126,8 @@ impl Settings {
             routine,
             event_queue,
             routine_interval_minutes,
-            max_consecutive_errors
+            max_consecutive_errors,
+            max_open_pull_requests
         );
         settings.write(workspace)?;
         Ok(settings)
@@ -339,7 +344,7 @@ mod tests {
             serde_json::to_value(Settings::read(dir.path()).unwrap()).unwrap(),
             json!({
                 "start_with_server":false,"keep_awake":false,"scheduled":true,
-                "routine":true,"event_queue":true,"routine_interval_minutes":10,"max_consecutive_errors":3
+                "routine":true,"event_queue":true,"routine_interval_minutes":10,"max_consecutive_errors":3,"max_open_pull_requests":2
             })
         );
         assert!(!Settings::path(dir.path()).exists());
@@ -477,5 +482,36 @@ mod tests {
             .is_err()
         );
         assert_eq!(Settings::read(dir.path()).unwrap(), settings);
+    }
+}
+
+#[cfg(test)]
+mod pull_request_limit_tests {
+    use super::*;
+    #[test]
+    fn default_range_and_restart_snapshot() {
+        assert_eq!(Settings::default().max_open_pull_requests, 2);
+        let dir = tempfile::tempdir().unwrap();
+        for limit in [0, 1, 2, 20, 21] {
+            let settings = Settings {
+                max_open_pull_requests: limit,
+                ..Settings::default()
+            };
+            assert_eq!(settings.validate().is_ok(), (1..=20).contains(&limit));
+        }
+        let running = Settings::read(dir.path()).unwrap();
+        Settings::update(
+            dir.path(),
+            Change {
+                max_open_pull_requests: Some(4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(running.max_open_pull_requests, 2);
+        assert_eq!(
+            Settings::read(dir.path()).unwrap().max_open_pull_requests,
+            4
+        );
     }
 }

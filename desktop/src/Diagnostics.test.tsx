@@ -1199,6 +1199,7 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_missing_credential_persons: [],
     events_chat_provider: "",
     member_routines: [],
+    member_pull_requests: {},
   };
 }
 
