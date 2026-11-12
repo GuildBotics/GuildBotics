@@ -36,8 +36,8 @@ pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
 /// host's. What the host mounts keeps its host path; a grant under the
 /// host's home is linked from the same place under this one.
 pub const GUEST_HOME: &str = "/opt/guildbotics/home";
-/// The exchange folder, relative to the host's home.
-pub const EXCHANGE: &str = "Documents/GuildBotics";
+/// Private run storage and its lifetime lease.
+pub mod run_files;
 /// GuildBotics' own roots in the microVM: its code, its venv, the home and
 /// its run state. No host path is taken over or under them.
 const RESERVED: [&str; 2] = ["/opt/guildbotics", "/run/guildbotics"];
@@ -99,6 +99,7 @@ pub struct Host {
 /// resolved for it in the run's copy of the configuration, what it declared,
 /// and its arguments, working directory (as the host spells it) and input.
 pub struct Command {
+    pub files: Option<std::sync::Arc<run_files::Lease>>,
     pub client_copy: bool,
     pub upload: Option<std::sync::Arc<worktree::transfer::Upload>>,
     pub returned: worktree::transfer::Returned,
@@ -233,6 +234,7 @@ pub async fn run(
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();
     runtime::run_once_with_guest(
         &runtime::Boot {
+            files: command.files.clone(),
             home: &host.data.join("msb"),
             snapshot: &snapshot,
             memory_mib: resources.memory_mib,
@@ -289,7 +291,7 @@ pub fn shape(
     }
     let registered = device::registered_workspaces(&host.data)
         .map_err(|e| Failure::Command(Sentence::Text(e)))?;
-    let access = contract::resolve(
+    let mut access = contract::resolve(
         workspace,
         &host.home,
         &registered,
@@ -297,6 +299,19 @@ pub fn shape(
         true,
     )
     .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+    if !command.access.read_only
+        && Some(&command.cwd)
+            == run_files::directory(&host.data, &command.run_id)
+                .ok()
+                .as_ref()
+    {
+        access.grants.push(Mount {
+            guest: cwd.clone(),
+            host: Some(command.cwd.clone()),
+            readonly: false,
+            quota_mib: None,
+        });
+    }
     mounts.extend(access.grants.clone());
     let mut read = vec![InspectsItem::Config];
     read.extend(command.access.inspects.iter().copied());

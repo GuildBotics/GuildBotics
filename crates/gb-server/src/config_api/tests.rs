@@ -415,9 +415,13 @@ async fn init_creates_a_cli_compatible_workspace() {
 }
 
 #[tokio::test]
-async fn init_refuses_a_workspace_inside_the_exchange_or_a_grant() {
+async fn init_refuses_a_workspace_inside_an_explicit_grant() {
     let f = fixture();
-    let inside = f.root.join("home/Documents/GuildBotics/new-workspace");
+    let inside = f.root.join("home/Documents/shared/new-workspace");
+    f.write(
+        &inside.join(".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml"),
+        "documents: [{path: Documents/shared, access: read_write}]",
+    );
     let (status, body) = f
         .call(
             "POST",
@@ -431,9 +435,9 @@ async fn init_refuses_a_workspace_inside_the_exchange_or_a_grant() {
         body["message"]
             .as_str()
             .unwrap()
-            .contains("Documents/GuildBotics")
+            .contains("Documents/shared")
     );
-    assert!(!inside.exists());
+    assert!(!inside.join(".guildbotics/config/team/project.yml").exists());
     assert!(
         gb_workspace::selection::registered(&f.data())
             .unwrap()
@@ -444,7 +448,11 @@ async fn init_refuses_a_workspace_inside_the_exchange_or_a_grant() {
 #[tokio::test]
 async fn a_setup_refusal_answers_400_with_its_code_and_reason() {
     let f = fixture();
-    let inside = f.root.join("home/Documents/GuildBotics/w");
+    let inside = f.root.join("home/Documents/shared/w");
+    f.write(
+        &inside.join(".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml"),
+        "documents: [{path: Documents/shared, access: read_write}]",
+    );
     let (status, body) = f
         .call(
             "POST",
@@ -464,15 +472,12 @@ async fn a_setup_refusal_answers_400_with_its_code_and_reason() {
                 ("path", &inside.display().to_string()),
                 (
                     "granted",
-                    &f.root
-                        .join("home/Documents/GuildBotics")
-                        .display()
-                        .to_string()
+                    &f.root.join("home/Documents/shared").display().to_string()
                 ),
             ]
         )
     );
-    assert!(!inside.exists());
+    assert!(!inside.join(".guildbotics/config/team/project.yml").exists());
     assert!(
         gb_workspace::selection::registered(&f.data())
             .unwrap()
@@ -500,6 +505,10 @@ async fn a_setup_refusal_answers_400_with_its_code_and_reason() {
     )
     .await;
     let before = std::fs::read(f.config().join("team/project.yml")).unwrap();
+    f.write(
+        &inside.join(".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml"),
+        "documents: [{path: Documents/shared, access: read_write}]",
+    );
     let (status, body) = f
         .call(
             "PUT",
@@ -2175,10 +2184,7 @@ async fn a_workspace_switch_stops_the_service_selects_the_workspace_and_announce
             .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workspace"], json!(workspace));
-        assert_eq!(
-            body["cwd"],
-            json!(f.root.join("home/Documents/GuildBotics"))
-        );
+        assert_eq!(body["cwd"], json!(""));
         assert_eq!(body["machine_state_dir"], json!(f.data()));
         assert_eq!(f.get("/health").await["workspace"], json!(workspace));
         let active = f.read(&f.data().join("active-workspace.json"));
@@ -2368,30 +2374,15 @@ async fn a_workspace_that_is_missing_or_not_a_directory_is_refused() {
 }
 
 #[tokio::test]
-async fn a_workspace_inside_the_exchange_directory_is_refused_without_registering_it() {
+async fn the_former_exchange_directory_is_an_ordinary_workspace_location() {
     let f = fixture();
     let inside = f.root.join("home/Documents/GuildBotics/workspace");
     std::fs::create_dir_all(&inside).unwrap();
-    let before = bytes_under(&f.data());
     let (status, body) = f
         .call("POST", "/workspace", json!({"workspace_dir": inside}))
         .await;
-    assert_eq!(
-        (status, &body["code"]),
-        (StatusCode::BAD_REQUEST, &json!("unsafe_host_path"))
-    );
-    assert!(
-        body["message"]
-            .as_str()
-            .unwrap()
-            .contains("Documents/GuildBotics")
-    );
-    assert_eq!(bytes_under(&f.data()), before);
-    assert!(f.events("workspace.changed").is_empty());
-    assert_eq!(
-        f.get("/config/status").await["workspace"],
-        json!(f.workspace())
-    );
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(f.get("/config/status").await["workspace"], json!(inside));
 }
 
 /// A server whose selected workspace has a service that can run.
@@ -3150,7 +3141,7 @@ async fn an_old_picture_is_replaced_whatever_the_case_of_its_suffix() {
 }
 
 #[tokio::test]
-async fn the_exchange_directory_is_recognized_under_another_spelling() {
+async fn the_former_exchange_directory_has_no_special_case() {
     let f = fixture();
     let exchange = f.root.join("home/Documents/GuildBotics");
     std::fs::create_dir_all(&exchange).unwrap();
@@ -3165,13 +3156,7 @@ async fn the_exchange_directory_is_recognized_under_another_spelling() {
                 json!({"config_dir": other_case.join("ws/.guildbotics/config"), "language": "en"}),
             )
             .await;
-        assert_eq!(
-            (status, &body["code"]),
-            (
-                StatusCode::BAD_REQUEST,
-                &json!("invalid_workspace_location")
-            )
-        );
+        assert_eq!(status, StatusCode::OK, "{body}");
     }
     #[cfg(unix)]
     {
@@ -3202,3 +3187,49 @@ mod commands;
 mod verify;
 
 mod diagnostics;
+
+#[tokio::test]
+async fn run_files_are_downloadable_only_after_completion_and_never_follow_links() {
+    let f = fixture();
+    let id = "a".repeat(32);
+    let lease = gb_environment::run_files::prepare(&f.data(), &id).unwrap();
+    let dir = lease.path.clone();
+    f.write(&dir.join("nested/report.pdf"), "pdf bytes");
+    let index = format!("/diagnostics/traces/{id}/files");
+    let download = format!("/diagnostics/traces/{id}/file?path=nested%2Freport.pdf");
+    assert_eq!(f.get(&index).await["files"], json!([]));
+    assert_eq!(
+        f.call("GET", &download, Value::Null).await.0,
+        StatusCode::NOT_FOUND
+    );
+    drop(lease);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nested/report.pdf", dir.join("link")).unwrap();
+    let large = std::fs::File::create(dir.join("large.bin")).unwrap();
+    large.set_len(64 * 1024 * 1024 + 1).unwrap();
+    assert_eq!(f.get(&index).await["files"], json!(["nested/report.pdf"]));
+    assert_eq!(f.get(&index).await["oversized"], json!(["large.bin"]));
+    let response = f
+        .respond(f.request("GET", &download).body(HttpBody::empty()).unwrap())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-disposition"], "attachment");
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 100)
+            .await
+            .unwrap(),
+        "pdf bytes"
+    );
+    for path in ["link", "..%2Ffinished", "%2Fetc%2Fpasswd"] {
+        assert_eq!(
+            f.call(
+                "GET",
+                &format!("/diagnostics/traces/{id}/file?path={path}"),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+}

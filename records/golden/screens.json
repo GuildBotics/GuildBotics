@@ -593,7 +593,7 @@
     "status": {
       "workspace_problem": "",
       "input_store_problem": "",
-      "cwd": "<root>/Documents/GuildBotics",
+      "cwd": "",
       "workspace": "<root>/workspace",
       "config_dir": "<root>/workspace/.guildbotics/config",
       "project_file": "<root>/workspace/.guildbotics/config/team/project.yml",

@@ -68,7 +68,7 @@ pub struct Api {
     pub(crate) member_work: tokio_util::task::TaskTracker,
     /// Cancelled when the server stops without waiting for its work.
     pub cancelled: tokio_util::sync::CancellationToken,
-    /// The owner's home, holding the exchange directory.
+    /// The owner's home.
     pub(crate) home: PathBuf,
     /// The root of the members' identities, which every workspace shares.
     pub(crate) identity_root: PathBuf,
@@ -770,6 +770,18 @@ routes!(
         get,
         "/diagnostics/traces/{id}",
         crate::screens::trace
+    ),
+    (
+        OwnerSession,
+        get,
+        "/diagnostics/traces/{id}/files",
+        crate::run_files::index
+    ),
+    (
+        OwnerSession,
+        get,
+        "/diagnostics/traces/{id}/file",
+        crate::run_files::download
     ),
 );
 routes!(

@@ -18,6 +18,7 @@ Understand ticket and pull request work, then investigate, edit, and publish as 
 - Work: {work_kind} `{work_identity}`
 - Earlier run that awaited this PR's checks: {awaited_run_id}
 - Member workspace: {member_workspace}
+- Artifact directory: {artifact_directory}
 - Project default language: {language}
 </target>
 

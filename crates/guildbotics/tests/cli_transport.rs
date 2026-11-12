@@ -318,7 +318,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         assert_eq!(
             preflight,
             json!({
-                "preflight":true,"remotes":{},"client_cwd":cwd,"upload":null,
+                "preflight":true,"input_ids":[],"remotes":{},"client_cwd":cwd,"upload":null,
                 "command":"ask","args":["topic=review","value"],"person":person,
                 "message":message,"cwd":null,"expected_workspace":"019691c2-8dc0-7654-8000-000000000042","request_id":null,
             })

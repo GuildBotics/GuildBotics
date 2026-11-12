@@ -200,8 +200,7 @@ dots or spaces must be renamed or removed on disk using the reported filename.
 A workspace's directory without `member.yml` is not a member, and an identity directory
 without `identity.yml` is not an identity. An upload from the screens is limited
 to 20MiB. Workspace
-locations must be outside their own grants and
-the exchange directory. Move an existing workspace out of those locations before
+locations must be outside their own grants. Move an existing workspace out of those locations before
 opening it.
 
 CLI `guildbotics run` always sends a data copy, including cwd inside read/write grants and member clones. The server reconstructs it at the client spelling in private microVM storage, shadowing only cwd inside a grant; other granted paths stay mounted. The CLI saves exported file hashes locally per run ID before submission. On the same device, `--resume` also writes back with the original conflict checks, deleting the record after success. Commit after write-back in the interactive session. The following path-based rules apply only to server-initiated runs.
@@ -213,7 +212,7 @@ Records are also removed on failed execution or definitive submission rejection.
 - **Working directory**: the working directory itself opens nothing for
   writing; only a grant does. A command that may write works in it directly,
   bound read/write at its host path, only when a read/write grant (a document
-  directory, a device path, or the exchange directory) contains it. Any other
+  directory, a device path) contains it. Any other
   working directory -- a repository named with `guildbotics run --cwd`, for
   example -- is bound read-only, its `.git` included, copied onto the
   microVM's own disk at the same path, and the command works on the copy.
@@ -265,13 +264,12 @@ Records are also removed on failed execution or definitive submission rejection.
   copy. A command that may write is refused in a working
   directory only a read-only grant contains, and a read-only command gets an
   empty directory of the microVM's own there instead. Do not keep a
-  repository inside the exchange directory or a read/write grant: a command
+  repository inside a read/write grant: a command
   can change its `.git` (hooks, configuration) there, and git on the host runs
   what it finds. A command the host
   starts on its own (a scheduled or routine command, the ticket patrol, a
-  chat dispatch) works in the exchange directory (`Documents/GuildBotics`,
-  below); a run from the screens works where the screen says (the exchange directory
-  when it says nothing), and `guildbotics run` in `--cwd` or the shell's
+  chat dispatch) works in a private run directory; a screen run uses its
+  specified directory (a private run directory when empty), and `guildbotics run` in `--cwd` or the shell's
   working directory. A turn works there or anywhere else the microVM
   mounted. The workspace's `.guildbotics/config` and `state` are not part
   of it.
@@ -303,20 +301,11 @@ Records are also removed on failed execution or definitive submission rejection.
   directories under the home directory the work reads from or writes to
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
-  Apart from that file, `Documents/GuildBotics` (the exchange directory) is
-  always granted read/write: a run from the screens that names no working
-  directory runs there, and what an agent makes for the user goes under it
-  unless the request names a destination. Each granted directory under the
-  host's home, the exchange directory included, is linked from the same name
-  under the environment's home, so `~/Documents/GuildBotics` and `~/<grant>`
-  name the same folder inside and out; it is bound once, at its host path,
-  where its access applies. What the screens hand over (a pasted
-  image, or a file dropped on the input, which the browser uploads as a copy)
-  is kept in GuildBotics' own storage (`~/.guildbotics/data/command_inputs`),
-  bound read-only at the same path into the runs the screens start, and removed
-  when the server's session ends, at its restart. The path the screen puts in
-  the input field for such a file is spelled as the environment names it, so the agent
-  opens it as written.
+  No shared directory is implicitly granted. Explicit grants under the host
+  home have links under the guest home at the same relative names. Uploads
+  have independent IDs; each run mounts only its selected IDs read-only.
+  Uploads and completed run files are retained for seven days. Save outputs
+  in the run cwd and download them from the command or diagnostics screen.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that protect directories from sharing, in
   `local/cli_agent_filesystem_grants.yml`. Credential
@@ -410,7 +399,7 @@ Records are also removed on failed execution or definitive submission rejection.
   can make itself read-only.
   The contract (`AccessContract.read_only`) states it, and the environment
   confines it the same way whatever provider runs it. Every directory bound from the host is
-  read-only, the exchange directory and `read_write` grants included, and the
+  read-only, `read_write` grants included, and the
   working directory is an empty directory of the microVM's own: writable,
   holding nothing of the host, and discarded with the microVM. The workspace's `network:`
   does not apply: only the provider's API domains and the member broker are
@@ -1010,3 +999,5 @@ true when any window is exhausted, so the member badge can light while another
 model group still has quota. Accounts that do not expose quotas, and payloads
 that are not that JSON, stay unavailable; GuildBotics does not parse the TUI,
 the status line, or tab-separated text, and it does not synthesize 0% or 100%.
+
+Workflow turns work in member clones; save deliverables in the absolute `Artifact directory` supplied by the workflow prompt, which remains mounted separately.

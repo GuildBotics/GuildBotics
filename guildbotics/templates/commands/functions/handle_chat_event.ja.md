@@ -22,6 +22,7 @@ description: Incoming chat event の対応を AI CLIツールへ委譲します�
 - Chat participation policy: {chat_participation}
 - プロジェクトのデフォルト言語: {language}
 - Member workspace: {member_workspace}
+- Artifact directory: {artifact_directory}
 </target>
 
 <unprocessed_messages>

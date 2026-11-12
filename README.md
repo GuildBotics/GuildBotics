@@ -86,7 +86,7 @@ For a first-time Branvil setup, run the two optional lines above. If you already
 Open the screens with `guildbotics open` on the Hub. The browser opens on **Project** setup, where you configure:
 
 - The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
-- The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside the exchange folder `~/Documents/GuildBotics`
+- The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside an explicit grant
 - The project description
 
 **Integrating with Branvil or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
@@ -261,7 +261,7 @@ Configure two kinds of automated execution per member under **Setup → Members 
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
-Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
+Screen runs without cwd and scheduled, patrol and chat commands use a private directory for each run. Completed outputs can be downloaded from the command or diagnostics screen for seven days.
 
 These settings are stored in the workspace's `team/members/<person_id>/member.yml`. To change these settings by hand, edit that file.
 
@@ -588,7 +588,7 @@ A field in the other file is refused when the team is loaded. A workspace member
 
 - `intelligences/brain_mapping.yml`: per-function engine and LLM / AI CLI slot assignments. For `chat_decision`, which decides whether a chat needs a response agent, see the [Slack integration guide](docs/slack_integration.en.md#chat-judgment-engine).
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
-- `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: what agents make for you goes there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
+- `intelligences/cli_agent_filesystem_grants.yml`: explicit home-relative grants (`documents`), shared by all members. Device-only extra paths and denies use `local/cli_agent_filesystem_grants.yml`. There is no implicit shared grant.
 - `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
 - `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian image unless set; for another toolchain, build an image yourself that keeps git, load it on the machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Before merging an image or recipe change, a human prebuilds the snapshot on the Hub from the PR head; see [the Hub procedure](docs/hub-server.md#レシピ変更のマージ前にスナップショットを用意する). After switching versions and confirming the current snapshot is ready, run `guildbotics environment prune` on each device to remove obsolete recipes; do not prune while prebuilding a future version or while rollback may still be needed. Changing the image rebuilds the environment; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings

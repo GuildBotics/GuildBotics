@@ -92,11 +92,7 @@ async fn declaration_precedes_snapshot_and_access_preview_keeps_document_rows() 
     );
     let preview = device::read(&host, &workspace).await;
     let documents = preview.view["access"]["documents"].as_array().unwrap();
-    assert_eq!(documents.len(), 1);
-    assert_eq!(documents[0]["grant"], "Documents/GuildBotics");
-    assert_eq!(documents[0]["builtin"], true);
-    assert_eq!(documents[0]["present"], false);
-    assert_eq!(documents[0]["access"], "read_write");
+    assert!(documents.is_empty());
     assert_eq!(preview.view["access"]["paths"], serde_json::json!([]));
     assert!(!host.home.join("Documents").exists());
 }

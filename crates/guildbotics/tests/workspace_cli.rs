@@ -79,11 +79,16 @@ fn workspace_use_persists_a_workspace_whose_grants_need_repair() {
 }
 
 #[test]
-fn cli_workspace_selection_refuses_exchange_locations_before_registering_them() {
+fn cli_workspace_selection_refuses_explicit_grant_locations_before_registering_them() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
-    let project = root.join("Documents/GuildBotics/project");
-    std::fs::create_dir_all(&project).unwrap();
+    let project = root.join("Documents/shared/project");
+    std::fs::create_dir_all(project.join(".guildbotics/config/intelligences")).unwrap();
+    std::fs::write(
+        project.join(".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml"),
+        "documents: [{path: Documents/shared, access: read_write}]",
+    )
+    .unwrap();
     let refused = workspace(&root, &["workspace", "use"], Some(&project));
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("inside granted directory"));

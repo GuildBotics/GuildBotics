@@ -1,5 +1,6 @@
 ---
 name: talk_as
+read_only: true
 response_class: guildbotics.intelligences.common.MessageResponse
 template_engine: jinja2
 description: Speak as the specified character about the given topic or content.

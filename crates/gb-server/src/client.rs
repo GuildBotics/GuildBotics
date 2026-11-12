@@ -203,6 +203,7 @@ pub async fn run_command(
         remotes: Default::default(),
         upload: None,
         command: name.to_owned(),
+        input_ids: vec![],
         args,
         person: person.filter(|p| !p.is_empty()).or_else(|| {
             let inline = inline.trim();

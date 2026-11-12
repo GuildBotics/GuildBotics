@@ -141,11 +141,11 @@
     "inspects": []
    },
    "templates/commands/functions/talk_as.en.md": {
-    "read_only": false,
+    "read_only": true,
     "inspects": []
    },
    "templates/commands/functions/talk_as.ja.md": {
-    "read_only": false,
+    "read_only": true,
     "inspects": []
    },
    "templates/commands/functions/troubleshoot.en.md": {

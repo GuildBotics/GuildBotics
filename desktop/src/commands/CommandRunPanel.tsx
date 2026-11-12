@@ -30,6 +30,7 @@ export type CommandRunPanelProps = {
   extraArgs: string;
   onExtraArgsChange: (value: string) => void;
   message: string;
+  onUpload?: (id: string, path: string) => void;
   onMessageChange: (value: string) => void;
   cwd: string;
   onCwdChange: (value: string) => void;
@@ -144,6 +145,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
               resize="vertical"
               value={props.message}
               onChange={props.onMessageChange}
+              onUpload={props.onUpload}
             />
           ) : null}
 

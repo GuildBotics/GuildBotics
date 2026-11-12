@@ -37,7 +37,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 
 - Rust hostがコマンドの解決・宣言、チームとメンバー、スロット、許可範囲を決める。Python guestは受け取った `ResolvedGuest` の表で子コマンドを解決し、実行順・テンプレート・`Context.pipe`・`shared_state` を扱う。優先順やアクセス判定を二重に実装しない。設定と同梱テンプレートはデータとして両側から参照する。
 - hostは1つのコマンドにmicroVMを1つ起動し、`guildbotics.guest.entry` に要求を渡す。子コマンドとAI CLI turnもその中で動く。返答は標準出力の最後の1行、コマンドのログは標準エラー。wireの正本は `guildbotics/intelligences/agent_runtime/wire.py`。変更時は `uv run --no-sync python scripts/generate-wire-schema.py` で生成し、`--check` で確認する。Rustの `gb-wire` が生成済みschemaを使う。[wireの仕様](wire/README.md) を参照する。
-- guestのホームは `/opt/guildbotics/home`（`GUEST_HOME`）。hostのパスは元の絶対パスに1回だけマウントする。hostのホーム配下の許可先は、受け渡しフォルダも含め、guestのホームに同名のリンクを作る。入れ子の許可先は一番外側だけリンクする。`guest_path()` は `/opt/guildbotics` または `/run/guildbotics` と重なるhostパスを拒否する。利用者には実体のパス（`realpath`）を伝える。
+- guestのホームは `/opt/guildbotics/home`（`GUEST_HOME`）。hostのパスは元の絶対パスに1回だけマウントする。hostのホーム配下の明示的な許可先は、guestのホームに同名のリンクを作る。入れ子の許可先は一番外側だけリンクする。`guest_path()` は `/opt/guildbotics` または `/run/guildbotics` と重なるhostパスを拒否する。利用者には実体のパス（`realpath`）を伝える。
 - hostの環境変数をguestへ継承しない。時刻と言語は `TZ` と `LANGUAGE` で渡す。実トークンやAPIキーはhostで保持し、許可した要求だけをメンバー窓口や認証ゲートウェイで中継する。1コマンドにつき一度に1 turn。終了時に貸し出しを取り消す。
 - Pythonの共有パッケージは `commands` → `intelligences` → `runtime` → `loader` → `entities` → `utils` の順で依存する。共有はguestをimportせず、全共有パッケージはguestの入口から使われる。`lint-imports` と `tests/guildbotics/test_package_map.py` で、名前で読み込むbrainと同梱コマンドも確かめる。
 - AI CLIの固定版は `guildbotics/intelligences/cli_agents.py`、Node.jsとスナップショットの固定値は `guildbotics/templates/environment/recipe.json`。Rustは生成したカタログとrecipeを読む。更新は [update-dependencies](.agents/skills/update-dependencies/SKILL.md) に従う。

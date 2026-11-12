@@ -102,7 +102,7 @@ A command and all of its subcommands (Markdown, YAML, Python, shell scripts, and
 
 - Nothing of the host's environment reaches the command: not its environment variables, its PATH, or its credentials. What the command is told of the host arrives as two environment variables: `LANGUAGE` (the OS UI language in gettext form, such as `ja_JP`) and `TZ` (the time zone by its IANA name). `functions/get_os_ui_language` reads the former.
 - CLI `run` always works on a copy, including inside read/write grants and member clones. Server-initiated commands write directly inside read/write grants; elsewhere they work on a copy whose `.git` is read-only, and when it ends well, the regular files that changed are written back to the working directory (in a repository, ignored untracked files are not copied and ignored new files are not written back; links and anything inside `.git` are not written back; see [Native agent runtime](native_agent_runtime.en.md)).
-- Files outside the working directory are reached only through the directories granted to the environment. The exchange folder `~/Documents/GuildBotics` is always granted, read/write unless the command declares `read_only` ([3.1](#31-declaring-a-command-read-only)).
+- Files outside the working directory are reached only through explicit grants.
 - The network is reached only as the workspace-wide `network:` block of `intelligences/agent_environment.yml` allows, and it denies everything when omitted. A command that talks to the network (a web API, a feed) needs its destinations allowed there before it runs.
 - Python commands run with GuildBotics' own Python environment (Python 3.15 with GuildBotics and its dependencies), and shell scripts with the tools of the environment's base image.
 
@@ -256,8 +256,7 @@ GuildBotics is an alpha tool for collaborating with AI agents and a task board; 
 The AI CLI tool works in the command's working directory, which is decided by how the command is run:
 
 - `guildbotics run`: the directory given by `--cwd`; without it, the shell's current directory
-- A manual run from the screens: the directory specified on the screen; without one, the exchange folder (`~/Documents/GuildBotics`)
-- A command the scheduler runs (a routine or scheduled command): the exchange folder ([8. Declaring a routine (patrol) command](#8-declaring-a-routine-patrol-command))
+- Screen runs without cwd and scheduled, patrol and chat commands use a private directory for each run. Completed outputs can be downloaded from the command or diagnostics screen for seven days.
 - A subcommand: the `cwd:` key of its `commands:` entry ([5. Using subcommands](#5-using-subcommands)), or `cwd=` of `context.invoke` ([7.2. Invoking other commands](#72-invoking-other-commands)). A relative path is resolved against the calling command's working directory; without either, the subcommand works in the calling command's working directory.
 
 ### 3.1. Declaring a command read-only
@@ -836,7 +835,7 @@ async def main(context) -> None:
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.
 
-A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started on the **Service** screen, from the CLI, or by the server as it starts: a file it writes to a relative path lands there.
+Screen runs without cwd and scheduled, patrol and chat commands use a private directory for each run. Completed outputs can be downloaded from the command or diagnostics screen for seven days.
 
 
 ## 9. Specifying model effort
@@ -1007,3 +1006,5 @@ channel. It records which messages were delivered. Additional messages are marke
 processed on done/asking only after a later chat reply, post, reaction, Branvil write, or Git publication. Blocked or
 no-op-only runs leave those messages pending for the next run. A final check cannot
 exclude arrivals after the check.
+
+Workflow turns work in member clones; save deliverables in the absolute `Artifact directory` supplied by the workflow prompt, which remains mounted separately.

@@ -78,15 +78,15 @@ test("creates, edits and saves a shared command, and says why it cannot run here
     );
   });
   await expect(message).toHaveValue(
-    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\]upload-[a-f0-9]{32}-clipboard\.png$/,
+    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\][a-f0-9]{32}[/\\]clipboard\.png$/,
   );
   const pastedImage = await message.inputValue();
   const storedPath = pastedImage.match(
-    /[/\\](session-[^/\\]+)[/\\](upload-[a-f0-9]{32}-clipboard\.png)$/,
+    /[/\\]([a-f0-9]{32})[/\\](clipboard\.png)$/,
   );
   expect(storedPath).not.toBeNull();
-  const [, session, name] = storedPath as RegExpMatchArray;
-  const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", session, name);
+  const [, uploadId, name] = storedPath as RegExpMatchArray;
+  const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", uploadId, name);
   expect(readFileSync(storedImage, "utf-8")).toBe("e2e-image");
 
   // The run is refused on this device, in the words the environment's

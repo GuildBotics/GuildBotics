@@ -108,7 +108,7 @@ impl Dispatcher {
     }
 
     /// The command `line` names, as the run reading `config` runs it.
-    /// Background commands start in the exchange directory, just like a
+    /// Background commands start in a private run directory, just like a
     /// manual command without a cwd. A workflow chooses its turn cwd later.
     pub fn prepare_in(
         &self,
@@ -141,13 +141,25 @@ impl Dispatcher {
             serde_json::to_value(&invocation.work).map_err(|_| DispatchFailure::InvalidCommand)?;
         let kind = work["kind"].as_str().unwrap_or("manual").to_owned();
         let identity = work["identity"].as_str().unwrap_or(trace_id).to_owned();
-        let cwd = self.host.home.join(gb_environment::EXCHANGE);
-        gb_base::host_path::open_directory(&cwd, true).map_err(|error| {
-            DispatchFailure::Environment(Failure::Command(Sentence::Text(error.to_string())))
-        })?;
+        let files = if access.read_only {
+            None
+        } else {
+            Some(Arc::new(
+                gb_environment::run_files::prepare(&self.host.data, trace_id).map_err(|error| {
+                    DispatchFailure::Environment(Failure::Command(Sentence::Text(
+                        error.to_string(),
+                    )))
+                })?,
+            ))
+        };
+        let cwd = files
+            .as_ref()
+            .map(|f| f.path.clone())
+            .unwrap_or(self.host.data.join("run/empty"));
         invocation.run_id = trace_id.into();
         Ok(Command {
             client_copy: false,
+            files,
             upload: None,
             returned: Default::default(),
             config,
@@ -402,7 +414,7 @@ mod tests {
             .prepare(
                 "functions/work 'message=two words'",
                 invocation.clone(),
-                "trace",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .await
             .unwrap();
@@ -415,15 +427,22 @@ mod tests {
         assert_eq!(command.work_kind, "ticket_mention");
         assert_eq!(command.work_identity, "local://ticket/90");
         assert_eq!(command.run_id, command.trace_id);
-        assert_eq!(command.invocation.unwrap().run_id, "trace");
+        assert_eq!(
+            command.invocation.unwrap().run_id,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         assert_eq!(
             command.cwd,
-            dispatcher.host.home.join("Documents/GuildBotics")
+            gb_environment::run_files::directory(
+                &dispatcher.host.data,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .unwrap()
         );
         for line in ["", "  ", "functions/work '", "missing"] {
             assert!(
                 dispatcher
-                    .prepare(line, invocation.clone(), "trace")
+                    .prepare(line, invocation.clone(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                     .await
                     .is_err()
             );
@@ -437,12 +456,12 @@ mod tests {
         let chat:WorkflowInvocation=serde_json::from_value(json!({"command":"functions/work","person_id":"aiko","source":"event_queue","trigger_type":"chat",
             "work":{"kind":"chat","identity":"local:C1:T1","chat":{"service":"local","channel_id":"C1","thread_id":"T1","event_id":"E1","self_user_id":"local-aiko"}}})).unwrap();
         let command = dispatcher
-            .prepare("functions/work", chat, "chat-trace")
+            .prepare("functions/work", chat, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
             .await
             .unwrap();
         let broker = crate::host_window::broker_invocation(&command);
         assert_eq!(broker.person_id, "aiko");
-        assert_eq!(broker.run_id, "chat-trace");
+        assert_eq!(broker.run_id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         let subject = broker.chat_subject.unwrap();
         assert_eq!(subject.service, "local");
         assert_eq!(subject.channel_id, "C1");

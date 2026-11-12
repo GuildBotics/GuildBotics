@@ -22,7 +22,7 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
     write(
         &workspace,
         ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",
-        "documents:\n  - path: Documents/project\n    access: read_write\n  - path: Documents/GuildBotics/reference\n    access: read\n",
+        "documents:\n  - path: Documents/GuildBotics\n    access: read_write\n  - path: Documents/project\n    access: read_write\n  - path: Documents/GuildBotics/reference\n    access: read\n",
     );
     for read_only in [true, false] {
         let plan = contract::resolve(&workspace, &home, &[], read_only, true).unwrap();
@@ -30,7 +30,7 @@ fn grants_protect_credentials_and_are_readonly_for_readonly_commands() {
         // Every grant is mounted once, at its host path, with its own
         // access; `~` reaches those under the host's home through links,
         // the outermost of nested ones alone.
-        let exchange = home.join(gb_environment::EXCHANGE).canonicalize().unwrap();
+        let exchange = home.join("Documents/GuildBotics").canonicalize().unwrap();
         let project = home.join("Documents/project").canonicalize().unwrap();
         let reference = exchange.join("reference");
         let guests: Vec<_> = plan
@@ -283,13 +283,18 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
     let (_dir, root) = temporary();
     let home = root.join("home");
     let workspace = root.join("workspace");
-    let exchange = home.join(gb_environment::EXCHANGE);
+    let exchange = home.join("Documents/GuildBotics");
     let clones = workspace.join(".guildbotics/local/clones/aiko");
     let clone = clones.join("a".repeat(64));
     let child = exchange.join("repo");
     for path in [&clone, &child] {
         std::fs::create_dir_all(path).unwrap();
     }
+    write(
+        &workspace,
+        ".guildbotics/config/intelligences/cli_agent_filesystem_grants.yml",
+        "documents: [{path: Documents/GuildBotics, access: read_write}]",
+    );
     let access = contract::resolve(&workspace, &home, &[], false, false).unwrap();
     let upload = Arc::new(Upload {
         directories: vec![],

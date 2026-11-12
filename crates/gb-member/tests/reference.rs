@@ -139,9 +139,9 @@ fn reference_states_cross_cutting_rules() {
     assert!(text.contains("ticket, code-host, and chat access, reads and writes alike"));
     assert!(text.contains("Never use a service's own CLI such as `gh`"));
     assert!(text.contains("When a needed read has no member command, ask a human"));
-    assert!(text.contains("read-only copies GuildBotics keeps"));
-    assert!(text.contains("never leave a result beside them"));
-    assert!(text.contains("under `~/Documents/GuildBotics/`"));
+    assert!(text.contains("read-only copies retained for seven days"));
+    assert!(text.contains("never save results beside an input"));
+    assert!(text.contains("save user deliverables in its working directory"));
 }
 #[test]
 fn reference_states_which_code_host_writes_stay_human_decisions() {

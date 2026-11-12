@@ -81,3 +81,6 @@ ja:
   service_stop_timeout: "停止がタイムアウトしました。実行中の処理は引き続きサービスが管理しています。"
   service_events_failed: "チャット受信が異常終了しました。診断で原因を確認してください。"
   command_client_cwd_refused: "手元の作業ディレクトリは保護対象か、読み取り専用の許可先です。"
+  command_input_file_invalid: "指定したアップロードが存在しないか無効です。ファイルを再アップロードしてください。"
+  command_run_file_missing: "ファイルを取得できません。実行終了後7日間、64 MBまでの通常ファイルをダウンロードできます。"
+  command_run_file_too_large: "ファイルがダウンロード上限の64 MBを超えています。"

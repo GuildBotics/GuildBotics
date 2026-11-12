@@ -48,6 +48,7 @@ vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
     ...actual,
+    getRunFiles: vi.fn(async () => ({ files: [] })),
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
     getProjectConfig: vi.fn(),

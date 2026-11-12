@@ -15,6 +15,7 @@ vi.mock("../api/client", async (importOriginal) => {
 
 const uploadMock = vi.mocked(uploadCommandInputFile);
 const t = i18n.getFixedT("en");
+const selectedUpload = vi.fn();
 
 function ControlledInput({ initial = "" }: { initial?: string }) {
   const [value, setValue] = useState(initial);
@@ -24,6 +25,7 @@ function ControlledInput({ initial = "" }: { initial?: string }) {
       required={false}
       value={value}
       onChange={setValue}
+      onUpload={selectedUpload}
     />
   );
 }
@@ -55,8 +57,16 @@ describe("CommandInput", () => {
 
   it("uploads each dropped file and appends the copies' paths", async () => {
     uploadMock
-      .mockResolvedValueOnce({ path: "/in/a-notes.md", guest_path: "/in/a-notes.md" })
-      .mockResolvedValueOnce({ path: "/in/b-shot.png", guest_path: "/in/b-shot.png" });
+      .mockResolvedValueOnce({
+        id: "upload-id",
+        path: "/in/a-notes.md",
+        guest_path: "/in/a-notes.md",
+      })
+      .mockResolvedValueOnce({
+        id: "upload-id",
+        path: "/in/b-shot.png",
+        guest_path: "/in/b-shot.png",
+      });
     renderInput("describe");
     const input = screen.getByRole("textbox", { name: t("commands.message") });
     const notes = new File(["# notes"], "notes.md", { type: "text/markdown" });
@@ -65,12 +75,13 @@ describe("CommandInput", () => {
     dropItems(input, [fileItem(notes), fileItem(shot)]);
 
     await waitFor(() => expect(input).toHaveValue("describe\n/in/a-notes.md\n/in/b-shot.png"));
+    expect(selectedUpload).toHaveBeenCalledWith("upload-id", "/in/a-notes.md");
     expect(uploadMock).toHaveBeenCalledWith(notes);
     expect(uploadMock).toHaveBeenCalledWith(shot);
   });
 
   it("refuses a dropped folder, asking for its server path, and still uploads the files", async () => {
-    uploadMock.mockResolvedValue({ path: "/in/a.md", guest_path: "/in/a.md" });
+    uploadMock.mockResolvedValue({ id: "upload-id", path: "/in/a.md", guest_path: "/in/a.md" });
     renderInput();
     const input = screen.getByRole("textbox", { name: t("commands.message") });
 
@@ -93,6 +104,7 @@ describe("CommandInput", () => {
   it("uploads a pasted image and appends the returned temporary path", async () => {
     uploadMock.mockResolvedValue({
       path: "/workspace/.guildbotics/data/input.png",
+      id: "upload-id",
       guest_path: "/workspace/.guildbotics/data/input.png",
     });
     renderInput("inspect");

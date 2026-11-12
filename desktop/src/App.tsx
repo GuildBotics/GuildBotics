@@ -1,3 +1,4 @@
+import { RunFiles } from "./commands/RunFiles";
 import { AppShell } from "@guildbotics/ui/AppShell";
 import {
   ActionIcon,
@@ -2022,6 +2023,10 @@ function TraceExplorer({
                   </Avatar>
                 )}
               </div>
+              <RunFiles
+                traceId={selectedSummary.trace_id}
+                finished={isTerminalTraceStatus(selectedSummary.status)}
+              />
               {detail.data?.transcript_available === false ? (
                 <Alert color="neutral" title={t("diagnostics.executions.transcriptDeleted")} />
               ) : null}
@@ -3170,6 +3175,7 @@ export function CommandRunDetails({
           <span>{summary.command}</span>
           <span>{summary.person_id || t("commands.defaultPerson")}</span>
         </div>
+        <RunFiles traceId={summary.trace_id} finished={isTerminalTraceStatus(summary.status)} />
         <Tabs className="command-run-tabs" value={activeTab} onChange={onTabChange}>
           <Tabs.List>
             <Tabs.Tab value="events">{t("commands.events")}</Tabs.Tab>
