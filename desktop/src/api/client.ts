@@ -337,6 +337,7 @@ export type CommandRunResponse = {
 };
 
 export type CommandInputFileResponse = {
+  id: string;
   path: string;
   /** The path as the agent inside the environment names it: what the input field carries. */
   guest_path: string;
@@ -1396,6 +1397,7 @@ export async function evaluateGrant(query: {
 
 export async function runCommand(body: {
   command: string;
+  input_ids?: string[];
   args?: string[];
   person?: string;
   message?: string;
@@ -1640,4 +1642,11 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
 /** The name of the machine the server runs on, which "this machine" means. */
 export async function getServerMachineName(): Promise<string> {
   return (await request<{ machine_name: string }>("/health")).machine_name;
+}
+
+export async function getRunFiles(traceId: string): Promise<{ files: string[] }> {
+  return request(`/diagnostics/traces/${encodeURIComponent(traceId)}/files`);
+}
+export function runFileUrl(traceId: string, path: string): string {
+  return `${API_PREFIX}/diagnostics/traces/${encodeURIComponent(traceId)}/file?path=${encodeURIComponent(path)}`;
 }

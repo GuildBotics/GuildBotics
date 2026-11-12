@@ -72,7 +72,7 @@ pub(crate) async fn status(api: &crate::api::Api, host: crate::api::EmbeddedHost
         .map(|error| crate::workspace::registry_error(error, language).to_string())
         .unwrap_or_default();
     json!({"branvil_available":host.0,"workspace_problem":workspace_problem,"input_store_problem":input_store_problem,
-        "cwd":api.home.join(gb_environment::EXCHANGE),
+        "cwd":"",
         "workspace":workspace,"config_dir":config,"project_file":project,
         "project_file_exists":project.as_ref().is_some_and(|p| p.exists()),"storage_dir":workspace,
         "machine_state_dir":api.data,

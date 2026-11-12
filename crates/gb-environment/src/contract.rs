@@ -221,13 +221,10 @@ fn location(path: &Path, home: &Path, missing: bool) -> Result<PathBuf, Sentence
     )
     .unwrap_or_default();
     let local: Local = load(&workspace.join(".guildbotics/local").join(FILE)).unwrap_or_default();
-    let grants = std::iter::once(home.join(crate::EXCHANGE))
-        .chain(
-            shared
-                .documents
-                .into_iter()
-                .filter_map(|grant| target(&grant.path, &home, false).ok()),
-        )
+    let grants = shared
+        .documents
+        .into_iter()
+        .filter_map(|grant| target(&grant.path, &home, false).ok())
         .chain(
             local
                 .paths
@@ -403,7 +400,7 @@ pub fn resolve_values(
     let builtin_count = denied.len();
     for name in local.deny {
         let p = proposed_target(&name, &home, true)?;
-        if p == home || p.parent().is_none() {
+        if p == home || p.parent().is_none() || p.canonicalize().ok().as_ref() == Some(&home) {
             return Err(grant_problem(
                 "intelligences.agent_environment.grants.deny_too_broad",
                 &name,
@@ -412,18 +409,10 @@ pub fn resolve_values(
         }
         denied.push(p);
     }
-    let mut planned = vec![(
-        home.join(crate::EXCHANGE),
-        Access::ReadWrite,
-        true,
-        crate::EXCHANGE.to_owned(),
-        true,
-    )];
+    let mut planned = Vec::new();
     for grant in shared.documents {
         let p = proposed_target(&grant.path, &home, false)?;
-        if p != home.join(crate::EXCHANGE) {
-            planned.push((p, grant.access, true, grant.path, false));
-        }
+        planned.push((p, grant.access, true, grant.path, false));
     }
     for grant in local.paths {
         let p = proposed_target(&grant.path, &home, true)?;
@@ -446,7 +435,7 @@ pub fn resolve_values(
         expanded.extend(protected_names(path));
     }
     denied = expanded;
-    // Validate the whole population before creating even the built-in exchange.
+    // Validate the whole population before creating any directory.
     for (path, _, document, _, _) in &planned {
         let source =
             gb_base::host_path::directory(path, *document || !create).map_err(|e| e.to_string())?;
@@ -1169,7 +1158,7 @@ mod frozen_tests {
                 put(&workspace, LOCAL, value);
             }
             let value = resolve(&workspace, &home, &[], false, false).unwrap();
-            assert_eq!(value.view["documents"].as_array().unwrap().len(), 1);
+            assert_eq!(value.view["documents"].as_array().unwrap().len(), 0);
             assert_eq!(value.view["paths"], serde_json::json!([]));
         }
         for path in [
@@ -1228,7 +1217,7 @@ mod frozen_tests {
             value.view["paths"][1]["grant"],
             outside.to_string_lossy().as_ref()
         );
-        assert_eq!(value.view["documents"][1]["grant"], "Documents/shared");
+        assert_eq!(value.view["documents"][0]["grant"], "Documents/shared");
         put(&workspace, LOCAL, "paths: [{path: absent, access: read}]");
         assert!(resolve(&workspace, &home, &[], false, true).is_err());
         assert_eq!(
@@ -1245,6 +1234,11 @@ mod frozen_tests {
         std::fs::create_dir(&home).unwrap();
         let workspace = root.join("workspace");
         std::fs::create_dir(home.join("Documents")).unwrap();
+        put(
+            &workspace,
+            SHARED,
+            "documents: [{path: Documents/project, access: read_write}]",
+        );
         let error = resolve_with_probe(&workspace, &home, &[], false, true, |path| {
             if path == home.join("Documents") {
                 Err(format!("{}: permission denied", path.display()))
@@ -1254,7 +1248,8 @@ mod frozen_tests {
         })
         .unwrap_err();
         assert!(error.contains("permission denied"));
-        assert!(!home.join("Documents/GuildBotics").exists());
+        assert!(!home.join("Documents/project").exists());
+        put(&workspace, SHARED, "{}");
         for scope in [SHARED, LOCAL] {
             std::fs::create_dir_all(home.join("extra")).unwrap();
             put(

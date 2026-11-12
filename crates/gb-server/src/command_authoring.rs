@@ -116,6 +116,7 @@ pub(crate) async fn author(
         client_cwd: None,
         upload: None,
         command: COMMAND.into(),
+        input_ids: vec![],
         args: vec![],
         person: request.person.clone(),
         message: pipe(&request, available).to_string(),

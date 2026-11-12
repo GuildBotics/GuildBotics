@@ -740,7 +740,7 @@ export const resources = {
           documents: {
             title: "Directories shared by the workspace",
             description:
-              "Directories under the home directory, registered as one access setting for every member of the workspace. Paths are written relative to the home directory; a missing one is created when a turn starts. The working directory of a turn and Documents/GuildBotics (the exchange directory) are always readable and writable: files handed over from this app are placed there (its tmp/ is emptied when the app closes), and so is what agents make for you.",
+              "Directories under the home directory, registered as one access setting for every member of the workspace. Paths are written relative to the home directory; a missing one is created when a turn starts. Runs without a working directory use a private directory. Uploads are visible only to runs that select them. Download completed run files from the command or diagnostics screen; files and uploads are retained for seven days.",
             builtin: "built in",
             empty: "No directories registered.",
             pathPlaceholder: "Documents/shared-documents",
@@ -1310,7 +1310,8 @@ export const resources = {
           "A folder cannot be dropped here. Type its path on the server machine instead.",
         advanced: "Detailed settings",
         cwd: "Working directory",
-        cwdDescription: "Blank uses the exchange folder: {{cwd}}",
+        runFiles: "Files (retained for 7 days, up to 64 MB each)",
+        cwdDescription: "Leave blank to use a private working directory for this run.",
         noRunsYet: "No command result yet.",
         runFailed: "The command could not run",
         output: "Output",
@@ -1840,7 +1841,7 @@ export const resources = {
           documents: {
             title: "ワークスペース共通のディレクトリ",
             description:
-              "ホームディレクトリ配下のディレクトリを、ワークスペースの全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書きます。無ければターン開始時に作成します。作業ディレクトリと Documents/GuildBotics（受け渡しフォルダ）は常に読み書きできます。このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書きます。無ければターン開始時に作成します。作業場所が空欄の実行は専用ディレクトリを使います。アップロードは指定した実行にだけ渡します。終了後の成果物はコマンド・診断画面からダウンロードできます。成果物とアップロードは7日間保持します。",
             builtin: "同梱",
             empty: "登録されたディレクトリはありません。",
             pathPlaceholder: "Documents/shared-documents",
@@ -2726,7 +2727,8 @@ export const resources = {
           "フォルダはドロップできません。サーバーのマシンでのフォルダのパスを入力してください。",
         advanced: "詳細設定",
         cwd: "作業ディレクトリ",
-        cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",
+        runFiles: "成果物（7日間保持、各64 MBまで）",
+        cwdDescription: "空欄の場合は、実行専用の作業ディレクトリを使います。",
         noRunsYet: "コマンド実行結果はまだありません。",
         runFailed: "コマンドを実行できませんでした",
         output: "出力",

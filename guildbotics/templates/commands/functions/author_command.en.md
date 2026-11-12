@@ -92,8 +92,7 @@ on the host:
   host's OS UI language and time zone arrive only as `LANGUAGE` and `TZ`; use
   `functions/get_os_ui_language` for the language.
 - Files outside the working directory are reachable only through the
-  environment's granted directories; the exchange folder `~/Documents/GuildBotics`
-  is always granted, read/write unless the command declares `read_only`.
+  environment's explicit grants. Runs without cwd use a private directory; completed outputs are downloadable from the screens for seven days.
 - The network is reachable only as the workspace-wide `network:` of
   `intelligences/agent_environment.yml` allows (deny when omitted). A command that
   reaches the network says in its `description` which destinations must be

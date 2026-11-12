@@ -329,6 +329,7 @@ async fn run_check(
         client_cwd: None,
         upload: None,
         command: command.into(),
+        input_ids: vec![],
         args: vec![],
         person: Some(person.into()),
         message: MESSAGE.into(),
@@ -853,9 +854,20 @@ pub(crate) fn prune(workspace: &std::path::Path) {
 pub(crate) async fn maintenance(api: Shared) {
     loop {
         let workspace = api.selected().workspace.clone();
-        if let Some(workspace) = workspace {
-            let _ = tokio::task::spawn_blocking(move || prune(&workspace)).await;
-        }
+        let data = api.data.clone();
+        let inputs = api.inputs.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Some(workspace) = workspace {
+                prune(&workspace);
+            }
+            if let Err(error) = gb_environment::run_files::prune(&data) {
+                tracing::warn!("Cannot prune run files: {error}");
+            }
+            if let Err(error) = inputs.prune() {
+                tracing::warn!("Cannot prune uploads: {error}");
+            }
+        })
+        .await;
         tokio::select! {()=api.cancelled.cancelled()=>return,()=tokio::time::sleep(std::time::Duration::from_secs(86400))=>{}}
     }
 }
@@ -975,6 +987,7 @@ pub(crate) async fn troubleshoot(
         client_cwd: None,
         upload: None,
         command: "assistants/troubleshoot".into(),
+        input_ids: vec![],
         args: vec![],
         person: request.person,
         message: json!({"question":request.message,"focus":focus,"directories":directories})

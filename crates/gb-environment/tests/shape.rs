@@ -94,12 +94,6 @@ fn read(guest: impl Into<String>, host: &Path) -> Mount {
     }
 }
 
-/// The exchange folder, read-only, at its host path.
-fn exchange(machine: &Machine) -> Mount {
-    let host = named(&machine.host.home.join(gb_environment::EXCHANGE));
-    read(spelled(&host), &host)
-}
-
 fn sorted(mut mounts: Vec<Mount>) -> Vec<Mount> {
     mounts.sort_by(|a, b| a.guest.cmp(&b.guest));
     mounts
@@ -208,7 +202,6 @@ fn a_read_only_command_reads_and_works_on_its_own() {
                 read(spelled(&members), &members),
             ]
             .into_iter()
-            .chain([exchange(&machine)])
             .collect()
         )
     );
@@ -230,10 +223,6 @@ fn a_read_only_command_reads_and_works_on_its_own() {
         facts.mounts,
         HashMap::from([
             (cwd.clone(), true),
-            (
-                spelled(&named(&machine.host.home.join("Documents/GuildBotics"))),
-                true
-            ),
             ("/opt/guildbotics/code/guildbotics".into(), false),
             (spelled(&config), false),
             (spelled(&members), false),
@@ -304,7 +293,6 @@ fn an_inspecting_command_is_told_where_to_look() {
         read(spelled(&run), &run),
     ]
     .into_iter()
-    .chain([exchange(&machine)])
     .collect::<Vec<_>>();
     assert_eq!(sorted(made.mounts.clone()), sorted(expected));
     let facts: CommandFacts =
@@ -339,7 +327,7 @@ fn what_is_not_there_is_not_mounted() {
     let made = shape(&machine.host, &machine.workspace, &run, None).unwrap();
     let facts: CommandFacts =
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
-    assert_eq!(made.mounts.len(), 5);
+    assert_eq!(made.mounts.len(), 4);
     assert_eq!(facts.inspected, HashMap::new());
 }
 
@@ -545,13 +533,12 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
         request.cwd = clone.clone();
         let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
         // Every kind of mount is there: the code, what the command inspects,
-        // the grants of either access, the built-in grant and the clone, and
+        // the grants of either access, the clone, and
         // a read-only command's empty working directory.
         let mut kinds = vec![
             "/opt/guildbotics/code/guildbotics".to_string(),
             spelled(&named(&machine.workspace.join(".guildbotics/config"))),
             spelled(&named(&machine.workspace.join(".guildbotics/local/run"))),
-            home("Documents/GuildBotics"),
             home("Documents/read"),
             home("Documents/write"),
             clone_guest.clone(),
@@ -569,7 +556,7 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
         // the same name; the microVM's home is never a mount.
         assert_eq!(
             made.links,
-            ["Documents/GuildBotics", "Documents/read", "Documents/write"].map(|name| {
+            ["Documents/read", "Documents/write"].map(|name| {
                 gb_environment::contract::Link {
                     name: name.into(),
                     target: home(name),
@@ -588,4 +575,45 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
         }
     }
     assert_eq!(gb_environment::contract::CLONE_QUOTA_MIB, 16 * 1024);
+}
+
+#[test]
+fn a_private_run_cwd_mounts_only_its_own_directory() {
+    let machine = machine();
+    let id = "a".repeat(32);
+    let other = gb_environment::run_files::prepare(&machine.host.data, &"b".repeat(32)).unwrap();
+    let cwd = gb_environment::run_files::prepare(&machine.host.data, &id).unwrap();
+    let mut request = command(
+        &machine,
+        machine
+            .host
+            .package
+            .join("templates/commands/functions/work.py"),
+        vec![],
+    );
+    request.run_id = id;
+    request.cwd = cwd.clone();
+    request.access.read_only = false;
+    let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+    assert!(made.copy.is_none());
+    assert!(
+        made.mounts
+            .iter()
+            .any(|m| m.host.as_ref() == Some(&named(&cwd)) && !m.readonly)
+    );
+    assert!(
+        !made
+            .mounts
+            .iter()
+            .any(|m| m.host.as_ref().is_some_and(|p| other.starts_with(p)))
+    );
+    assert!(!machine.host.home.join("Documents/GuildBotics").exists());
+    request.access.read_only = true;
+    let read = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+    assert!(
+        !read
+            .mounts
+            .iter()
+            .any(|m| m.host.as_ref() == Some(&named(&cwd)))
+    );
 }

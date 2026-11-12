@@ -77,7 +77,7 @@ test("runs a command in the isolated environment and streams its result", async 
     );
   });
   await expect(message).toHaveValue(
-    /\/\.guildbotics\/data\/command_inputs\/session-[^/]+\/upload-[a-f0-9]+-clipboard\.png$/,
+    /\/\.guildbotics\/data\/command_inputs\/[a-f0-9]{32}\/clipboard\.png$/,
   );
 
   const run = page.getByRole("button", { name: "Save and run" });

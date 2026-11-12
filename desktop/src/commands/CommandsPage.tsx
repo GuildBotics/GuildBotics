@@ -135,6 +135,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
   const [argValues, setArgValues] = useState<Record<string, string>>(initial.argValues);
   const [extraArgs, setExtraArgs] = useState(initial.extraArgs);
   const [message, setMessage] = useState(initial.message);
+  const [uploads, setUploads] = useState<Record<string, string>>({});
   const [cwd, setCwd] = useState(initial.cwd);
   const [showAdvanced, setShowAdvanced] = useState(initial.showAdvanced);
   // The run started here or seen starting; until one is, the latest run.
@@ -498,6 +499,12 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
         person: selectedPerson ?? undefined,
         message: runFile.inputs.message !== "hidden" ? message : "",
         cwd: cwd.trim() || undefined,
+        input_ids:
+          runFile.inputs.message === "hidden"
+            ? []
+            : Object.entries(uploads)
+                .filter(([, path]) => message.split("\n").includes(path))
+                .map(([id]) => id),
         expected_command_file_id: runFile.id,
         expected_command_file_revision: runFile.revision,
       });
@@ -525,6 +532,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
     runPerson,
     extraArgs,
     message,
+    uploads,
     saveMutation,
     selectedFileId,
     selectedPerson,
@@ -861,6 +869,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
                     extraArgs={extraArgs}
                     onExtraArgsChange={setExtraArgs}
                     message={message}
+                    onUpload={(id, path) => setUploads((current) => ({ ...current, [id]: path }))}
                     onMessageChange={setMessage}
                     cwd={cwd}
                     onCwdChange={setCwd}

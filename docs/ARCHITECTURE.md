@@ -500,22 +500,22 @@ once.
 `crates/gb-environment/src/contract.rs`. A host directory is mounted once at its
 absolute host path. The guest has its own home, `/opt/guildbotics/home`. Granted
 directories under the host home also have links at the corresponding guest home
-paths, so `~/Documents/GuildBotics` and `~/<grant>` work inside the microVM. When
+paths, so `~/<grant>` work inside the microVM. When
 grants nest, only the outermost gets a link. `guest_path()` rejects host paths
 that overlap `/opt/guildbotics` or `/run/guildbotics`. Report real paths to users.
 
-The command can reach its working directory, declared grants, and the mounts
-GuildBotics supplies. The exchange directory `~/Documents/GuildBotics` is a
-built-in read-write grant. Screen uploads are read-only copies under the machine
-root and are removed when the server session ends. A screen run without a working
-directory uses the exchange directory. Unless the user names a destination,
-outputs intended for the user go there as well.
+The command can reach its working directory, explicit grants, and declared mounts.
+Background runs and screen runs without cwd use machine-owned `run/files/<run_id>/work`,
+mounted only into that run. Read-only commands retain their empty guest cwd.
+Owner-authenticated routes list and download completed run files using directory
+capabilities without following links; only regular files are served. Files and
+independent upload-ID directories expire after seven days and are pruned on the
+next use. Run requests select their read-only uploads explicitly.
 
 `gb-base/src/host_path.rs` and the environment contract validate bind sources,
 including ancestry, symlinks and protected paths. The contract protects device
 state, registered workspace state and credential locations, including paths
-that do not exist yet. Workspace admission checks the exchange directory and
-grants before registering a workspace. Explicit host-owned mounts such as a
+that do not exist yet. Workspace admission checks grants before registering a workspace. Explicit host-owned mounts such as a
 member clone use their own access rules.
 
 ### Model effort

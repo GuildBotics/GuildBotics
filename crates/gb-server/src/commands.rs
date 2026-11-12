@@ -43,6 +43,8 @@ pub(crate) struct RunRequest {
     #[serde(default)]
     pub(crate) message: String,
     pub(crate) cwd: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) input_ids: Vec<String>,
     /// The workspace the caller means, which must still be the selected one.
     pub(crate) expected_workspace: Option<String>,
     pub(crate) request_id: Option<String>,
@@ -359,7 +361,8 @@ async fn start(
     }
     // Where the run works, once its member and file are known; a directory
     // of its own is made without following a link on the way.
-    let cwd = match (
+    let default_cwd = launch.cwd.is_none() && request.cwd.is_none() && request.client_cwd.is_none();
+    let mut cwd = match (
         &launch.cwd,
         request.client_cwd.as_ref().or(request.cwd.as_ref()),
     ) {
@@ -384,8 +387,8 @@ async fn start(
                     .into_response(),
             })?
         }
-        // A run that names no working directory runs in the exchange folder.
-        (None, None) => host.home.join(gb_environment::EXCHANGE),
+        // The actual private directory is allocated once its run ID is known.
+        (None, None) => host.data.join("run/empty"),
     };
     let resolved = resolved.and_then(|path| Ok((command_access(&path)?, path)));
     let (access, path) = resolved.map_err(|problem| {
@@ -472,6 +475,14 @@ async fn start(
     } else {
         trace_id.clone()
     };
+    if default_cwd {
+        cwd = if access.read_only {
+            gb_environment::run_files::directory(&host.data, &run_id)
+        } else {
+            gb_environment::run_files::prepare(&host.data, &run_id)
+        }
+        .map_err(|e| internal(&e.to_string(), "OSError"))?;
+    }
     let command = gb_environment::Command {
         client_copy: request.client_cwd.is_some(),
         upload: request.upload.map(std::sync::Arc::new),
@@ -507,8 +518,15 @@ async fn start(
     let worker_capture = failure_capture.clone();
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
     let inputs = match api.inputs {
-        Some(inputs) => inputs.mount_if_available().await,
-        None => None,
+        Some(inputs) => inputs.mounts(&request.input_ids).await.map_err(|_| {
+            error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
+        })?,
+        None if request.input_ids.is_empty() => vec![],
+        None => {
+            return Err(
+                error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
+            );
+        }
     };
     let member = api.member.clone();
     let keychain = api.keychain.clone();
@@ -549,9 +567,7 @@ async fn start(
                 )
                 .await
                 .map_err(|reason| failed(Failure::Command(Sentence::Text(reason)), language))?;
-                if let Some(inputs) = inputs {
-                    services.session.mounts.push(inputs);
-                }
+                services.session.mounts.extend(inputs);
                 let reply = gb_environment::run(
                     &host,
                     &workspace,

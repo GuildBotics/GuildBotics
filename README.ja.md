@@ -85,7 +85,7 @@ Branvilを初めて使うときは、上のコメント付きの2行を実行し
 Hub で `guildbotics open` を実行して画面を開きます。ブラウザに **プロジェクト** 設定が開くので、以下を設定します。
 
 - エージェントの既定言語（英語/日本語）。コマンド、ロール定義、LLM への指示で使う
-- ワークスペースフォルダの選択。作業するリポジトリの外に置いてください。たとえば作業リポジトリを `~/repos/myproject`、ワークスペースを `~/teams/myproject` に分けます。受け渡しフォルダ `~/Documents/GuildBotics` の中にも置けません
+- ワークスペースフォルダの選択。作業するリポジトリの外に置いてください。たとえば作業リポジトリを `~/repos/myproject`、ワークスペースを `~/teams/myproject` に分けます。明示的な許可先の中にも置けません
 - プロジェクトの説明文
 
 **Branvil / Slack と連携する場合は、設定を始める前にサービス側の準備が必要です。** どの連携も任意で、あとから **設定 → 連携** で有効にできます。まず動かしてみたい場合は、連携を使わずに進めてください。
@@ -260,7 +260,7 @@ Slack App を手動で作成する場合の手順（必要な scope の一覧）
 
 巡回間隔と、連続失敗でワーカーを止める回数は **サービス実行** 画面で指定します。
 
-サービスが実行するコマンドは、**サービス実行** 画面から開始しても、CLI から開始しても、サーバーの起動時に開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。定期実行の `.sh` や AI CLI のターンが相対パスで書き出したファイルはここに出ます。
+作業場所が空欄の画面からの実行と、巡回・チャット・定期実行は実行専用ディレクトリで動きます。成果物は終了後7日間、コマンド・診断画面からダウンロードできます。
 
 設定内容はワークスペースの `team/members/<person_id>/member.yml` に保存されます。設定ファイルを直接編集する場合は、このファイルを使います。
 
@@ -586,7 +586,7 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - `intelligences/brain_mapping.yml`: 機能ごとのエンジンと LLM／AI CLI スロットの割り当て。チャットの起動要否を判定する `chat_decision` の設定は、[Slack 連携ガイド](docs/slack_integration.ja.md#チャット判断エンジン)を参照してください。
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
-- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、エージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
+- `intelligences/cli_agent_filesystem_grants.yml`: ホーム配下の明示的な許可先（`documents`）。端末固有の追加パスと拒否は `local/cli_agent_filesystem_grants.yml` に置きます。暗黙の共通許可先はありません。
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
 - `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian。別のツールチェーンが必要なら git を残して自分で build し、そのマシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します

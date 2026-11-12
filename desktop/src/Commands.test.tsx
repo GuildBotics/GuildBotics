@@ -1,6 +1,6 @@
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import {
   getTraces,
   listCommandFiles,
   runCommand,
+  uploadCommandInputFile,
   subscribeEvents,
   updateCommandFile,
   type CommandFileDetail,
@@ -66,6 +67,7 @@ vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
     ...actual,
+    getRunFiles: vi.fn(async () => ({ files: [] })),
     applyCommandAuthoring: vi.fn(),
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
@@ -80,6 +82,7 @@ vi.mock("./api/client", async (importOriginal) => {
     updateCommandFile: vi.fn(),
     getCommandFileExecutionStatus: vi.fn(),
     runCommand: vi.fn(),
+    uploadCommandInputFile: vi.fn(),
     subscribeEvents: vi.fn(),
   };
 });
@@ -976,9 +979,48 @@ describe("Command editor screen", () => {
         expect.objectContaining({
           command: "greet",
           message: "",
+          input_ids: [],
           expected_command_file_id: "greet-id",
           expected_command_file_revision: "rev-2",
         }),
+      ),
+    );
+  });
+
+  it("sends only uploads whose paths remain in the message", async () => {
+    vi.mocked(uploadCommandInputFile)
+      .mockResolvedValueOnce({
+        id: "first",
+        path: "/inputs/first/a.txt",
+        guest_path: "/inputs/first/a.txt",
+      })
+      .mockResolvedValueOnce({
+        id: "second",
+        path: "/inputs/second/b.txt",
+        guest_path: "/inputs/second/b.txt",
+      });
+    const user = userEvent.setup();
+    await renderPage();
+    const message = await screen.findByRole("textbox", { name: t("commands.message") });
+    for (const name of ["a.txt", "b.txt"]) {
+      fireEvent.paste(message, {
+        clipboardData: {
+          items: [
+            {
+              kind: "file",
+              type: "image/png",
+              getAsFile: () => new File(["input"], name, { type: "image/png" }),
+            },
+          ],
+        },
+      });
+    }
+    await waitFor(() => expect(message).toHaveValue("/inputs/first/a.txt\n/inputs/second/b.txt"));
+    fireEvent.change(message, { target: { value: "/inputs/second/b.txt" } });
+    await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
+    await waitFor(() =>
+      expect(runCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({ input_ids: ["second"] }),
       ),
     );
   });

@@ -7,6 +7,7 @@ import { uploadCommandInputFile } from "../api/client";
 type CommandInputProps = Omit<TextareaProps, "onChange" | "value"> & {
   value: string;
   onChange: (value: string) => void;
+  onUpload?: (id: string, path: string) => void;
 };
 
 /** `value` with `path` on a line of its own after it. */
@@ -15,7 +16,13 @@ export function appendCommandInputPath(value: string, path: string): string {
   return `${value}${separator}${path}`;
 }
 
-export function CommandInput({ value, onChange, onPaste, ...textareaProps }: CommandInputProps) {
+export function CommandInput({
+  value,
+  onChange,
+  onUpload,
+  onPaste,
+  ...textareaProps
+}: CommandInputProps) {
   const { t } = useTranslation();
   const valueRef = useRef(value);
   const [dropActive, setDropActive] = useState(false);
@@ -43,13 +50,14 @@ export function CommandInput({ value, onChange, onPaste, ...textareaProps }: Com
       try {
         const response = await uploadCommandInputFile(file);
         appendPath(response.guest_path);
+        onUpload?.(response.id, response.guest_path);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {
         setUploadsInFlight((count) => count - 1);
       }
     },
-    [appendPath],
+    [appendPath, onUpload],
   );
 
   // A drop hands over a copy of each file: the browser has no path the server
