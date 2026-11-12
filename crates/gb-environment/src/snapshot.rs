@@ -5,7 +5,7 @@ use gb_base::files::FileLock;
 use std::path::{Path, PathBuf};
 
 const PREFIX: &str = "guildbotics-";
-const LOCK_FILE: &str = "build.lock";
+pub(crate) const LOCK_FILE: &str = "build.lock";
 const FAILED_SUFFIX: &str = ".failed";
 
 static BUILD_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =

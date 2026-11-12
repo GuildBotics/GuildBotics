@@ -159,30 +159,60 @@ async fn images_of_snapshots_stay_and_replaced_or_unused_images_go() {
         assert!(layer(&home, &unused_layer));
     }
 
+    // A build in the gone snapshot's directory may be putting a new one there.
+    let building = gb_base::files::FileLock::try_hold(&snapshots_dir(&gone).join("build.lock"))
+        .unwrap()
+        .unwrap();
     runtime::retire(&home, &built, CURRENT, &indexed)
         .await
         .unwrap();
     assert!(!previous.exists(), "the previous image's snapshot goes");
     assert!(current.exists() && prebuilt.exists() && shared.exists());
-    assert_eq!(held().await, vec![(TAG.into(), m2.clone())]);
-    assert!(layer(&home, &v1), "another workspace's snapshot keeps v1");
-    assert!(!layer(&home, &stale_layer) && !layer(&home, &unused_layer));
-    let rows: Vec<PathBuf> = microsandbox::Snapshot::list()
-        .await
-        .unwrap()
-        .iter()
-        .map(|s| s.path().to_owned())
-        .collect();
-    assert!(
-        !rows.contains(&gone_path),
-        "the row of a removed snapshot goes"
+    assert_eq!(
+        held().await,
+        vec![("test/stale:x".into(), stale), (TAG.into(), m2.clone())]
     );
+    assert!(layer(&home, &v1), "another workspace's snapshot keeps v1");
+    assert!(!layer(&home, &unused_layer));
+    assert!(
+        rows().await.contains(&gone_path),
+        "a building directory keeps its rows"
+    );
+    assert!(layer(&home, &stale_layer));
+    drop(building);
 
     // Once the other workspace drops its snapshot, v1 goes; shared layers stay.
     std::fs::remove_dir_all(&shared).unwrap();
     runtime::sweep_images(&home, &indexed).await.unwrap();
     assert!(!layer(&home, &v1));
-    assert_eq!(held().await, vec![(TAG.into(), m2)]);
+    assert!(
+        !rows().await.contains(&gone_path),
+        "the row of a removed snapshot goes"
+    );
+    assert!(!layer(&home, &stale_layer));
+    assert_eq!(held().await, vec![(TAG.into(), m2.clone())]);
     let base = hex(&tar(&[("base.txt", b"shared base\n")]));
     assert!(layer(&home, &base));
+
+    // One row stands for a name: two workspaces' snapshots of one name on
+    // different images leave one image unprotected, so nothing is swept.
+    let v3 = archive(&root.path().join("v3.tar"), "test/three:x", "three\n");
+    let m3 = load(&home, &root.path().join("v3.tar")).await;
+    snapshot(&built, "guildbotics-ffffffffffffffff", &m3);
+    snapshot(&other, "guildbotics-ffffffffffffffff", &m2);
+    let refused = runtime::sweep_images(&home, &indexed).await.unwrap_err();
+    assert!(
+        refused.contains("not protected by the snapshot index"),
+        "{refused}"
+    );
+    assert!(layer(&home, &v3));
+}
+
+async fn rows() -> Vec<PathBuf> {
+    microsandbox::Snapshot::list()
+        .await
+        .unwrap()
+        .iter()
+        .map(|s| s.path().to_owned())
+        .collect()
 }
