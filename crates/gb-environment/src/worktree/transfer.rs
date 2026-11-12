@@ -23,8 +23,16 @@ pub struct Upload {
 #[serde(deny_unknown_fields)]
 pub struct File {
     pub path: String,
-    pub content: String,
+    pub source: Source,
     pub executable: bool,
+}
+/// Where the receiver gets a file's bytes: sent, or the index blob it equals,
+/// which the received history holds. Only sent bytes count against [`LIMIT`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Source {
+    Content(String),
+    Blob { oid: String, sha256: String },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -154,6 +162,98 @@ fn optional(root: &Path, name: &str) -> Result<Option<String>, CaptureError> {
     }
     Ok(Some(STANDARD.encode(bytes)))
 }
+/// The blob each stage-0 regular file of the index names, by the NFC form of
+/// its path: macOS Git composes the names it indexes, not the disk's.
+fn index_blobs(staged: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    let mut blobs = BTreeMap::new();
+    for entry in staged.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+        let (header, path) = entry
+            .iter()
+            .position(|b| *b == b'\t')
+            .map(|at| (&entry[..at], &entry[at + 1..]))
+            .ok_or("Invalid index record")?;
+        let header = String::from_utf8_lossy(header);
+        let fields = header.split(' ').collect::<Vec<_>>();
+        if let ([mode, oid, "0"], Ok(path)) = (fields.as_slice(), std::str::from_utf8(path))
+            && mode.starts_with("100")
+        {
+            blobs.insert(composed(path), (*oid).to_owned());
+        }
+    }
+    Ok(blobs)
+}
+fn composed(path: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    path.nfc().collect()
+}
+/// Read a file of `len` bytes once. When its bytes are `blob` (in `format`),
+/// it is named; otherwise its bytes are sent, if they fit in `room`. Returns
+/// the source and the bytes it sends, or `None` when they do not fit.
+fn read_source(
+    file: &mut impl std::io::Read,
+    format: &str,
+    len: u64,
+    blob: Option<&str>,
+    room: usize,
+    chunk: &mut [u8],
+) -> Result<Option<(Source, usize)>, CaptureError> {
+    use sha2::Digest;
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    if blob.is_none() && len > room as u64 {
+        return Ok(None);
+    }
+    let header = format!("blob {len}\0");
+    let mut sha1 =
+        (blob.is_some() && format == "sha1").then(|| sha1::Sha1::new_with_prefix(&header));
+    let mut sha256_oid =
+        (blob.is_some() && format == "sha256").then(|| sha2::Sha256::new_with_prefix(&header));
+    let mut sha256 = blob.map(|_| sha2::Sha256::new());
+    let mut bytes = Some(Vec::new());
+    let mut read = 0u64;
+    loop {
+        let n = match file.read(chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.to_string().into()),
+        };
+        let part = &chunk[..n];
+        read += n as u64;
+        sha1.iter_mut().for_each(|h| h.update(part));
+        sha256_oid.iter_mut().for_each(|h| h.update(part));
+        sha256.iter_mut().for_each(|h| h.update(part));
+        if let Some(kept) = &mut bytes {
+            if kept.len() + n > room {
+                bytes = None;
+            } else {
+                kept.extend_from_slice(part);
+            }
+        }
+    }
+    if read != len {
+        return Err("Worktree file changed while it was read".into());
+    }
+    let oid = sha1
+        .map(|h| hex(&h.finalize()))
+        .or_else(|| sha256_oid.map(|h| hex(&h.finalize())));
+    if let (Some(oid), Some(sha256)) = (oid, sha256)
+        && Some(oid.as_str()) == blob
+    {
+        return Ok(Some((
+            Source::Blob {
+                oid,
+                sha256: hex(&sha256.finalize()),
+            },
+            0,
+        )));
+    }
+    Ok(bytes.map(|bytes| {
+        let sent = bytes.len();
+        (Source::Content(STANDARD.encode(bytes)), sent)
+    }))
+}
 #[derive(Debug)]
 pub enum CaptureError {
     Limit { files: usize, history: usize },
@@ -199,8 +299,24 @@ impl Upload {
             gb_base::worktree::list(&copy.host, &copy.excluded).map_err(|e| e.to_string())?;
         let root =
             gb_base::host_path::open_directory(&copy.host, false).map_err(|e| e.to_string())?;
+        let (object_format, staged) = if manifest.repository {
+            (
+                String::from_utf8_lossy(&git(
+                    &copy.host,
+                    &["rev-parse", "--show-object-format"],
+                    &[],
+                )?)
+                .trim()
+                .to_owned(),
+                git(&copy.host, &["ls-files", "--stage", "-z"], &[])?,
+            )
+        } else {
+            (String::new(), Vec::new())
+        };
+        let blobs = index_blobs(&staged)?;
         let mut total = 0;
         let mut files = Vec::new();
+        let mut chunk = vec![0; 1 << 20];
         use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
         for path in manifest.files {
             let mut options = cap_std::fs::OpenOptions::new();
@@ -219,25 +335,14 @@ impl Upload {
             if !metadata.is_file() {
                 return Err("Worktree file changed type".into());
             }
-            total += usize::try_from(metadata.len()).map_err(|e| e.to_string())?;
-            if total > LIMIT {
-                return Err(CaptureError::Limit {
-                    files: total,
-                    history: 0,
-                });
-            }
-            let mut bytes = Vec::new();
-            use std::io::Read;
-            std::io::Read::by_ref(&mut file)
-                .take((LIMIT + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            if bytes.len() > LIMIT {
-                return Err(CaptureError::Limit {
-                    files: total,
-                    history: 0,
-                });
-            }
+            let read = read_source(
+                &mut file,
+                &object_format,
+                metadata.len(),
+                blobs.get(&composed(&path)).map(String::as_str),
+                LIMIT - total,
+                &mut chunk,
+            )?;
             #[cfg(unix)]
             let executable = {
                 use cap_std::fs::PermissionsExt;
@@ -245,9 +350,17 @@ impl Upload {
             };
             #[cfg(not(unix))]
             let executable = false;
+            let Some((source, sent)) = read else {
+                return Err(CaptureError::Limit {
+                    files: total
+                        .saturating_add(usize::try_from(metadata.len()).unwrap_or(usize::MAX)),
+                    history: 0,
+                });
+            };
+            total += sent;
             files.push(File {
                 path,
-                content: STANDARD.encode(bytes),
+                source,
                 executable,
             });
         }
@@ -354,7 +467,6 @@ impl Upload {
             } else {
                 BTreeSet::new()
             };
-            let staged = git(&copy.host, &["ls-files", "--stage", "-z"], &[])?;
             let mut needed = BTreeSet::new();
             for entry in staged.split(|b| *b == 0).filter(|b| !b.is_empty()) {
                 let header = String::from_utf8_lossy(
@@ -436,13 +548,7 @@ impl Upload {
                 );
             }
             Some(Git {
-                object_format: String::from_utf8_lossy(&git(
-                    &copy.host,
-                    &["rev-parse", "--show-object-format"],
-                    &[],
-                )?)
-                .trim()
-                .to_owned(),
+                object_format,
                 shared_indexes,
                 objects,
                 bundle: STANDARD.encode(bundle),
@@ -462,46 +568,45 @@ impl Upload {
             nested,
             git: repository,
         };
-        let file_size = upload
+        let (files, history) = upload.sizes()?;
+        if files + history > LIMIT {
+            return Err(CaptureError::Limit { files, history });
+        }
+        upload.validate()?;
+        Ok(upload)
+    }
+    /// The decoded bytes of the sent file contents, and of the sent history
+    /// and index data.
+    pub fn sizes(&self) -> Result<(usize, usize), String> {
+        let decoded = |data: &String| {
+            STANDARD
+                .decode(data)
+                .map(|b| b.len())
+                .map_err(|e| e.to_string())
+        };
+        let files = self
             .files
             .iter()
-            .map(|f| {
-                STANDARD
-                    .decode(&f.content)
-                    .map(|b| b.len())
-                    .map_err(|e| e.to_string())
+            .filter_map(|f| match &f.source {
+                Source::Content(content) => Some(decoded(content)),
+                Source::Blob { .. } => None,
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .iter()
-            .sum::<usize>();
-        let history_size = match &upload.git {
+            .sum::<Result<usize, _>>()?;
+        let history = match &self.git {
             None => 0,
             Some(g) => [Some(&g.bundle), g.index.as_ref(), g.exclude.as_ref()]
                 .into_iter()
                 .flatten()
                 .chain(g.objects.values())
                 .chain(g.shared_indexes.values())
-                .map(|b| {
-                    STANDARD
-                        .decode(b)
-                        .map(|b| b.len())
-                        .map_err(|e| e.to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .iter()
-                .sum::<usize>(),
+                .map(decoded)
+                .sum::<Result<usize, _>>()?,
         };
-        if file_size + history_size > LIMIT {
-            return Err(CaptureError::Limit {
-                files: file_size,
-                history: history_size,
-            });
-        }
-        upload.validate()?;
-        Ok(upload)
+        Ok((files, history))
     }
+    /// The upload's shape: safe, distinct names, decodable data, and blobs
+    /// named in the repository's object format.
     pub fn validate(&self) -> Result<(), String> {
-        let mut size = 0usize;
         let mut seen = std::collections::HashSet::new();
         for path in self
             .directories
@@ -513,29 +618,32 @@ impl Upload {
                 return Err("Repeated worktree path".into());
             }
         }
+        let hex = |value: &str, len: usize| {
+            value.len() == len
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
         for file in &self.files {
-            size = size
-                .checked_add(
-                    STANDARD
-                        .decode(&file.content)
-                        .map_err(|e| e.to_string())?
-                        .len(),
-                )
-                .ok_or("Worktree size overflow")?;
-        }
-        if let Some(git) = &self.git {
-            for data in [Some(&git.bundle), git.index.as_ref(), git.exclude.as_ref()]
-                .into_iter()
-                .flatten()
-                .chain(git.objects.values())
-                .chain(git.shared_indexes.values())
-            {
-                size = size
-                    .checked_add(STANDARD.decode(data).map_err(|e| e.to_string())?.len())
-                    .ok_or("Worktree size overflow")?;
+            if let Source::Blob { oid, sha256 } = &file.source {
+                let len = match self.git.as_ref().map(|g| g.object_format.as_str()) {
+                    Some("sha1") => 40,
+                    Some("sha256") => 64,
+                    _ => return Err("Worktree blob without a repository".into()),
+                };
+                if !hex(oid, len) || !hex(sha256, 64) {
+                    return Err("Invalid worktree blob".into());
+                }
             }
         }
-        if size > LIMIT {
+        self.sizes().map(|_| ())
+    }
+    /// What a client may send: [`Self::validate`] within [`LIMIT`]. History a
+    /// server completes from the code host is not the client's to count.
+    pub fn validate_sent(&self) -> Result<(), String> {
+        self.validate()?;
+        let (files, history) = self.sizes()?;
+        if files + history > LIMIT {
             return Err("Worktree upload exceeds 16 MiB".into());
         }
         Ok(())
@@ -545,11 +653,15 @@ impl Upload {
         self.files
             .iter()
             .flat_map(|f| {
-                let bytes = STANDARD.decode(&f.content).expect("validated upload");
-                let hash = Sha256::digest(bytes)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>();
+                let hash = match &f.source {
+                    Source::Content(content) => {
+                        Sha256::digest(STANDARD.decode(content).expect("validated upload"))
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    }
+                    Source::Blob { sha256, .. } => sha256.clone(),
+                };
                 (serde_json::json!({"path":f.path,"sha256":hash,"executable":f.executable})
                     .to_string()
                     + "\n")
@@ -763,7 +875,7 @@ mod tests {
             let mut value = upload();
             value.files.push(File {
                 path: path.into(),
-                content: String::new(),
+                source: Source::Content(String::new()),
                 executable: false,
             });
             assert!(value.validate().is_err(), "{path}");
@@ -771,9 +883,200 @@ mod tests {
         let mut value = upload();
         value.files.push(File {
             path: "file".into(),
-            content: STANDARD.encode(vec![0; LIMIT + 1]),
+            source: Source::Content(STANDARD.encode(vec![0; LIMIT + 1])),
+            executable: false,
+        });
+        assert!(value.validate().is_ok());
+        assert!(value.validate_sent().is_err());
+    }
+    #[test]
+    fn files_equal_to_their_index_blob_are_named_and_only_sent_bytes_count() {
+        use sha2::Digest;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        let run = |args: &[&str]| {
+            git(
+                path,
+                &[
+                    &[
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=f@example.invalid",
+                    ],
+                    args,
+                ]
+                .concat(),
+                &[],
+            )
+            .unwrap()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        // Larger than the limit, yet unchanged: only its name crosses.
+        std::fs::write(path.join("large"), vec![7u8; LIMIT + 1]).unwrap();
+        std::fs::write(path.join("edited"), "committed").unwrap();
+        std::fs::write(path.join("staged"), "committed").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "base"]);
+        std::fs::write(path.join("edited"), "edited").unwrap();
+        std::fs::write(path.join("staged"), "staged").unwrap();
+        run(&["add", "staged"]);
+        std::fs::write(path.join("new"), "new").unwrap();
+        let copy =
+            super::super::Copy::new(path.into(), "/work".into(), vec![], path.join("write.lock"))
+                .unwrap();
+        let upload = Upload::capture(&copy).unwrap();
+        let source = |name: &str| &upload.files.iter().find(|f| f.path == name).unwrap().source;
+        let index = |name: &str| {
+            String::from_utf8(git(path, &["rev-parse", &format!(":{name}")], &[]).unwrap())
+                .unwrap()
+                .trim()
+                .to_owned()
+        };
+        let sha256 = |bytes: &[u8]| {
+            sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            source("large"),
+            &Source::Blob {
+                oid: index("large"),
+                sha256: sha256(&vec![7u8; LIMIT + 1])
+            }
+        );
+        assert!(matches!(source("staged"), Source::Blob { oid, .. } if *oid == index("staged")));
+        assert!(
+            upload
+                .git
+                .as_ref()
+                .unwrap()
+                .objects
+                .contains_key(&index("staged"))
+        );
+        assert_eq!(
+            source("edited"),
+            &Source::Content(STANDARD.encode("edited"))
+        );
+        assert_eq!(source("new"), &Source::Content(STANDARD.encode("new")));
+        assert_eq!(upload.sizes().unwrap().0, "edited".len() + "new".len());
+        let receipts = String::from_utf8(upload.copied()).unwrap();
+        assert!(receipts.contains(&sha256(&vec![7u8; LIMIT + 1])));
+        assert!(receipts.contains(&sha256(b"edited")));
+        // A tracked file edited beyond the limit is sent, and refused.
+        std::fs::write(path.join("large"), vec![8u8; LIMIT + 1]).unwrap();
+        assert!(matches!(
+            Upload::capture(&copy),
+            Err(CaptureError::Limit { .. })
+        ));
+    }
+    #[test]
+    fn index_names_match_by_composed_form_conflicts_send_bytes_and_sha256_repositories_name_blobs()
+    {
+        let fixture = |format: &str| {
+            let root = tempfile::tempdir().unwrap();
+            git(
+                root.path(),
+                &["init", "-q", &format!("--object-format={format}")],
+                &[],
+            )
+            .unwrap();
+            root
+        };
+        let capture = |path: &Path| {
+            let copy =
+                super::super::Copy::new(path.into(), "/work".into(), vec![], path.join("lock"))
+                    .unwrap();
+            Upload::capture(&copy).unwrap()
+        };
+        let blob = |path: &Path, bytes: &[u8]| {
+            String::from_utf8(git(path, &["hash-object", "-w", "--stdin"], bytes).unwrap())
+                .unwrap()
+                .trim()
+                .to_owned()
+        };
+        // macOS Git indexes the composed name of a file the disk spells decomposed.
+        let root = fixture("sha1");
+        let decomposed = "\u{304b}\u{3099}.txt";
+        std::fs::write(root.path().join(decomposed), "kana").unwrap();
+        let oid = blob(root.path(), b"kana");
+        let index = |entries: &str| {
+            git(
+                root.path(),
+                &["update-index", "--index-info"],
+                entries.as_bytes(),
+            )
+            .unwrap();
+        };
+        index(&format!("100644 {oid} 0\t\u{304c}.txt\n"));
+        let upload = capture(root.path());
+        assert!(matches!(&upload.files[0].source, Source::Blob { oid: o, .. } if *o == oid));
+        // A conflicted entry names no single blob: its bytes are sent.
+        let composed = "\u{304c}.txt";
+        let zero = "0".repeat(40);
+        index(&format!(
+            "0 {zero}\t{composed}\n100644 {oid} 2\t{composed}\n100644 {oid} 3\t{composed}\n"
+        ));
+        let upload = capture(root.path());
+        assert_eq!(
+            upload.files[0].source,
+            Source::Content(STANDARD.encode("kana"))
+        );
+        let root = fixture("sha256");
+        std::fs::write(root.path().join("file"), "content").unwrap();
+        git(root.path(), &["add", "file"], &[]).unwrap();
+        let upload = capture(root.path());
+        assert!(matches!(&upload.files[0].source,
+            Source::Blob { oid, .. } if oid.len() == 64 && *oid == blob(root.path(), b"content")));
+        upload.validate().unwrap();
+    }
+    #[test]
+    fn untracked_bytes_beyond_the_limit_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        git(root.path(), &["init", "-q"], &[]).unwrap();
+        std::fs::write(root.path().join("small"), "small").unwrap();
+        std::fs::write(root.path().join("large"), vec![0u8; LIMIT]).unwrap();
+        let copy = super::super::Copy::new(
+            root.path().into(),
+            "/work".into(),
+            vec![],
+            root.path().join("lock"),
+        )
+        .unwrap();
+        assert!(matches!(
+            Upload::capture(&copy),
+            Err(CaptureError::Limit { files, history: 0 }) if files == LIMIT + "small".len()
+        ));
+    }
+    #[test]
+    fn blobs_need_a_repository_and_completed_history_is_not_the_senders() {
+        let mut value = upload();
+        value.files.push(File {
+            path: "file".into(),
+            source: Source::Blob {
+                oid: "a".repeat(40),
+                sha256: "b".repeat(64),
+            },
             executable: false,
         });
         assert!(value.validate().is_err());
+        let git = |format: &str, bundle: String| Git {
+            bundle,
+            bases: vec![],
+            object_format: format.into(),
+            head: "refs/heads/main".into(),
+            refs: BTreeMap::new(),
+            index: None,
+            exclude: None,
+            remotes: BTreeMap::new(),
+            objects: BTreeMap::new(),
+            shared_indexes: BTreeMap::new(),
+        };
+        value.git = Some(git("sha256", String::new()));
+        assert!(value.validate().is_err());
+        value.git = Some(git("sha1", STANDARD.encode(vec![0; LIMIT + 1])));
+        assert!(value.validate().is_ok());
+        assert!(value.validate_sent().is_err());
     }
 }

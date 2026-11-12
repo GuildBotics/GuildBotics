@@ -2092,6 +2092,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.11.1",
  "tar",
  "tempfile",

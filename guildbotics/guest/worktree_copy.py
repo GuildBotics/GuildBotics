@@ -35,10 +35,11 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from collections.abc import Iterator, Set
 from pathlib import Path, PurePosixPath
-from typing import Any, TypedDict
+from typing import IO, Any, TypedDict
 
 from guildbotics.intelligences.agent_runtime.wire import (
     ChangedFile,
@@ -66,7 +67,11 @@ class WorktreeCopyError(ValueError):
 def receive_tree(
     source: Path, destination: Path, upload: dict[str, Any], *, readonly: bool = True
 ) -> Iterator[CopiedFile]:
-    """Rebuild a client copy using only received data, never the client's path."""
+    """Rebuild a client copy using only received data, never the client's path.
+
+    A file the client named by its index blob is written from the received
+    history; any other file from the bytes it sent.
+    """
 
     def safe(name: str) -> Path:
         parts = name.split("/")
@@ -86,22 +91,41 @@ def receive_tree(
     source.mkdir(parents=True, exist_ok=True)
     for name in upload["directories"]:
         (destination / safe(name)).mkdir(parents=True, exist_ok=True)
+    for name in upload["nested"]:
+        (source / safe(name) / _GIT).mkdir(parents=True, exist_ok=True)
+    repository = upload["git"]
+    gitdir = source / _GIT
+    if repository is not None:
+        _receive_repository(gitdir, destination, repository)
+    received: list[tuple[dict[str, Any], Path]] = []
+    named: dict[str, list[Path]] = {}
     for item in upload["files"]:
-        name = safe(item["path"])
-        target = destination / name
+        target = destination / safe(item["path"])
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("xb") as file:
-            file.write(base64.b64decode(item["content"], validate=True))
+        match item["source"]:
+            case {"content": content}:
+                with target.open("xb") as file:
+                    file.write(base64.b64decode(content, validate=True))
+            case {"blob": {"oid": str(oid)}}:
+                named.setdefault(oid, []).append(target)
+            case _:
+                raise WorktreeCopyError("Invalid received worktree file")
+        received.append((item, target))
+    _write_blobs(gitdir, named)
+    for item, target in received:
         os.chmod(target, 0o755 if item["executable"] else 0o644)
         yield CopiedFile(
             path=item["path"], sha256=_sha256(target), executable=item["executable"]
         )
-    for name in upload["nested"]:
-        (source / safe(name) / _GIT).mkdir(parents=True, exist_ok=True)
-    repository = upload["git"]
-    if repository is None:
-        return
-    gitdir = source / _GIT
+    if repository is not None and readonly:
+        subprocess.run(["mount", "--bind", str(gitdir), str(gitdir)], check=True)
+        subprocess.run(["mount", "-o", "remount,bind,ro", str(gitdir)], check=True)
+
+
+def _receive_repository(
+    gitdir: Path, destination: Path, repository: dict[str, Any]
+) -> None:
+    """Rebuild the client's repository in ``gitdir`` for ``destination``."""
     object_format = repository["object_format"]
     if object_format not in ("sha1", "sha256"):
         raise WorktreeCopyError("Invalid Git object format")
@@ -117,7 +141,7 @@ def receive_tree(
         ).stdout
 
     if repository["bundle"]:
-        bundle = source / "history.bundle"
+        bundle = gitdir.parent / "history.bundle"
         bundle.write_bytes(base64.b64decode(repository["bundle"], validate=True))
         git("bundle", "verify", str(bundle))
         git("bundle", "unbundle", str(bundle))
@@ -161,9 +185,54 @@ def receive_tree(
     for name, url in repository["remotes"].items():
         git("config", f"remote.{name}.url", url)
     (destination / _GIT).write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
-    if readonly:
-        subprocess.run(["mount", "--bind", str(gitdir), str(gitdir)], check=True)
-        subprocess.run(["mount", "-o", "remount,bind,ro", str(gitdir)], check=True)
+
+
+def _write_blobs(gitdir: Path, named: dict[str, list[Path]]) -> None:
+    """Write each blob of the received repository to the files that name it,
+    streamed from one ``git cat-file --batch``.
+
+    Raises:
+        WorktreeCopyError: When the repository lacks one of them.
+    """
+    if not named:
+        return
+    with tempfile.TemporaryFile() as wanted:
+        wanted.write("".join(f"{oid}\n" for oid in named).encode())
+        wanted.seek(0)
+        with subprocess.Popen(
+            ["git", f"--git-dir={gitdir}", "cat-file", "--batch"],
+            stdin=wanted,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ) as batch:
+            assert batch.stdout is not None
+            for oid, targets in named.items():
+                _copy_blob(batch.stdout, oid, targets)
+    if batch.returncode != 0:
+        raise WorktreeCopyError("Received history lacks a worktree blob")
+
+
+def _copy_blob(out: IO[bytes], oid: str, targets: list[Path]) -> None:
+    """Stream one batch entry into the first target, then copy it to the
+    rest one at a time: a blob many files share opens no more of them."""
+    match out.readline().decode().split():
+        case [found, "blob", size] if found == oid:
+            remaining = int(size)
+        case _:
+            raise WorktreeCopyError("Received history lacks a worktree blob")
+    first, *rest = targets
+    with first.open("xb") as file:
+        while remaining:
+            chunk = out.read(min(remaining, _CHUNK_BYTES))
+            if not chunk:
+                raise WorktreeCopyError("Received history lacks a worktree blob")
+            file.write(chunk)
+            remaining -= len(chunk)
+    if out.read(1) != b"\n":
+        raise WorktreeCopyError("Received history lacks a worktree blob")
+    for target in rest:
+        with first.open("rb") as source, target.open("xb") as copy:
+            shutil.copyfileobj(source, copy, _CHUNK_BYTES)
 
 
 def copy_tree(
