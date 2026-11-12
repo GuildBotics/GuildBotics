@@ -11,9 +11,16 @@
 # PR heads select jobs by paths; default-branch and landing-gate runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
 #
-# The Rust jobs check the whole Cargo workspace. The cache restores `target`
-# built from other commits, which can look newer than the checked-out files:
-# touching the crates first makes them newer than any restored output, so
+# The Rust jobs check the whole Cargo workspace, its tests in two jobs:
+# rust-test-branvil tests Branvil's crates, which use none of GuildBotics', so
+# a change to GuildBotics' crates alone skips it; rust-test tests the rest,
+# which uses Branvil, so it also runs for Branvil's changes. Each crate is
+# tested by one of them, and each job's paths include every workspace crate
+# its tested crates build from (tests/test_cargo_workspace.py).
+#
+# The Rust jobs' cache restores `target` built from other commits, which can
+# look newer than the checked-out files: touching the crates first makes them
+# newer than any restored output, so
 # Cargo rebuilds the workspace's crates and reuses only the dependencies.
 # Incremental data would save little of that rebuild and fill the cache
 # (CARGO_INCREMENTAL=0; measured in crates/branvil/docs/performance.md,
@@ -134,7 +141,29 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace",
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace --exclude branvil --exclude loopback-auth",
+]
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
+
+[[jobs]]
+name = "rust-test-branvil"
+paths = [
+  "crates/branvil/src/**",
+  "crates/branvil/tests/**",
+  "crates/branvil/examples/**",
+  "crates/branvil/Cargo.toml",
+  "crates/loopback-auth/src/**",
+  "crates/loopback-auth/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain*",
+  ".cargo/**",
+]
+image = "guildbotics/agent-environment:dev"
+commands = [
+  "find crates -exec touch -c {} +",
+  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked -p branvil -p loopback-auth",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }

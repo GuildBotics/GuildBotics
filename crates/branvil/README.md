@@ -579,8 +579,10 @@ artifacts, retry and cancel, states, limits, and the trust model:
 ### This repository's pipeline
 
 The GuildBotics repository's [`.branvil/ci.toml`](../../.branvil/ci.toml) runs
-the checks of "Development": `rust-fmt`, `rust-clippy`, and `rust-test` for
-the Cargo workspace, `rust-duplicates` (jscpd), `branvil-web` (`npm ci` at the
+the checks of "Development": `rust-fmt` and `rust-clippy` for the Cargo
+workspace, and its tests in `rust-test-branvil` (Branvil's crates, which a pull
+request changing only GuildBotics' crates skips) and `rust-test` (the rest),
+`rust-duplicates` (jscpd), `branvil-web` (`npm ci` at the
 repository root, then `npm run lint`, `npm run typecheck`, and `npm run test`
 in `crates/branvil/web`), and
 `branvil-integration` (see "Checking with GuildBotics"). Their image is
@@ -591,8 +593,8 @@ archive under Settings → CI, and the pipeline names it by its tag. When the
 image is rebuilt, loading the new archive is all it takes (the script
 does so itself); the pipeline stays as it is. The Rust jobs fetch crates
 from crates.io and `branvil-web` fetches packages from `registry.npmjs.org`, so the
-repository's CI tab must allow its jobs the network. `rust-clippy` and `rust-test` cache
-Cargo's registry and `target`, keyed by `rust-toolchain.toml` so lockfile changes
+repository's CI tab must allow its jobs the network. `rust-clippy` and the two
+test jobs each cache Cargo's registry and `target`, keyed by `rust-toolchain.toml` so lockfile changes
 can reuse dependencies on PR heads and gates. The pipeline comments explain
 this temporary choice and the return to lockfile keys in ticket #120.
 `branvil-web` caches npm's
