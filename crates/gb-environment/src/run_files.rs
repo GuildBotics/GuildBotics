@@ -24,17 +24,17 @@ pub fn directory(data: &Path, id: &str) -> std::io::Result<PathBuf> {
 }
 pub struct Lease {
     pub path: PathBuf,
-    _lock: gb_base::files::FileLock,
+    _lock: std::fs::File,
 }
 impl Drop for Lease {
     fn drop(&mut self) {
         // The timestamp is host-owned and updated before the OS unlocks.
-        let _ = self._lock.file().set_modified(SystemTime::now());
+        let _ = self._lock.set_modified(SystemTime::now());
     }
 }
 pub struct Completed {
     dir: Dir,
-    _lock: gb_base::files::FileLock,
+    _lock: std::fs::File,
 }
 impl std::ops::Deref for Completed {
     type Target = Dir;
@@ -42,7 +42,7 @@ impl std::ops::Deref for Completed {
         &self.dir
     }
 }
-fn lock(dir: &Dir, create: bool) -> std::io::Result<Option<gb_base::files::FileLock>> {
+fn lock(dir: &Dir, create: bool, shared: bool) -> std::io::Result<Option<std::fs::File>> {
     let file = dir.open_with(
         "lease",
         OpenOptions::new()
@@ -51,22 +51,38 @@ fn lock(dir: &Dir, create: bool) -> std::io::Result<Option<gb_base::files::FileL
             .create(create)
             .follow(FollowSymlinks::No),
     )?;
-    gb_base::files::FileLock::try_file(file.into_std())
+    let file = file.into_std();
+    let result = if shared {
+        file.try_lock_shared()
+    } else {
+        file.try_lock()
+    };
+    match result {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
 }
 pub fn prepare(data: &Path, id: &str) -> std::io::Result<Lease> {
     prune(data)?;
     let path = directory(data, id)?;
     let parent = gb_base::host_path::open_directory(path.parent().unwrap(), true)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let held = lock(&parent, true)?.ok_or_else(|| std::io::Error::other("Run is active"))?;
-    parent.create_dir("work")?;
+    let held = lock(&parent, true, false)?.ok_or_else(|| std::io::Error::other("Run is active"))?;
+    // A retry keeps this run's partial artifacts, after the prior writer stops.
+    if let Err(error) = parent.create_dir("work")
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(error);
+    }
+    parent.open_dir_nofollow("work")?;
     Ok(Lease { path, _lock: held })
 }
 pub fn completed(data: &Path, id: &str) -> std::io::Result<Completed> {
     let path = directory(data, id)?;
     let parent = gb_base::host_path::open_directory(path.parent().unwrap(), false)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let held = lock(&parent, false)?
+    let held = lock(&parent, false, true)?
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::WouldBlock, "Run active"))?;
     let meta = parent.symlink_metadata("lease")?;
     if SystemTime::now()
@@ -113,9 +129,9 @@ pub fn prune(data: &Path) -> std::io::Result<()> {
         } else {
             None
         };
-        if let Some(held) = lock(&dir, true)? {
+        if let Some(held) = lock(&dir, true, false)? {
             if let Some(time) = orphan_time {
-                held.file().set_modified(time)?;
+                held.set_modified(time)?;
             }
             let meta = dir.symlink_metadata("lease")?;
             if SystemTime::now()
@@ -175,6 +191,48 @@ pub fn regular(root: &Dir, name: &str) -> std::io::Result<cap_std::fs::File> {
 mod tests {
     use super::*;
     #[test]
+    fn retries_reuse_files_only_after_writers_and_readers_release() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "d".repeat(32);
+        let first = prepare(root.path(), &id).unwrap();
+        std::fs::write(first.path.join("partial.txt"), "partial").unwrap();
+        assert!(prepare(root.path(), &id).is_err());
+        drop(first);
+        let retry = prepare(root.path(), &id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(retry.path.join("partial.txt")).unwrap(),
+            "partial"
+        );
+        assert!(completed(root.path(), &id).is_err());
+        drop(retry);
+        let reader = completed(root.path(), &id).unwrap();
+        let other = completed(root.path(), &id).unwrap();
+        assert!(prepare(root.path(), &id).is_err());
+        let path = directory(root.path(), &id).unwrap();
+        std::fs::File::open(path.parent().unwrap().join("lease"))
+            .unwrap()
+            .set_modified(SystemTime::now() - RETENTION - Duration::from_secs(1))
+            .unwrap();
+        prune(root.path()).unwrap();
+        assert!(path.exists());
+        drop(reader);
+        prune(root.path()).unwrap();
+        assert!(path.exists());
+        drop(other);
+        prune(root.path()).unwrap();
+        assert!(!path.exists());
+        #[cfg(unix)]
+        {
+            let lease = prepare(root.path(), &id).unwrap();
+            let path = lease.path.clone();
+            drop(lease);
+            std::fs::remove_dir(&path).unwrap();
+            std::os::unix::fs::symlink(root.path(), &path).unwrap();
+            assert!(prepare(root.path(), &id).is_err());
+        }
+    }
+
+    #[test]
     fn run_directories_are_private_until_finished_and_reject_links() {
         let root = tempfile::tempdir().unwrap();
         let a = "a".repeat(32);
@@ -232,7 +290,6 @@ mod failure_tests {
             std::fs::write(lease.path.join("partial.txt"), "partial").unwrap();
             lease
                 ._lock
-                .file()
                 .set_modified(SystemTime::now() - RETENTION - Duration::from_secs(1))
                 .unwrap();
             prune(root.path()).unwrap();

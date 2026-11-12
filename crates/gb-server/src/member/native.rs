@@ -1515,6 +1515,9 @@ pub(crate) mod tests {
                 ));
                 if command.name == "functions/talk_as" && command.wants_result {
                     assert!(command.invocation.is_none());
+                    assert!(command.access.read_only);
+                    assert!(command.files.is_none());
+                    assert_eq!(command.cwd, self.native.data.join("run/empty"));
                     assert!(command.pipe.is_empty());
                     assert_eq!(command.args.len(), 2);
                     assert_eq!(command.args[1], "context_location=Ticket");
@@ -1761,6 +1764,56 @@ pub(crate) mod tests {
             })
         }
     }
+    #[tokio::test]
+    async fn failure_speech_dispatches_with_the_original_run_still_held_or_finished() {
+        use crate::ticket_selector::Runner;
+        for language in ["en", "ja"] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let project_path = native
+                .workspace
+                .join(".guildbotics/config/team/project.yml");
+            let mut project: Value =
+                serde_json::from_slice(&std::fs::read(&project_path).unwrap()).unwrap();
+            project["language"] = json!(language);
+            write_json(&project_path, project);
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let trace = gb_observability::Trace::open(
+                &gb_observability::Diagnostics::open(&native.workspace),
+                "manual",
+            );
+            let invocation: gb_wire::WorkflowInvocation = serde_json::from_value(json!({
+                "command":"workflows/ticket_driven_workflow", "person_id":"aiko",
+                "source":"manual", "trigger_type":"ticket", "payload":{},
+                "work":{"kind":"generic", "identity":"failure-speech"}
+            }))
+            .unwrap();
+            let original = runtime
+                .dispatcher
+                .prepare(
+                    "workflows/ticket_driven_workflow",
+                    invocation.clone(),
+                    trace.id(),
+                )
+                .await
+                .unwrap();
+            // Speech must run even while the failed VM's cleanup holds its lease.
+            assert_eq!(
+                runtime.say("failure", &invocation, &trace).await.as_deref(),
+                Some("Safe failure explanation.")
+            );
+            drop(original);
+            assert_eq!(
+                runtime.say("failure", &invocation, &trace).await.as_deref(),
+                Some("Safe failure explanation.")
+            );
+            assert_eq!(driver.ran.lock().unwrap().len(), 2);
+            cleanup.close();
+            cleanup.wait().await;
+        }
+    }
+
     fn workflow_fixture(
         native: &Native,
         root: &Path,
