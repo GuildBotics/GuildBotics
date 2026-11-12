@@ -854,32 +854,40 @@ function ServicePage() {
                   }
                 }}
               />
+              <NumberInput
+                label={t("service.openPullRequestLimit")}
+                description={t("service.openPullRequestLimitDescription")}
+                min={1}
+                max={20}
+                allowDecimal={false}
+                clampBehavior="strict"
+                disabled={!settings}
+                value={settings?.max_open_pull_requests ?? ""}
+                onChange={(value) => {
+                  if (typeof value === "number") save({ max_open_pull_requests: value });
+                }}
+              />
+              {scheduler.data?.scheduler.running &&
+                Object.entries(scheduler.data.scheduler.member_pull_requests ?? {}).map(
+                  ([person, load]) => (
+                    <Text key={person}>
+                      {t("service.pullRequestLoad", {
+                        person:
+                          activeMembers.find((member) => member.person_id === person)?.name ??
+                          person,
+                        ...load,
+                      })}
+                      {" — "}
+                      {t(
+                        load.deferred
+                          ? "service.pullRequestDeferred"
+                          : "service.pullRequestAvailable",
+                      )}
+                    </Text>
+                  ),
+                )}
             </ServiceRuntimeSection>
           </div>
-          <NumberInput
-            label={t("service.openPullRequestLimit")}
-            min={1}
-            max={20}
-            allowDecimal={false}
-            clampBehavior="strict"
-            disabled={!settings}
-            value={settings?.max_open_pull_requests ?? ""}
-            onChange={(value) => {
-              if (typeof value === "number") save({ max_open_pull_requests: value });
-            }}
-          />
-          {scheduler.data?.scheduler.running &&
-            Object.entries(scheduler.data.scheduler.member_pull_requests ?? {}).map(
-              ([person, load]) => (
-                <Text key={person}>
-                  {t("service.pullRequestLoad", { person, ...load })}
-                  {" — "}
-                  {t(
-                    load.deferred ? "service.pullRequestDeferred" : "service.pullRequestAvailable",
-                  )}
-                </Text>
-              ),
-            )}
           <ServiceSwitchSetting
             title={t("service.startWithServer.title")}
             description={t("service.startWithServer.description")}

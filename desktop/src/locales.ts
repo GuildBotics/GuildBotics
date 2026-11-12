@@ -179,8 +179,10 @@ export const resources = {
       },
       service: {
         openPullRequestLimit: "Open PR limit per member",
+        openPullRequestLimitDescription:
+          "Counts drafts and PRs without tickets; excludes PRs linked to interactive tickets. Only new ready-lane tickets from patrol and scheduled runs are paused.",
         pullRequestLoad: "{{person}}: {{count}} / {{limit}} open PRs",
-        pullRequestDeferred: "New tickets deferred",
+        pullRequestDeferred: "Limit reached (new tickets paused)",
         pullRequestAvailable: "New tickets allowed",
         title: "Service Runtime",
         sourceTarget: "Include in service run",
@@ -2167,8 +2169,10 @@ export const resources = {
       },
       service: {
         openPullRequestLimit: "メンバーごとの開いている PR の上限",
+        openPullRequestLimitDescription:
+          "Draft とチケットのない PR も数え、対話チケットに関連する PR は除きます。止めるのは巡回・定期実行の着手可チケットの新規着手だけです。",
         pullRequestLoad: "{{person}}: 開いている PR {{count}} / {{limit}}",
-        pullRequestDeferred: "新規着手を見送り",
+        pullRequestDeferred: "上限に到達（新規着手を停止中）",
         pullRequestAvailable: "新規着手可能",
         title: "サービス実行",
         sourceTarget: "サービス実行に含める",

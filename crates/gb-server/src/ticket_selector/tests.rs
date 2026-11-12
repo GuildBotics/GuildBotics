@@ -1043,6 +1043,7 @@ struct CodeFaults {
     inner: Arc<dyn CodeHostingService>,
     draft: Option<ServiceError>,
     fail_comment: bool,
+    quota_error: Option<ServiceError>,
 }
 impl CodeFaults {
     fn new(inner: Arc<dyn CodeHostingService>) -> Self {
@@ -1053,6 +1054,7 @@ impl CodeFaults {
             block: None,
             draft: None,
             fail_comment: false,
+            quota_error: None,
         }
     }
 }
@@ -1176,7 +1178,11 @@ impl CodeHostingService for CodeFaults {
         self.inner.repository_from_remote(remote_url)
     }
     fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
-        self.inner.authored_open_pull_requests()
+        if let Some(error) = &self.quota_error {
+            Box::pin(async move { Err(error.clone()) })
+        } else {
+            self.inner.authored_open_pull_requests()
+        }
     }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         if let Some(tasks) = &self.candidates {
@@ -1235,6 +1241,7 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
             inner: f.code.clone(),
             draft: Some(error.clone()),
             fail_comment: false,
+            quota_error: None,
         };
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
@@ -1292,6 +1299,7 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
         inner: f.code.clone(),
         draft: None,
         fail_comment: true,
+        quota_error: None,
     };
     let mut selector = f.selector("routine");
     selector.code = Some(&faults);
@@ -1322,6 +1330,7 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
             inner: f.code.clone(),
             draft: None,
             fail_comment: false,
+            quota_error: None,
         };
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
@@ -1489,6 +1498,91 @@ async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_o
                 .unwrap();
             assert_eq!(f.runner.calls.lock().unwrap().len(), 7);
             assert_eq!(quota.snapshot().unwrap().count, 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
+    for source in ["routine", "scheduled", "manual"] {
+        for error in [
+            ServiceError::NotFound,
+            ServiceError::Failed,
+            ServiceError::Unavailable,
+        ] {
+            let f = Fixture::new();
+            let ready = f.task().await;
+            let pull = f.pull().await;
+            let quota = PullRequestQuota::new(2);
+            let mut selector = f.selector(source);
+            selector.quota = Some(&quota);
+            selector.candidates().await.unwrap();
+            assert!(quota.snapshot().is_some());
+            let mut faults = CodeFaults::new(f.code.clone());
+            faults.quota_error = Some(error);
+            selector.code = Some(&faults);
+            assert!(!selector.candidates().await.unwrap().is_empty());
+            assert!(quota.snapshot().is_none());
+            assert_eq!(selector.next().await.unwrap().unwrap().0.url, pull.url);
+            assert_eq!(
+                selector.refresh(&ready).await.unwrap().is_none(),
+                source != "manual"
+            );
+            selector
+                .run(
+                    &ready,
+                    selector.invocation(&ready).unwrap(),
+                    &f.trace(source),
+                    5,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                f.runner.calls.lock().unwrap().len(),
+                usize::from(source == "manual")
+            );
+            for reason in [
+                "working_lane",
+                "issue_comment",
+                "issue_mention",
+                "pull_request_feedback",
+                "pull_request_review",
+                "pull_request_checks",
+            ] {
+                let mut task = ready.clone();
+                task.status = "in_progress".into();
+                task.trigger_reason = Some(reason.into());
+                selector
+                    .run(
+                        &task,
+                        selector.invocation(&task).unwrap(),
+                        &f.trace(source),
+                        5,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                f.runner.calls.lock().unwrap().len(),
+                6 + usize::from(source == "manual")
+            );
+            let working = f.task().await;
+            f.ticket
+                .move_ticket(&working, MoveLane::InProgress)
+                .await
+                .unwrap();
+            let mut working = working;
+            working.status = "in_progress".into();
+            let mut working_faults = CodeFaults::new(f.code.clone());
+            working_faults.quota_error = faults.quota_error.clone();
+            working_faults.candidates = Some(vec![ready.clone(), working.clone()]);
+            selector.code = Some(&working_faults);
+            if source != "manual" {
+                assert_eq!(selector.next().await.unwrap().unwrap().0.url, working.url);
+            }
+            selector.code = Some(f.code.as_ref());
+            selector.candidates().await.unwrap();
+            assert!(quota.snapshot().is_some());
         }
     }
 }

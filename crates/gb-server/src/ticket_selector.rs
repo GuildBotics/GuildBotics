@@ -103,15 +103,25 @@ impl PullRequestQuota {
     pub fn snapshot(&self) -> Option<PullRequestLoad> {
         self.last.lock().unwrap().clone()
     }
-    async fn observe(&self, code: &dyn CodeHostingService) -> Result<bool, ServiceError> {
-        let count = code.authored_open_pull_requests().await?.len();
+    async fn observe(&self, code: &dyn CodeHostingService) -> bool {
+        let count = match code.authored_open_pull_requests().await {
+            Ok(pulls) => pulls.len(),
+            Err(error) => {
+                *self.last.lock().unwrap() = None;
+                tracing::warn!(
+                    ?error,
+                    "Could not count authored open PRs; deferring new ready work"
+                );
+                return true;
+            }
+        };
         let deferred = count >= usize::from(self.limit);
         *self.last.lock().unwrap() = Some(PullRequestLoad {
             count,
             limit: self.limit,
             deferred,
         });
-        Ok(deferred)
+        deferred
     }
 }
 
@@ -141,7 +151,7 @@ impl Selector<'_> {
     }
     pub async fn candidates(&self) -> Result<Vec<Task>, ServiceError> {
         if let (Some(quota), Some(code)) = (self.quota, self.code) {
-            quota.observe(code).await?;
+            quota.observe(code).await;
         }
         let mut candidates = Vec::new();
         if let Some(code) = self.code {
@@ -171,20 +181,20 @@ impl Selector<'_> {
             self.hand_over(&task).await;
             return Ok(None);
         }
-        if self.defer_ready(&task).await? {
+        if self.defer_ready(&task).await {
             return Ok(None);
         }
         self.invocation(&task).map(Some)
     }
 
-    async fn defer_ready(&self, task: &Task) -> Result<bool, ServiceError> {
+    async fn defer_ready(&self, task: &Task) -> bool {
         if self.source != "manual"
             && task.trigger_reason.as_deref() == Some("ready_lane")
             && let (Some(quota), Some(code)) = (self.quota, self.code)
         {
             return quota.observe(code).await;
         }
-        Ok(false)
+        false
     }
 
     pub fn invocation(&self, task: &Task) -> Result<WorkflowInvocation, ServiceError> {
@@ -236,11 +246,7 @@ impl Selector<'_> {
         invocation
             .payload
             .insert("max_completion_attempts".into(), json!(attempts.max(1)));
-        if self
-            .defer_ready(task)
-            .await
-            .map_err(DispatchFailure::Service)?
-        {
+        if self.defer_ready(task).await {
             return Ok(CommandReply::default());
         }
         let result = async {

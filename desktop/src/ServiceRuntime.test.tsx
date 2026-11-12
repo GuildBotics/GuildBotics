@@ -867,13 +867,17 @@ it("shows each member's counted PRs only while running and saves the shared limi
   );
   const user = userEvent.setup();
   renderApp("/service");
-  expect(await screen.findByText(/alice: 2 \/ 2 open PRs/)).toHaveTextContent(
+  expect(await screen.findByText(/Alice: 2 \/ 2 open PRs/)).toHaveTextContent(
     t("service.pullRequestDeferred"),
   );
   expect(screen.getByText(/bob: 1 \/ 2 open PRs/)).toHaveTextContent(
     t("service.pullRequestAvailable"),
   );
   const input = screen.getByRole("textbox", { name: t("service.openPullRequestLimit") });
+  expect(
+    screen.getByText(t("overview.workerCard.title")).closest(".service-unit-panel"),
+  ).toContainElement(input);
+  expect(input).toHaveAccessibleDescription(t("service.openPullRequestLimitDescription"));
   await user.clear(input);
   await user.type(input, "4");
   await waitFor(() => expect(saved.max_open_pull_requests).toBe(4));
@@ -888,5 +892,5 @@ it("hides counted PRs when the service is stopped", async () => {
   );
   renderApp("/service");
   await screen.findByRole("textbox", { name: t("service.openPullRequestLimit") });
-  expect(screen.queryByText(/alice: 2 \/ 2 open PRs/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Alice: 2 \/ 2 open PRs/)).not.toBeInTheDocument();
 });
