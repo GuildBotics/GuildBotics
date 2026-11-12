@@ -405,7 +405,20 @@ mod tests {
                 .body(axum::body::Body::from(data.to_string()))
                 .unwrap()
         };
-        let preflight = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "person":"aiko", "preflight":true, "cwd":root.path().join("client-only/absent"), "expected_workspace":identity.workspace_id}))).await.unwrap();
+        let mixed = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/commands/run",
+                json!({
+                    "command":"functions/probe", "person":"aiko", "preflight":true,
+                    "cwd":root.path(), "client_cwd":root.path().join("client-only/absent")
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(mixed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let preflight = app.clone().oneshot(request("POST", "/commands/run", json!({"command":"functions/probe", "person":"aiko", "preflight":true, "client_cwd":root.path().join("client-only/absent"), "expected_workspace":identity.workspace_id}))).await.unwrap();
         let status = preflight.status();
         let bytes = axum::body::to_bytes(preflight.into_body(), MAX_RESULT)
             .await

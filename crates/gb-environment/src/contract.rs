@@ -869,6 +869,20 @@ fn protected_names(path: &Path) -> Vec<PathBuf> {
     seen
 }
 
+pub fn managed_clone(workspace: &Path, person: &str, cwd: &Path) -> bool {
+    let clones = workspace.join(".guildbotics/local/clones").join(person);
+    cwd.strip_prefix(&clones)
+        .ok()
+        .and_then(|p| p.components().next())
+        .is_some_and(|c| {
+            let text = c.as_os_str().to_str().unwrap_or_default();
+            text.len() == 64
+                && text
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+}
+
 /// Member checkouts are host-owned precise children of workspace state. This
 /// exception never opens state itself or any credential directory as cwd.
 pub fn working_directory(
@@ -878,18 +892,7 @@ pub fn working_directory(
     denied: &[PathBuf],
 ) -> Result<PathBuf, String> {
     let cwd = gb_base::host_path::directory(cwd, false).map_err(|e| e.to_string())?;
-    let clones = workspace.join(".guildbotics/local/clones").join(person);
-    let managed = cwd
-        .strip_prefix(&clones)
-        .ok()
-        .and_then(|p| p.components().next())
-        .is_some_and(|c| {
-            let text = c.as_os_str().to_str().unwrap_or_default();
-            text.len() == 64
-                && text
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        });
+    let managed = managed_clone(workspace, person, &cwd);
     if managed {
         let state = workspace.join(".guildbotics");
         let remaining: Vec<_> = denied.iter().filter(|p| **p != state).cloned().collect();
@@ -968,7 +971,10 @@ pub fn validate_client_name(cwd: &Path, access: &Resolved, read_only: bool) -> R
 }
 
 /// Compare an untrusted client spelling without opening the client's directory.
+#[allow(clippy::too_many_arguments)]
 pub fn received_plan(
+    workspace: &Path,
+    person: &str,
     cwd: &Path,
     access: &Resolved,
     mut mounts: Vec<Mount>,
@@ -976,13 +982,35 @@ pub fn received_plan(
     upload: Option<std::sync::Arc<crate::worktree::transfer::Upload>>,
     returned: crate::worktree::transfer::Returned,
 ) -> Result<Plan, String> {
-    validate_client_name(cwd, access, read_only)?;
+    let mut client_access = access.clone();
+    if managed_clone(workspace, person, cwd) {
+        client_access
+            .denied
+            .retain(|p| *p != workspace.join(".guildbotics"));
+    }
+    validate_client_name(cwd, &client_access, read_only)?;
     let cwd = gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?;
     let guest = spelled(&cwd)?;
     mounts.retain(|m| m.guest != guest || m.host.is_some());
-    if mounts.iter().any(|m| cwd.starts_with(&m.guest)) {
+    // Grants may cover the copy. A nested scratch mount shadows only its cwd;
+    // runtime-owned mounts must never be shadowed by an untrusted spelling.
+    if mounts
+        .iter()
+        .any(|m| cwd.starts_with(&m.guest) && !access.grants.iter().any(|g| g == m))
+    {
         return Err("Client copy overlaps a server mount".into());
     }
+    let clones = workspace.join(".guildbotics/local/clones").join(person);
+    if clones.exists() {
+        let checked = validate_source(&clones, &access.denied, false, false)?;
+        mounts.push(Mount {
+            guest: spelled(&checked)?,
+            host: Some(checked),
+            readonly: read_only,
+            quota_mib: Some(CLONE_QUOTA_MIB),
+        });
+    }
+    mounts.retain(|m| m.guest != guest);
     let mut excluded = vec![".guildbotics".into()];
     for mount in &mounts {
         if let Some(relative) = mount.guest.strip_prefix(&format!("{guest}/")) {
@@ -1010,6 +1038,7 @@ pub fn received_plan(
         copy.excluded = excluded;
         Some(copy)
     };
+    mounts.sort_by_key(|mount| Path::new(&mount.guest).components().count());
     Ok(Plan {
         cwd: guest,
         mounts,
@@ -1041,16 +1070,7 @@ pub fn plan(
     let guest = spelled(&cwd)?;
     mounts.retain(|m| m.guest != guest || m.host.is_some());
     let clones = workspace.join(".guildbotics/local/clones").join(person);
-    let managed = cwd
-        .strip_prefix(&clones)
-        .ok()
-        .and_then(|p| p.components().next())
-        .is_some_and(|c| {
-            let v = c.as_os_str().to_str().unwrap_or_default();
-            v.len() == 64
-                && v.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        });
+    let managed = managed_clone(workspace, person, &cwd);
     if clones.exists() {
         let checked = validate_source(&clones, &access.denied, false, false)?;
         let mount = Mount {

@@ -318,9 +318,9 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         assert_eq!(
             preflight,
             json!({
-                "preflight":true,"client_copy":false,"upload":null,
+                "preflight":true,"client_cwd":cwd,"upload":null,
                 "command":"ask","args":["topic=review","value"],"person":person,
-                "message":message,"cwd":cwd,"expected_workspace":"019691c2-8dc0-7654-8000-000000000042","request_id":null,
+                "message":message,"cwd":null,"expected_workspace":"019691c2-8dc0-7654-8000-000000000042","request_id":null,
             })
         );
         let resolved_person = person.as_str().unwrap_or("default-member");
@@ -335,12 +335,13 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         let id = request["request_id"].as_str().unwrap();
         assert!(id.starts_with("fixture.100000."));
         assert_eq!(request["preflight"], false);
-        assert_eq!(request["client_copy"], true);
+        assert!(request.get("client_copy").is_none());
         assert_eq!(request["command"], "ask");
         assert_eq!(request["args"], json!(["topic=review", "value"]));
         assert_eq!(request["person"], resolved_person);
         assert_eq!(request["message"], message);
-        assert_eq!(request["cwd"], json!(cwd));
+        assert_eq!(request["cwd"], Value::Null);
+        assert_eq!(request["client_cwd"], json!(cwd));
         assert_eq!(
             request["expected_workspace"],
             "019691c2-8dc0-7654-8000-000000000042"

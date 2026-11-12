@@ -560,6 +560,8 @@ mod tests {
         .unwrap();
         let plan = |cwd: &Path, read_only, payload| {
             crate::contract::received_plan(
+                &workspace,
+                "aiko",
                 cwd,
                 &access,
                 vec![],

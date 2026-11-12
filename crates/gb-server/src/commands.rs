@@ -34,7 +34,7 @@ pub(crate) struct RunRequest {
     #[serde(default)]
     pub(crate) preflight: bool,
     #[serde(default)]
-    pub(crate) client_copy: bool,
+    pub(crate) client_cwd: Option<PathBuf>,
     pub(crate) upload: Option<gb_environment::worktree::transfer::Upload>,
     pub(crate) command: String,
     #[serde(default)]
@@ -231,8 +231,9 @@ async fn start(
     returned: gb_environment::worktree::transfer::Returned,
 ) -> Result<Ran, Response> {
     let error = |status, code| ApiError::new(status, code, headers);
-    if request.command.is_empty()
-        || (request.upload.is_some() && (!request.client_copy || request.preflight))
+    if (request.cwd.is_some() && request.client_cwd.is_some())
+        || request.command.is_empty()
+        || (request.upload.is_some() && (request.client_cwd.is_none() || request.preflight))
     {
         return Err(error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error").into_response());
     }
@@ -358,13 +359,16 @@ async fn start(
     }
     // Where the run works, once its member and file are known; a directory
     // of its own is made without following a link on the way.
-    let cwd = match (&launch.cwd, &request.cwd) {
+    let cwd = match (
+        &launch.cwd,
+        request.client_cwd.as_ref().or(request.cwd.as_ref()),
+    ) {
         (Some(cwd), _) => {
             gb_base::host_path::open_directory(cwd, true)
                 .map_err(|e| internal(&e.to_string(), "OSError"))?;
             cwd.clone()
         }
-        (None, Some(cwd)) if request.preflight || request.client_copy => {
+        (None, Some(cwd)) if request.preflight || request.client_cwd.is_some() => {
             gb_base::host_path::normalize(cwd).map_err(|e| internal(&e.to_string(), "OSError"))?
         }
         (None, Some(cwd)) => {
@@ -389,7 +393,7 @@ async fn start(
             .reason(configuration.spoken(&problem.to_string()))
             .into_response()
     })?;
-    if request.preflight || request.client_copy {
+    if request.preflight || request.client_cwd.is_some() {
         let registered = gb_environment::device::registered_workspaces(&host.data)
             .map_err(|e| internal(&e, "OSError"))?;
         let mut resolved = gb_environment::contract::resolve(
@@ -400,21 +404,7 @@ async fn start(
             false,
         )
         .map_err(|e| internal(&e, "OSError"))?;
-        let clones = workspace
-            .join(".guildbotics/local/clones")
-            .join(&person.person_id);
-        if request.preflight
-            && cwd
-                .strip_prefix(&clones)
-                .ok()
-                .and_then(|p| p.components().next())
-                .is_some_and(|c| {
-                    let n = c.as_os_str().to_string_lossy();
-                    n.len() == 64
-                        && n.bytes()
-                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-                })
-        {
+        if gb_environment::contract::managed_clone(workspace, &person.person_id, &cwd) {
             resolved
                 .denied
                 .retain(|p| *p != workspace.join(".guildbotics"));
@@ -483,7 +473,7 @@ async fn start(
         trace_id.clone()
     };
     let command = gb_environment::Command {
-        client_copy: request.client_copy,
+        client_copy: request.client_cwd.is_some(),
         upload: request.upload.map(std::sync::Arc::new),
         returned,
         config: configuration,

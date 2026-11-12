@@ -326,7 +326,7 @@ async fn run_check(
     launch.failure_capture = Some(capture.clone());
     let request = RunRequest {
         preflight: false,
-        client_copy: false,
+        client_cwd: None,
         upload: None,
         command: command.into(),
         args: vec![],
@@ -972,7 +972,7 @@ pub(crate) async fn troubleshoot(
     );
     let run = RunRequest {
         preflight: false,
-        client_copy: false,
+        client_cwd: None,
         upload: None,
         command: "assistants/troubleshoot".into(),
         args: vec![],
