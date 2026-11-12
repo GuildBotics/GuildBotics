@@ -17,7 +17,7 @@ pub(crate) enum EnvironmentCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Remove obsolete snapshots after a successful Hub activation
+    /// Remove obsolete snapshots and the images no snapshot uses after a successful Hub activation
     Prune,
     /// Remove device snapshots while preserving provider logins
     Remove,
@@ -91,13 +91,13 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
             let name = device.view["snapshot"]["name"].as_str().unwrap_or_default();
             gb_environment::snapshot::ready(&workspace, name)
                 .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?;
-            gb_environment::snapshot::prune(
-                &workspace,
-                name,
-                gb_environment::runtime::remove_snapshot,
-            )
+            gb_environment::snapshot::prune(&workspace, name, |path| async {
+                gb_environment::runtime::remove_snapshot(path).await?;
+                Ok(true)
+            })
             .await
             .map_err(anyhow::Error::msg)?;
+            gb_server::environment::sweep_images(&host.data, &workspace).await?;
         }
         EnvironmentCommand::Remove => {
             let removed = gb_environment::runtime::remove_snapshots(

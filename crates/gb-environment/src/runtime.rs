@@ -32,6 +32,10 @@ const REPLY_LIMIT: usize = 10 * 1024 * 1024;
 const LOG_DRAIN: Duration = Duration::from_secs(2);
 /// How long the microVM has to stop before it is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Held by a load, a build until its microVM holds its image, and a sweep of
+/// the runtime's images: the first two reuse or pin images and layer files a
+/// sweep deletes, and none takes the runtime's own locks for that.
+const IMAGE_LOCK: &str = "images.lock";
 /// The runtime this crate speaks to: the version of the `microsandbox` crate
 /// and of the Python SDK, whose `msb` the Python version placed and marked
 /// with its version.
@@ -247,6 +251,7 @@ pub async fn load_image(
     backend(home)
         .await
         .map_err(|e| Sentence::Text(format!("{e:?}")))?;
+    let _held = hold(&home.join(IMAGE_LOCK)).await.map_err(Sentence::Text)?;
     let unpacked =
         crate::image_archive::uncompressed(archive).map_err(|e| Sentence::Text(e.to_string()))?;
     let input = unpacked.as_ref().map(|file| file.path()).unwrap_or(archive);
@@ -411,6 +416,43 @@ async fn owned_boot_in<T: Send + 'static>(
     // Dropping the waiter detaches creation; its owned result still drops and cleans up.
     tasks.spawn(boot).await.expect("microVM boot task failed")
 }
+/// Waits for the lock without occupying a runtime thread, so a cancelled
+/// caller stops waiting and shutdown is not held up.
+async fn hold(lock: &Path) -> Result<gb_base::files::FileLock, String> {
+    tokio::time::timeout(Duration::from_secs(10 * 60), async {
+        loop {
+            if let Some(held) =
+                gb_base::files::FileLock::try_hold(lock).map_err(|e| e.to_string())?
+            {
+                return Ok(held);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out waiting for the advisory lock at {}.",
+            lock.display()
+        )
+    })?
+}
+/// Boots while holding `lock`, until the microVM holds its image: a sweep
+/// could otherwise remove it. The lock moves into the boot task, so a waiter
+/// cancelled after it was taken does not release it while creation goes on,
+/// and one cancelled before boots nothing.
+async fn boot_holding<T: Send + 'static>(
+    lock: &Path,
+    boot: impl Future<Output = Result<T, String>> + Send + 'static,
+) -> Result<T, String> {
+    let held = hold(lock).await?;
+    owned_boot(async move {
+        let result = boot.await;
+        drop(held);
+        result
+    })
+    .await
+}
 
 #[cfg(test)]
 mod lifecycle_tests {
@@ -489,6 +531,58 @@ mod lifecycle_tests {
         cleanup_release.send(()).unwrap();
         drain.await;
         assert!(tasks.is_empty());
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancelled_boot_keeps_the_image_lock_until_creation_ends() {
+        let root = tempfile::tempdir().unwrap();
+        let lock = root.path().join(IMAGE_LOCK);
+        let (start, started) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let free = || gb_base::files::FileLock::try_hold(&lock).unwrap().is_some();
+        let loading = gb_base::files::FileLock::try_hold(&lock).unwrap().unwrap();
+        let (boots, booted) = tokio::sync::oneshot::channel::<()>();
+        let path = lock.clone();
+        let waiting = tokio::spawn(async move {
+            boot_holding(&path, async move {
+                let _ = boots.send(());
+                Ok(())
+            })
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waiting.abort();
+        let _ = waiting.await;
+        drop(loading);
+        assert!(
+            booted.await.is_err(),
+            "a build cancelled while waiting boots nothing"
+        );
+        assert!(free());
+
+        let path = lock.clone();
+        let waiter = tokio::spawn(async move {
+            boot_holding(&path, async move {
+                let _ = start.send(());
+                let _ = released.await;
+                let _ = finish.send(());
+                Ok(())
+            })
+            .await
+        });
+        started.await.unwrap();
+        waiter.abort();
+        let _ = waiter.await;
+        assert!(!free(), "a sweep must wait for the detached boot");
+        release.send(()).unwrap();
+        finished.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !free() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the boot releases the lock when creation ends");
     }
     #[tokio::test]
     async fn cancelled_boot_cleans_up_a_vm_that_finishes_starting_later() {
@@ -1612,12 +1706,17 @@ pub async fn build_snapshot(
         resources,
         nameservers,
     )?;
+    let images = home.join(IMAGE_LOCK);
     let boot = async move {
         reclaim_build_vms(&prefix).await?;
-        let OwnedVm { sandbox, cleanup } =
-            owned_boot(async move { builder.create().await.map(OwnedVm::new) })
+        let OwnedVm { sandbox, cleanup } = boot_holding(&images, async move {
+            builder
+                .create()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map(OwnedVm::new)
+                .map_err(|e| e.to_string())
+        })
+        .await?;
         Ok((sandbox, move || cleanup.finish()))
     };
     build_lifecycle(boot, cancelled, |guest| async move {
@@ -2047,6 +2146,109 @@ mod build_tests {
 pub async fn remove_snapshot(path: PathBuf) -> Result<(), String> {
     microsandbox::Snapshot::remove(&path.to_string_lossy(), true)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// After a build of a declared image, which every version boots: remove the
+/// workspace's recipes of another image, then the images no longer used.
+/// Recipes of the built image stay, so one prebuilt for an update survives.
+pub async fn retire(
+    home: &Path,
+    workspace: &Path,
+    name: &str,
+    indexed: &[PathBuf],
+) -> Result<(), String> {
+    ensure(home).map_err(|e| format!("{e:?}"))?;
+    backend(home).await.map_err(|e| format!("{e:?}"))?;
+    let current = base_image(&crate::snapshot::snapshots_dir(workspace).join(name)).await?;
+    crate::snapshot::prune(workspace, name, |path| {
+        let current = current.clone();
+        async move {
+            if base_image(&path).await.is_ok_and(|image| image == current) {
+                return Ok(false);
+            }
+            remove_snapshot(path).await?;
+            Ok(true)
+        }
+    })
+    .await?;
+    sweep_images(home, indexed).await
+}
+
+/// The manifest digest of the image a snapshot was built from.
+async fn base_image(path: &Path) -> Result<String, String> {
+    microsandbox::Snapshot::open(path.to_string_lossy())
+        .await
+        .map(|snapshot| snapshot.manifest().image.manifest_digest.clone())
+        .map_err(|e| e.to_string())
+}
+
+/// Remove the images and layers no snapshot and no running microVM uses. The
+/// runtime keeps an image only for an indexed snapshot, and indexes a new one
+/// only best-effort, so the snapshots of `indexed` are indexed again first and
+/// the rows of snapshots that are gone are dropped.
+pub async fn sweep_images(home: &Path, indexed: &[PathBuf]) -> Result<(), String> {
+    ensure(home).map_err(|e| format!("{e:?}"))?;
+    backend(home).await.map_err(|e| format!("{e:?}"))?;
+    let _held = gb_base::files::FileLock::try_hold(&home.join(IMAGE_LOCK))
+        .map_err(|e| e.to_string())?
+        .ok_or("An image load or a build is starting")?;
+    for snapshot in microsandbox::Snapshot::list()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        // A build in its directory may be putting a new artifact at the path.
+        let held =
+            match std::fs::File::open(snapshot.path().with_file_name(crate::snapshot::LOCK_FILE)) {
+                Ok(file) => {
+                    match gb_base::files::FileLock::try_file(file).map_err(|e| e.to_string())? {
+                        Some(held) => Some(held),
+                        None => continue,
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.to_string()),
+            };
+        if !snapshot.path().try_exists().unwrap_or(true) {
+            microsandbox::Snapshot::remove(snapshot.digest(), true)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        drop(held);
+    }
+    let directories: Vec<_> = indexed.iter().filter(|d| d.is_dir()).collect();
+    for directory in &directories {
+        microsandbox::Snapshot::reindex(directory)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    // A reindex skips what it fails to index, and one row stands for a name.
+    let mut protected = std::collections::HashSet::new();
+    for handle in microsandbox::Snapshot::list()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        // An unreadable row protects nothing here; that only refuses more.
+        if let Ok(image) = base_image(handle.path()).await {
+            protected.insert(image);
+        }
+    }
+    for directory in directories {
+        for snapshot in microsandbox::Snapshot::list_dir(directory)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if !protected.contains(&snapshot.manifest().image.manifest_digest) {
+                return Err(format!(
+                    "The image of {} is not protected by the snapshot index",
+                    snapshot.path().display()
+                ));
+            }
+        }
+    }
+    microsandbox::Image::prune()
+        .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 

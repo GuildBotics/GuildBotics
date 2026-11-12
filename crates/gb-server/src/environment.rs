@@ -751,7 +751,42 @@ pub async fn build(
     )
     .await
     .map_err(anyhow::Error::msg)?;
+    // A declared image is every version's, so its other images' recipes go.
+    // The default image comes with the version: a prebuilt update's differs.
+    let home = data.join("msb");
+    let cleaned = match snapshot_dirs(data, workspace) {
+        Ok(indexed) if pull => runtime::sweep_images(&home, &indexed).await,
+        Ok(indexed) => runtime::retire(&home, workspace, &name, &indexed).await,
+        Err(error) => Err(error.to_string()),
+    };
+    if let Err(error) = cleaned {
+        tracing::warn!("Removing unused environment images failed: {error}");
+    }
     Ok(BuildOutcome::Built(result.path))
+}
+
+/// The snapshot directories of every workspace this device registered: an
+/// image one of them was built from stays.
+fn snapshot_dirs(
+    data: &std::path::Path,
+    workspace: &std::path::Path,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut workspaces = gb_workspace::selection::registered(data)?;
+    workspaces.push(workspace.to_owned());
+    Ok(workspaces
+        .iter()
+        .map(|workspace| gb_environment::snapshot::snapshots_dir(workspace))
+        .collect())
+}
+
+/// Remove the images and layers no snapshot and no running microVM uses.
+pub async fn sweep_images(
+    data: &std::path::Path,
+    workspace: &std::path::Path,
+) -> anyhow::Result<()> {
+    gb_environment::runtime::sweep_images(&data.join("msb"), &snapshot_dirs(data, workspace)?)
+        .await
+        .map_err(anyhow::Error::msg)
 }
 
 #[derive(serde::Deserialize, Default)]

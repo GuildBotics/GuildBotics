@@ -84,6 +84,7 @@ impl From<Inspected> for ImageInfo {
 #[derive(serde::Deserialize)]
 struct Listed {
     reference: String,
+    digest: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -325,8 +326,8 @@ impl Microsandbox {
             .map_err(|e| format!("msb image inspect answered something unreadable: {e}"))
     }
 
-    /// Every image of the cache.
-    pub async fn images(&self) -> Result<Vec<ImageInfo>, String> {
+    /// Every reference of the cache.
+    async fn listed(&self) -> Result<Vec<Listed>, String> {
         let out = self.output(&["image", "list", "--format", "json"]).await?;
         if !out.status.success() {
             return Err(format!(
@@ -334,17 +335,84 @@ impl Microsandbox {
                 tail(&out.stderr, 1024)
             ));
         }
-        let listed: Vec<Listed> = serde_json::from_slice(&out.stdout)
-            .map_err(|e| format!("msb image list answered something unreadable: {e}"))?;
+        serde_json::from_slice(&out.stdout)
+            .map_err(|e| format!("msb image list answered something unreadable: {e}"))
+    }
+
+    /// Every image of the cache a job can name: by its tag, never by a
+    /// version's pin ([`Self::pin`]).
+    pub async fn images(&self) -> Result<Vec<ImageInfo>, String> {
         let mut images = Vec::new();
         // The list leaves out the configuration digest, which tells the
         // versions of a tag apart.
-        for l in listed {
-            if let Some(i) = self.inspect(&l.reference).await? {
+        for l in self.listed().await? {
+            if !pinned(&l.reference)
+                && let Some(i) = self.inspect(&l.reference).await?
+            {
                 images.push(i);
             }
         }
         Ok(images)
+    }
+
+    /// Names the version the tag `name` now points to by its manifest digest,
+    /// the second name of `archive` when it came from one. msb cannot name a
+    /// manifest no reference points to: without this, a load or pull that
+    /// moves the tag leaves the old version in the cache for good. The tag
+    /// has moved either way, so a failure is a warning, not the transfer's.
+    pub async fn pin(&self, name: &str, archive: Option<&Path>) {
+        if let Err(e) = self.try_pin(name, archive).await {
+            tracing::warn!("{name} is not pinned, so its version stays when replaced: {e}");
+        }
+    }
+
+    async fn try_pin(&self, name: &str, archive: Option<&Path>) -> Result<(), String> {
+        if pinned(name) {
+            return Err("it is named by a digest, not a tag".into());
+        }
+        let held = self
+            .inspect(name)
+            .await?
+            .ok_or("the cache holds no image under it")?;
+        let start = name.rfind('/').map_or(0, |i| i + 1);
+        let repository = name[start..].find(':').map_or(name, |i| &name[..start + i]);
+        let pin = format!("{repository}@{}", held.digest);
+        let path = archive.map(|a| a.to_string_lossy().to_string());
+        let args = match &path {
+            Some(path) => vec!["load", "--quiet", "--input", path, "--tag", &pin],
+            None => vec!["pull", "--quiet", &pin],
+        };
+        self.finish("pin", self.output_within(&args, IMAGE_TRANSFER).await?)
+    }
+
+    /// Removes the versions no tag points to anymore. One a job still runs
+    /// on is refused and stays for the next time: after a load or pull, and
+    /// before each job. The caller holds `lock_images`, so that no load is
+    /// writing the layer files a removal deletes.
+    pub async fn collect(&self) {
+        let listed = match self.listed().await {
+            Ok(listed) => listed,
+            Err(e) => return tracing::warn!("listing the image cache failed: {e}"),
+        };
+        let tagged: std::collections::HashSet<&str> = listed
+            .iter()
+            .filter(|l| !pinned(&l.reference))
+            .map(|l| l.digest.as_str())
+            .collect();
+        for l in &listed {
+            if pinned(&l.reference) && !tagged.contains(l.digest.as_str()) {
+                match self.output(&["image", "remove", "-q", &l.reference]).await {
+                    Ok(out) if out.status.success() => {}
+                    // Most often a job still runs on it.
+                    Ok(out) => tracing::debug!(
+                        "{} stays for now: {}",
+                        l.reference,
+                        tail(&out.stderr, 1024)
+                    ),
+                    Err(e) => tracing::warn!("removing {} failed: {e}", l.reference),
+                }
+            }
+        }
     }
 
     /// Locks the image cache. The lock is a file of `MSB_HOME`, so that it
@@ -387,7 +455,7 @@ impl Microsandbox {
         }
     }
 
-    /// Pulls `reference` into the cache; the caller holds
+    /// Pulls `reference` into the cache and pins it; the caller holds
     /// `lock_images(true)`.
     pub async fn pull(&self, reference: &str) -> Result<(), String> {
         let _ = std::fs::create_dir_all(&self.home);
@@ -395,19 +463,26 @@ impl Microsandbox {
             "pull",
             self.output_within(&["pull", "--quiet", reference], IMAGE_TRANSFER)
                 .await?,
-        )
+        )?;
+        self.pin(reference, None).await;
+        Ok(())
     }
 
-    /// Loads a `docker save` / OCI archive into the cache; the caller holds
-    /// `lock_images(true)`.
-    pub async fn load(&self, archive: &Path) -> Result<(), String> {
+    /// Loads a `docker save` / OCI archive into the cache and pins its first
+    /// image, named `name` (msb tags only the first image of an archive);
+    /// the caller holds `lock_images(true)`.
+    pub async fn load(&self, archive: &Path, name: Option<&str>) -> Result<(), String> {
         let _ = std::fs::create_dir_all(&self.home);
         let path = archive.to_string_lossy();
         self.finish(
             "load",
             self.output_within(&["load", "--quiet", "--input", &path], IMAGE_TRANSFER)
                 .await?,
-        )
+        )?;
+        if let Some(name) = name {
+            self.pin(name, Some(archive)).await;
+        }
+        Ok(())
     }
 
     fn finish(&self, what: &str, out: std::process::Output) -> Result<(), String> {
@@ -506,6 +581,12 @@ impl Microsandbox {
             Err(e) => tracing::warn!("removing {what} failed: {e}"),
         }
     }
+}
+
+/// Whether `reference` is a version's pin: a job names an image only by its
+/// tag (`pipeline::valid_image` refuses `@`).
+fn pinned(reference: &str) -> bool {
+    reference.contains('@')
 }
 
 /// Where a job's log directory is mounted in the VM.
@@ -639,6 +720,8 @@ impl Executor for Microsandbox {
                 let _ = log.try_send(note.as_bytes().to_vec());
             })
             .await?;
+        // A version a job ran on when a load replaced it goes once it ended.
+        self.collect().await;
         match self.inspect(image).await? {
             Some(i) if !crate::ci::pipeline::valid_digest(&i.config_digest) => Err(format!(
                 "msb image inspect reports '{}' as the configuration digest of {image}, not sha256:<64 hex>",
@@ -1080,7 +1163,7 @@ esac
         assert_eq!(digest, Some(a.clone()));
         let loading = tokio::spawn(async move {
             let _lock = service.lock_images(true, || {}).await?;
-            service.load(&archive).await
+            service.load(&archive, None).await
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(!loading.is_finished(), "the load waits for the checked job");
@@ -1245,6 +1328,81 @@ esac
             std::fs::read_to_string(state.join("removed")).unwrap(),
             format!("remove --force -q --label branvil.runner=t\nvolume remove -q bv-tmp-t-{id}\n")
         );
+    }
+
+    /// A load or pull also names the version its tag now points to by the
+    /// manifest digest; when it cannot (no such tag, a digest name, a failed
+    /// pin), the transfer still succeeds. The versions no tag points to
+    /// anymore go; one a tag points to stays, and one msb refuses (a job runs
+    /// on it) waits for the next time. The pins are no images a job can name.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn loads_and_pulls_pin_their_version_and_replaced_versions_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let msb = dir.path().join("msb");
+        write_script(
+            &msb,
+            r#"#!/bin/sh
+state="$MSB_HOME/fake"
+echo "$*" >> "$state/calls"
+case "$1 $2" in
+"image list") cat "$state/list" ;;
+"image inspect") [ "$5" != missing:dev ] && printf '{"reference":"%s","digest":"sha256:new","config":{"digest":"sha256:c"}}' "$5" ;;
+"image remove") [ "$4" != "reg:5000/img@sha256:busy" ] ;;
+"pull --quiet") [ "$3" != "offline@sha256:new" ] ;;
+esac
+"#,
+        );
+        let home = dir.path().join("home");
+        let state = home.join("fake");
+        std::fs::create_dir_all(&state).unwrap();
+        let listed = serde_json::json!([
+            {"reference": "reg:5000/img:dev", "digest": "sha256:new"},
+            {"reference": "reg:5000/img@sha256:new", "digest": "sha256:new"},
+            {"reference": "reg:5000/img@sha256:old", "digest": "sha256:old"},
+            {"reference": "reg:5000/img@sha256:busy", "digest": "sha256:busy"},
+            {"reference": "alpine:3.20", "digest": "sha256:alpine"},
+            {"reference": "docker.io/library/alpine@sha256:alpine", "digest": "sha256:alpine"},
+        ]);
+        std::fs::write(state.join("list"), listed.to_string()).unwrap();
+        let ms = Microsandbox::new(Msb::Found(msb), home, "t");
+        let archive = dir.path().join("a.tar");
+        let a = archive.display();
+
+        ms.load(&archive, Some("reg:5000/img:dev")).await.unwrap();
+        ms.pull("alpine:3.20").await.unwrap();
+        ms.load(&archive, Some("missing:dev")).await.unwrap();
+        ms.load(&archive, Some("img@sha256:x")).await.unwrap();
+        ms.pull("offline:1").await.unwrap();
+        ms.collect().await;
+        assert_eq!(
+            std::fs::read_to_string(state.join("calls")).unwrap(),
+            format!(
+                "load --quiet --input {a}\n\
+                 image inspect --format json reg:5000/img:dev\n\
+                 load --quiet --input {a} --tag reg:5000/img@sha256:new\n\
+                 pull --quiet alpine:3.20\n\
+                 image inspect --format json alpine:3.20\n\
+                 pull --quiet alpine@sha256:new\n\
+                 load --quiet --input {a}\n\
+                 image inspect --format json missing:dev\n\
+                 load --quiet --input {a}\n\
+                 pull --quiet offline:1\n\
+                 image inspect --format json offline:1\n\
+                 pull --quiet offline@sha256:new\n\
+                 image list --format json\n\
+                 image remove -q reg:5000/img@sha256:old\n\
+                 image remove -q reg:5000/img@sha256:busy\n"
+            )
+        );
+        let images: Vec<String> = ms
+            .images()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        assert_eq!(images, ["reg:5000/img:dev", "alpine:3.20"]);
     }
 
     /// Without Git on `PATH` the executor is not ready, and says why (in a

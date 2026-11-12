@@ -5,7 +5,7 @@ use gb_base::files::FileLock;
 use std::path::{Path, PathBuf};
 
 const PREFIX: &str = "guildbotics-";
-const LOCK_FILE: &str = "build.lock";
+pub(crate) const LOCK_FILE: &str = "build.lock";
 const FAILED_SUFFIX: &str = ".failed";
 
 static BUILD_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =
@@ -156,7 +156,8 @@ where
     Ok(removed)
 }
 
-/// Delete obsolete recipes only after activation, while retaining a ready recipe.
+/// Delete the obsolete recipes `perform` removes (telling whether it did),
+/// with every other recipe's failure, while retaining a ready recipe.
 pub async fn prune<F, Fut>(
     workspace: &Path,
     name: &str,
@@ -164,7 +165,7 @@ pub async fn prune<F, Fut>(
 ) -> Result<Vec<String>, String>
 where
     F: FnMut(PathBuf) -> Fut,
-    Fut: Future<Output = Result<(), String>>,
+    Fut: Future<Output = Result<bool, String>>,
 {
     ready(workspace, name).map_err(|e| format!("{e:?}"))?;
     let directory = snapshots_dir(workspace);
@@ -191,7 +192,9 @@ where
         }
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         if kind.is_dir() {
-            perform(entry.path()).await?;
+            if !perform(entry.path()).await? {
+                continue;
+            }
             removed.push(other);
         } else if kind.is_file() && other.ends_with(FAILED_SUFFIX) {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
