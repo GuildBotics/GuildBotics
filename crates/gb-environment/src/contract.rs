@@ -1040,6 +1040,22 @@ pub fn received_plan(
 /// than the runtime's default.
 pub const CLONE_QUOTA_MIB: u32 = 16 * 1024;
 
+/// Where a member's writable commands keep sccache's compilation results,
+/// so the member's next clone reuses its dependencies' compilation. One per
+/// workspace and member: a result one member's command wrote never reaches
+/// another member's build.
+pub fn sccache_dir(workspace: &Path, person: &str) -> PathBuf {
+    workspace
+        .join(".guildbotics/local/build-cache")
+        .join(person)
+        .join("sccache")
+}
+
+/// What a run may add to the member's sccache directory: more than the
+/// image's `SCCACHE_CACHE_SIZE`, so even a run that fills the whole cache
+/// stays within it (the runtime's default is no more than the cache).
+pub const SCCACHE_QUOTA_MIB: u32 = 8 * 1024;
+
 pub struct Plan {
     pub cwd: String,
     pub mounts: Vec<Mount>,

@@ -544,8 +544,14 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
             home("Documents/write"),
             clone_guest.clone(),
         ];
+        let sccache = spelled(&named(&gb_environment::contract::sccache_dir(
+            &machine.workspace,
+            "yuki",
+        )));
         if read_only {
             kinds.push(spelled(&named(&clone)));
+        } else {
+            kinds.push(sccache.clone());
         }
         for guest in &kinds {
             assert!(
@@ -570,12 +576,66 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
                 .all(|m| !m.guest.starts_with(gb_environment::GUEST_HOME))
         );
         for mount in &made.mounts {
-            let expected =
-                (mount.guest == clone_guest).then_some(gb_environment::contract::CLONE_QUOTA_MIB);
+            let expected = if mount.guest == clone_guest {
+                Some(gb_environment::contract::CLONE_QUOTA_MIB)
+            } else if mount.guest == sccache {
+                Some(gb_environment::contract::SCCACHE_QUOTA_MIB)
+            } else {
+                None
+            };
             assert_eq!(mount.quota_mib, expected, "{mount:?}");
         }
     }
     assert_eq!(gb_environment::contract::CLONE_QUOTA_MIB, 16 * 1024);
+}
+
+#[test]
+fn only_a_writable_command_binds_its_own_members_sccache_directory() {
+    let machine = machine();
+    let path = machine
+        .host
+        .package
+        .join("templates/commands/functions/get_os_ui_language.py");
+    let caches = named(&machine.workspace.join(".guildbotics/local/build-cache"));
+    let cached = |made: &gb_environment::Shape| -> Vec<Mount> {
+        made.mounts
+            .iter()
+            .filter(|m| m.host.as_ref().is_some_and(|h| h.starts_with(&caches)))
+            .cloned()
+            .collect()
+    };
+    // The second member's command runs after the first one's directory
+    // exists, and still sees only its own.
+    for person in ["yuki", "aiko"] {
+        let mut request = command(&machine, path.clone(), vec![]);
+        request.person_id = person.into();
+        request.access.read_only = false;
+        std::fs::create_dir_all(&request.cwd).unwrap();
+        let made = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+        let own = caches.join(person).join("sccache");
+        assert!(own.is_dir(), "{person}");
+        assert_eq!(
+            cached(&made),
+            [Mount {
+                guest: spelled(&own),
+                host: Some(own.clone()),
+                readonly: false,
+                quota_mib: Some(gb_environment::contract::SCCACHE_QUOTA_MIB),
+            }],
+            "{person}"
+        );
+        assert_eq!(env(&made.env, "SCCACHE_DIR"), Some(spelled(&own).as_str()));
+        // GuildBotics binds it for the builds; work does not happen there.
+        let facts: CommandFacts =
+            serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
+        assert_eq!(facts.mounts.get(&spelled(&own)), Some(&false));
+
+        // A read-only command's sccache keeps its cache on the microVM's disk.
+        request.access.read_only = true;
+        let read = shape(&machine.host, &machine.workspace, &request, None).unwrap();
+        assert_eq!(cached(&read), [], "{person}");
+        assert_eq!(env(&read.env, "SCCACHE_DIR"), None);
+    }
 }
 
 #[test]

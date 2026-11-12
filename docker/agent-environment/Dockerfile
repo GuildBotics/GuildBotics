@@ -14,6 +14,16 @@
 #   - the Rust toolchain for the Cargo workspace's checks, with cargo-nextest
 #     for its tests; `cargo` is cargo-wrapper.sh, which calls the nearest
 #     repository-owned .cargo/before-cargo.sh before running the real cargo
+#   - sccache, through which rustc runs (RUSTC_WRAPPER), keeping compilation
+#     results by their inputs up to SCCACHE_CACHE_SIZE. A member's writable
+#     command binds the workspace's
+#     .guildbotics/local/build-cache/<person_id>/sccache as SCCACHE_DIR, so
+#     the member's next clone reuses its dependencies' compilation; a
+#     read-only command keeps the cache on the microVM's own disk, which is
+#     discarded with it. The CI's Rust jobs build without it (an empty
+#     RUSTC_WRAPPER in `.branvil/ci.toml`). For the clones to share results,
+#     aarch64 links through the repository's linker script copied to a fixed
+#     path (cc-lld.sh)
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
@@ -41,6 +51,10 @@ ARG PYTHON_VERSION=3.15
 # The channel of rust-toolchain.toml: the jobs cannot install another one.
 ARG RUST_VERSION=1.96.0
 ARG NEXTEST_VERSION=0.9.148
+# The release's musl archives, verified against their published SHA-256.
+ARG SCCACHE_VERSION=0.19.0
+ARG SCCACHE_SHA256_AARCH64=3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d
+ARG SCCACHE_SHA256_X86_64=aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd
 ARG LYCHEE_VERSION=0.24.2
 # Keep in step with `@playwright/test` in package-lock.json; a newer
 # lock file makes `npm run e2e:install` fetch the matching browser at run time.
@@ -98,6 +112,30 @@ RUN arch="$(uname -m)" \
     && curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz" \
         | tar -xz -C /usr/local/bin cargo-nextest \
     && cargo nextest --version
+
+# sccache, as rustc's wrapper for every build in the environment. The cache
+# is bounded below the write quota GuildBotics gives its bound directory
+# (`SCCACHE_QUOTA_MIB` in crates/gb-environment/src/contract.rs).
+RUN arch="$(uname -m)" \
+    && case "${arch}" in \
+        aarch64) sha256="${SCCACHE_SHA256_AARCH64}" ;; \
+        x86_64) sha256="${SCCACHE_SHA256_X86_64}" ;; \
+        *) echo "no sccache checksum for ${arch}" >&2; exit 1 ;; \
+    esac \
+    && archive="sccache-v${SCCACHE_VERSION}-${arch}-unknown-linux-musl" \
+    && curl -fsSL -o /tmp/sccache.tar.gz "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/${archive}.tar.gz" \
+    && echo "${sha256}  /tmp/sccache.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/sccache.tar.gz -C /usr/local/bin --strip-components=1 "${archive}/sccache" \
+    && rm /tmp/sccache.tar.gz \
+    && sccache --version
+# The repository's aarch64 linker (.cargo/cc-lld.sh), at a path that is the
+# same in every checkout: sccache keys a compilation by rustc's arguments,
+# and Cargo passes the linker's absolute path to every crate's rustc, so the
+# repository's own copy would make each clone's results its own.
+COPY --chmod=0755 cc-lld.sh /usr/local/bin/cc-lld
+ENV RUSTC_WRAPPER=sccache \
+    SCCACHE_CACHE_SIZE=4G \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/cc-lld
 
 # lychee, for the CI's markdown-links job. The static musl
 # build: the x86_64 glibc build wants a newer glibc than bookworm has.

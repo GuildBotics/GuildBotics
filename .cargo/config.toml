@@ -1,6 +1,8 @@
 # x86_64 Linux links with the toolchain's rust-lld by default; aarch64 Linux
 # (the CI runner and the agent environment on Apple silicon) does too through
 # this linker. GNU ld needs about twice the memory: the workspace's parallel
-# test links outgrew the CI job's 6 GiB with it.
+# test links outgrew the CI job's 6 GiB with it. The agent environment image
+# overrides this path with its copy of the script at a fixed path
+# (docker/agent-environment/Dockerfile), for sccache.
 [target.aarch64-unknown-linux-gnu]
 linker = ".cargo/cc-lld.sh"
