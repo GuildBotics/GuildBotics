@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Any
 
 import pytest
 
+HOOK = Path(__file__).parents[2] / ".cargo/before-cargo.sh"
 WRAPPER = Path(__file__).parents[2] / "docker/agent-environment/cargo-wrapper.sh"
 MANIFEST = """[package]
 name = "demo"
@@ -70,11 +72,19 @@ with open(os.environ["CARGO_LOG"], "a", encoding="utf-8") as log:
     log.write(json.dumps(entry) + "\\n")
 if args[:1] == ["metadata"]:
     root, target = workspace()
-    print(json.dumps({"target_directory": str(target), "workspace_root": str(root)}))
+    print(json.dumps({"target_directory": str(target), "workspace_root": str(root),
+                      "workspace_members": ["demo"],
+                      "packages": [{"id": "demo", "targets": [{"name": "demo"}]}]}))
 elif args[:1] == ["clean"]:
-    shutil.rmtree(entry["removed"])
+    if os.environ.get("CLEAN_FAIL"):
+        sys.exit(1)
+    if "--workspace" not in args:
+        shutil.rmtree(entry["removed"])
 else:
-    print("real cargo ran")
+    if args[:1] == ["run"]:
+        print(sys.stdin.read(), end="")
+    else:
+        print("real cargo ran")
     sys.exit(int(os.environ.get("CARGO_EXIT", "0")))
 """
 
@@ -108,10 +118,13 @@ class Cargo:
             path.write_text(f"#!{sys.executable}\n{source}", encoding="utf-8")
             path.chmod(0o755)
         self.project.mkdir()
+        hook = tmp_path / ".cargo/before-cargo.sh"
+        hook.parent.mkdir()
+        shutil.copyfile(HOOK, hook)
         (self.project / "Cargo.toml").write_text(MANIFEST, encoding="utf-8")
 
     def __call__(
-        self, *args: str, cwd: Path | None = None
+        self, *args: str, cwd: Path | None = None, input_text: str = ""
     ) -> subprocess.CompletedProcess[str]:
         self.log.write_text("", encoding="utf-8")
         return subprocess.run(
@@ -132,6 +145,7 @@ class Cargo:
                 **self.env,
             },
             capture_output=True,
+            input=input_text,
             text=True,
             encoding="utf-8",
             check=False,
@@ -183,7 +197,7 @@ def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
     assert cargo.cleans() == [str(cargo.target)]
     assert cargo.calls()[-1] == ["build", "--release"]
     assert not stale.exists()
-    mark = (cargo.target / ".build-conditions").read_text(encoding="utf-8")
+    mark = (cargo.target / ".build-conditions-v2").read_text(encoding="utf-8")
     assert mark.startswith(RUSTC)
     assert '[profile.dev.package."*"]\ndebug = false\n' in mark
     assert "[dependencies]" not in mark
@@ -194,7 +208,7 @@ def test_missing_target_is_marked_without_cleaning(cargo: Cargo) -> None:
     cargo("build")
 
     assert cargo.cleans() == []
-    assert (cargo.target / ".build-conditions").is_file()
+    assert (cargo.target / ".build-conditions-v2").is_file()
     assert_tagged_as_cache(cargo, cargo.target)
 
 
@@ -251,8 +265,8 @@ def test_target_dir_from_the_environment_is_the_one_kept(
     assert cargo.cleans() == [str(elsewhere)]
     assert not stale.exists()
     assert untouched.exists()
-    assert (elsewhere / ".build-conditions").is_file()
-    assert not (cargo.target / ".build-conditions").exists()
+    assert (elsewhere / ".build-conditions-v2").is_file()
+    assert not (cargo.target / ".build-conditions-v2").exists()
 
 
 @pytest.mark.parametrize("exit_code", [0, 101])
@@ -302,9 +316,9 @@ def test_target_dir_of_the_command_is_the_one_kept(
     assert cargo.cleans() == [str(custom)]
     assert not stale.exists()
     assert_tagged_as_cache(cargo, custom)
-    assert (custom / ".build-conditions").is_file()
+    assert (custom / ".build-conditions-v2").is_file()
     assert unused.exists()
-    assert not (cargo.target / ".build-conditions").exists()
+    assert not (cargo.target / ".build-conditions-v2").exists()
     # The variable stands in for the option only in the wrapper's own calls.
     assert [entry["target_dir"] for entry in cargo.entries()] == [
         "custom",
@@ -327,7 +341,7 @@ def test_manifest_path_of_the_command_is_followed_from_outside(
     assert result.returncode == 0, result.stderr
     assert cargo.cleans() == [str(cargo.target)]
     assert not stale.exists()
-    assert (cargo.target / ".build-conditions").is_file()
+    assert (cargo.target / ".build-conditions-v2").is_file()
 
 
 def test_arguments_after_the_separator_are_not_cargo_options(cargo: Cargo) -> None:
@@ -374,3 +388,131 @@ def test_options_choosing_the_directories_reach_metadata_and_clean(
     ]
     assert metadata == ["metadata", "--no-deps", "--format-version", "1", *forwarded]
     assert clean == ["clean", *forwarded]
+
+
+def test_no_hook_only_executes_cargo(cargo: Cargo) -> None:
+    (cargo.project.parent / ".cargo/before-cargo.sh").unlink()
+    result = cargo("build", "argument with spaces")
+    assert result.returncode == 0
+    assert cargo.calls() == [["build", "argument with spaces"]]
+
+
+def test_nearest_hook_failure_does_not_stop_cargo(cargo: Cargo) -> None:
+    hook = cargo.project / ".cargo/before-cargo.sh"
+    hook.parent.mkdir()
+    hook.write_text('printf "%s\\n" "$@"; exit 9\n', encoding="utf-8")
+    result = cargo("build", "argument with spaces")
+    assert result.returncode == 0
+    assert result.stdout == "real cargo ran\n"
+    assert result.stderr == "build\nargument with spaces\n"
+    assert cargo.calls() == [["build", "argument with spaces"]]
+
+
+@pytest.mark.parametrize("hook_at", ["parent", "project"])
+@pytest.mark.parametrize("hook_exit", [0, 9])
+def test_hook_io_is_isolated(cargo: Cargo, hook_at: str, hook_exit: int) -> None:
+    root = cargo.project if hook_at == "project" else cargo.project.parent
+    hook = root / ".cargo/before-cargo.sh"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(
+        "echo hook-output\necho hook-error >&2\n"
+        'if IFS= read -r line; then echo "consumed: $line" >&2; fi\n'
+        f"exit {hook_exit}\n",
+        encoding="utf-8",
+    )
+
+    result = cargo("metadata", "--no-deps", "--format-version", "1")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["workspace_root"] == str(cargo.project)
+    assert result.stderr == "hook-output\nhook-error\n"
+    assert cargo.calls() == [["metadata", "--no-deps", "--format-version", "1"]]
+
+    cargo.env["CARGO_EXIT"] = "7"
+    result = cargo("run", "--", "argument with spaces", input_text="program input\n")
+    assert result.returncode == 7
+    assert result.stdout == "program input\n"
+    assert result.stderr == "hook-output\nhook-error\n"
+    assert cargo.calls() == [["run", "--", "argument with spaces"]]
+
+
+@pytest.mark.parametrize("change", ["branch", "lock", "detached"])
+def test_workspace_changes_preserve_dependencies(cargo: Cargo, change: str) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(cargo.project), *args], check=True, capture_output=True
+        )
+
+    git("init", "-b", "first")
+    cargo("build")
+    outputs = [
+        "debug/deps/libdemo-0123.rlib",
+        "release/deps/demo-4567",
+        "debug/incremental/demo-123/session",
+        "debug/incremental/build_script_build-456/session",
+    ]
+    for name in outputs + ["debug/deps/libthird_party-1234.rlib"]:
+        path = cargo.target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    if change == "lock":
+        (cargo.project / "Cargo.lock").write_text("changed", encoding="utf-8")
+    elif change == "branch":
+        git("symbolic-ref", "HEAD", "refs/heads/second")
+    else:
+        (cargo.project / ".git/HEAD").write_text("1" * 40 + "\n", encoding="utf-8")
+    result = cargo("build")
+    assert result.returncode == 0, result.stderr
+    assert ["clean", "--workspace"] in cargo.calls()
+    assert all(not (cargo.target / name).exists() for name in outputs)
+    assert (cargo.target / "debug/deps/libthird_party-1234.rlib").exists()
+    cargo("build")
+    assert cargo.cleans() == []
+
+
+def test_old_stamp_forces_full_clean(cargo: Cargo) -> None:
+    stale = cargo.build_stale()
+    (cargo.target / ".build-conditions").write_text(RUSTC, encoding="utf-8")
+    cargo("build")
+    assert not stale.exists()
+    assert ["clean"] in cargo.calls()
+
+
+def test_failed_clean_is_retried_without_stopping_cargo(cargo: Cargo) -> None:
+    cargo("build")
+    stamp = cargo.target / ".workspace-conditions"
+    before = stamp.read_bytes()
+    (cargo.project / "Cargo.lock").write_text("changed", encoding="utf-8")
+    cargo.env["CLEAN_FAIL"] = "1"
+    result = cargo("build")
+    assert result.returncode == 0
+    assert result.stdout == "real cargo ran\n"
+    assert stamp.read_bytes() == before
+    cargo.env.pop("CLEAN_FAIL")
+    cargo("build")
+    assert ["clean", "--workspace"] in cargo.calls()
+
+
+def test_nested_cwd_and_workspace_clean_forward_options(cargo: Cargo) -> None:
+    nested = cargo.project / "src/subdir"
+    nested.mkdir(parents=True)
+    args = [
+        "check",
+        "--manifest-path",
+        str(cargo.project / "Cargo.toml"),
+        "--target-dir",
+        "custom",
+        "--config",
+        "build.incremental=false",
+    ]
+    cargo(*args, cwd=nested)
+    (cargo.project / "Cargo.lock").write_text("changed", encoding="utf-8")
+    cargo(*args, cwd=nested)
+    assert [
+        "clean",
+        "--workspace",
+        "--manifest-path",
+        str(cargo.project / "Cargo.toml"),
+        "--config",
+        "build.incremental=false",
+    ] in cargo.calls()
+    assert cargo.entries()[1]["target_dir"] == "custom"

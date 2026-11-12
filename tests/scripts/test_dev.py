@@ -6,7 +6,7 @@ for the workspace and builds a fake ``guildbotics``, and that ``guildbotics``,
 which records its calls and the signals it gets, says what ``guildbotics
 server start`` says once GuildBotics and Branvil listen, and serves until the
 test releases it or a signal stops it. The build goes through the development
-image's cargo wrapper, copied as it is.
+image's cargo wrapper and repository hook, copied as they are.
 """
 
 from __future__ import annotations
@@ -164,6 +164,9 @@ class Launcher:
         wrapper = self.repo / "docker/agent-environment/cargo-wrapper.sh"
         wrapper.parent.mkdir(parents=True)
         shutil.copy(ROOT / "docker/agent-environment/cargo-wrapper.sh", wrapper)
+        hook = self.repo / ".cargo/before-cargo.sh"
+        hook.parent.mkdir()
+        shutil.copy(ROOT / ".cargo/before-cargo.sh", hook)
         (self.repo / "Cargo.toml").write_text(WORKSPACE_MANIFEST, "utf-8")
         crate = self.repo / "crates/guildbotics"
         crate.mkdir(parents=True)
@@ -361,7 +364,9 @@ def test_a_target_built_under_other_conditions_is_cleaned_before_the_build(
         for e in launcher.events("cargo")
         if e["args"][0] != "metadata"
     ] == [("clean", True), ("build", False), ("build", False)]
-    assert (launcher.target / ".build-conditions").read_text("utf-8").startswith(RUSTC)
+    assert (
+        (launcher.target / ".build-conditions-v2").read_text("utf-8").startswith(RUSTC)
+    )
 
 
 def test_the_image_cargo_named_by_real_cargo_builds(launcher: Launcher) -> None:
