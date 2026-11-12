@@ -16,6 +16,7 @@ ja:
   invalid: "許可された内容と一致しないため、拒否しました。"
   misdirected: "GuildBotics のサーバーとは別のホストを指すリクエストです。"
   origin_mismatch: "別のサイトからのリクエストは受け付けません。"
+  command_history_required: "前提の履歴を取得できませんでした。全体の bundle を送信してください。コマンドはまだ開始していません。"
   command_result_missing: "実行結果がありません（不明な ID、保持上限による削除、期限切れ、またはサーバー再起動）。コマンドは再実行していません。"
   command_results_full: "保持中の実行がすべて実行中です。いずれかが終了してから新しい実行を依頼してください。"
   command_result_too_large: "コマンドの結果が取得上限（32 MiB）を超えました。"
