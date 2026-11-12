@@ -92,7 +92,7 @@ COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN cargo --version
 
 # cargo-nextest, which runs each test in a process of its own, for the CI's
-# rust-test job. On PATH rather than under CARGO_HOME: the jobs point
+# Rust test jobs. On PATH rather than under CARGO_HOME: the jobs point
 # CARGO_HOME at their cache, and cargo finds `cargo nextest` on PATH either way.
 RUN arch="$(uname -m)" \
     && curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz" \

@@ -37,31 +37,3 @@ macro_rules! classified_routes {
         ];
     };
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn mounted_routers_cannot_register_unclassified_routes() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        for (file, direct_routes) in [
-            ("branvil/src/http.rs", 1), // Git's body limit; path comes from GIT_ROUTE.
-            ("branvil/src/ci/api.rs", 0),
-            ("branvil/src/ci/admin.rs", 0),
-            ("branvil/src/upstream/http.rs", 0),
-            ("branvil/src/autoland.rs", 0),
-            ("branvil/src/landing.rs", 0),
-            ("gb-server/src/api.rs", 2), // The catalog macro and standalone root.
-            ("gb-server/src/ui.rs", 2),  // MAIN_PATHS and ASSET_PATH.
-        ] {
-            let source = std::fs::read_to_string(root.join(file)).unwrap();
-            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
-            assert_eq!(
-                production.matches(".route(").count(),
-                direct_routes,
-                "{file}: register the route in the classified catalog"
-            );
-        }
-    }
-}

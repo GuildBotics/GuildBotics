@@ -67,7 +67,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 
 ### Branvil
 
-- `branvil` crateはGuildBoticsのcrateに依存しない。データの入口は同じサービスの公開API（`api::DataApi` と認証後の `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
+- `branvil` crateはGuildBoticsのcrateに依存しない。`branvil` と `loopback-auth` のテストも、両 crate の `Cargo.toml`・`src`・`tests`・`examples` の外のファイルを読まない（CI の `rust-test-branvil` は、GuildBotics の crate だけを変えた PR の head では流れない）。データの入口は同じサービスの公開API（`api::DataApi` と認証後の `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
 - 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`admin upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。Branvilの `secrets/` にはowner tokenだけを置く。ほかの秘密は起動するプロセスが渡す `vault::Vault` 越しに保存し、平文のファイルへ逃がさない（`branvil` 単体では `BRANVIL_VAULT` のディレクトリに、名前ごとに `BRANVIL_VAULT_KEY` で暗号化したファイル）。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
 - HTTP契約を変えたら [API文書](crates/branvil/docs/api.md) とRustの組み込みproviderを合わせ、`scripts/branvil-integration.sh` で公開APIとの結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
@@ -96,6 +96,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
 lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates
 ```
+
+CI は Rust のテストを 2 つのジョブに分ける。`rust-test-branvil` が `branvil` と `loopback-auth` を、`rust-test` が残りの crate を流す。PR の head では `paths` に合う変更があるジョブだけが流れるので、各ジョブの `paths` には、テストする crate がビルドするワークスペースの crate をすべて含める（対象と `paths` は `tests/test_cargo_workspace.py` が固定する）。
 
 黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
 Rustの入口へ向ける形で残す。サーバーには `cargo build --locked -p gb-server --example browser-test-server`

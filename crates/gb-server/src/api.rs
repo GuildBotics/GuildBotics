@@ -1204,6 +1204,23 @@ mod tests {
         }
     }
 
+    /// The catalogs are the only way in: a router built with `.route()`
+    /// would escape the classification tested below.
+    #[test]
+    fn routers_register_routes_only_through_the_classified_catalogs() {
+        for (file, source, direct_routes) in [
+            ("api.rs", include_str!("api.rs"), 2), // The catalog macro and standalone root.
+            ("ui.rs", include_str!("ui.rs"), 2),   // MAIN_PATHS and ASSET_PATH.
+        ] {
+            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+            assert_eq!(
+                production.matches(".route(").count(),
+                direct_routes,
+                "{file}: register the route in the classified catalog"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn classified_routes_cover_the_combined_guard_and_reserved_namespace() {
         assert_eq!(OUTER_ROUTES.len(), OUTER_CLASSIFIED.len());

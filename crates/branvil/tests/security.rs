@@ -918,6 +918,32 @@ async fn the_consent_exchange_refuses_what_does_not_match_the_code() {
     );
 }
 
+/// The classified catalogs are the only way in: a router built with
+/// `.route()` would escape the classification tested below.
+#[test]
+fn routers_register_routes_only_through_the_classified_catalogs() {
+    for (file, source, direct_routes) in [
+        // Git's body limit; the path comes from GIT_ROUTE.
+        ("http.rs", include_str!("../src/http.rs"), 1),
+        ("ci/api.rs", include_str!("../src/ci/api.rs"), 0),
+        ("ci/admin.rs", include_str!("../src/ci/admin.rs"), 0),
+        (
+            "upstream/http.rs",
+            include_str!("../src/upstream/http.rs"),
+            0,
+        ),
+        ("autoland.rs", include_str!("../src/autoland.rs"), 0),
+        ("landing.rs", include_str!("../src/landing.rs"), 0),
+    ] {
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert_eq!(
+            production.matches(".route(").count(),
+            direct_routes,
+            "{file}: register the route in the classified catalog"
+        );
+    }
+}
+
 /// All registered methods, not a hand-picked sample of the API.
 #[tokio::test]
 async fn classified_routes_enforce_host_origin_and_credentials() {
