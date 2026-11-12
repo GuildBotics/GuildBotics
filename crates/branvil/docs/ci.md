@@ -82,6 +82,15 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   lock). Settings → CI shows the tag to write and the digest of
   every cached image. (A runner started by hand on another machine loads such
   an archive with `msb load` under its own `MSB_HOME`.)
+- A pull or a load also names the version the tag now points to by its
+  manifest digest (`<name>@sha256:…`), as msb cannot remove a version that no
+  reference names. After a pull or a load, and before each job, the runner
+  removes the versions no tag points to anymore, with their layers; msb
+  refuses one a job still runs on, which goes at a later job's start. These
+  digest references are no images a pipeline can name, and Settings → CI does
+  not show them. Only the first image of an archive is pinned (msb tags only
+  that one), and an image loaded with `msb` by hand is not pinned: its version
+  stays in the cache when the tag moves.
 
 ## The job's environment
 

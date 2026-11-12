@@ -260,7 +260,8 @@ async fn load(State(app): State<Shared>, c: Caller, J(input): J<LoadInput>) -> A
             .ok()
             .and_then(Result::ok)
             .unwrap_or_default();
-        settings.end(transfer(&ms, names, ms.load(&path)).await);
+        let first = names.first().cloned();
+        settings.end(transfer(&ms, names, ms.load(&path, first.as_deref())).await);
     });
     Ok((StatusCode::ACCEPTED, axum::Json(view(&app).await?)).into_response())
 }
@@ -279,6 +280,7 @@ async fn transfer(
     let held = |i: &ImageInfo| (i.reference.clone(), i.digest.clone(), i.created_at.clone());
     let before: std::collections::HashSet<_> = ms.images().await?.iter().map(held).collect();
     operation.await?;
+    ms.collect().await;
     let loaded = |i: &ImageInfo| Loaded {
         reference: i.reference.clone(),
     };

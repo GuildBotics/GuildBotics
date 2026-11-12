@@ -382,6 +382,8 @@ pub async fn pull(settings: &Settings, image: &str) -> anyhow::Result<()> {
     if !status.success() {
         bail!("msb pull {image} failed ({status})");
     }
+    ms.pin(image, None).await;
+    ms.collect().await;
     Ok(())
 }
 

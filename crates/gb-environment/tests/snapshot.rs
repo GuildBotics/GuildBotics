@@ -8,6 +8,7 @@ use std::path::Path;
 
 const NAME: &str = "guildbotics-0123456789abcdef";
 const OTHER: &str = "guildbotics-fedcba9876543210";
+const KEPT: &str = "guildbotics-00000000000000ff";
 
 #[test]
 fn recipe_matches_the_frozen_python_scripts_and_digest() {
@@ -148,6 +149,7 @@ async fn prebuild_and_upkeep_rebuild_preserve_both_recipes_until_activation() {
     assert_eq!(ready(root.path(), OTHER).unwrap(), directory.join(OTHER));
     std::fs::write(directory.join(format!("{OTHER}.failed")), "old failure").unwrap();
     std::fs::create_dir(directory.join("unrelated")).unwrap();
+    std::fs::create_dir(directory.join(KEPT)).unwrap();
     let lock_directory = directory.clone();
     let removed = gb_environment::snapshot::prune(root.path(), NAME, move |path| {
         assert!(
@@ -155,11 +157,20 @@ async fn prebuild_and_upkeep_rebuild_preserve_both_recipes_until_activation() {
                 .unwrap()
                 .is_none()
         );
-        async move { std::fs::remove_dir_all(path).map_err(|e| e.to_string()) }
+        // A recipe the caller keeps stays, and is not reported.
+        let keep = path.ends_with(KEPT);
+        async move {
+            if keep {
+                return Ok(false);
+            }
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+            Ok(true)
+        }
     })
     .await
     .unwrap();
     assert_eq!(removed, vec![OTHER]);
+    assert!(directory.join(KEPT).exists());
     assert!(!directory.join(OTHER).exists());
     assert!(!directory.join(format!("{OTHER}.failed")).exists());
     assert!(directory.join("unrelated").exists());
