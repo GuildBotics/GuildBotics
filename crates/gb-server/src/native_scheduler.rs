@@ -110,6 +110,7 @@ impl crate::scheduler::Engine for Engine {
                 ticket: tickets,
                 code: self.runtime.code.as_deref(),
                 runner: self.runtime.as_ref(),
+                quota: self.runtime.quota.as_deref(),
             };
             let mut batch = self.candidates.lock().await;
             if batch.is_none() {

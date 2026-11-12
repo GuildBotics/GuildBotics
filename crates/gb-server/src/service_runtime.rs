@@ -183,6 +183,19 @@ impl Controller {
                 .map(|worker| worker.scheduler.heartbeats())
                 .unwrap_or_default()
         );
+        scheduler["member_pull_requests"] = serde_json::json!(
+            worker
+                .as_ref()
+                .filter(|_| status.running)
+                .map(|worker| worker
+                    .quotas
+                    .iter()
+                    .filter_map(|(person, quota)| quota
+                        .snapshot()
+                        .map(|load| (person.clone(), load)))
+                    .collect::<BTreeMap<_, _>>())
+                .unwrap_or_default()
+        );
         let events = self.service.events_status().await;
         serde_json::json!({"scheduler":scheduler,"events":events,
             "active_works":self.execution.generation().snapshot(),"has_active_work":status.running || status.state == "stopping" || !self.execution.generation().work.is_empty()})
@@ -303,6 +316,7 @@ pub struct NativeWorker {
     service: std::sync::OnceLock<crate::service::Service>,
     service_instance_id: String,
     scheduler: crate::scheduler::Scheduler,
+    quotas: BTreeMap<String, Arc<crate::ticket_selector::PullRequestQuota>>,
     groups: Vec<Arc<crate::chat_receiver::Group>>,
     started: OnceCell<()>,
     receivers: TaskTracker,
@@ -335,6 +349,7 @@ impl NativeWorker {
         let mut listeners = BTreeMap::<String, crate::chat_receiver::Connection>::new();
         let mut groups = BTreeMap::<String, Vec<Arc<crate::chat_receiver::Receiver>>>::new();
         let mut members = vec![];
+        let mut quotas = BTreeMap::new();
         let mut missing_credentials = vec![];
         let mut chat_provider = String::new();
         for member in team
@@ -351,6 +366,11 @@ impl NativeWorker {
                 cancelled.clone(),
                 settings.event_queue.then_some(&mut listeners),
             )?;
+            let quota = Arc::new(crate::ticket_selector::PullRequestQuota::new(
+                settings.max_open_pull_requests,
+            ));
+            runtime.quota = Some(quota.clone());
+            quotas.insert(member.person_id.clone(), quota);
             runtime.generation = Some(generation.clone());
             runtime.service_run_id = Some(service_instance_id.clone());
             chat_provider.clone_from(&runtime.chat_provider);
@@ -431,6 +451,7 @@ impl NativeWorker {
                 service: Default::default(),
                 service_instance_id,
                 scheduler,
+                quotas,
                 groups,
                 started: OnceCell::new(),
                 receivers: TaskTracker::new(),
@@ -856,6 +877,7 @@ mod tests {
             service: Default::default(),
             service_instance_id: generation.id.clone(),
             scheduler: Default::default(),
+            quotas: Default::default(),
             groups: vec![],
             started: OnceCell::new(),
             receivers: TaskTracker::new(),

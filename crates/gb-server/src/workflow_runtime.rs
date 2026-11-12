@@ -22,6 +22,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 pub struct Runtime {
+    pub quota: Option<Arc<ticket_selector::PullRequestQuota>>,
     pub generation: Option<Arc<crate::execution::Generation>>,
     pub service_run_id: Option<String>,
     pub dispatcher: Dispatcher,
@@ -260,6 +261,7 @@ impl Runtime {
         Ok((
             Self {
                 config: None,
+                quota: None,
                 generation: None,
                 service_run_id: None,
                 dispatcher,
@@ -315,6 +317,7 @@ impl Runtime {
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
+                quota: self.quota.as_deref(),
             };
             let selected = match selector.next().await {
                 Ok(selected) => selected,
@@ -427,6 +430,7 @@ impl Runtime {
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
+                quota: self.quota.as_deref(),
             };
         let selected = match selector.next().await {
             Ok(selected) => selected,
@@ -525,6 +529,7 @@ impl Runtime {
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
+                quota: self.quota.as_deref(),
             };
         let result = trace
             .run_command(

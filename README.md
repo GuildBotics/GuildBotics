@@ -214,6 +214,8 @@ While a command runs, the machine never goes to sleep from being left idle (idle
 
 To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
 
+Patrol and scheduled ticket workflows defer only new ready-lane tickets while the member has reached the open PR limit (default 2, range 1–20). Drafts and PRs without tickets count; PRs linked to interactive tickets, including inherited interactive settings, do not. Counts are refreshed when listing candidates and immediately before starting work; merging or closing a PR frees capacity. Working-lane resumes, comments and mentions, PR feedback, reviews, CI resumes, and manual runs continue. Set the shared limit for all members on the Service screen; it applies from the next service start. While running, the screen shows each member’s last observed count / limit and whether new work is deferred.
+
 ### Pull Request Patrol
 
 Before looking at the ticket lanes, every patrol run checks the open pull requests under the configured Branvil workspace that involve the member. No ticket is needed for this; the PR itself is the unit of work.
@@ -414,6 +416,7 @@ scheduled: true               # scheduled commands
 routine: true                 # patrol commands
 event_queue: true             # event triggers (at least one of the three stays true)
 routine_interval_minutes: 10  # 1-1440
+max_open_pull_requests: 2     # 1-20
 max_consecutive_errors: 3     # 1-20
 ```
 

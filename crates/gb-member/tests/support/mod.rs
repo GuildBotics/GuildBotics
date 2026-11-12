@@ -280,6 +280,9 @@ impl CodeHostingService for Probe {
             .find(|(_, v)| v.as_str() == url)
             .map(|(k, _)| k.clone())
     }
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
     }

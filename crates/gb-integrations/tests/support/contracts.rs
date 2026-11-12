@@ -1239,6 +1239,13 @@ pub async fn code_contract(
         .await
         .unwrap();
     assert!(pr.created);
+    assert!(
+        service
+            .authored_open_pull_requests()
+            .await
+            .unwrap()
+            .contains(&pr.target.url)
+    );
     let again = service
         .create_pull_request(request(head_branch))
         .await
@@ -1531,6 +1538,15 @@ pub async fn code_contract(
     converted.sort();
     assert_eq!(converted, [false, true]);
     assert!(!service.convert_pull_request_to_draft(url).await.unwrap());
+    let counted = service.authored_open_pull_requests().await.unwrap();
+    let detail = service
+        .read(Resource::PullRequests, url, None, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        counted.contains(&url.to_owned()),
+        detail.items()[0]["state"] == "open"
+    );
     assert_eq!(
         service
             .read(Resource::PullRequests, url, None, "")
@@ -1637,6 +1653,15 @@ pub async fn code_closed_contract(service: &dyn CodeHostingService, url: &str) {
         .unwrap();
     assert_eq!(p.items()[0]["state"], "closed");
     assert!(!service.convert_pull_request_to_draft(url).await.unwrap());
+    let counted = service.authored_open_pull_requests().await.unwrap();
+    let detail = service
+        .read(Resource::PullRequests, url, None, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        counted.contains(&url.to_owned()),
+        detail.items()[0]["state"] == "open"
+    );
 }
 /// Run as a different member from the PR author. Both restored providers support these verdicts.
 pub async fn code_other_actor_contract(service: &dyn CodeHostingService, url: &str) {
@@ -1644,6 +1669,13 @@ pub async fn code_other_actor_contract(service: &dyn CodeHostingService, url: &s
         .read(Resource::PullRequests, url, None, "")
         .await
         .unwrap();
+    assert!(
+        !service
+            .authored_open_pull_requests()
+            .await
+            .unwrap()
+            .contains(&url.to_owned())
+    );
     let head = p.items()[0]["head_sha"].as_str().unwrap();
     for verdict in [ReviewVerdict::Approve, ReviewVerdict::RequestChanges] {
         let r = service.review(url, "verdict", verdict, head).await.unwrap();
@@ -1967,6 +1999,69 @@ pub async fn code_link_population(
             .await
             .unwrap();
         }
+        assert!(
+            code.authored_open_pull_requests()
+                .await
+                .unwrap()
+                .contains(&pr.target.url)
+        );
+        for ancestor in [false, true] {
+            tickets
+                .update_ticket(
+                    &second,
+                    UpdateTicket {
+                        interactive: Some(true),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            tickets
+                .update_ticket(
+                    &first,
+                    UpdateTicket {
+                        interactive: Some(!ancestor),
+                        parent: ancestor.then(|| second.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                !code
+                    .authored_open_pull_requests()
+                    .await
+                    .unwrap()
+                    .contains(&pr.target.url)
+            );
+            tickets
+                .update_ticket(
+                    &first,
+                    UpdateTicket {
+                        interactive: Some(false),
+                        parent: Some(String::new()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            tickets
+                .update_ticket(
+                    &second,
+                    UpdateTicket {
+                        interactive: Some(false),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                code.authored_open_pull_requests()
+                    .await
+                    .unwrap()
+                    .contains(&pr.target.url)
+            );
+        }
         let mut first_state = "closed";
         let mut second_state = if i == 0 { "closed" } else { "open" };
         match i {
@@ -2247,6 +2342,8 @@ pub async fn code_open_order_contract(
         assert!(result.created);
         created.push(result.target.url);
     }
+    let counted = code.authored_open_pull_requests().await.unwrap();
+    assert!(created.iter().all(|url| counted.contains(url)));
     if newest_first {
         created.reverse();
     }

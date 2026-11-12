@@ -178,11 +178,17 @@ export const resources = {
         },
       },
       service: {
+        openPullRequestLimit: "Open PR limit per member",
+        openPullRequestLimitDescription:
+          "Counts drafts and PRs without tickets; excludes PRs linked to interactive tickets. Only new ready-lane tickets from patrol and scheduled runs are paused.",
+        pullRequestLoad: "{{person}}: {{count}} / {{limit}} open PRs",
+        pullRequestDeferred: "Limit reached (new tickets paused)",
+        pullRequestAvailable: "New tickets allowed",
         title: "Service Runtime",
         sourceTarget: "Include in service run",
         loadError: "Could not read the service settings",
         settingsApplyAtNextStart:
-          "Changes to what runs, the patrol interval, and the failure limit apply the next time the service starts.",
+          "Changes to what runs, the patrol interval, the failure limit, and the open PR limit apply the next time the service starts.",
         saveError: "Could not save the service settings",
         startWithServer: {
           title: "Start the services when the server starts",
@@ -2162,11 +2168,17 @@ export const resources = {
         },
       },
       service: {
+        openPullRequestLimit: "メンバーごとの開いている PR の上限",
+        openPullRequestLimitDescription:
+          "Draft とチケットのない PR も数え、対話チケットに関連する PR は除きます。止めるのは巡回・定期実行の着手可チケットの新規着手だけです。",
+        pullRequestLoad: "{{person}}: 開いている PR {{count}} / {{limit}}",
+        pullRequestDeferred: "上限に到達（新規着手を停止中）",
+        pullRequestAvailable: "新規着手可能",
         title: "サービス実行",
         sourceTarget: "サービス実行に含める",
         loadError: "サービスの設定を読み込めませんでした",
         settingsApplyAtNextStart:
-          "実行する対象・巡回間隔・連続失敗の回数の変更は、次にサービスを開始したときから反映されます。",
+          "実行する対象・巡回間隔・連続失敗の回数・開いている PR の上限の変更は、次にサービスを開始したときから反映されます。",
         saveError: "サービスの設定を保存できませんでした",
         startWithServer: {
           title: "サーバーの起動時にサービスも開始する",

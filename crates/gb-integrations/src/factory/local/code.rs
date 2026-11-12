@@ -569,6 +569,21 @@ impl CodeHostingService for LocalService {
             .into_owned();
         (path == self.store.bare(&repo)).then_some(repo)
     }
+    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+        Box::pin(async {
+            let mut out = Vec::new();
+            for (r, v) in self.store.items(WorkKind::PullRequest, None)? {
+                if self.store.scope.authorize(&r.place).is_ok()
+                    && v["state"] == "open"
+                    && text(&v, "author") == self.actor
+                    && !self.pull_interactive(&v)?
+                {
+                    out.push(r.url());
+                }
+            }
+            Ok(out)
+        })
+    }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         Box::pin(async {
             let mut out = vec![];
@@ -699,8 +714,23 @@ impl LocalService {
                 .collect(),
         })
     }
+    fn pull_interactive(&self, pull: &Value) -> Result<bool, ServiceError> {
+        for link in array(pull, "tickets") {
+            let Ok(reference) = Ref::locate(text(&link, "url"), WorkKind::Ticket) else {
+                continue;
+            };
+            let ticket = self.store.load(&reference)?;
+            if ticket["interactive"] == true || self.ancestor(&ticket)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     async fn pr_work(&self, r: &Ref, v: &Value) -> Result<Option<Task>, ServiceError> {
         if self.store.scope.authorize(&r.place).is_err() {
+            return Ok(None);
+        }
+        if text(v, "author") == self.actor && self.pull_interactive(v)? {
             return Ok(None);
         }
         let p = self.snapshot(r, v)?;

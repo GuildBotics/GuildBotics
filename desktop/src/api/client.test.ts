@@ -401,6 +401,7 @@ describe("GET query parameter encoding", () => {
       event_queue: true,
       routine_interval_minutes: 3,
       max_consecutive_errors: 5,
+      max_open_pull_requests: 2,
     };
     const { calls } = captureFetch(jsonResponse(settings));
     await getServiceSettings();
