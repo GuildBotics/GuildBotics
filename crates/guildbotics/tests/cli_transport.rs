@@ -364,7 +364,7 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
             assert!(
                 files
                     .iter()
-                    .any(|f| f["path"] == "input.txt" && f["content"] == "b3JpZ2luYWw=")
+                    .any(|f| f["path"] == "input.txt" && f["source"]["content"] == "b3JpZ2luYWw=")
             );
         }
         if reply.is_none() || status == "200 OK" {

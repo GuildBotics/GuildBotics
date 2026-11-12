@@ -2,12 +2,17 @@
 
 import base64
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from guildbotics.guest.worktree_copy import changed_files, receive_tree
+from guildbotics.guest.worktree_copy import (
+    WorktreeCopyError,
+    changed_files,
+    receive_tree,
+)
 
 
 def git(root, *args, input=None):
@@ -207,3 +212,84 @@ def test_many_index_objects_are_batched_without_pipe_deadlock(tmp_path, exporter
     git(root, "add", ".")
     upload = json.loads(subprocess.check_output([str(exporter), str(root)], timeout=30))
     assert len(upload["git"]["objects"]) == 1800
+
+
+def test_files_equal_to_their_index_blob_are_rebuilt_from_history(tmp_path, exporter):
+    import hashlib
+    import random
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-b", "main")
+    # Beyond the 16 MiB limit as file bytes, yet compressible in the bundle:
+    # it crosses as a blob name.
+    large = random.Random(7).randbytes(1024) * (17 * 1024)
+    (root / "large").write_bytes(large)
+    (root / "tool").write_text("#!/bin/sh\n")
+    (root / "tool").chmod(0o755)
+    (root / "staged").write_text("committed")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "fixture")
+    (root / "staged").write_text("staged")
+    git(root, "add", "staged")
+    (root / "edited").write_text("edited")
+    upload = json.loads(subprocess.check_output([str(exporter), str(root)]))
+    sources = {f["path"]: f["source"] for f in upload["files"]}
+    assert (
+        set(sources["large"])
+        == set(sources["tool"])
+        == set(sources["staged"])
+        == {"blob"}
+    )
+    assert sources["large"]["blob"]["sha256"] == hashlib.sha256(large).hexdigest()
+    assert "content" in sources["edited"]
+    status = git(root, "status", "--porcelain")
+    root.rename(tmp_path / "hidden")
+    destination = tmp_path / "destination"
+    copied = {
+        c["path"]: c
+        for c in receive_tree(tmp_path / "source", destination, upload, readonly=False)
+    }
+    assert (destination / "large").read_bytes() == large
+    assert (destination / "staged").read_text() == "staged"
+    assert os.access(destination / "tool", os.X_OK)
+    assert copied["large"]["sha256"] == sources["large"]["blob"]["sha256"]
+    assert git(destination, "status", "--porcelain") == status
+
+
+def test_a_blob_missing_from_the_received_history_fails(tmp_path, exporter):
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-b", "main")
+    (root / "file").write_text("committed")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "fixture")
+    upload = json.loads(subprocess.check_output([str(exporter), str(root)]))
+    upload["git"]["bundle"] = ""
+    upload["git"]["refs"] = {}
+    upload["git"]["head"] = "refs/heads/main"
+    with pytest.raises(WorktreeCopyError):
+        list(
+            receive_tree(
+                tmp_path / "source", tmp_path / "guest", upload, readonly=False
+            )
+        )
+
+
+def test_many_named_blobs_stream_and_a_shared_blob_fills_every_file(tmp_path, exporter):
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init")
+    for i in range(1800):
+        (root / str(i)).write_bytes(str(i % 900).encode() + b"x" * 100)
+    git(root, "add", ".")
+    git(root, "commit", "-m", "fixture")
+    upload = json.loads(subprocess.check_output([str(exporter), str(root)], timeout=30))
+    assert all("blob" in f["source"] for f in upload["files"])
+    destination = tmp_path / "destination"
+    copied = list(
+        receive_tree(tmp_path / "source", destination, upload, readonly=False)
+    )
+    assert len(copied) == 1800
+    for i in (0, 900, 1799):
+        assert (destination / str(i)).read_bytes() == (root / str(i)).read_bytes()

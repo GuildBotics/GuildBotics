@@ -235,7 +235,9 @@ Records are also removed on failed execution or definitive submission rejection.
   a complete bundle to the microVM, keeping the client's branch, tracking branch, tag,
   and HEAD values. Credentials never enter the microVM. If prerequisites cannot be
   obtained, the server asks the CLI to resend the complete bundle. The command runs
-  only once in either case.
+  only once in either case. Files equal to their index entry cross as blob names and
+  are written from that history, so what the CLI sends grows with the change, not the
+  repository; the 16 MiB limit counts only what the CLI sends.
   When the command ends well, the host writes back the regular files that
   changed in the copy -- those copied, and the new files git does not
   ignore, never one inside a submodule or a nested repository -- reaching

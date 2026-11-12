@@ -103,6 +103,16 @@ pub(crate) async fn run(
     headers: HeaderMap,
     Body(request): Body<RunRequest>,
 ) -> Response {
+    // Bound what the client sent, before any history is completed for it.
+    if let Some(Err(reason)) = request.upload.as_ref().map(|u| u.validate_sent()) {
+        return ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            &headers,
+        )
+        .reason(reason)
+        .into_response();
+    }
     if request.request_id.is_some() {
         return results::submit(api, headers, request).await;
     }

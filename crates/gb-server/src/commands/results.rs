@@ -487,6 +487,25 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::CONFLICT);
         assert_eq!(body(refused).await["code"], "command_history_required");
         assert!(api.command_results.0.lock().unwrap().entries.is_empty());
+        // What the client sends is bounded before any history is completed,
+        // with or without a receipt ID.
+        let mut oversized = data.clone();
+        oversized["upload"]["files"] = json!([{"path":"large", "executable":false,
+            "source":{"content": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0u8; gb_environment::worktree::transfer::LIMIT + 1])}}]);
+        for receipt in [true, false] {
+            let mut sent = oversized.clone();
+            if !receipt {
+                sent.as_object_mut().unwrap().remove("request_id");
+            }
+            let response = app
+                .clone()
+                .oneshot(request("POST", "/commands/run", sent))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(body(response).await["code"], "validation_error");
+        }
+        assert!(api.command_results.0.lock().unwrap().entries.is_empty());
         assert_eq!(factory.1.load(Ordering::SeqCst), 0);
         let first = app
             .clone()

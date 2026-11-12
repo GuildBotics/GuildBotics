@@ -75,11 +75,6 @@ pub(super) async fn complete(api: &Shared, request: &mut RunRequest) -> anyhow::
     let Some(upload) = request.upload.as_mut() else {
         return Ok(());
     };
-    let incremental = upload.git.as_ref().is_some_and(|g| !g.bases.is_empty());
-    if !incremental {
-        return Ok(());
-    }
-    upload.validate().map_err(anyhow::Error::msg)?;
     let Some(git) = upload.git.as_mut().filter(|g| !g.bases.is_empty()) else {
         return Ok(());
     };
