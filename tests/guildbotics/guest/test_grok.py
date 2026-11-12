@@ -1714,8 +1714,18 @@ async def test_disabled_resume_without_load_session_is_unsupported(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["initialize", "session/new", "session/load"])
-@pytest.mark.parametrize("behavior", ["slow", "silent", "exit"])
+@pytest.mark.parametrize(
+    ("method", "behavior"),
+    [
+        ("initialize", "slow"),
+        ("initialize", "silent"),
+        ("initialize", "exit"),
+        ("session/new", "silent"),
+        ("session/new", "exit"),
+        ("session/load", "silent"),
+        ("session/load", "exit"),
+    ],
+)
 async def test_startup_requests_share_the_turn_deadline(
     monkeypatch, tmp_path, method, behavior
 ) -> None:

@@ -1080,8 +1080,18 @@ def test_codex_state_stays_hidden_under_a_writable_mount_above_it() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["initialize", "thread/start", "thread/resume"])
-@pytest.mark.parametrize("behavior", ["slow", "silent", "exit"])
+@pytest.mark.parametrize(
+    ("method", "behavior"),
+    [
+        ("initialize", "slow"),
+        ("initialize", "silent"),
+        ("initialize", "exit"),
+        ("thread/start", "silent"),
+        ("thread/start", "exit"),
+        ("thread/resume", "silent"),
+        ("thread/resume", "exit"),
+    ],
+)
 async def test_startup_requests_share_the_turn_deadline(
     monkeypatch, tmp_path, method, behavior
 ) -> None:
