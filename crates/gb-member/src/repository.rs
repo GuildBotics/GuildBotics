@@ -455,3 +455,38 @@ impl Repository<'_> {
         Ok(notices)
     }
 }
+
+/// Author feedback shares a ticket conversation only when ownership is unambiguous.
+pub async fn author_ticket(
+    code: &dyn CodeHostingService,
+    tickets: &dyn TicketService,
+    url: &str,
+) -> std::result::Result<Option<String>, ServiceError> {
+    let page = code.read(Resource::PullRequests, url, None, "").await?;
+    let pr: PullRequest = serde_json::from_value(
+        page.items()
+            .first()
+            .ok_or(ServiceError::InvalidResult)?
+            .clone(),
+    )
+    .map_err(|_| ServiceError::InvalidResult)?;
+    let mut owned = std::collections::BTreeSet::new();
+    for link in code.linked_tickets(url).await? {
+        let page = tickets.read(Resource::Tickets, &link.url, None, "").await?;
+        let ticket: Ticket = serde_json::from_value(
+            page.items()
+                .first()
+                .ok_or(ServiceError::InvalidResult)?
+                .clone(),
+        )
+        .map_err(|_| ServiceError::InvalidResult)?;
+        if ticket.state == "open" && ticket.assignees.contains(&pr.author) {
+            owned.insert(ticket.url);
+        }
+    }
+    Ok(if owned.len() == 1 {
+        owned.into_iter().next()
+    } else {
+        None
+    })
+}

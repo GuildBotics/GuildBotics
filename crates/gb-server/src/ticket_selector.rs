@@ -184,7 +184,25 @@ impl Selector<'_> {
         if self.defer_ready(&task).await {
             return Ok(None);
         }
-        self.invocation(&task).map(Some)
+        let mut invocation = self.invocation(&task)?;
+        if task.resumes.is_none() && task.trigger_reason.as_deref() == Some("pull_request_feedback")
+        {
+            let code = self.code.ok_or(ServiceError::Unsupported)?;
+            let url = task
+                .pull_request_url
+                .as_deref()
+                .ok_or(ServiceError::InvalidResult)?;
+            if let Some(ticket) = gb_member::repository::author_ticket(code, self.ticket, url)
+                .await
+                .unwrap_or(None)
+            {
+                invocation.work = Some(
+                    serde_json::from_value(json!({"kind":"ticket", "identity":ticket}))
+                        .map_err(|_| ServiceError::InvalidResult)?,
+                );
+            }
+        }
+        Ok(Some(invocation))
     }
 
     async fn defer_ready(&self, task: &Task) -> bool {
@@ -215,7 +233,13 @@ impl Selector<'_> {
             )
         } else {
             (
-                if task.assignee.as_deref() != Some(self.person)
+                if task.pull_request_url.is_some() {
+                    if task.trigger_reason.as_deref() == Some("pull_request_feedback") {
+                        "pull_request"
+                    } else {
+                        "pull_request_review"
+                    }
+                } else if task.assignee.as_deref() != Some(self.person)
                     && task.trigger_reason.as_deref() == Some("issue_mention")
                 {
                     "ticket_mention"

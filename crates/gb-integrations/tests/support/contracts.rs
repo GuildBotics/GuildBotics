@@ -1926,10 +1926,79 @@ pub async fn code_link_population(
                 title: format!("links {i}"),
                 body: body.clone(),
                 draft: false,
-                tickets: initial,
+                tickets: initial.clone(),
             })
             .await
             .unwrap();
+        assert_eq!(code.linked_tickets(&pr.target.url).await.unwrap(), initial);
+        if i == 0 {
+            let original = code
+                .read(Resource::PullRequests, &pr.target.url, None, "")
+                .await
+                .unwrap();
+            let author: ActorName =
+                serde_json::from_value(original.items()[0]["author"].clone()).unwrap();
+            let mut request = ticket_request(tracker, "owned work");
+            request.assignee = Some(author.clone());
+            let one = tickets.create_ticket(request).await.unwrap().target.url;
+            let mut request = ticket_request(tracker, "second owned work");
+            request.assignee = Some(author);
+            let two = tickets.create_ticket(request).await.unwrap().target.url;
+            for links in [vec![], vec![one.clone()], vec![one.clone(), two.clone()]] {
+                code.update_pull_request(
+                    &pr.target.url,
+                    UpdatePullRequest {
+                        tickets: Some(
+                            links
+                                .iter()
+                                .map(|u| TicketLink {
+                                    url: u.clone(),
+                                    closes: false,
+                                })
+                                .collect(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    gb_member::repository::author_ticket(code, tickets, &pr.target.url)
+                        .await
+                        .unwrap(),
+                    if links.len() == 1 {
+                        Some(one.clone())
+                    } else {
+                        None
+                    }
+                );
+            }
+            tickets
+                .update_ticket(
+                    &two,
+                    UpdateTicket {
+                        state: Some("closed".into()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                gb_member::repository::author_ticket(code, tickets, &pr.target.url)
+                    .await
+                    .unwrap(),
+                Some(one)
+            );
+            code.update_pull_request(
+                &pr.target.url,
+                UpdatePullRequest {
+                    tickets: Some(initial.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
         assert!(
             code.authored_open_pull_requests()
                 .await

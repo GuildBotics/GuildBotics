@@ -698,6 +698,8 @@ fn tree_kind(mode: &str) -> &'static str {
 struct Checkout {
     repository: String,
     owner: String,
+    #[serde(default)]
+    target: Option<(gb_ports::WorkKind, String)>,
     branch: String,
     #[serde(default)]
     discarded: bool,
@@ -900,6 +902,82 @@ impl Workspace<'_> {
             Err(error) => receipt["pull_requests_error"] = (self.render_error)(&error).into(),
         }
         Ok((receipt, vec![]))
+    }
+    async fn target(&self) -> Option<(gb_ports::WorkKind, String)> {
+        use gb_ports::WorkKind;
+        let (kind, url) = self.work?;
+        let kind = match kind {
+            "ticket" => WorkKind::Ticket,
+            "pull_request" => WorkKind::PullRequest,
+            _ => return None,
+        };
+        // Conversation identity is independent of the provider's target kind.
+        let canonical = self.state(kind, url).await.map(|v| v.0).unwrap_or(kind);
+        Some((canonical, url.into()))
+    }
+    async fn state(
+        &self,
+        kind: gb_ports::WorkKind,
+        url: &str,
+    ) -> Result<(gb_ports::WorkKind, bool)> {
+        use gb_ports::WorkKind;
+        match self.read_state(kind, url).await {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                self.read_state(
+                    match kind {
+                        WorkKind::Ticket => WorkKind::PullRequest,
+                        WorkKind::PullRequest => WorkKind::Ticket,
+                    },
+                    url,
+                )
+                .await
+            }
+        }
+    }
+    async fn read_state(
+        &self,
+        kind: gb_ports::WorkKind,
+        url: &str,
+    ) -> Result<(gb_ports::WorkKind, bool)> {
+        use gb_ports::{Lane, Resource, WorkKind};
+        let page = match kind {
+            WorkKind::Ticket => {
+                self.services
+                    .tickets()?
+                    .read(Resource::Tickets, url, None, "")
+                    .await?
+            }
+            WorkKind::PullRequest => {
+                self.code()?
+                    .read(Resource::PullRequests, url, None, "")
+                    .await?
+            }
+        };
+        let value = page
+            .items()
+            .first()
+            .ok_or(gb_ports::ServiceError::InvalidResult)?
+            .clone();
+        Ok(match kind {
+            WorkKind::Ticket => {
+                let t: gb_ports::Ticket = serde_json::from_value(value)
+                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                (t.kind, t.state == "open" && t.lane != Some(Lane::Done))
+            }
+            WorkKind::PullRequest => {
+                let p: gb_ports::PullRequest = serde_json::from_value(value)
+                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                (p.kind, p.state == "open" && !p.merged)
+            }
+        })
+    }
+    async fn active(&self, record: &Checkout) -> bool {
+        let Some((kind, url)) = &record.target else {
+            return false;
+        };
+        // Unknown state must retain the checkout without blocking other work.
+        self.state(*kind, url).await.map(|v| v.1).unwrap_or(true)
     }
     fn owner(&self) -> Result<String> {
         self.work.map(digest).ok_or_else(|| failure("work"))
@@ -1219,19 +1297,24 @@ impl Workspace<'_> {
             .refs(&["refs/remotes/origin/", "refs/tags/", PUBLIC])
             .await?;
         let records = self.records()?;
+        let target = self.target().await;
         let mut owned = None;
         let mut idle = vec![];
         for (slot, record) in &records {
             if record.repository != repository || record.discarded {
                 continue;
             }
-            if record.owner == owner && record.branch == requested {
+            if record.owner == owner
+                && (record.branch == requested
+                    || matches!((&record.target, &target), (Some((_, old)), Some((_, current))) if old == current))
+            {
                 owned = Some(slot.clone());
             }
-            if self
-                .reusable(&origin, &self.clones.join(slot), &public)
-                .await
-                .unwrap_or(false)
+            if !self.active(record).await
+                && self
+                    .reusable(&origin, &self.clones.join(slot), &public)
+                    .await
+                    .unwrap_or(false)
             {
                 idle.push(slot.clone());
             }
@@ -1256,6 +1339,7 @@ impl Workspace<'_> {
         let record = Checkout {
             repository: repository.into(),
             owner,
+            target,
             branch: requested.into(),
             discarded: false,
             removed: false,

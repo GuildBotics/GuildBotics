@@ -268,6 +268,14 @@ impl LocalService {
     }
 }
 impl CodeHostingService for LocalService {
+    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+        Box::pin(async move {
+            let r = Ref::locate(url, WorkKind::PullRequest)?;
+            serde_json::from_value(self.store.load(&r)?["tickets"].clone())
+                .map_err(|_| ServiceError::InvalidResult)
+        })
+    }
+
     fn read<'a>(
         &'a self,
         r: Resource,

@@ -1043,6 +1043,8 @@ struct CodeFaults {
     inner: Arc<dyn CodeHostingService>,
     draft: Option<ServiceError>,
     fail_comment: bool,
+    fail_links: bool,
+    link_override: Option<Vec<TicketLink>>,
     quota_error: Option<ServiceError>,
 }
 impl CodeFaults {
@@ -1054,11 +1056,23 @@ impl CodeFaults {
             block: None,
             draft: None,
             fail_comment: false,
+            fail_links: false,
+            link_override: None,
             quota_error: None,
         }
     }
 }
 impl CodeHostingService for CodeFaults {
+    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+        if let Some(links) = &self.link_override {
+            return Box::pin(async move { Ok(links.clone()) });
+        }
+        if self.fail_links {
+            Box::pin(async { Err(ServiceError::Unavailable) })
+        } else {
+            self.inner.linked_tickets(url)
+        }
+    }
     fn read<'a>(
         &'a self,
         resource: Resource,
@@ -1241,6 +1255,8 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
             inner: f.code.clone(),
             draft: Some(error.clone()),
             fail_comment: false,
+            fail_links: false,
+            link_override: None,
             quota_error: None,
         };
         let mut selector = f.selector("manual");
@@ -1299,6 +1315,8 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
         inner: f.code.clone(),
         draft: None,
         fail_comment: true,
+        fail_links: false,
+        link_override: None,
         quota_error: None,
     };
     let mut selector = f.selector("routine");
@@ -1330,6 +1348,8 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
             inner: f.code.clone(),
             draft: None,
             fail_comment: false,
+            fail_links: false,
+            link_override: None,
             quota_error: None,
         };
         let mut selector = f.selector("manual");
@@ -1395,6 +1415,82 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+#[tokio::test]
+async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes() {
+    for count in [0, 1, 2] {
+        let f = Fixture::new();
+        let task = f.task().await;
+        let second = f
+            .ticket
+            .create_ticket(CreateTicket {
+                tracker: "acme/team".into(),
+                title: "Second".into(),
+                body: String::new(),
+                labels: vec![],
+                add_to_board: true,
+                interactive: false,
+                assignee: Some(ActorName("local-aiko".into())),
+                lane: Some(CreateLane::Ready),
+                parent: None,
+                blocked_by: vec![],
+            })
+            .await
+            .unwrap();
+        let pull = f.pull().await;
+        let url = pull.url.as_deref().unwrap();
+        let urls = [task.url.as_deref().unwrap(), second.target.url.as_str()];
+        f.code
+            .update_pull_request(
+                url,
+                UpdatePullRequest {
+                    tickets: Some(
+                        urls[..count]
+                            .iter()
+                            .map(|u| TicketLink {
+                                url: (*u).into(),
+                                closes: false,
+                            })
+                            .collect(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let selector = f.selector("routine");
+        let selected = selector.refresh(&pull).await.unwrap().unwrap();
+        let work = selected.work.unwrap();
+        assert_eq!(
+            work.kind,
+            if count == 1 { "ticket" } else { "pull_request" }
+        );
+        assert_eq!(work.identity, if count == 1 { urls[0] } else { url });
+        if count == 1 {
+            assert_eq!(Some(work), selector.invocation(&task).unwrap().work);
+        }
+    }
+}
+
+#[tokio::test]
+async fn unreadable_author_links_keep_pr_work_selectable() {
+    for missing_ticket in [false, true] {
+        let f = Fixture::new();
+        let pull = f.pull().await;
+        let mut faulty = CodeFaults::new(f.code.clone());
+        faulty.fail_links = !missing_ticket;
+        if missing_ticket {
+            faulty.link_override = Some(vec![TicketLink {
+                url: "local://ticket/acme/team/999999".into(),
+                closes: false,
+            }]);
+        }
+        let mut selector = f.selector("routine");
+        selector.code = Some(&faulty);
+        let selected = selector.next().await.unwrap().unwrap().1;
+        assert_eq!(selected.work.unwrap().identity, pull.url.unwrap());
     }
 }
 
