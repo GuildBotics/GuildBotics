@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -293,3 +294,36 @@ def test_many_named_blobs_stream_and_a_shared_blob_fills_every_file(tmp_path, ex
     assert len(copied) == 1800
     for i in (0, 900, 1799):
         assert (destination / str(i)).read_bytes() == (root / str(i)).read_bytes()
+
+
+def test_a_blob_shared_by_more_files_than_open_files_allow_is_restored(
+    tmp_path, exporter
+):
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init")
+    for i in range(300):
+        (root / str(i)).write_bytes(b"")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "fixture")
+    upload = tmp_path / "upload.json"
+    upload.write_bytes(subprocess.check_output([str(exporter), str(root)], timeout=30))
+    # A child with a fixed descriptor limit below the number of files sharing the blob.
+    restore = (
+        "import json, resource, sys\n"
+        "from pathlib import Path\n"
+        "from guildbotics.guest.worktree_copy import receive_tree\n"
+        "resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))\n"
+        "upload = json.loads(Path(sys.argv[1]).read_text())\n"
+        "print(len(list(receive_tree(Path(sys.argv[2]), Path(sys.argv[3]), upload, readonly=False))))\n"
+    )
+    destination = tmp_path / "destination"
+    done = subprocess.run(
+        [sys.executable, "-c", restore, upload, tmp_path / "source", destination],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "300"
+    assert all((destination / str(i)).read_bytes() == b"" for i in range(300))

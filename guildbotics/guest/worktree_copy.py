@@ -213,25 +213,26 @@ def _write_blobs(gitdir: Path, named: dict[str, list[Path]]) -> None:
 
 
 def _copy_blob(out: IO[bytes], oid: str, targets: list[Path]) -> None:
+    """Stream one batch entry into the first target, then copy it to the
+    rest one at a time: a blob many files share opens no more of them."""
     match out.readline().decode().split():
         case [found, "blob", size] if found == oid:
             remaining = int(size)
         case _:
             raise WorktreeCopyError("Received history lacks a worktree blob")
-    files = [target.open("xb") for target in targets]
-    try:
+    first, *rest = targets
+    with first.open("xb") as file:
         while remaining:
             chunk = out.read(min(remaining, _CHUNK_BYTES))
             if not chunk:
                 raise WorktreeCopyError("Received history lacks a worktree blob")
-            for file in files:
-                file.write(chunk)
+            file.write(chunk)
             remaining -= len(chunk)
-    finally:
-        for file in files:
-            file.close()
     if out.read(1) != b"\n":
         raise WorktreeCopyError("Received history lacks a worktree blob")
+    for target in rest:
+        with first.open("rb") as source, target.open("xb") as copy:
+            shutil.copyfileobj(source, copy, _CHUNK_BYTES)
 
 
 def copy_tree(
