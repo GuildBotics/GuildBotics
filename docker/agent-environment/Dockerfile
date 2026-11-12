@@ -12,8 +12,8 @@
 #     the CI jobs (in the environment snapshot, the build's own Node.js, at the
 #     version GuildBotics pins, replaces it)
 #   - the Rust toolchain for the Cargo workspace's checks, with cargo-nextest
-#     for its tests; `cargo` is cargo-wrapper.sh, which first cleans a target
-#     directory built under other build conditions
+#     for its tests; `cargo` is cargo-wrapper.sh, which calls the nearest
+#     repository-owned .cargo/before-cargo.sh before running the real cargo
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #

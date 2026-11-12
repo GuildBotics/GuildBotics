@@ -9,3 +9,19 @@ Hub の CPU 用 archive を `guildbotics environment image load` で読み込ん
 運用ワークスペースの `guildbotics environment build` を実行します。
 [Hub の事前ビルド手順](../../docs/hub-server.md#レシピ変更のマージ前にスナップショットを用意する)
 に従い、稼働中の checkout は変更せず、snapshot が ready であることを確かめてからマージします。
+
+## cargo の実行前処理
+
+イメージの `cargo` は、作業ディレクトリから親へたどり、最初に見つけた
+`.cargo/before-cargo.sh` に同じ引数を渡してから `$REAL_CARGO` を実行します。
+スクリプトが無い場合や失敗した場合も cargo は実行します。
+
+このリポジトリのスクリプトは `rustc -vV` とルート manifest の profile が変わると
+全成果物を消し、ブランチ名または `Cargo.lock` の hash が変わると
+`cargo clean --workspace` と残った自前 target の片付けを行います。
+第三者依存は後者では残します。印は target 内に置き、旧形式の印は使いません。
+`--manifest-path`、`--config`、`--target-dir` は片付けにも引き継ぎます。
+フックの探索は cwd を基準とするため、リポジトリ外から `--manifest-path` を
+渡しても、探索経路にフックが無ければ片付けません。
+
+この変更のイメージ作り直しと Hub への反映は #209 で行います。

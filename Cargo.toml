@@ -6,7 +6,7 @@ exclude = [".ci"]
 resolver = "3"
 
 # Profiles apply only here, at the workspace's root: Cargo ignores those of a
-# member. docker/agent-environment/cargo-wrapper.sh records these tables in the
+# member. .cargo/before-cargo.sh records these tables in the
 # target directory and cleans it when they change.
 
 # Line numbers are enough for the backtraces; full debug info, and any for
