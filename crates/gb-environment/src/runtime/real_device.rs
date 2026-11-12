@@ -36,6 +36,7 @@ async fn real_device_large_stdin_reaches_all_guest_process_entries() {
     let home = dir.path().join("msb");
     ensure(&home).unwrap();
     let boot = Boot {
+        files: None,
         home: &home,
         snapshot: &snapshot,
         memory_mib: 4096,
@@ -202,6 +203,7 @@ async fn real_device_owner_exit_stops_the_vm() {
 
 async fn hold_synthetic_login(home: &Path, snapshot: &Path) {
     let boot = Boot {
+        files: None,
         home,
         snapshot,
         memory_mib: 4096,

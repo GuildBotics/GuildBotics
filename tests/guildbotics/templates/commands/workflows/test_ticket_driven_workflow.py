@@ -10,6 +10,8 @@ import importlib
 import json
 from pathlib import Path
 
+import os
+
 import pytest
 
 from guildbotics.entities.task import Task
@@ -78,6 +80,7 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
 
     assert response is context.response
     [(command_name, kwargs)] = context.invocations
+    assert kwargs["artifact_directory"] == os.getcwd()
     assert command_name == "functions/handle_ticket"
     # The run and the work are the host's: the turn takes them from its grant.
     assert kwargs["agent_execution_context"] == {

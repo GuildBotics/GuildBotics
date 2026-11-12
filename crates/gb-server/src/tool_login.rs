@@ -3014,6 +3014,7 @@ impl PrivatePlan {
         runtime_home: &'a Path,
     ) -> gb_environment::runtime::Boot<'a> {
         gb_environment::runtime::Boot {
+            files: None,
             home: runtime_home,
             snapshot: &vm.snapshot,
             memory_mib: vm.memory_mib,

@@ -821,3 +821,5 @@ Claude / Codex と同様、`limit_reached` はどれか1枠が枯渇したとき
 余裕があってもメンバー見出しの「Rate limit 中」は点灯します。利用枠を提供しないアカウントや、
 そのJSONではない出力は「使用量情報なし」のままにし、TUI・status line・タブ区切り本文の解析や、
 0% / 100% の合成はしません。
+
+workflow の turn は member の clone で作業します。利用者向けの成果物は、別途マウントされているプロンプトの `Artifact directory` の絶対パスへ保存します。

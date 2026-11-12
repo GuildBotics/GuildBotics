@@ -1644,7 +1644,9 @@ export async function getServerMachineName(): Promise<string> {
   return (await request<{ machine_name: string }>("/health")).machine_name;
 }
 
-export async function getRunFiles(traceId: string): Promise<{ files: string[] }> {
+export async function getRunFiles(
+  traceId: string,
+): Promise<{ files: string[]; oversized?: string[]; pending?: boolean }> {
   return request(`/diagnostics/traces/${encodeURIComponent(traceId)}/files`);
 }
 export function runFileUrl(traceId: string, path: string): string {

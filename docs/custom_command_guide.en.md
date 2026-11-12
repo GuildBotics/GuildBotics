@@ -1006,3 +1006,5 @@ channel. It records which messages were delivered. Additional messages are marke
 processed on done/asking only after a later chat reply, post, reaction, Branvil write, or Git publication. Blocked or
 no-op-only runs leave those messages pending for the next run. A final check cannot
 exclude arrivals after the check.
+
+Workflow turns work in member clones; save deliverables in the absolute `Artifact directory` supplied by the workflow prompt, which remains mounted separately.

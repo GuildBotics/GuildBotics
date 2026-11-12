@@ -83,3 +83,4 @@ en:
   command_client_cwd_refused: "The client working directory is protected or covered by a read-only grant."
   command_input_file_invalid: "The selected upload is unavailable or invalid. Upload the file again."
   command_run_file_missing: "This file is unavailable. Wait for the run to finish; files expire after seven days and downloads accept regular files up to 64 MB."
+  command_run_file_too_large: "The file exceeds the 64 MB download limit."

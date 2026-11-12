@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
@@ -53,6 +54,7 @@ async def main(context: Any) -> None:
         chat_participation=prompt["chat_participation"],
         language=getattr(context, "language_name", ""),
         member_workspace=str(member_workspace),
+        artifact_directory=os.getcwd(),
         agent_execution_context={
             "resume_policy": "auto",
             "context_cursor": turn.context_cursor,

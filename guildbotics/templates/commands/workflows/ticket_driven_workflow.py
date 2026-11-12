@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from guildbotics.runtime import Context
@@ -86,6 +87,7 @@ async def main(context: Context) -> Any:
         chat_thread_id=thread_id,
         language=context.language_name,
         member_workspace=str(member_workspace),
+        artifact_directory=os.getcwd(),
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
             # A new run feeds its instructions into the work's existing session.

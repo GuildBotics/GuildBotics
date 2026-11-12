@@ -475,16 +475,31 @@ async fn start(
     } else {
         trace_id.clone()
     };
-    if default_cwd {
-        cwd = if access.read_only {
-            gb_environment::run_files::directory(&host.data, &run_id)
-        } else {
-            gb_environment::run_files::prepare(&host.data, &run_id)
+    let inputs = match api.inputs {
+        Some(inputs) => inputs.mounts(&request.input_ids).await.map_err(|_| {
+            error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
+        })?,
+        None if request.input_ids.is_empty() => vec![],
+        None => {
+            return Err(
+                error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
+            );
         }
-        .map_err(|e| internal(&e.to_string(), "OSError"))?;
+    };
+    let files = if default_cwd && !access.read_only {
+        Some(std::sync::Arc::new(
+            gb_environment::run_files::prepare(&host.data, &run_id)
+                .map_err(|e| internal(&e.to_string(), "OSError"))?,
+        ))
+    } else {
+        None
+    };
+    if let Some(files) = &files {
+        cwd = files.path.clone();
     }
     let command = gb_environment::Command {
         client_copy: request.client_cwd.is_some(),
+        files,
         upload: request.upload.map(std::sync::Arc::new),
         returned,
         config: configuration,
@@ -517,17 +532,6 @@ async fn start(
     let failure_capture = launch.failure_capture;
     let worker_capture = failure_capture.clone();
     let (workspace, cancelled) = (workspace.clone(), api.cancelled.clone());
-    let inputs = match api.inputs {
-        Some(inputs) => inputs.mounts(&request.input_ids).await.map_err(|_| {
-            error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
-        })?,
-        None if request.input_ids.is_empty() => vec![],
-        None => {
-            return Err(
-                error(StatusCode::BAD_REQUEST, "command_input_file_invalid").into_response()
-            );
-        }
-    };
     let member = api.member.clone();
     let keychain = api.keychain.clone();
     let mut admission = crate::execution::Admission {

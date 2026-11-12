@@ -14,25 +14,30 @@ fn list(
     prefix: &str,
     files: &mut Vec<String>,
     depth: usize,
+    oversized: &mut Vec<String>,
 ) -> std::io::Result<()> {
     if depth > 32 {
         return Ok(());
     }
     for entry in dir.entries()? {
-        if files.len() >= 1000 {
+        if files.len() + oversized.len() >= 1000 {
             break;
         }
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = format!("{prefix}{name}");
         if entry.file_type()?.is_file() {
-            if gb_environment::run_files::regular(dir, &name).is_ok() {
-                files.push(path);
+            if let Ok(file) = gb_environment::run_files::regular(dir, &name) {
+                if file.metadata()?.len() > 64 * 1024 * 1024 {
+                    oversized.push(path);
+                } else {
+                    files.push(path);
+                }
             }
         } else if entry.file_type()?.is_dir() {
             use cap_fs_ext::DirExt;
             if let Ok(child) = dir.open_dir_nofollow(&name) {
-                list(&child, &format!("{path}/"), files, depth + 1)?;
+                list(&child, &format!("{path}/"), files, depth + 1, oversized)?;
             }
         }
     }
@@ -44,17 +49,26 @@ pub(crate) async fn index(
     headers: HeaderMap,
 ) -> Response {
     let data = api.data.clone();
-    match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
-        let mut files = vec![];
-        if let Ok(dir) = gb_environment::run_files::completed(&data, &id) {
-            list(&dir, "", &mut files, 0)?;
-        }
-        files.sort();
-        Ok(files)
-    })
+    match tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Vec<String>, Vec<String>, bool)> {
+            let mut files = vec![];
+            let mut oversized = vec![];
+            let pending = match gb_environment::run_files::completed(&data, &id) {
+                Ok(dir) => {
+                    list(&dir, "", &mut files, 0, &mut oversized)?;
+                    false
+                }
+                Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+            };
+            files.sort();
+            Ok((files, oversized, pending))
+        },
+    )
     .await
     {
-        Ok(Ok(files)) => Json(json!({"files": files})).into_response(),
+        Ok(Ok((files, oversized, pending))) => {
+            Json(json!({"files": files,"oversized":oversized,"pending":pending})).into_response()
+        }
         _ => ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -80,7 +94,13 @@ pub(crate) async fn download(
         let file = gb_environment::run_files::regular(&root, &query.path)?;
         let mut bytes = Vec::new();
         file.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        anyhow::ensure!(bytes.len() <= 64 * 1024 * 1024, "Artifact too large");
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "Artifact too large",
+            )
+            .into());
+        }
         Ok(bytes)
     })
     .await

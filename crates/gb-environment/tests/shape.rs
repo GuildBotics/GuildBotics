@@ -47,6 +47,7 @@ fn machine() -> Machine {
 fn command(machine: &Machine, path: PathBuf, inspects: Vec<InspectsItem>) -> Command {
     Command {
         client_copy: false,
+        files: None,
         upload: None,
         returned: Default::default(),
         config: std::sync::Arc::new(
@@ -581,8 +582,11 @@ fn only_the_clone_mount_lets_the_guest_add_more_than_the_runtime_default() {
 fn a_private_run_cwd_mounts_only_its_own_directory() {
     let machine = machine();
     let id = "a".repeat(32);
-    let other = gb_environment::run_files::prepare(&machine.host.data, &"b".repeat(32)).unwrap();
-    let cwd = gb_environment::run_files::prepare(&machine.host.data, &id).unwrap();
+    let other_lease =
+        gb_environment::run_files::prepare(&machine.host.data, &"b".repeat(32)).unwrap();
+    let lease = gb_environment::run_files::prepare(&machine.host.data, &id).unwrap();
+    let cwd = lease.path.clone();
+    let other = other_lease.path.clone();
     let mut request = command(
         &machine,
         machine

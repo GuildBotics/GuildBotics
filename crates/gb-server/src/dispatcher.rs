@@ -141,17 +141,25 @@ impl Dispatcher {
             serde_json::to_value(&invocation.work).map_err(|_| DispatchFailure::InvalidCommand)?;
         let kind = work["kind"].as_str().unwrap_or("manual").to_owned();
         let identity = work["identity"].as_str().unwrap_or(trace_id).to_owned();
-        let cwd = if access.read_only {
-            gb_environment::run_files::directory(&self.host.data, trace_id)
+        let files = if access.read_only {
+            None
         } else {
-            gb_environment::run_files::prepare(&self.host.data, trace_id)
-        }
-        .map_err(|error| {
-            DispatchFailure::Environment(Failure::Command(Sentence::Text(error.to_string())))
-        })?;
+            Some(Arc::new(
+                gb_environment::run_files::prepare(&self.host.data, trace_id).map_err(|error| {
+                    DispatchFailure::Environment(Failure::Command(Sentence::Text(
+                        error.to_string(),
+                    )))
+                })?,
+            ))
+        };
+        let cwd = files
+            .as_ref()
+            .map(|f| f.path.clone())
+            .unwrap_or(self.host.data.join("run/empty"));
         invocation.run_id = trace_id.into();
         Ok(Command {
             client_copy: false,
+            files,
             upload: None,
             returned: Default::default(),
             config,

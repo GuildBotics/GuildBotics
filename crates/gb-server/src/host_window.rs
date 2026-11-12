@@ -577,6 +577,7 @@ mod tests {
         let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
         let command = gb_environment::Command {
             client_copy: false,
+            files: None,
             upload: None,
             returned: Default::default(),
             path: copy.path().join("team/members/aiko/commands/probe.md"),
@@ -714,6 +715,7 @@ mod tests {
         std::fs::write(&project, "[").unwrap();
         let command = gb_environment::Command {
             client_copy: false,
+            files: None,
             upload: None,
             returned: Default::default(),
             config: Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap()),

@@ -18,6 +18,7 @@ ticket / pull request の内容を理解し、割り当てられた GuildBotics 
 - 作業: {work_kind} `{work_identity}`
 - この PR のチェックを待った以前の run: {awaited_run_id}
 - Member workspace: {member_workspace}
+- Artifact directory: {artifact_directory}
 - プロジェクトのデフォルト言語: {language}
 </target>
 

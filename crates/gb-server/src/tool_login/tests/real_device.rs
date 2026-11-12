@@ -105,6 +105,7 @@ impl Device {
 
     fn boot<'a>(&'a self, home: &'a Path, mounts: &'a [Mount], network: &'a Network) -> Boot<'a> {
         Boot {
+            files: None,
             home,
             snapshot: &self.vm.snapshot,
             memory_mib: self.vm.memory_mib,
@@ -220,6 +221,7 @@ impl Device {
         let path = copy.path().join(path.strip_prefix(&config).unwrap());
         let command = gb_environment::Command {
             client_copy: false,
+            files: None,
             upload: None,
             returned: Default::default(),
             config: copy,

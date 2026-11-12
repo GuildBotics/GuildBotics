@@ -36,7 +36,7 @@ pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
 /// host's. What the host mounts keeps its host path; a grant under the
 /// host's home is linked from the same place under this one.
 pub const GUEST_HOME: &str = "/opt/guildbotics/home";
-/// The exchange folder, relative to the host's home.
+/// Private run storage and its lifetime lease.
 pub mod run_files;
 /// GuildBotics' own roots in the microVM: its code, its venv, the home and
 /// its run state. No host path is taken over or under them.
@@ -99,6 +99,7 @@ pub struct Host {
 /// resolved for it in the run's copy of the configuration, what it declared,
 /// and its arguments, working directory (as the host spells it) and input.
 pub struct Command {
+    pub files: Option<std::sync::Arc<run_files::Lease>>,
     pub client_copy: bool,
     pub upload: Option<std::sync::Arc<worktree::transfer::Upload>>,
     pub returned: worktree::transfer::Returned,
@@ -144,27 +145,6 @@ pub struct Session {
 /// Runs `command` of the workspace `workspace` in a microVM of its own, which
 /// is gone when this returns, and says how the command ended.
 pub async fn run(
-    host: &Host,
-    workspace: &Path,
-    command: Command,
-    on_warning: impl Fn(Sentence),
-    session: &Session,
-) -> Result<CommandReply, Failure> {
-    let owned = !command.access.read_only
-        && Some(&command.cwd)
-            == run_files::directory(&host.data, &command.run_id)
-                .ok()
-                .as_ref();
-    let id = command.run_id.clone();
-    let result = run_inner(host, workspace, command, on_warning, session).await;
-    if owned {
-        run_files::finish(&host.data, &id)
-            .map_err(|e| Failure::Runtime(Sentence::Text(e.to_string())))?;
-    }
-    result
-}
-
-async fn run_inner(
     host: &Host,
     workspace: &Path,
     command: Command,
@@ -254,6 +234,7 @@ async fn run_inner(
     let argv: Vec<String> = ENTRY.iter().map(|s| s.to_string()).collect();
     runtime::run_once_with_guest(
         &runtime::Boot {
+            files: command.files.clone(),
             home: &host.data.join("msb"),
             snapshot: &snapshot,
             memory_mib: resources.memory_mib,

@@ -30,3 +30,17 @@ it("offers a download only after the run finishes", async () => {
   );
   expect(link).toHaveAttribute("download", "report.pdf");
 });
+
+it("shows oversized outputs without a download link", async () => {
+  vi.mocked(getRunFiles).mockResolvedValue({ files: [], oversized: ["large.bin"] });
+  const client = new QueryClient();
+  render(
+    <QueryClientProvider client={client}>
+      <TestMantineProvider>
+        <RunFiles traceId="large" finished />
+      </TestMantineProvider>
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByText(/large.bin/)).toBeInTheDocument();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});

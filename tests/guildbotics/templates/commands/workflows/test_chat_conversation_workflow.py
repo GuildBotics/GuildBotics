@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import os
+
 import pytest
 
 from guildbotics.commands.agent_turn import run_agent_turn
@@ -94,6 +96,7 @@ async def test_one_judgment_feeds_explicit_response_input_and_effort_to_every_co
     assert len(responses) == completes_on
     assert "previous_effort" not in assessments[0]
     assert invocations[0][0] == "functions/handle_chat_event"
+    assert invocations[0][1]["artifact_directory"] == os.getcwd()
     assert invocations[0][1]["cwd"] == tmp_path
     assert invocations[0][1]["member_workspace"] == str(tmp_path)
     assert invocations[0][1]["event_id"] == selected.subject.event_id

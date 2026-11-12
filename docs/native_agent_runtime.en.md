@@ -992,3 +992,5 @@ true when any window is exhausted, so the member badge can light while another
 model group still has quota. Accounts that do not expose quotas, and payloads
 that are not that JSON, stay unavailable; GuildBotics does not parse the TUI,
 the status line, or tab-separated text, and it does not synthesize 0% or 100%.
+
+Workflow turns work in member clones; save deliverables in the absolute `Artifact directory` supplied by the workflow prompt, which remains mounted separately.

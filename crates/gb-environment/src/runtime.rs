@@ -54,6 +54,7 @@ pub struct Mount {
 
 /// What a microVM boots from and with.
 pub struct Boot<'a> {
+    pub files: Option<std::sync::Arc<crate::run_files::Lease>>,
     pub home: &'a Path,
     pub snapshot: &'a Path,
     pub memory_mib: u32,
@@ -338,6 +339,15 @@ struct Cleanup {
     task: tokio::task::JoinHandle<()>,
 }
 impl Cleanup {
+    fn with_files(
+        files: Option<std::sync::Arc<crate::run_files::Lease>>,
+        work: impl Future<Output = ()> + Send + 'static,
+    ) -> Self {
+        Self::new(async move {
+            work.await;
+            drop(files);
+        })
+    }
     fn new(work: impl Future<Output = ()> + Send + 'static) -> Self {
         Self::new_in(&VM_TASKS, work)
     }
@@ -369,10 +379,16 @@ struct OwnedVm {
 }
 impl OwnedVm {
     fn new(sandbox: Sandbox) -> Self {
+        Self::with_files(sandbox, None)
+    }
+    fn with_files(
+        sandbox: Sandbox,
+        files: Option<std::sync::Arc<crate::run_files::Lease>>,
+    ) -> Self {
         let owned = sandbox.clone();
         Self {
             sandbox,
-            cleanup: Cleanup::new(async move { stop_vm(&owned).await }),
+            cleanup: Cleanup::with_files(files, async move { stop_vm(&owned).await }),
         }
     }
     async fn close(self) {
@@ -399,6 +415,27 @@ async fn owned_boot_in<T: Send + 'static>(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    #[tokio::test]
+    async fn detached_cleanup_retains_the_artifact_lease_until_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "d".repeat(32);
+        let lease = std::sync::Arc::new(crate::run_files::prepare(root.path(), &id).unwrap());
+        let kept = lease.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let (release, stopped) = tokio::sync::oneshot::channel();
+        let cleanup = Cleanup::with_files(Some(kept), async move {
+            let _ = started.send(());
+            let _ = stopped.await;
+        });
+        drop(lease);
+        assert!(crate::run_files::completed(root.path(), &id).is_err());
+        let task = tokio::spawn(cleanup.finish());
+        entered.await.unwrap();
+        assert!(crate::run_files::completed(root.path(), &id).is_err());
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(crate::run_files::completed(root.path(), &id).is_ok());
+    }
     #[tokio::test]
     async fn shutdown_drain_has_a_deadline_for_hanging_vm_tasks() {
         let tasks = tokio_util::task::TaskTracker::new();
@@ -2146,18 +2183,24 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
             .map_err(|e| Failure::Command(Sentence::Text(e)))?;
         builder = builder.volume(crate::worktree::SOURCE, |m| m.bind(&copy.host).readonly());
     }
-    let sandbox = owned_boot(async move { builder.create().await.map(OwnedVm::new) })
-        .await
-        .map_err(|e| {
-            Failure::Runtime(Sentence::Key(
-                "intelligences.agent_environment.runtime.start_failed",
-                vec![
-                    ("memory_mib", boot.memory_mib.to_string()),
-                    ("cpus", boot.cpus.to_string()),
-                    ("error", e.to_string()),
-                ],
-            ))
-        })?;
+    let files = boot.files.clone();
+    let sandbox = owned_boot(async move {
+        builder
+            .create()
+            .await
+            .map(|sandbox| OwnedVm::with_files(sandbox, files))
+    })
+    .await
+    .map_err(|e| {
+        Failure::Runtime(Sentence::Key(
+            "intelligences.agent_environment.runtime.start_failed",
+            vec![
+                ("memory_mib", boot.memory_mib.to_string()),
+                ("cpus", boot.cpus.to_string()),
+                ("error", e.to_string()),
+            ],
+        ))
+    })?;
     Ok(sandbox)
 }
 

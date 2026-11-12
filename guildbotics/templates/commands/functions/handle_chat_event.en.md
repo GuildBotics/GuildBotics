@@ -22,6 +22,7 @@ The member's standing roles are defined by the `roles` field in the member conte
 - Chat participation policy: {chat_participation}
 - Project default language: {language}
 - Member workspace: {member_workspace}
+- Artifact directory: {artifact_directory}
 </target>
 
 <unprocessed_messages>

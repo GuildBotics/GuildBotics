@@ -3192,7 +3192,8 @@ mod diagnostics;
 async fn run_files_are_downloadable_only_after_completion_and_never_follow_links() {
     let f = fixture();
     let id = "a".repeat(32);
-    let dir = gb_environment::run_files::prepare(&f.data(), &id).unwrap();
+    let lease = gb_environment::run_files::prepare(&f.data(), &id).unwrap();
+    let dir = lease.path.clone();
     f.write(&dir.join("nested/report.pdf"), "pdf bytes");
     let index = format!("/diagnostics/traces/{id}/files");
     let download = format!("/diagnostics/traces/{id}/file?path=nested%2Freport.pdf");
@@ -3201,10 +3202,13 @@ async fn run_files_are_downloadable_only_after_completion_and_never_follow_links
         f.call("GET", &download, Value::Null).await.0,
         StatusCode::NOT_FOUND
     );
-    gb_environment::run_files::finish(&f.data(), &id).unwrap();
+    drop(lease);
     #[cfg(unix)]
     std::os::unix::fs::symlink("nested/report.pdf", dir.join("link")).unwrap();
+    let large = std::fs::File::create(dir.join("large.bin")).unwrap();
+    large.set_len(64 * 1024 * 1024 + 1).unwrap();
     assert_eq!(f.get(&index).await["files"], json!(["nested/report.pdf"]));
+    assert_eq!(f.get(&index).await["oversized"], json!(["large.bin"]));
     let response = f
         .respond(f.request("GET", &download).body(HttpBody::empty()).unwrap())
         .await;
