@@ -51,8 +51,9 @@ pub struct Mount {
     pub guest: String,
     pub host: Option<PathBuf>,
     pub readonly: bool,
-    /// How much the guest may add to a bound directory, in MiB. Without it,
-    /// the runtime applies its own default of 4 GiB per mount.
+    /// The write budget of a bound directory, or the capacity of a private
+    /// disk, in MiB. Without it, binds use the runtime's 4 GiB default and
+    /// private directories use tmpfs.
     pub quota_mib: Option<u32>,
 }
 
@@ -2376,9 +2377,12 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
         .volume("/tmp", |m| {
             m.named_with(format!("{name}-0"), |v| v.create().disk().size(4096))
         });
-    for mount in boot.mounts {
+    for (index, mount) in boot.mounts.iter().enumerate() {
         let mount = mount.clone();
-        builder = builder.volume(mount.guest.clone(), move |m| volume(m, &mount, scratch_mib));
+        let disk_name = format!("{name}-{}", index + 1);
+        builder = builder.volume(mount.guest.clone(), move |m| {
+            volume(m, &mount, scratch_mib, &disk_name)
+        });
     }
     if let Some(copy) = boot.worktree.filter(|copy| copy.upload.is_none()) {
         copy.validate()
@@ -2406,13 +2410,14 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
     Ok(sandbox)
 }
 
-/// How `mount` is made in the microVM: a bound directory, with the write
-/// quota it names, or an empty directory of `scratch_mib`.
-fn volume(m: MountBuilder, mount: &Mount, scratch_mib: u32) -> MountBuilder {
+/// Bind the host directory, create a private disk of the declared capacity,
+/// or use tmpfs for an empty scratch directory.
+fn volume(m: MountBuilder, mount: &Mount, scratch_mib: u32, disk_name: &str) -> MountBuilder {
     let m = match (&mount.host, mount.quota_mib) {
         (Some(host), Some(quota)) => m.bind(host).quota(quota),
         (Some(host), None) => m.bind(host),
-        (None, _) => m.tmpfs().size(scratch_mib),
+        (None, Some(capacity)) => m.named_with(disk_name, |v| v.create().disk().size(capacity)),
+        (None, None) => m.tmpfs().size(scratch_mib),
     };
     if mount.readonly { m.readonly() } else { m }
 }
@@ -2423,9 +2428,14 @@ mod volume_tests {
     use microsandbox::sandbox::VolumeMount;
 
     fn built(mount: &Mount) -> VolumeMount {
-        volume(MountBuilder::new(mount.guest.clone()), mount, SCRATCH_MIB)
-            .build()
-            .unwrap()
+        volume(
+            MountBuilder::new(mount.guest.clone()),
+            mount,
+            SCRATCH_MIB,
+            "guildbotics-0123456789ab-1",
+        )
+        .build()
+        .unwrap()
     }
 
     #[test]
@@ -2451,9 +2461,79 @@ mod volume_tests {
         }
         assert!(matches!(
             built(&mount(None, false, None)),
-            VolumeMount::Tmpfs { .. }
+            VolumeMount::Tmpfs {
+                size_mib: Some(SCRATCH_MIB),
+                ..
+            }
         ));
     }
+
+    #[test]
+    fn a_private_copy_uses_a_clone_sized_disk_instead_of_guest_memory() {
+        let mount = Mount {
+            guest: "/work".into(),
+            host: None,
+            readonly: false,
+            quota_mib: Some(crate::contract::CLONE_QUOTA_MIB),
+        };
+        match built(&mount) {
+            VolumeMount::Named {
+                create: Some(create),
+                ..
+            } => {
+                assert_eq!(create.kind, microsandbox::VolumeKind::Disk);
+                assert_eq!(create.capacity_mib, Some(16 * 1024));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cleanup_selects_every_own_disk_and_no_other_mount() {
+        let vm = "guildbotics-0123456789ab";
+        let names = [format!("{vm}-0"), format!("{vm}-7")];
+        let dir = tempfile::tempdir().unwrap();
+        let named = |guest: &str, name: &str| {
+            MountBuilder::new(guest)
+                .named_with(name, |v| v.create().disk().size(4096))
+                .build()
+                .unwrap()
+        };
+        let mounts = [
+            named("/tmp", &names[0]),
+            named("/copy", &names[1]),
+            // Persisted configurations omit creation metadata.
+            MountBuilder::new("/persisted")
+                .named(format!("{vm}-12"))
+                .build()
+                .unwrap(),
+            named("/another-vm", "guildbotics-abcdef012345-7"),
+            named("/similar-vm", "guildbotics-0123456789abcd-7"),
+            MountBuilder::new("/bound")
+                .bind(dir.path())
+                .build()
+                .unwrap(),
+            MountBuilder::new("/scratch").tmpfs().build().unwrap(),
+        ];
+        assert_eq!(
+            temporary_disk_names(vm, &mounts).collect::<Vec<_>>(),
+            [&names[0], &names[1], &format!("{vm}-12")]
+        );
+    }
+}
+
+/// Only named volumes owned by this VM are removed after its destruction.
+fn temporary_disk_names<'a>(
+    vm: &str,
+    mounts: &'a [microsandbox::sandbox::VolumeMount],
+) -> impl Iterator<Item = &'a str> {
+    let prefix = format!("{vm}-");
+    mounts.iter().filter_map(move |mount| match mount {
+        microsandbox::sandbox::VolumeMount::Named { name, .. } if name.starts_with(&prefix) => {
+            Some(name.as_str())
+        }
+        _ => None,
+    })
 }
 
 async fn stop_vm(sandbox: &Sandbox) {
@@ -2465,7 +2545,9 @@ async fn stop_vm(sandbox: &Sandbox) {
         }
     }
     let _ = sandbox.destroy().await;
-    let _ = microsandbox::Volume::remove(&format!("{name}-0")).await;
+    for disk in temporary_disk_names(name, &sandbox.config().spec.mounts) {
+        let _ = microsandbox::Volume::remove(disk).await;
+    }
 }
 
 /// Login/probe output is private and is never passed to the host's logger.

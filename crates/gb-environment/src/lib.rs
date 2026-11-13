@@ -394,7 +394,6 @@ pub fn shape(
                     || mount.guest == clone_parent;
                 (mount.guest.clone(), open)
             })
-            .chain(copy.iter().map(|working| (working.guest.clone(), true)))
             .collect(),
         person_id: command.person_id.clone(),
         run_id: command.run_id.clone(),

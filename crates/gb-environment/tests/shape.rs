@@ -373,10 +373,10 @@ fn copied_worktree_is_admitted_as_workable_in_command_facts() {
         serde_json::from_str(env(&made.env, "GUILDBOTICS_COMMAND").unwrap()).unwrap();
     assert_eq!(facts.mounts.get(&copy.guest), Some(&true));
     assert_eq!(copy.guest, made.cwd);
-    assert!(
-        !made.mounts.iter().any(|mount| mount.guest == made.cwd),
-        "the workable copy lives on the VM's own disk"
-    );
+    let mount = made.mounts.iter().find(|m| m.guest == made.cwd).unwrap();
+    assert!(mount.host.is_none());
+    assert!(!mount.readonly);
+    assert_eq!(mount.quota_mib, Some(16 * 1024));
 }
 
 #[test]
