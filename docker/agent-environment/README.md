@@ -14,8 +14,8 @@ Hub の CPU 用 archive を `guildbotics environment image load` で読み込ん
 
 Linux 上で Windows クライアントをビルドするため、Rust の target
 `x86_64-pc-windows-gnu` と、mingw-w64 の C コンパイラー・リンカーを導入します。
-`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` に `x86_64-w64-mingw32-gcc` を設定し、
-`cargo build --target x86_64-pc-windows-gnu` のリンクに使います。
+`cargo build --target x86_64-pc-windows-gnu` は、rustc がこの target で既定に使う
+`x86_64-w64-mingw32-gcc` でリンクします。
 Dockerfile の `RUN` で target の導入とコンパイラー・リンカーの起動を確認します。
 
 イメージの実ビルドと Hub への反映は #211 で行います。

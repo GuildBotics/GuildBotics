@@ -110,7 +110,6 @@ RUN cargo --version
 
 # Windows clients use the GNU target; cc-rs also finds this cross compiler
 # by its target-prefixed name when building native dependencies.
-ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
 RUN rustup target add --toolchain "${RUST_VERSION}" x86_64-pc-windows-gnu \
     && rustup target list --toolchain "${RUST_VERSION}" --installed \
         | grep -Fx x86_64-pc-windows-gnu \
