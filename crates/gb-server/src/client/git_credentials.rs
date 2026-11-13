@@ -27,17 +27,7 @@ pub(super) async fn credential(
     let keep = |token: &str| secrets::keep_os_credential(KEYCHAIN, origin, token);
     acquire(&http, origin, &data, read, keep, async || {
         let language = super::language().await;
-        let unavailable = || {
-            anyhow::anyhow!(crate::i18n::t(
-                language,
-                "cli.git_credential.backend_required",
-                &[]
-            ))
-        };
-        let running = crate::server::running(&data, language)?.ok_or_else(unavailable)?;
-        let owner = super::OwnerClient::connect(&data, running.port, language)
-            .await?
-            .ok_or_else(unavailable)?;
+        let (owner, _) = super::cli_server(&data, language).await?;
         let (device_id, display_name) = device(&data)?;
         let answer = owner
             .post(

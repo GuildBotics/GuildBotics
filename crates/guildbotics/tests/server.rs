@@ -2071,7 +2071,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
 }
 
 #[tokio::test]
-async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
+async fn consent_tokens_allow_cli_routes_but_not_command_execution_or_settings() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path());
     let verifier = loopback_auth::random_secret::<48>();
@@ -2121,7 +2121,11 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
         ("/session/links", StatusCode::CREATED),
         ("/shutdown", StatusCode::UNAUTHORIZED),
         ("/commands/run", StatusCode::UNAUTHORIZED),
-        ("/member/run", StatusCode::UNAUTHORIZED),
+        // Empty payloads reach the CLI handlers and fail validation, not authentication.
+        ("/member/run", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/member/plan", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/member/git", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/git-credentials", StatusCode::UNPROCESSABLE_ENTITY),
         ("/apps/authorizations", StatusCode::UNAUTHORIZED),
     ] {
         let response = server
@@ -2129,6 +2133,20 @@ async fn consent_tokens_open_the_screens_but_cannot_execute_commands() {
             .post(server.url(&format!("/-/guildbotics/api{path}")))
             .bearer_auth(token)
             .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{path}");
+    }
+    for (path, expected) in [
+        ("/health", StatusCode::OK),
+        ("/member/redaction-keys", StatusCode::OK),
+        ("/config/status", StatusCode::UNAUTHORIZED),
+    ] {
+        let response = server
+            .http
+            .get(server.url(&format!("/-/guildbotics/api{path}")))
+            .bearer_auth(token)
             .send()
             .await
             .unwrap();
@@ -2255,7 +2273,13 @@ fn member_uses_the_active_workspace_and_reads_only_planned_caller_content() {
     server.stop();
     let no_server = cli(&["member", "--help"]);
     assert!(!no_server.status.success());
-    assert!(String::from_utf8_lossy(&no_server.stderr).contains("Start the GuildBotics server"));
+    assert!(
+        String::from_utf8_lossy(&no_server.stderr).contains(&gb_server::i18n::t(
+            "en",
+            "cli.server.unreachable",
+            &[]
+        ))
+    );
 }
 
 #[test]

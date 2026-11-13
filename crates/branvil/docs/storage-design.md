@@ -51,13 +51,17 @@ closure returns `Ok` and aborts otherwise.
 
 ## Schema version
 
-`meta["schema_version"]` is written on creation (currently `24`). The current
+`meta["schema_version"]` is written on creation (currently `26`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
 publication-resume state. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
 requested them, whether a required failure awaits notification, and its
 successful webhook delivery time.
+Runs also hold the input digest of each job with `paths`, and attempts the one
+of their job when claimed. The 25 → 26 upgrade gives every run and attempt
+none (it does not use Git); the reconciler's next registration gives a run its
+digests, and attempts claimed after that carry them.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.
@@ -96,8 +100,8 @@ check did not change stored records or raise the version.
 | `ref_snapshots` | `(repo id, refname)` | last recorded object | `refs::record_refs` | push recording, startup rescan |
 | `ref_journal` | `(journal id)` | repo, ref, expected old/new, operation | merge (before `update-ref`) | completion, startup recovery |
 | `idempotency` | `(fold(member), key)` | request hash, status, response body, time | API middleware | API middleware |
-| `ci_runs` | `(repo id, sha)` | branches or current gates that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, pending failure notice, failure delivery time | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
-| `ci_attempts` | `(attempt id)` | job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
+| `ci_runs` | `(repo id, sha)` | branches or current gates that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, pending failure notice, failure delivery time, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
+| `ci_attempts` | `(attempt id)` | job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
 
 Each comment, review, and inline comment is its own record, so adding one never
 rewrites a history; a reaction rewrites only its target entry.
@@ -147,6 +151,7 @@ Every index entry of a record comes from one function in `src/model.rs`
 | `ix_ci_waiting` | `(run sequence)` → run key, runs that did not fit the queue | admission in order when room frees up |
 | `ix_ci_unnotified` | `(repo id, sha)` → run key | protected runs with a final required-check failure awaiting webhook delivery; maintained in the same transaction as run/attempt changes |
 | `ix_ci_tree` | `(repo id, tree, sha)` → run key, runs with a known tree | finding successful actual executions with the same tree at claim |
+| `ix_ci_inputs` | `(repo id, job, input digest, attempt id)` → attempt id, completed successful attempts that were not reused, have an input digest, and keep their files | finding the successful actual executions of a job's inputs in one range read |
 
 Cards read only the requested lanes' ranges of one workspace's `ix_cards` (the
 `done` lane keeps every finished ticket, and candidates ask for `ready` and

@@ -314,7 +314,6 @@ macro_rules! routes {
         fn $builder() -> Router<Shared> {
             Router::new()$(.route($path, $method($handler) $(.layer(axum::extract::DefaultBodyLimit::max($limit)))?))*
         }
-        #[cfg(test)]
         const $classified: &[loopback_auth::Route] = &[$(loopback_auth::Route {
             method: stringify!($method), path: $path, auth: loopback_auth::RouteAuth::$auth,
         }),*];
@@ -327,7 +326,7 @@ routes!(
     OWNER_ROUTES,
     OWNER_CLASSIFIED,
     (
-        OwnerSession,
+        OwnerOrConsent,
         post,
         "/git-credentials",
         crate::git_credentials::issue
@@ -392,7 +391,13 @@ routes!(
         "/config/providers/branvil/entry",
         crate::provider_api::entry
     ),
-    (OwnerSession, get, "/health", health),
+    (OwnerOrConsent, get, "/health", health),
+    (
+        OwnerOrConsent,
+        get,
+        "/member/redaction-keys",
+        redaction_keys
+    ),
     (
         OwnerSession,
         get,
@@ -452,21 +457,21 @@ routes!(
         crate::commands::result
     ),
     (
-        OwnerSession,
+        OwnerOrConsent,
         post,
         "/member/run",
         crate::member::execute,
         4 << 20
     ),
     (
-        OwnerSession,
+        OwnerOrConsent,
         post,
         "/member/plan",
         crate::member::describe,
         4 << 20
     ),
     (
-        OwnerSession,
+        OwnerOrConsent,
         post,
         "/member/git",
         crate::member::exchange,
@@ -926,7 +931,28 @@ async fn refuse_new_work(State(api): State<Shared>, req: Request, next: Next) ->
 }
 
 async fn authenticate(State(api): State<Shared>, req: Request, next: Next) -> Response {
-    match api.auth.authenticate(req.method(), req.headers()) {
+    let path = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|path| path.as_str().trim_start_matches("/-/guildbotics/api"));
+    let method = if req.method() == axum::http::Method::HEAD {
+        "get"
+    } else {
+        req.method().as_str()
+    };
+    let consent = OWNER_CLASSIFIED
+        .iter()
+        .chain(PUBLIC_CLASSIFIED)
+        .chain(OUTER_CLASSIFIED)
+        .any(|route| {
+            Some(route.path) == path
+                && route.method.eq_ignore_ascii_case(method)
+                && route.auth == loopback_auth::RouteAuth::OwnerOrConsent
+        });
+    match api
+        .auth
+        .authenticate_for(req.method(), req.headers(), consent)
+    {
         Ok(()) => next.run(req).await,
         Err(denied) => auth_denial(denied, req.headers()),
     }
@@ -938,6 +964,36 @@ fn auth_denial(denied: Denied, headers: &HeaderMap) -> Response {
         Denied::CsrfMismatch => (StatusCode::FORBIDDEN, "csrf_mismatch"),
     };
     ApiError::new(status, code, headers).into_response()
+}
+
+/// Return only the configured names; secret values remain on the Hub.
+async fn redaction_keys(State(api): State<Shared>, headers: HeaderMap) -> Response {
+    let workspace = api.selected().workspace.clone();
+    let identity_root = api.identity_root.clone();
+    let names = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
+        let mut names = match workspace {
+            Some(workspace) => {
+                gb_config::secrets::read_secret_index(&workspace.join(".guildbotics/config"))?
+            }
+            None => Vec::new(),
+        };
+        names.extend(gb_config::secrets::read_secret_index(
+            &identity_root.join(".guildbotics/config"),
+        )?);
+        names.sort();
+        names.dedup();
+        Ok(names)
+    })
+    .await;
+    match names {
+        Ok(Ok(names)) => Json(names).into_response(),
+        _ => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &headers,
+        )
+        .into_response(),
+    }
 }
 
 /// The server, the workspace it opened by the identity a client compares
@@ -1218,6 +1274,90 @@ mod tests {
                 direct_routes,
                 "{file}: register the route in the classified catalog"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn consent_is_confined_to_cli_routes_and_entry_links() {
+        use loopback_auth::RouteAuth;
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let mut api = Api::new(
+            Selected {
+                workspace: Some(root.path().join("workspace")),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        );
+        api.identity_root = root.path().join("identity");
+        let config = api.identity_root.join(".guildbotics/config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("secrets.yml"), "keys: [CUSTOM_CREDENTIAL]\n").unwrap();
+        let workspace_config = root.path().join("workspace/.guildbotics/config");
+        std::fs::create_dir_all(&workspace_config).unwrap();
+        std::fs::write(
+            workspace_config.join("secrets.yml"),
+            "keys: [WORKSPACE_CREDENTIAL, CUSTOM_CREDENTIAL]\n",
+        )
+        .unwrap();
+        let token = api.auth.test_consent();
+        let app = router(Arc::new(api));
+        let permitted = [
+            ("get", "/health"),
+            ("get", "/member/redaction-keys"),
+            ("post", "/member/run"),
+            ("post", "/member/plan"),
+            ("post", "/member/git"),
+            ("post", "/git-credentials"),
+            ("post", "/session/links"),
+        ];
+        let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        for route in OWNER_CLASSIFIED.iter().chain(PUBLIC_CLASSIFIED) {
+            let allowed = permitted.contains(&(route.method, route.path));
+            assert_eq!(
+                route.auth == RouteAuth::OwnerOrConsent,
+                allowed,
+                "{route:?}"
+            );
+            if !matches!(
+                route.auth,
+                RouteAuth::OwnerSession | RouteAuth::OwnerOrConsent
+            ) {
+                continue;
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(route.method.to_uppercase().as_str())
+                        .uri(format!(
+                            "/-/guildbotics/api{}",
+                            variable.replace_all(route.path, "missing")
+                        ))
+                        .header("host", "127.0.0.1:8765")
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if allowed {
+                assert_ne!(response.status(), StatusCode::UNAUTHORIZED, "{route:?}");
+                if route.path == "/member/redaction-keys" {
+                    let body = axum::body::to_bytes(response.into_body(), 4096)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&body).unwrap(),
+                        json!(["CUSTOM_CREDENTIAL", "WORKSPACE_CREDENTIAL"])
+                    );
+                }
+            } else {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{route:?}");
+            }
         }
     }
 

@@ -790,6 +790,7 @@ mod tests {
                     queue::register(
                         w,
                         queue::Registration {
+                            inputs: Default::default(),
                             selection: None,
                             repo: r2.id,
                             repo_path: r2.path,

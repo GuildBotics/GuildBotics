@@ -11,7 +11,7 @@ This skill only defines the interactive envelope: how to work side by side with 
 
 ## Required First Step
 
-Before any member command, the GuildBotics server must be running (`guildbotics server start`, or its OS service). The member CLI delegates to that server, including `--help`; it cannot run alone. Use the managed CLI installed by the same Rust build as the server. On the Hub, the LaunchAgent install/update places it through `guildbotics install`. If you start the server from a terminal, run the built executable's `install` first. Member commands use the server's selected workspace. `member --workspace <path>` resolves the workspace ID on this machine, and refuses another selection: switch the workspace on the GuildBotics screens after stopping active work, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again.
+Before any member command, the GuildBotics server must be running on the Hub (`guildbotics server start`, or its OS service). The member CLI delegates to that server, including `--help`; it cannot run alone. Use the managed CLI installed by the same Rust build as the server. On the Hub, the LaunchAgent install/update places it through `guildbotics install`. If you start the server from a terminal, run the built executable's `install` first. On another machine, forward the Hub's port and run `guildbotics connect` first. Member commands use the Hub's selected workspace. On the Hub, `member --workspace <path>` verifies the selected workspace ID on this machine; on another machine, omit `--workspace`, since the CLI reads that ID from the Hub. To change the selection, finish active work and switch it on the Hub's GuildBotics screens, or stop the Hub's server with `guildbotics server stop`, run `guildbotics workspace use <path>` on the Hub, and start it again.
 
 Run the managed CLI by absolute path:
 
@@ -22,7 +22,7 @@ Run the managed CLI by absolute path:
 Treat the returned non-secret member context as the source of truth for the member's persona, role, profile, judgment criteria, and `communication_style`.
 Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted with `"$HOME/.guildbotics/bin/guildbotics" member help`.
 Do not perform ticket, repository, git, or chat writes before reading `member context`.
-Always use the managed absolute path. If it reports that no active workspace is configured, ask the user to select a workspace on the GuildBotics screens or run `guildbotics workspace use <path>`.
+Always use the managed absolute path. If it reports that no active workspace is configured, ask the user to select a workspace on the Hub's GuildBotics screens or run `guildbotics workspace use <path>` on the Hub.
 
 If the user asks to verify credentials, use the same executable:
 

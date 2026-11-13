@@ -14,26 +14,34 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
-async fn schema_24_upgrade_preserves_attempts_and_indexes_pending_failure_notices() {
+async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
+    let ci = format!(
+        "{}{}paths=['src/**']\n",
+        pipeline(&["test"]),
+        pipeline(&["lint"])
+    );
     let head = land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[("src/a.txt", "a"), (".branvil/ci.toml", &ci)],
         None,
     )
     .await;
-    let attempt = runner.claim().await.unwrap();
+    let claimed = [runner.claim().await.unwrap(), runner.claim().await.unwrap()];
     set_required(&w, &["test"]).await;
-    assert_eq!(runner.finish(&attempt, "startup_failure").await.0, 200);
+    for c in &claimed {
+        let conclusion = if c["job"]["name"] == "test" {
+            "startup_failure"
+        } else {
+            "success"
+        };
+        assert_eq!(runner.finish(c, conclusion).await.0, 200);
+    }
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
-    let attempts = records(&db, "ci_attempts");
-    let pulls = records(&db, "pulls");
-    as_schema_24(&db);
-    let before = tables(&db);
     let admin = |what: &str| {
         let out = std::process::Command::new(BIN)
             .args(["admin", what, "--data-dir"])
@@ -49,17 +57,31 @@ async fn schema_24_upgrade_preserves_attempts_and_indexes_pending_failure_notice
             ),
         )
     };
+    // The successful execution of the job with paths is found by its inputs,
+    // and reindexing rebuilds exactly that.
+    let indexed = tables(&db)["ix_ci_inputs"].clone();
+    assert_eq!(indexed.len(), 1);
+    assert_eq!(admin("reindex").0, 0);
+    assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
+    let mut attempts = records(&db, "ci_attempts");
+    assert!(attempts.iter().any(|a| a["inputs"].is_string()));
+    as_schema_25(&db);
+    let before = tables(&db);
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 24 to 25"), "{output}");
+    assert!(output.contains("from schema version 25 to 26"), "{output}");
+    for a in &mut attempts {
+        a["inputs"] = Value::Null;
+    }
     assert_eq!(records(&db, "ci_attempts"), attempts);
-    assert_eq!(records(&db, "pulls"), pulls);
     let runs = records(&db, "ci_runs");
+    assert!(runs.iter().all(|r| r["inputs"] == json!({})));
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
     assert!(run["failure_notified_at"].is_null());
     assert!(!tables(&db)["ix_ci_unnotified"].is_empty());
+    assert!(tables(&db)["ix_ci_inputs"].is_empty());
     let backup = std::fs::read_dir(&data)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -67,7 +89,7 @@ async fn schema_24_upgrade_preserves_attempts_and_indexes_pending_failure_notice
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-24-")
+                .starts_with("branvil-schema-25-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -683,7 +705,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_24(&db);
+    as_schema_25(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])

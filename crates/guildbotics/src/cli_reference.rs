@@ -104,7 +104,7 @@ fn collect(command: Command, path: &str, index: &mut String, sections: &mut Stri
     sections.push_str("```\n");
     if path == "guildbotics member" {
         sections.push_str(
-            "\nStart the GuildBotics server before running member commands. Use `member --workspace <path>` to verify the selected workspace.\n\
+            "\nOn the Hub, start the GuildBotics server before running member commands; use `member --workspace <path>` to verify the selected local workspace. On another machine, forward the Hub's port and run `guildbotics connect` first; the Hub selects the workspace.\n\
             See the [member capability reference](../guildbotics/templates/member/reference.md) for examples and option semantics.\n",
         );
         writeln!(

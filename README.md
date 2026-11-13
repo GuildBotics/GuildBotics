@@ -143,7 +143,7 @@ There are four prerequisites:
 - The AI CLI tool is installed on your machine and you are logged in to it there. This is the one place a host install is needed: it is you working interactively, not a member's turn, which runs inside the isolated agent environment
 - The guildbotics skill and the managed CLI are installed (→ [Installation](#installation))
 - A member is configured
-- The GuildBotics server is running, as the service or with `guildbotics server start`. All member commands, including `--help`, use that server; the CLI and the server must come from the same checkout
+- The GuildBotics server is running on the Hub, as the service or with `guildbotics server start`. All member commands, including `--help`, use that server; the CLI and the server must come from the same build. On another machine, forward the Hub's port and run `guildbotics connect` first
 
 Start your AI CLI tool in the repository you want to work in and ask for work, **naming the skill and the member**. That phrase is what invokes the skill.
 
@@ -151,7 +151,7 @@ Start your AI CLI tool in the repository you want to work in and ask for work, *
 Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-Member commands use the workspace selected by the server. `member --workspace <path>` selects a local workspace ID; it does not switch the server. Finish active work and switch the workspace under **Setup → Project** first, or stop the server with `guildbotics server stop`, run `guildbotics workspace use <path>`, and start it again. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
+Member commands use the workspace selected by the Hub. On the Hub, `member --workspace <path>` verifies the selected local workspace ID; it does not switch the server. On another machine, omit `--workspace`; the CLI reads the workspace ID from the Hub. To change it, finish active work and switch the workspace under **Setup → Project** on the Hub, or stop the Hub's server with `guildbotics server stop`, run `guildbotics workspace use <path>` on the Hub, and start it again. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 

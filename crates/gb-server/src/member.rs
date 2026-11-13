@@ -367,9 +367,17 @@ mod tests {
         }
     }
     fn api(root: &Path, delay: bool) -> (Shared, Arc<AtomicUsize>) {
-        let calls = Arc::new(AtomicUsize::new(0));
+        let (api, calls) = api_for_port(root, 8765, Arc::new(AtomicUsize::new(0)), delay);
+        (Arc::new(api), calls)
+    }
+    fn api_for_port(
+        root: &Path,
+        port: u16,
+        calls: Arc<AtomicUsize>,
+        delay: bool,
+    ) -> (crate::api::Api, Arc<AtomicUsize>) {
         (
-            Arc::new(crate::api::Api::new(
+            crate::api::Api::new(
                 crate::api::Selected {
                     member: Some(Arc::new(Backend {
                         version: "build-1".into(),
@@ -387,10 +395,10 @@ mod tests {
                     ..Default::default()
                 },
                 crate::input_files::InputFileStore::deferred(&root.join("inputs")),
-                crate::auth::ServerAuth::open(root, 8765).unwrap(),
+                crate::auth::ServerAuth::open(root, port).unwrap(),
                 "fixture".into(),
                 root.into(),
-            )),
+            ),
             calls,
         )
     }
@@ -418,6 +426,58 @@ mod tests {
             .unwrap()
             .to_vec()
     }
+    #[tokio::test]
+    async fn client_without_workspace_uses_consent_for_health_and_member_reads_and_writes() {
+        let hub = tempfile::tempdir().unwrap();
+        let client_data = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The Host guard must match the actual listener.
+        let (mut selected_api, _) = api_for_port(hub.path(), port, calls.clone(), false);
+        let consent = selected_api.auth.test_consent();
+        selected_api.identity_root = hub.path().join("identity");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, crate::api::router(Arc::new(selected_api)))
+                .await
+                .unwrap()
+        });
+        assert!(
+            crate::client::OwnerClient::connect(client_data.path(), port, "en")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let owner = crate::client::consent_client(port, "en", |_| Some(consent.clone()))
+            .await
+            .unwrap();
+        let health = owner.health().await.unwrap();
+        for arguments in [json!(["ticket", "read"]), json!(["ticket", "comment"])] {
+            let request = json!({"version":"build-1", "workspace_id":health["workspace_id"], "arguments":arguments, "stdin":"fixture content"});
+            for path in ["/member/plan", "/member/run"] {
+                let response = owner
+                    .request(reqwest::Method::POST, path)
+                    .json(&request)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert!(response.text().await.unwrap().contains("fixture content"));
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        for token in [None, Some("gbt_0123456789abcdef_revoked".into())] {
+            let error = crate::client::consent_client(port, "en", |_| token)
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("guildbotics connect"));
+        }
+        server.abort();
+    }
+
     #[tokio::test]
     async fn authority_version_workspace_and_client_assigned_identity_fail_before_execution() {
         let temp = tempfile::tempdir().unwrap();
