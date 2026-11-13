@@ -356,7 +356,8 @@ impl Microsandbox {
     }
 
     /// Names the version the tag `name` now points to by its manifest digest,
-    /// the second name of `archive` when it came from one. msb cannot name a
+    /// the second name of `archive` when it came from one; nothing is loaded
+    /// or pulled again when that name already points to the version. msb cannot name a
     /// manifest no reference points to: without this, a load or pull that
     /// moves the tag leaves the old version in the cache for good. The tag
     /// has moved either way, so a failure is a warning, not the transfer's.
@@ -377,6 +378,15 @@ impl Microsandbox {
         let start = name.rfind('/').map_or(0, |i| i + 1);
         let repository = name[start..].find(':').map_or(name, |i| &name[..start + i]);
         let pin = format!("{repository}@{}", held.digest);
+        // A pin under this name for another version (made by an earlier
+        // build that pinned a wrong name) is named again.
+        if self
+            .inspect(&pin)
+            .await?
+            .is_some_and(|p| p.digest == held.digest)
+        {
+            return Ok(());
+        }
         let path = archive.map(|a| a.to_string_lossy().to_string());
         let args = match &path {
             Some(path) => vec!["load", "--quiet", "--input", path, "--tag", &pin],
@@ -1327,8 +1337,9 @@ esac
     }
 
     /// A pull, and a load's pin, name the version the tag now points to by
-    /// the manifest digest; when they cannot (no such tag, a digest name, a
-    /// failed pin), the transfer still succeeds. The versions no tag points to
+    /// the manifest digest, unless it has that name already; when they
+    /// cannot (no such tag, a digest name, a failed pin), the transfer still
+    /// succeeds. The versions no tag points to
     /// anymore go; one a tag points to stays, and one msb refuses (a job runs
     /// on it) waits for the next time. The pins are no images a job can name.
     #[cfg(unix)]
@@ -1343,7 +1354,9 @@ state="$MSB_HOME/fake"
 echo "$*" >> "$state/calls"
 case "$1 $2" in
 "image list") cat "$state/list" ;;
-"image inspect") [ "$5" != missing:dev ] && printf '{"reference":"%s","digest":"sha256:new","config":{"digest":"sha256:c"}}' "$5" ;;
+"image inspect")
+  case "$5" in missing:dev) exit 1 ;; *@*) grep -q "\"$5\"" "$state/list" || exit 1 ;; esac
+  printf '{"reference":"%s","digest":"sha256:new","config":{"digest":"sha256:c"}}' "$5" ;;
 "image remove") [ "$4" != "reg:5000/img@sha256:busy" ] ;;
 "pull --quiet") [ "$3" != "offline@sha256:new" ] ;;
 esac
@@ -1363,7 +1376,6 @@ esac
         std::fs::write(state.join("list"), listed.to_string()).unwrap();
         let ms = Microsandbox::new(Msb::Found(msb), home, "t");
         let archive = dir.path().join("a.tar");
-        let a = archive.display();
 
         ms.pin("reg:5000/img:dev", Some(&archive)).await;
         ms.pull("alpine:3.20").await.unwrap();
@@ -1373,20 +1385,20 @@ esac
         ms.collect().await;
         assert_eq!(
             std::fs::read_to_string(state.join("calls")).unwrap(),
-            format!(
-                "image inspect --format json reg:5000/img:dev\n\
-                 load --quiet --input {a} --tag reg:5000/img@sha256:new\n\
+            "image inspect --format json reg:5000/img:dev\n\
+                 image inspect --format json reg:5000/img@sha256:new\n\
                  pull --quiet alpine:3.20\n\
                  image inspect --format json alpine:3.20\n\
+                 image inspect --format json alpine@sha256:new\n\
                  pull --quiet alpine@sha256:new\n\
                  image inspect --format json missing:dev\n\
                  pull --quiet offline:1\n\
                  image inspect --format json offline:1\n\
+                 image inspect --format json offline@sha256:new\n\
                  pull --quiet offline@sha256:new\n\
                  image list --format json\n\
                  image remove -q reg:5000/img@sha256:old\n\
                  image remove -q reg:5000/img@sha256:busy\n"
-            )
         );
         let images: Vec<String> = ms
             .images()

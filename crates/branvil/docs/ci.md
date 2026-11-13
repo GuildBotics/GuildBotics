@@ -90,9 +90,14 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   digest references are no images a pipeline can name, and Settings → CI does
   not show them. A load pins the reference it changed in the cache, the name
   msb registered (for a `docker save` archive its `RepoTags`, not the
-  `docker.io/…` name of its `index.json`). Only the first image of an archive
-  is pinned (msb tags only that one), and an image loaded with `msb` by hand
-  is not pinned: its version stays in the cache when the tag moves.
+  `docker.io/…` name of its `index.json`). Loading a version the cache already
+  holds pins it if it has no pin yet (loaded by hand, before pins existed, or
+  after a failed pin); one with its pin is not tagged again. An archive of
+  several images is not pinned (msb names only its first image when it
+  pins, and the references the load changed do not tell which of them is
+  the first image's), and an image loaded with `msb` by hand is not pinned
+  until it is loaded again here: its version stays in the cache when the tag
+  moves.
 
 ## The job's environment
 
