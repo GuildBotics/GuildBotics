@@ -1,4 +1,4 @@
-//! Owner-only issuance; credentials go straight to the response, never to events.
+//! Owner or consent-authorized issuance; credentials go straight to the response, never to events.
 use crate::api::{ApiError, Body, Shared};
 use axum::{
     Json,
@@ -155,63 +155,70 @@ mod tests {
             .unwrap()
             .unwrap();
         let cookie = format!("{}={cookie}", api.auth.cookie);
+        let consent = api.auth.test_consent();
         let app = crate::api::router(Arc::new(api));
-        for (origin, device, name, status) in [
-            (
-                origin.as_str(),
-                "019691c2-8dc0-7654-8000-0000abc01234",
-                "Client",
-                StatusCode::OK,
-            ),
-            (
-                "http://127.0.0.1:1",
-                "019691c2-8dc0-7654-8000-0000abc01234",
-                "Client",
-                StatusCode::OK,
-            ),
-            (
-                origin.as_str(),
-                "bad",
-                "Client",
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    axum::http::Request::builder()
-                        .method("POST")
-                        .uri("/-/guildbotics/api/git-credentials")
-                        .header("host", "127.0.0.1:8765")
-                        .header("cookie", &cookie)
-                        .header(crate::auth::CSRF_HEADER, &csrf)
-                        .header("content-type", "application/json")
-                        .body(axum::body::Body::from(
-                            json!({"origin":origin,"device_id":device,"display_name":name})
-                                .to_string(),
-                        ))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), status);
-            if status == StatusCode::OK {
-                let body: Value = serde_json::from_slice(
-                    &axum::body::to_bytes(response.into_body(), usize::MAX)
-                        .await
-                        .unwrap(),
-                )
-                .unwrap();
-                if origin == "http://127.0.0.1:1" {
-                    assert!(body.is_null());
-                } else {
-                    assert!(
-                        running
-                            .data
-                            .authenticate(body["password"].as_str().unwrap().into())
+        for use_consent in [false, true] {
+            for (origin, device, name, status) in [
+                (
+                    origin.as_str(),
+                    "019691c2-8dc0-7654-8000-0000abc01234",
+                    "Client",
+                    StatusCode::OK,
+                ),
+                (
+                    "http://127.0.0.1:1",
+                    "019691c2-8dc0-7654-8000-0000abc01234",
+                    "Client",
+                    StatusCode::OK,
+                ),
+                (
+                    origin.as_str(),
+                    "bad",
+                    "Client",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+            ] {
+                let mut builder = axum::http::Request::builder();
+                if use_consent {
+                    builder = builder.header("authorization", format!("Bearer {consent}"));
+                }
+                let response = app
+                    .clone()
+                    .oneshot(
+                        builder
+                            .method("POST")
+                            .uri("/-/guildbotics/api/git-credentials")
+                            .header("host", "127.0.0.1:8765")
+                            .header("cookie", if use_consent { "" } else { &cookie })
+                            .header(crate::auth::CSRF_HEADER, &csrf)
+                            .header("content-type", "application/json")
+                            .body(axum::body::Body::from(
+                                json!({"origin":origin,"device_id":device,"display_name":name})
+                                    .to_string(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status);
+                if status == StatusCode::OK {
+                    let body: Value = serde_json::from_slice(
+                        &axum::body::to_bytes(response.into_body(), usize::MAX)
                             .await
-                            .is_ok()
-                    );
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    if origin == "http://127.0.0.1:1" {
+                        assert!(body.is_null());
+                    } else {
+                        assert!(
+                            running
+                                .data
+                                .authenticate(body["password"].as_str().unwrap().into())
+                                .await
+                                .is_ok()
+                        );
+                    }
                 }
             }
         }

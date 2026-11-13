@@ -239,6 +239,37 @@ impl ServerAuth {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_consent(&self) -> String {
+        let verifier = "a".repeat(43);
+        let redirect = "http://127.0.0.1:54321/callback";
+        let url = self
+            .authorize(Authorization {
+                client: "test-client".into(),
+                redirect_uri: redirect.into(),
+                state: "fixture".into(),
+                code_challenge: loopback_auth::b64(&loopback_auth::sha256(verifier.as_bytes())),
+            })
+            .unwrap();
+        let code = url::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .find(|(key, _)| key == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        self.app_token(Exchange {
+            code,
+            redirect_uri: redirect.into(),
+            code_verifier: verifier,
+        })
+        .unwrap()
+        .unwrap()["token"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
     pub(crate) fn authorize(&self, request: Authorization) -> Option<String> {
         let mut redirect = loopback_auth::loopback_redirect(&request.redirect_uri)?;
         if !loopback_auth::valid_client(&request.client)

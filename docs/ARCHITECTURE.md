@@ -102,6 +102,16 @@ workflow (orchestration)
   which the agent's provider operations run and the only layer that resolves the
   member's credentials for them. It records run evidence (`gb-observability/src/runs.rs`) for each
   side effect.
+  CLI connections prefer the local running server's lock and owner token. Without a
+  local server, member and Git credential clients use the consent credential in
+  the OS keychain (`guildbotics-server`, `127.0.0.1:<port>`), after a fresh
+  `/local-api/proof` challenge. Consent permits only health, member run/plan/git,
+  member redaction-key names, Git credential issuance, and session entry links.
+  Configuration, secrets, environments, services, screens, and command execution
+  retain their existing authentication. A client without a workspace uses the
+  Hub's health workspace ID and redaction-key names; values to mask come only
+  from the client's environment. A missing or revoked credential requires
+  `guildbotics connect` again.
 - **Repository inspections** (`repository/issue_inspect`, `repository/pr_inspect`,
   `repository/pr_checks`): bundled Python commands combine the pages returned by
   the common code-hosting service. The existing member broker carries each read;
