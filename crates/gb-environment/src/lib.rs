@@ -313,6 +313,25 @@ pub fn shape(
         });
     }
     mounts.extend(access.grants.clone());
+    // A writable command's builds keep their compilation results for the
+    // member's later commands; a read-only one's stay on the microVM's disk.
+    let sccache = if command.access.read_only {
+        None
+    } else {
+        let dir = contract::sccache_dir(workspace, &command.person_id);
+        gb_base::host_path::open_directory(&dir, true)
+            .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+        let dir = contract::validate_source(&dir, &access.denied, false, false)
+            .map_err(|e| Failure::Command(Sentence::Text(e)))?;
+        let guest = guest_path(&dir)?;
+        mounts.push(Mount {
+            guest: guest.clone(),
+            host: Some(dir),
+            readonly: false,
+            quota_mib: Some(contract::SCCACHE_QUOTA_MIB),
+        });
+        Some(guest)
+    };
     let mut read = vec![InspectsItem::Config];
     read.extend(command.access.inspects.iter().copied());
     for (_, mount) in inspected_mounts(host, workspace, &command.config, &read)? {
@@ -390,6 +409,9 @@ pub fn shape(
     ];
     if let Some(language) = language {
         env.push(("LANGUAGE".into(), language));
+    }
+    if let Some(sccache) = sccache {
+        env.push(("SCCACHE_DIR".into(), sccache));
     }
     let debug = gb_config::debug::read(Some(workspace));
     env.push(("LOG_LEVEL".into(), debug.guest_log_level().into()));

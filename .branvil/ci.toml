@@ -25,6 +25,9 @@
 # Incremental data would save little of that rebuild and fill the cache
 # (CARGO_INCREMENTAL=0; measured in crates/branvil/docs/performance.md,
 # "Branvil's own pipeline").
+# Every job that builds with Cargo empties the image's RUSTC_WRAPPER: the jobs
+# build without sccache, which only the members' commands use, until ticket
+# #123's measurements decide otherwise.
 # Use the toolchain, rather than Cargo.lock, for the Rust cache keys for now:
 # workspace crate additions change the lockfile before the protected branch
 # can save that key, leaving PR heads and gates without dependencies to restore.
@@ -38,7 +41,7 @@ name = "test"
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
-export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER=
 uv sync --extra test --extra dev
 uv run --no-sync python scripts/generate-wire-schema.py --check
 uv run --no-sync ruff format --check guildbotics tests
@@ -85,7 +88,7 @@ paths = [
   "rustfmt.toml",
 ]
 image = "guildbotics/agent-environment:dev"
-commands = ["CARGO_HOME=/work/.ci/cargo-home cargo fmt --all --check"]
+commands = ["CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo fmt --all --check"]
 timeout_secs = 300
 
 [[jobs]]
@@ -110,7 +113,7 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
@@ -141,7 +144,7 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace --exclude branvil --exclude loopback-auth",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace --exclude branvil --exclude loopback-auth",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
@@ -163,7 +166,7 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 cargo nextest run --locked -p branvil -p loopback-auth",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p branvil -p loopback-auth",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
@@ -175,7 +178,7 @@ paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
-export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 uv sync --extra test
 cargo build --locked -p gb-server --example browser-test-server
 cargo build --locked -p gb-environment --example worktree-transfer
@@ -195,7 +198,7 @@ cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = [
 name = "branvil-integration"
 paths = ["crates/branvil/**", "crates/gb-integrations/**", "crates/gb-member/**", "crates/gb-workspace/**", "crates/gb-observability/**", "crates/gb-ports/**", "crates/gb-config/**", "crates/gb-base/**", "guildbotics/**", "tests/guildbotics/guest/alert_command_fixture.py", "pyproject.toml", "uv.lock", "scripts/branvil-integration.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
 image = "guildbotics/agent-environment:dev"
-commands = ["find crates -exec touch -c {} +", "UV_CACHE_DIR=/work/.ci/uv CARGO_HOME=/work/.ci/cargo-home CARGO_INCREMENTAL=0 bash scripts/branvil-integration.sh"]
+commands = ["find crates -exec touch -c {} +", "UV_CACHE_DIR=/work/.ci/uv CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 bash scripts/branvil-integration.sh"]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }
 

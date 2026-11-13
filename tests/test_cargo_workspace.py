@@ -21,6 +21,55 @@ def test_the_toolchain_is_the_rust_of_the_ci_image() -> None:
     assert _load("rust-toolchain.toml")["toolchain"]["channel"] == image_rust
 
 
+def test_the_ci_builds_without_the_images_sccache() -> None:
+    """The image runs rustc through sccache for the members' commands; every
+    CI command that builds with Cargo (each points CARGO_HOME at its cache)
+    empties RUSTC_WRAPPER, so the jobs build as they did without it."""
+    dockerfile = (ROOT / "docker/agent-environment/Dockerfile").read_text("utf-8")
+    assert re.search(r"^ENV RUSTC_WRAPPER=sccache\b", dockerfile, re.MULTILINE)
+    building = 0
+    for job in _load(".branvil/ci.toml")["jobs"]:
+        for command in job["commands"]:
+            words = shlex.split(command)
+            if "cargo" in words or any(w.startswith("CARGO_HOME=") for w in words):
+                building += 1
+                assert "RUSTC_WRAPPER=" in words, (job["name"], command)
+    assert building >= 7
+
+
+def test_the_sccache_cache_stays_within_its_bind_quota() -> None:
+    """sccache bounds the cache by SCCACHE_CACHE_SIZE (binary units); the
+    host gives its bound directory a write quota above that, so even a run
+    that fills the whole cache cannot exhaust it."""
+    dockerfile = (ROOT / "docker/agent-environment/Dockerfile").read_text("utf-8")
+    [size, unit] = re.findall(
+        r"\bSCCACHE_CACHE_SIZE=(\d+)([MGT])\b", dockerfile, re.MULTILINE
+    )[0]
+    cache_mib = int(size) * {"M": 1, "G": 1024, "T": 1024 * 1024}[unit]
+    contract = (ROOT / "crates/gb-environment/src/contract.rs").read_text("utf-8")
+    [quota] = re.findall(r"pub const SCCACHE_QUOTA_MIB: u32 = ([\d *]+);", contract)
+    quota_mib = 1
+    for factor in quota.split("*"):
+        quota_mib *= int(factor)
+
+    assert cache_mib < quota_mib
+
+
+def test_the_images_linker_is_the_repositorys() -> None:
+    """The image links aarch64 through its own copy of the repository's
+    linker script, at a path that is the same in every clone."""
+    image = ROOT / "docker/agent-environment/cc-lld.sh"
+    dockerfile = (ROOT / "docker/agent-environment/Dockerfile").read_text("utf-8")
+
+    assert image.read_bytes() == (ROOT / ".cargo/cc-lld.sh").read_bytes()
+    assert "COPY --chmod=0755 cc-lld.sh /usr/local/bin/cc-lld\n" in dockerfile
+    assert re.search(
+        r"^\s+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/cc-lld$",
+        dockerfile,
+        re.MULTILINE,
+    )
+
+
 def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None:
     """uv builds Python sdists with Cargo inside its cache: a cache directory
     under the workspace's root would make their manifests look like members."""
