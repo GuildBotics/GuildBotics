@@ -327,6 +327,33 @@ mod tests {
             reads,
             "no Git history is read for runs without room"
         );
+        // Reconciliation still registers the waiting run, but must leave
+        // admission history to admit_waiting once there is capacity.
+        for _ in 0..2 {
+            ci.consider(&repo, "refs/heads/main", &gap).await.unwrap();
+        }
+        assert_eq!(
+            ci.inner
+                .history_reads
+                .load(std::sync::atomic::Ordering::Relaxed),
+            reads,
+            "reconciliation of a waiting run does not read history"
+        );
+        let (r, s) = (repo.clone(), gap.clone());
+        ci.inner
+            .store
+            .read(move |rd| {
+                let run = queue::get_run(rd, &r.id, &s)?.unwrap();
+                assert!(run.waiting);
+                assert_eq!(
+                    run.cache_scope, "protected",
+                    "registration still updates the run"
+                );
+                assert!(queue::attempts_of(rd, &r.id, &s)?.is_empty());
+                Ok(())
+            })
+            .await
+            .unwrap();
         let (r, s) = (repo.clone(), h2.clone());
         ci.inner
             .store

@@ -481,6 +481,9 @@ impl Ci {
                 let Some(mut run) = queue::get_run(r, &id, &sha)? else {
                     return Ok(true);
                 };
+                if run.waiting {
+                    return Ok(false);
+                }
                 run.pipeline = pipeline;
                 run.selection = selection;
                 if protected {
