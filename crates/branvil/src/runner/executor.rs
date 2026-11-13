@@ -468,21 +468,17 @@ impl Microsandbox {
         Ok(())
     }
 
-    /// Loads a `docker save` / OCI archive into the cache and pins its first
-    /// image, named `name` (msb tags only the first image of an archive);
-    /// the caller holds `lock_images(true)`.
-    pub async fn load(&self, archive: &Path, name: Option<&str>) -> Result<(), String> {
+    /// Loads a `docker save` / OCI archive into the cache; the caller holds
+    /// `lock_images(true)` and pins the reference the load registered (msb
+    /// tags only the first image of an archive).
+    pub async fn load(&self, archive: &Path) -> Result<(), String> {
         let _ = std::fs::create_dir_all(&self.home);
         let path = archive.to_string_lossy();
         self.finish(
             "load",
             self.output_within(&["load", "--quiet", "--input", &path], IMAGE_TRANSFER)
                 .await?,
-        )?;
-        if let Some(name) = name {
-            self.pin(name, Some(archive)).await;
-        }
-        Ok(())
+        )
     }
 
     fn finish(&self, what: &str, out: std::process::Output) -> Result<(), String> {
@@ -1018,7 +1014,7 @@ fn tail(bytes: &[u8], n: usize) -> String {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     #[test]
     fn the_embedding_host_supplies_its_runtime_explicitly() {
         use super::{HOST_RUNTIME, set_runtime_binary};
@@ -1074,7 +1070,7 @@ pub(super) mod tests {
     /// descriptor of it open for writing here could pass into a process that
     /// another test forks meanwhile, and running the script would then fail
     /// with "text file busy".
-    pub(in crate::runner) fn write_script(path: &Path, body: &str) {
+    pub(crate) fn write_script(path: &Path, body: &str) {
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -1163,7 +1159,7 @@ esac
         assert_eq!(digest, Some(a.clone()));
         let loading = tokio::spawn(async move {
             let _lock = service.lock_images(true, || {}).await?;
-            service.load(&archive, None).await
+            service.load(&archive).await
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(!loading.is_finished(), "the load waits for the checked job");
@@ -1330,9 +1326,9 @@ esac
         );
     }
 
-    /// A load or pull also names the version its tag now points to by the
-    /// manifest digest; when it cannot (no such tag, a digest name, a failed
-    /// pin), the transfer still succeeds. The versions no tag points to
+    /// A pull, and a load's pin, name the version the tag now points to by
+    /// the manifest digest; when they cannot (no such tag, a digest name, a
+    /// failed pin), the transfer still succeeds. The versions no tag points to
     /// anymore go; one a tag points to stays, and one msb refuses (a job runs
     /// on it) waits for the next time. The pins are no images a job can name.
     #[cfg(unix)]
@@ -1369,24 +1365,21 @@ esac
         let archive = dir.path().join("a.tar");
         let a = archive.display();
 
-        ms.load(&archive, Some("reg:5000/img:dev")).await.unwrap();
+        ms.pin("reg:5000/img:dev", Some(&archive)).await;
         ms.pull("alpine:3.20").await.unwrap();
-        ms.load(&archive, Some("missing:dev")).await.unwrap();
-        ms.load(&archive, Some("img@sha256:x")).await.unwrap();
+        ms.pin("missing:dev", Some(&archive)).await;
+        ms.pin("img@sha256:x", Some(&archive)).await;
         ms.pull("offline:1").await.unwrap();
         ms.collect().await;
         assert_eq!(
             std::fs::read_to_string(state.join("calls")).unwrap(),
             format!(
-                "load --quiet --input {a}\n\
-                 image inspect --format json reg:5000/img:dev\n\
+                "image inspect --format json reg:5000/img:dev\n\
                  load --quiet --input {a} --tag reg:5000/img@sha256:new\n\
                  pull --quiet alpine:3.20\n\
                  image inspect --format json alpine:3.20\n\
                  pull --quiet alpine@sha256:new\n\
-                 load --quiet --input {a}\n\
                  image inspect --format json missing:dev\n\
-                 load --quiet --input {a}\n\
                  pull --quiet offline:1\n\
                  image inspect --format json offline:1\n\
                  pull --quiet offline@sha256:new\n\

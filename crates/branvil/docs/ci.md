@@ -88,9 +88,11 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   removes the versions no tag points to anymore, with their layers; msb
   refuses one a job still runs on, which goes at a later job's start. These
   digest references are no images a pipeline can name, and Settings → CI does
-  not show them. Only the first image of an archive is pinned (msb tags only
-  that one), and an image loaded with `msb` by hand is not pinned: its version
-  stays in the cache when the tag moves.
+  not show them. A load pins the reference it changed in the cache, the name
+  msb registered (for a `docker save` archive its `RepoTags`, not the
+  `docker.io/…` name of its `index.json`). Only the first image of an archive
+  is pinned (msb tags only that one), and an image loaded with `msb` by hand
+  is not pinned: its version stays in the cache when the tag moves.
 
 ## The job's environment
 

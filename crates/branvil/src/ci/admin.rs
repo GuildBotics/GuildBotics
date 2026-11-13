@@ -4,7 +4,7 @@
 //! `docs/api.md` ("CI settings").
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::extract::State;
@@ -215,7 +215,7 @@ async fn pull(State(app): State<Shared>, c: Caller, J(input): J<PullInput>) -> A
     tokio::spawn(async move {
         let settings = worker.ci.settings();
         let ms = settings.microsandbox(AUTO_RUNNER).await;
-        settings.end(transfer(&ms, vec![reference.clone()], ms.pull(&reference)).await);
+        settings.end(transfer(&ms, vec![reference.clone()], None, ms.pull(&reference)).await);
     });
     Ok((StatusCode::ACCEPTED, axum::Json(view(&app).await?)).into_response())
 }
@@ -254,25 +254,35 @@ async fn load(State(app): State<Shared>, c: Caller, J(input): J<LoadInput>) -> A
     tokio::spawn(async move {
         let settings = worker.ci.settings();
         let ms = settings.microsandbox(AUTO_RUNNER).await;
-        let archive = path.clone();
-        let names = tokio::task::spawn_blocking(move || archive_references(&archive))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
-        let first = names.first().cloned();
-        settings.end(transfer(&ms, names, ms.load(&path, first.as_deref())).await);
+        settings.end(load_archive(&ms, path).await);
     });
     Ok((StatusCode::ACCEPTED, axum::Json(view(&app).await?)).into_response())
+}
+
+/// Loads the image archive at `path` into the cache (see [`transfer`]).
+async fn load_archive(ms: &Microsandbox, path: PathBuf) -> Result<Vec<Loaded>, String> {
+    let archive = path.clone();
+    let names = tokio::task::spawn_blocking(move || archive_references(&archive))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    transfer(ms, names, Some(&path), ms.load(&path)).await
 }
 
 /// Runs a pull or a load and tells what it brought: the images it names
 /// (the pulled reference, the archive's own references) as the cache holds
 /// them afterwards, new or written again. When it names none the cache
 /// knows, what changed in the cache instead.
+///
+/// A load from `archive` pins the version msb registered for it: the one
+/// reference the load changed. The archive's own references cannot tell
+/// which: msb registers a `docker save` archive under its `RepoTags`, while
+/// its `index.json` names the image with the registry (`docker.io/...`).
 async fn transfer(
     ms: &Microsandbox,
     names: Vec<String>,
+    archive: Option<&Path>,
     operation: impl std::future::Future<Output = Result<(), String>>,
 ) -> Result<Vec<Loaded>, String> {
     // Held through the report, so that it names what this operation brought.
@@ -280,6 +290,23 @@ async fn transfer(
     let held = |i: &ImageInfo| (i.reference.clone(), i.digest.clone(), i.created_at.clone());
     let before: std::collections::HashSet<_> = ms.images().await?.iter().map(held).collect();
     operation.await?;
+    let changed: Vec<ImageInfo> = ms
+        .images()
+        .await?
+        .into_iter()
+        .filter(|i| !before.contains(&held(i)))
+        .collect();
+    if let Some(archive) = archive {
+        match changed.as_slice() {
+            [] => {}
+            [image] => ms.pin(&image.reference, Some(archive)).await,
+            _ => tracing::warn!(
+                "the load of {} changed {} references, so its version is not pinned and stays when replaced",
+                archive.display(),
+                changed.len()
+            ),
+        }
+    }
     ms.collect().await;
     let loaded = |i: &ImageInfo| Loaded {
         reference: i.reference.clone(),
@@ -293,19 +320,13 @@ async fn transfer(
     if !named.is_empty() {
         return Ok(named);
     }
-    Ok(ms
-        .images()
-        .await?
-        .iter()
-        .filter(|i| !before.contains(&held(i)))
-        .map(loaded)
-        .collect())
+    Ok(changed.iter().map(loaded).collect())
 }
 
 /// The references an image archive carries: `RepoTags` of a `docker save`
 /// manifest, or the image names an OCI index records. Only the archive's
 /// small metadata entries are read.
-fn archive_references(path: &std::path::Path) -> std::io::Result<Vec<String>> {
+fn archive_references(path: &Path) -> std::io::Result<Vec<String>> {
     let mut archive = tar::Archive::new(std::fs::File::open(path)?);
     let mut found = Vec::new();
     for entry in archive.entries_with_seek()? {
@@ -355,7 +376,8 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
 
 #[cfg(test)]
 mod tests {
-    use super::archive_references;
+    use super::{archive_references, load_archive};
+    use crate::runner::executor::{Microsandbox, Msb, tests::write_script};
 
     fn archive(entries: &[(&str, &str)]) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -369,6 +391,92 @@ mod tests {
         }
         b.finish().unwrap();
         file
+    }
+
+    /// A `docker save` archive (Docker 29): its `index.json`, which comes
+    /// first, names the image with the registry; its `manifest.json` names
+    /// it as `RepoTags`, the name msb registers.
+    fn docker_save() -> tempfile::NamedTempFile {
+        archive(&[
+            ("blobs/sha256/aa", "layer"),
+            (
+                "index.json",
+                r#"{"manifests":[{"annotations":{"io.containerd.image.name":"docker.io/guildbotics/agent-environment:dev","org.opencontainers.image.ref.name":"dev"}}]}"#,
+            ),
+            (
+                "manifest.json",
+                r#"[{"Config":"c","RepoTags":["guildbotics/agent-environment:dev"],"Layers":[]}]"#,
+            ),
+            ("oci-layout", "{}"),
+        ])
+    }
+
+    /// An msb that keeps references (`fake/refs`, "reference digest" lines)
+    /// and manifests (`fake/manifests`): a load registers the version in
+    /// `fake/next` under the archive's `RepoTags` name, or under `--tag`; a
+    /// manifest goes with its last reference.
+    #[cfg(unix)]
+    const FAKE_MSB: &str = r#"#!/bin/sh
+state="$MSB_HOME/fake"
+touch "$state/refs" "$state/manifests"
+drop() { awk -v r="$1" '$1 != r' "$state/refs" > "$state/r"; mv "$state/r" "$state/refs"; }
+digest() { awk -v r="$1" '$1 == r { print $2 }' "$state/refs"; }
+case "$1 $2" in
+"load --quiet")
+  next=$(cat "$state/next")
+  ref=guildbotics/agent-environment:dev
+  [ "$5" = --tag ] && ref="$6"
+  drop "$ref"
+  echo "$ref $next" >> "$state/refs"
+  grep -qx "$next" "$state/manifests" || echo "$next" >> "$state/manifests" ;;
+"image list")
+  sep=; printf '['
+  while read -r r d; do printf '%s{"reference":"%s","digest":"%s"}' "$sep" "$r" "$d"; sep=,; done < "$state/refs"
+  printf ']' ;;
+"image inspect")
+  d=$(digest "$5"); [ -n "$d" ] || exit 1
+  printf '{"reference":"%s","digest":"%s","config":{"digest":"%s"},"created_at":"%s"}' "$5" "$d" "$d" "$d" ;;
+"image remove")
+  d=$(digest "$4"); drop "$4"
+  awk '{ print $2 }' "$state/refs" | grep -qx "$d" || { grep -vx "$d" "$state/manifests" > "$state/m"; mv "$state/m" "$state/manifests"; } ;;
+*) exit 1 ;;
+esac
+"#;
+
+    /// A load pins the version under the name msb registered, not the
+    /// archive's first name; the next load that replaces the version takes
+    /// the old one away, leaving no manifest without a reference.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_docker_save_load_pins_its_version_and_the_replaced_one_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let msb = dir.path().join("msb");
+        write_script(&msb, FAKE_MSB);
+        let home = dir.path().join("home");
+        let state = home.join("fake");
+        std::fs::create_dir_all(&state).unwrap();
+        let ms = Microsandbox::new(Msb::Found(msb), home, "t");
+        let saved = docker_save();
+        let read = |name: &str| std::fs::read_to_string(state.join(name)).unwrap();
+
+        std::fs::write(state.join("next"), "sha256:v1").unwrap();
+        let loaded = load_archive(&ms, saved.path().to_path_buf()).await.unwrap();
+        let loaded: Vec<&str> = loaded.iter().map(|l| l.reference.as_str()).collect();
+        assert_eq!(loaded, ["guildbotics/agent-environment:dev"]);
+        assert_eq!(
+            read("refs"),
+            "guildbotics/agent-environment:dev sha256:v1\n\
+             guildbotics/agent-environment@sha256:v1 sha256:v1\n"
+        );
+
+        std::fs::write(state.join("next"), "sha256:v2").unwrap();
+        load_archive(&ms, saved.path().to_path_buf()).await.unwrap();
+        assert_eq!(
+            read("refs"),
+            "guildbotics/agent-environment:dev sha256:v2\n\
+             guildbotics/agent-environment@sha256:v2 sha256:v2\n"
+        );
+        assert_eq!(read("manifests"), "sha256:v2\n");
     }
 
     #[test]
@@ -394,6 +502,13 @@ mod tests {
         assert_eq!(
             archive_references(oci.path()).unwrap(),
             vec!["docker.io/library/alpine:3".to_string()]
+        );
+        assert_eq!(
+            archive_references(docker_save().path()).unwrap(),
+            [
+                "docker.io/guildbotics/agent-environment:dev",
+                "guildbotics/agent-environment:dev"
+            ]
         );
         let unnamed = archive(&[("README", "x")]);
         assert!(archive_references(unnamed.path()).unwrap().is_empty());
