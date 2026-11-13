@@ -171,12 +171,14 @@ pub(crate) async fn read_review_states(
     p: &Pull,
     head: &str,
 ) -> AppResult<Vec<ReviewState>> {
-    let (repo, number) = (p.repo.clone(), p.number);
-    let reviews = app
-        .store
-        .read(move |r| reviews_of(r, &repo, number))
-        .await?;
-    Ok(review_states(p, &reviews, head))
+    let (p, head) = (p.clone(), head.to_string());
+    app.store
+        .read(move |r| review_states_in(r, &p, &head))
+        .await
+}
+
+pub(crate) fn review_states_in(r: &impl Rd, p: &Pull, head: &str) -> AppResult<Vec<ReviewState>> {
+    Ok(review_states(p, &reviews_of(r, &p.repo, p.number)?, head))
 }
 
 pub(crate) fn approvals(states: &[ReviewState]) -> u64 {

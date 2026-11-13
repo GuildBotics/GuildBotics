@@ -842,57 +842,58 @@ pub struct ResultInfo {
     pub refresh_cache: bool,
 }
 
+fn reusable_shape(a: &Attempt, source: &Attempt) -> bool {
+    a.purpose == Purpose::Check
+        && a.allow_reuse
+        && a.id != source.id
+        && a.repo == source.repo
+        && a.job == source.job
+        && a.network == source.network
+        && source.status == "completed"
+        && source.conclusion.as_deref() == Some("success")
+        && source.reused_from.is_none()
+        && source.image_digest.is_some()
+        && (a.job.cache.is_none() || source.cache_key.is_some())
+}
+
 fn can_reuse(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<bool> {
-    if a.purpose != Purpose::Check
-        || !a.allow_reuse
-        || a.id == source.id
-        || a.repo != source.repo
-        || a.job != source.job
-        || a.network != source.network
-        || source.status != "completed"
-        || source.conclusion.as_deref() != Some("success")
-        || source.reused_from.is_some()
-        || source.image_digest.is_none()
-        || (a.job.cache.is_some() && source.cache_key.is_none())
-    {
+    if !reusable_shape(a, source) {
         return Ok(false);
     }
     let tree = get_run(r, &a.repo, &a.sha)?.and_then(|run| run.tree);
     Ok(tree.is_some() && tree == get_run(r, &source.repo, &source.sha)?.and_then(|run| run.tree))
 }
 
-fn reuse_candidate(r: &impl Rd, a: &Attempt) -> AppResult<Option<Reuse>> {
-    if !a.allow_reuse {
-        return Ok(None);
-    }
+/// Load candidate history once per run during a claim, not once per job.
+fn reuse_sources(r: &impl Rd, a: &Attempt) -> AppResult<Vec<Attempt>> {
     let Some(tree) = get_run(r, &a.repo, &a.sha)?.and_then(|run| run.tree) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let prefix = Key::new().s(&a.repo).s(&tree).bytes();
-    let mut newest: Option<Attempt> = None;
+    let mut sources = Vec::new();
     for (_, key) in r.prefix_raw(store::IX_CI_TREE, &prefix, None, usize::MAX)? {
         let run: Run = r
             .get(store::CI_RUNS, &key)?
             .ok_or_else(|| AppError::internal("tree index run is missing"))?;
-        for source in attempts_of(r, &a.repo, &run.sha)? {
-            // Once offered, a source may expire before finish. Retention
-            // disqualifies new offers, not a runner's already claimed work.
-            if !source.files_pruned
-                && can_reuse(r, a, &source)?
-                && newest.as_ref().is_none_or(|old| {
-                    (&source.finished_at, source.seq) > (&old.finished_at, old.seq)
-                })
-            {
-                newest = Some(source);
-            }
-        }
+        sources.extend(attempts_of(r, &a.repo, &run.sha)?);
     }
-    Ok(newest.map(|source| Reuse {
-        attempt_id: source.id,
-        sha: source.sha,
-        image_digest: source.image_digest.unwrap(),
-        cache_key: source.cache_key,
-    }))
+    Ok(sources)
+}
+
+fn reuse_candidate(a: &Attempt, sources: &[Attempt]) -> Option<Reuse> {
+    if !a.allow_reuse || a.purpose != Purpose::Check {
+        return None;
+    }
+    sources
+        .iter()
+        .filter(|source| !source.files_pruned && reusable_shape(a, source))
+        .max_by_key(|source| (&source.finished_at, source.seq))
+        .map(|source| Reuse {
+            attempt_id: source.id.clone(),
+            sha: source.sha.clone(),
+            image_digest: source.image_digest.clone().unwrap(),
+            cache_key: source.cache_key.clone(),
+        })
 }
 
 /// The attempt that owns the result's artifact files. Reuse never chains.
@@ -905,23 +906,52 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
     }
 }
 
-/// Hands the oldest queued attempt to `runner` under a new lease.
+/// Hands the highest-priority queued attempt to `runner` under a new lease.
 pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
-    let next = w.prefix_raw(store::IX_CI_PENDING, &[], None, 1)?;
-    let Some((_, id)) = next.into_iter().next() else {
-        return Ok(None);
-    };
-    let id = String::from_utf8_lossy(&id).into_owned();
-    let old =
-        get_attempt(w, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-    let lease = format!("bvl_{}", util::random_secret::<24>());
-    let mut a = old.clone();
-    // The run's scope as it is now: a commit a protected branch came to want
-    // after its attempts were queued (a pull request merged meanwhile) saves
-    // the cache.
-    if let Some(run) = get_run(w, &a.repo, &a.sha)? {
-        a.cache_scope = run.cache_scope;
+    let mut snapshot = super::priority::Snapshot::default();
+    let mut best = super::priority::Class::Last;
+    let mut candidates = Vec::new();
+    for (_, id) in w.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+        let id = String::from_utf8_lossy(&id);
+        let mut a =
+            get_attempt(w, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+        let class = snapshot.class_of(w, &a)?.class;
+        if class > best {
+            continue;
+        }
+        if class < best {
+            best = class;
+            candidates.clear();
+        }
+        // A protected branch may have come to want this commit since admission.
+        if let Some(run) = get_run(w, &a.repo, &a.sha)? {
+            a.cache_scope = run.cache_scope;
+        }
+        candidates.push(a);
     }
+    let mut sources = std::collections::BTreeMap::new();
+    let mut selected = None;
+    for (i, a) in candidates.iter().enumerate() {
+        if !a.allow_reuse || a.purpose != Purpose::Check {
+            continue;
+        }
+        let key = (a.repo.clone(), a.sha.clone());
+        let sources = match sources.entry(key) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(reuse_sources(w, a)?),
+        };
+        if let Some(reuse) = reuse_candidate(a, sources) {
+            selected = Some((i, reuse));
+            break;
+        }
+    }
+    let (index, reuse) = selected.map_or((0, None), |(i, reuse)| (i, Some(reuse)));
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let mut a = candidates.remove(index);
+    let old = get_attempt(w, &a.id)?.unwrap();
+    let lease = format!("bvl_{}", util::random_secret::<24>());
     a.status = "in_progress".into();
     a.wait_for_runner = false;
     a.lease_hash = Some(lease_hash(&lease));
@@ -929,7 +959,6 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     a.runner = Some(runner.to_string());
     a.started_at = Some(now.to_string());
     put_attempt(w, Some(&old), &a)?;
-    let reuse = reuse_candidate(w, &a)?;
     Ok(Some(Claimed {
         attempt: a,
         lease,
@@ -1777,7 +1806,7 @@ mod tests {
         }
     }
 
-    fn reg(sha: &str, branch: &str, jobs: &[&str]) -> Registration {
+    pub(super) fn reg(sha: &str, branch: &str, jobs: &[&str]) -> Registration {
         Registration {
             selection: None,
             repo: "repo_1".into(),
@@ -1793,17 +1822,18 @@ mod tests {
         }
     }
 
-    fn store() -> (tempfile::TempDir, Store) {
+    pub(super) fn store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(&dir.path().join("t.redb"), 1 << 20, 1).unwrap();
         (dir, s)
     }
 
-    const T0: &str = "2026-10-14T10:00:00.000Z";
+    pub(super) const T0: &str = "2026-10-14T10:00:00.000Z";
     const T1: &str = "2026-10-14T10:00:30.000Z";
     const T2: &str = "2026-10-14T10:02:00.000Z";
     const T3: &str = "2026-10-14T10:05:00.000Z";
-    const DIGEST: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    pub(super) const DIGEST: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
     fn latest_attempts(r: &impl Rd, repo: &str, sha: &str) -> AppResult<Vec<Attempt>> {
         let jobs: Vec<JobDef> = attempts_of(r, repo, sha)?
@@ -2379,7 +2409,9 @@ mod tests {
             failed.conclusion = Some("failure".into());
             put_attempt(w, Some(&second), &failed)?;
             assert_eq!(
-                reuse_candidate(w, &next.attempt)?.unwrap().attempt_id,
+                reuse_candidate(&next.attempt, &reuse_sources(w, &next.attempt)?)
+                    .unwrap()
+                    .attempt_id,
                 first.id
             );
             Ok(())
@@ -3091,3 +3123,7 @@ mod tests {
         assert_eq!(latest(&s, "s1")[0].id, a2.id);
     }
 }
+
+#[cfg(test)]
+#[path = "priority_tests.rs"]
+mod priority_tests;

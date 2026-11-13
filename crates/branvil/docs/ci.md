@@ -37,6 +37,39 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
 - Jobs of one run are queued together; a runner runs queued jobs, of any
   run, up to `ci.executor.max_jobs` at once, each in a microVM of its own
   (there are no dependencies between jobs).
+  At each claim the service derives a class from current store records, without
+  Git or a saved priority. The first matching rule wins:
+
+  | Scope | Condition | Class |
+  | --- | --- | --- |
+  | Attempt | Cache refresh | 4b (last) |
+  | Run | Missing run or repository, or no branches want the commit | 4b |
+  | Branch | Protected (including the default branch) | 1 |
+  | Branch | `gate/<n>` with a gating/passed landing record whose gate matches the commit | 2 (near landing) |
+  | Branch | No open PR using this head branch | 4b |
+  | PR | Draft | 4b |
+  | PR | A required check completed without satisfying the head, including a missing required job | 4a (deferred) |
+  | PR | A current changes-requested verdict, too few approvals, and an unanswered statement for the author | 4a |
+  | PR | Enough current approvals | 2 |
+  | PR | Otherwise | 3 (normal) |
+
+  A run takes the highest class of its branches; a branch takes the highest
+  class of its open PRs. Review verdicts, approvals, unanswered statements, and
+  required checks use the same rules as PR readiness and landing. Reasons for
+  4a/4b distinguish cache refresh, missing records, unwanted commits, no open
+  PR, drafts, the failed required check, and the reviewer requesting changes
+  (with the approval count).
+
+  Claim order is 1, 2, 3, 4a, 4b. Within a class, attempts with an available
+  reusable successful result come first, then registration sequence (`seq`);
+  without a reusable result, sequence decides. Reuse is assessed after taking
+  the run's current cache scope; retries with `allow_reuse = false` execute.
+  Class 4a runs only when no class 1–3 attempt waits, and 4b only when no other
+  class waits. This changes order only: it neither cancels nor holds attempts.
+  A deferred/last attempt that has started continues to completion, even if
+  higher-class work arrives. Under sustained load a failing head's remaining
+  jobs may therefore finish only after its author has already pushed a fix.
+
 - `paths` selects PR-head jobs using Git's pathspec glob rules (up to 32
   relative paths of at most 512 bytes; no `:`, `\\`, NUL, empty, `.` or `..`
   components). `**` matches recursively; `*` does not cross directories.
