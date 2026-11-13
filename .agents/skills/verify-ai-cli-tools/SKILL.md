@@ -13,7 +13,7 @@ Compile the Rust binary and test targets with the checkout's pinned toolchain:
 
 ```bash
 cargo build --locked -p guildbotics
-cargo test --locked -p guildbotics --test server --no-run
+cargo test --locked -p guildbotics --test main --no-run
 cargo test --locked -p gb-server --lib --no-run
 cargo test --locked -p gb-environment --lib --no-run
 ```
@@ -46,8 +46,8 @@ The build downloads the base image and packages. It uses no provider login or in
 The `real_device` tests are marked `#[ignore]`, so regular Cargo and nextest runs compile them and skip their bodies. To inspect names, use `-- --list` with the test targets above. Substitute one complete name in an exact-match invocation and check that the output says it ran one test:
 
 ```bash
-cargo test --locked -p guildbotics --test server \
-  real_device::real_device_snapshot_loads_the_read_only_guest_package \
+cargo test --locked -p guildbotics --test main \
+  server::real_device::real_device_snapshot_loads_the_read_only_guest_package \
   -- --ignored --exact --nocapture
 
 NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 cargo test --locked -p gb-server --lib \

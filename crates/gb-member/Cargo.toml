@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
+# The integration tests are modules of tests/main.rs.
+autotests = false
+
 [dependencies]
 gb-ports = { path = "../gb-ports" }
 gb-base = { path = "../gb-base" }
@@ -28,3 +31,7 @@ tokio = { version = "1", features = ["macros", "process", "io-util", "time", "rt
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

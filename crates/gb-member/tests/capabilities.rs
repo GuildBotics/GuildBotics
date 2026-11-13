@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use gb_member::{MemberError, WriteGuard, repository::*};
 use gb_ports::*;
 use serde_json::json;

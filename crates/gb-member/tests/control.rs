@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{
     MemberError, WriteGuard, command,
