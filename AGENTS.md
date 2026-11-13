@@ -110,7 +110,7 @@ desktop journey は Rust HTTP API と一時 vault で実行する。golden の�
 CI に含めず、ワークフローで実行する。隔離環境を含むjourneyと画面の目視は利用者の立ち会いで行う。
 Branvilの画面E2Eは継続する。
 
-CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test main hub_server::` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `BRANVIL_REAL_EXECUTOR=1` の任意実行。
+CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test main -E 'test(/^hub_server::/)'` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `BRANVIL_REAL_EXECUTOR=1` の任意実行。
 
 ## 品質とテスト
 
@@ -118,7 +118,7 @@ CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-referen
 
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
-- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main <file>::`。`gb-integrations` の専用ハーネス `branvil-integration` は別 target）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
+- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる。`gb-integrations` の専用ハーネス `branvil-integration` は別 target）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`、`crates/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）
