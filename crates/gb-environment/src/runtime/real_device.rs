@@ -98,7 +98,7 @@ async fn real_device_large_stdin_reaches_all_guest_process_entries() {
         Ok::<_, Failure>(())
     })
     .await;
-    stop_vm(&vm).await;
+    vm.close().await;
     result.expect("large stdin probe timed out").unwrap();
 }
 
