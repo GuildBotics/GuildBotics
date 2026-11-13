@@ -38,7 +38,7 @@ fn interrupted_alert_save_preserves_dismissed_state() {
     let mut r = event("command.failed");
     r["command"] = "x".repeat(20000).into();
     f.record(r);
-    let result=std::process::Command::new("/bin/sh").args(["-c","ulimit -c 0; ulimit -f 1; exec \"$1\" --exact interrupted_alert_save_preserves_dismissed_state --nocapture","alert-save-test"]).arg(std::env::current_exe().unwrap()).env(CHILD,f.dir.path()).output().unwrap();
+    let result=std::process::Command::new("/bin/sh").args(["-c","ulimit -c 0; ulimit -f 1; exec \"$1\" --exact health::interrupted_alert_save_preserves_dismissed_state --nocapture","alert-save-test"]).arg(std::env::current_exe().unwrap()).env(CHILD,f.dir.path()).output().unwrap();
     assert!(!result.status.success());
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let alerts = f.list();

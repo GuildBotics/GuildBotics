@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use gb_member::{
     WriteGuard,
     git::{Guest, Output, Pending, Workspace},

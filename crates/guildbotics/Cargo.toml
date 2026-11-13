@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
+# The integration tests are modules of tests/main.rs.
+autotests = false
+
 [dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
@@ -30,3 +33,7 @@ flate2 = "1"
 sha2 = "0.11.1"
 tar = "0.4"
 loopback-auth = { path = "../loopback-auth" }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

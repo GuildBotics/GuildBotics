@@ -280,7 +280,7 @@ When a tool pin, Node.js pin, or `uv.lock` changes, check the Rust snapshot
 recipe without building a real snapshot:
 
 ```bash
-cargo nextest run --locked -p gb-environment --test snapshot
+cargo nextest run --locked -p gb-environment --test main snapshot::
 uv run --no-sync python -m pytest tests/test_environment_requirements.py tests/scripts/test_environment_catalog.py
 ```
 

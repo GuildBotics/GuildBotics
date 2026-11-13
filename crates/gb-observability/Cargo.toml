@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
+# The integration tests are modules of tests/main.rs.
+autotests = false
+
 [dependencies]
 base64 = "0.22"
 anyhow = "1.0.102"
@@ -26,3 +29,7 @@ url = "2.5.8"
 syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["full"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

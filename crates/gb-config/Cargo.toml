@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/GuildBotics/GuildBotics"
 publish = false
 
+# The integration tests are modules of tests/main.rs.
+autotests = false
+
 [dependencies]
 gb-base = { path = "../gb-base" }
 sha1 = "0.11"
@@ -33,3 +36,7 @@ tempfile = "3.27.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7.0"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
