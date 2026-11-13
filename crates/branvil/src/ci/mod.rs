@@ -19,6 +19,7 @@ pub mod config;
 pub mod files;
 pub mod notify;
 pub mod pipeline;
+pub mod priority;
 pub mod queue;
 mod selection;
 pub mod settings;
@@ -397,85 +398,13 @@ impl Ci {
         run: &queue::Run,
         latest: Vec<(Attempt, Attempt)>,
     ) -> AppResult<Checks> {
-        // A formerly skipped job now waiting for capacity is pending, not a
-        // satisfied check left over from the old base snapshot.
-        let latest: Vec<_> = latest
-            .into_iter()
-            .filter(|(a, _)| run.includes(a))
-            .collect();
-        let mut checks = Vec::new();
-        if let PipelineState::Invalid { message } = &run.pipeline {
-            checks.push(Check::placeholder(
-                "pipeline",
-                "completed",
-                Some("failure"),
-                format!(
-                    "The {} of {} is invalid: {message}",
-                    pipeline::PIPELINE_PATH,
-                    run.sha
-                ),
-            ));
-        }
-        for (a, source) in &latest {
-            checks.push(self.check_of(a, source));
-        }
-        if let PipelineState::Jobs { jobs } = &run.pipeline {
-            for j in jobs
-                .iter()
-                .filter(|j| !latest.iter().any(|(a, _)| a.job.name == j.name))
-            {
-                checks.push(match &run.superseded_by {
-                    Some(by) => Check::placeholder(
-                        &j.name,
-                        "completed",
-                        Some("cancelled"),
-                        format!("Superseded by {by} before it was queued."),
-                    ),
-                    None if run.waiting => Check::placeholder(
-                        &j.name,
-                        "queued",
-                        None,
-                        format!(
-                            "Waiting for room in the CI queue ({} attempts at most).",
-                            self.inner.config.queue_max
-                        ),
-                    ),
-                    None => Check::placeholder(
-                        &j.name,
-                        "queued",
-                        None,
-                        "Not queued yet; the reconciler queues it within a minute.".into(),
-                    ),
-                });
-            }
-        }
-        for name in &repo.required_checks {
-            if checks.iter().any(|c| &c.name == name) {
-                continue;
-            }
-            let why = match &run.pipeline {
-                PipelineState::Absent => format!(
-                    "{} has no {}, so the required check {name} cannot run.",
-                    run.sha,
-                    pipeline::PIPELINE_PATH
-                ),
-                PipelineState::Invalid { .. } => {
-                    format!("The pipeline is invalid, so the required check {name} cannot run.")
-                }
-                PipelineState::Jobs { .. } => format!(
-                    "The {} of {} defines no job named {name}.",
-                    pipeline::PIPELINE_PATH,
-                    run.sha
-                ),
-            };
-            checks.push(Check::placeholder(name, "completed", Some("failure"), why));
-        }
-        Ok(Checks {
-            run_registered: true,
-            checks,
-            checks_expected: run.pipeline != PipelineState::Absent
-                || !repo.required_checks.is_empty(),
-        })
+        run_checks(
+            repo,
+            run,
+            latest,
+            self.inner.config.queue_max,
+            |a, source| self.check_of(a, source),
+        )
     }
 
     /// Reads the pipeline of commit `sha` (`pipeline::read`).
@@ -972,6 +901,94 @@ fn open_pull_heads(r: &impl Rd, repo: &str) -> AppResult<Vec<String>> {
         }
     }
     Ok(heads)
+}
+
+/// Build registered checks inside or outside a store transaction using the same rules.
+fn run_checks(
+    repo: &Repo,
+    run: &queue::Run,
+    latest: Vec<(Attempt, Attempt)>,
+    queue_max: usize,
+    check_of: impl Fn(&Attempt, &Attempt) -> Check,
+) -> AppResult<Checks> {
+    // A formerly skipped job now waiting for capacity is pending, not a
+    // satisfied check left over from the old base snapshot.
+    let latest: Vec<_> = latest
+        .into_iter()
+        .filter(|(a, _)| run.includes(a))
+        .collect();
+    let mut checks = Vec::new();
+    if let PipelineState::Invalid { message } = &run.pipeline {
+        checks.push(Check::placeholder(
+            "pipeline",
+            "completed",
+            Some("failure"),
+            format!(
+                "The {} of {} is invalid: {message}",
+                pipeline::PIPELINE_PATH,
+                run.sha
+            ),
+        ));
+    }
+    for (a, source) in &latest {
+        checks.push(check_of(a, source));
+    }
+    if let PipelineState::Jobs { jobs } = &run.pipeline {
+        for j in jobs
+            .iter()
+            .filter(|j| !latest.iter().any(|(a, _)| a.job.name == j.name))
+        {
+            checks.push(match &run.superseded_by {
+                Some(by) => Check::placeholder(
+                    &j.name,
+                    "completed",
+                    Some("cancelled"),
+                    format!("Superseded by {by} before it was queued."),
+                ),
+                None if run.waiting => Check::placeholder(
+                    &j.name,
+                    "queued",
+                    None,
+                    format!(
+                        "Waiting for room in the CI queue ({} attempts at most).",
+                        queue_max
+                    ),
+                ),
+                None => Check::placeholder(
+                    &j.name,
+                    "queued",
+                    None,
+                    "Not queued yet; the reconciler queues it within a minute.".into(),
+                ),
+            });
+        }
+    }
+    for name in &repo.required_checks {
+        if checks.iter().any(|c| &c.name == name) {
+            continue;
+        }
+        let why = match &run.pipeline {
+            PipelineState::Absent => format!(
+                "{} has no {}, so the required check {name} cannot run.",
+                run.sha,
+                pipeline::PIPELINE_PATH
+            ),
+            PipelineState::Invalid { .. } => {
+                format!("The pipeline is invalid, so the required check {name} cannot run.")
+            }
+            PipelineState::Jobs { .. } => format!(
+                "The {} of {} defines no job named {name}.",
+                pipeline::PIPELINE_PATH,
+                run.sha
+            ),
+        };
+        checks.push(Check::placeholder(name, "completed", Some("failure"), why));
+    }
+    Ok(Checks {
+        run_registered: true,
+        checks,
+        checks_expected: run.pipeline != PipelineState::Absent || !repo.required_checks.is_empty(),
+    })
 }
 
 #[cfg(test)]

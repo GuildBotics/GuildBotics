@@ -1187,6 +1187,12 @@ kind `runner` (created by `guildbotics branvil runner register`); any other memb
 (`heartbeat`, `finish`) or in the `X-Branvil-Lease` header (`source`, `log`,
 `artifacts`), never in the URL.
 
+Claims select protected-branch work, near-landing work, normal work, deferred
+work, then last-class work, deriving the class anew from store records. Within
+one class, available reusable results precede other attempts, with `seq` as the
+tie-breaker. See [CI scheduling](ci.md) for the classification rules. Running
+attempts are not interrupted by changes in class.
+
 - `POST /claim` `{"executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "..."}`
   → `204` (nothing queued, or the service is stopping: see "Stopping the
   service" in `docs/ci.md`) or
