@@ -86,7 +86,7 @@ impl OwnerClient {
             .header("x-guildbotics-language", self.language)
     }
 
-    async fn health(&self) -> Option<Value> {
+    pub(crate) async fn health(&self) -> Option<Value> {
         self.request(reqwest::Method::GET, "/health")
             .timeout(PROOF_TIMEOUT)
             .send()
@@ -575,6 +575,32 @@ async fn entry_client(
         Some(token) => OwnerClient::with_token(port, language, token).await,
         None => Ok(None),
     }
+}
+
+/// Prefer a running local Hub; otherwise authenticate the forwarded Hub with consent.
+/// The boolean indicates that workspace selection belongs to this machine.
+async fn cli_server(data: &Path, language: &'static str) -> anyhow::Result<(OwnerClient, bool)> {
+    let unavailable = || anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[]));
+    if let Some(running) = crate::server::running(data, language)? {
+        let owner = OwnerClient::connect(data, running.port, language)
+            .await?
+            .ok_or_else(unavailable)?;
+        return Ok((owner, true));
+    }
+    let client = consent_client(crate::server::port()?, language, connect::credential).await?;
+    Ok((client, false))
+}
+
+pub(crate) async fn consent_client(
+    port: u16,
+    language: &'static str,
+    consent: impl FnOnce(u16) -> Option<String>,
+) -> anyhow::Result<OwnerClient> {
+    let unavailable = || anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[]));
+    let token = consent(port).ok_or_else(unavailable)?;
+    OwnerClient::with_token(port, language, token)
+        .await?
+        .ok_or_else(unavailable)
 }
 
 /// Resolve a CLI user's file or directory, including existing symlink ancestors.

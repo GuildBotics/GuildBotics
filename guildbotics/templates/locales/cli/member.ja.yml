@@ -1,6 +1,7 @@
 ja:
   client:
     invalid_response: "サーバーから返されたメンバーコマンドの応答が無効です。"
+    remote_workspace: "転送先の Hub がワークスペースを選択します。--workspace を外し、Hub でワークスペースを選択してください。"
     backend_required: "member コマンド（--help を含む）の前に、GuildBotics のサーバー（`guildbotics server start` または OS のサービス）を起動してください。"
     workspace_required: "先に --workspace または `guildbotics workspace use <パス>` でワークスペースを選んでください。"
     current_repository: "current モードは、対象の Git リポジトリ内から実行してください。"

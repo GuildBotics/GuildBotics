@@ -21,23 +21,37 @@ const MAX_CONTENT: usize = 2 << 20;
 pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
     let language = super::language().await;
     let data = gb_base::home::data()?;
-    let running =
-        crate::server::running(&data, language)?.ok_or_else(|| backend_required(language))?;
-    let owner = OwnerClient::connect(&data, running.port, language)
-        .await?
-        .ok_or_else(|| backend_required(language))?;
+    let (owner, local) = super::cli_server(&data, language).await?;
     let explicit = workspace_argument(&mut arguments, language)?;
-    let workspace = selected_workspace(&data, explicit, language)?;
-    let workspace_id = gb_workspace::identity::read_workspace_identity(&workspace)?
-        .ok_or_else(|| {
-            anyhow::anyhow!(i18n::t(
-                language,
-                "cli.member.client.workspace_required",
-                &[]
-            ))
-        })?
-        .workspace_id;
-    let redact = redactor(&workspace)?;
+    let workspace_id = if local {
+        let workspace = selected_workspace(&data, explicit, language)?;
+        gb_workspace::identity::read_workspace_identity(&workspace)?
+            .map(|identity| identity.workspace_id)
+    } else {
+        anyhow::ensure!(
+            explicit.is_none(),
+            i18n::t(language, "cli.member.client.remote_workspace", &[])
+        );
+        owner
+            .health()
+            .await
+            .and_then(|health| health["workspace_id"].as_str().map(str::to_owned))
+    }
+    .filter(|id| !id.is_empty())
+    .ok_or_else(|| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.member.client.workspace_required",
+            &[]
+        ))
+    })?;
+    let response = owner
+        .request(reqwest::Method::GET, "/member/redaction-keys")
+        .timeout(super::TIMEOUT)
+        .send()
+        .await?;
+    let names: Vec<String> = checked(response).await?.json().await?;
+    let redact = redactor(names);
     let original = arguments;
     let (interactive_host, interactive_thread_key) = interactive_context();
     let mut request = MemberRequest {
@@ -283,11 +297,7 @@ fn interactive_context() -> (String, String) {
     (host, thread)
 }
 
-fn redactor(workspace: &Path) -> anyhow::Result<Redactor> {
-    let mut names = gb_config::secrets::read_secret_index(&workspace.join(".guildbotics/config"))?;
-    names.extend(gb_config::secrets::read_secret_index(
-        &gb_base::home::identity_root()?.join(".guildbotics/config"),
-    )?);
+fn redactor(names: Vec<String>) -> Redactor {
     let mut values = names
         .into_iter()
         .filter_map(|name| std::env::var(name).ok())
@@ -302,7 +312,7 @@ fn redactor(workspace: &Path) -> anyhow::Result<Redactor> {
             values.push(value);
         }
     }
-    Ok(Redactor::with_min_length(values, 4))
+    Redactor::with_min_length(values, 4)
 }
 
 fn redacted(redactor: &Redactor, arguments: &[String]) -> Vec<String> {
@@ -330,10 +340,6 @@ fn print(result: Reply) -> anyhow::Result<u8> {
     io::stdout().write_all(result.stdout.as_bytes())?;
     io::stderr().write_all(result.stderr.as_bytes())?;
     Ok(u8::try_from(result.exit_code).unwrap_or(1))
-}
-
-fn backend_required(language: &str) -> anyhow::Error {
-    anyhow::anyhow!(i18n::t(language, "cli.member.client.backend_required", &[]))
 }
 
 struct Client {
