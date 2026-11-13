@@ -394,10 +394,11 @@ impl OwnedVm {
         let owned = sandbox.clone();
         Self {
             sandbox,
-            cleanup: Cleanup::with_files(files, async move { stop_vm(&owned).await }),
+            cleanup: Cleanup::with_files(files, stop_vm(owned)),
         }
     }
     async fn close(self) {
+        drop(self.sandbox);
         self.cleanup.finish().await;
     }
 }
@@ -2536,8 +2537,11 @@ fn temporary_disk_names<'a>(
     })
 }
 
-async fn stop_vm(sandbox: &Sandbox) {
+async fn stop_vm(sandbox: Sandbox) {
     let name = sandbox.name();
+    let disks: Vec<_> = temporary_disk_names(name, &sandbox.config().spec.mounts)
+        .map(str::to_owned)
+        .collect();
     if let Err(e) = sandbox.stop_with_timeout(STOP_TIMEOUT).await {
         tracing::warn!("The microVM {name} did not stop, and is killed: {e}");
         if let Err(e) = sandbox.kill().await {
@@ -2545,8 +2549,10 @@ async fn stop_vm(sandbox: &Sandbox) {
         }
     }
     let _ = sandbox.destroy().await;
-    for disk in temporary_disk_names(name, &sandbox.config().spec.mounts) {
-        let _ = microsandbox::Volume::remove(disk).await;
+    // The stopped process handle still owns its disk locks until the last Sandbox drops.
+    drop(sandbox);
+    for disk in disks {
+        let _ = microsandbox::Volume::remove(&disk).await;
     }
 }
 
@@ -2887,12 +2893,10 @@ async fn private_session_inner(
         vm.close().await;
         return Err(failed());
     }
-    let OwnedVm {
-        sandbox: vm,
-        cleanup,
-    } = vm;
-    let execute = execute_private_tty_cancelled(&vm, process, on_output, interactive, cancelled);
-    let capture = async {
+    let execute = async |vm: &OwnedVm| {
+        execute_private_tty_cancelled(vm, process, on_output, interactive, cancelled).await
+    };
+    let capture = async |vm: &OwnedVm| {
         let argv = vec![
             "/opt/guildbotics/venv/bin/python".into(),
             "-B".into(),
@@ -2902,7 +2906,7 @@ async fn private_session_inner(
         ];
         let input = serde_json::to_vec(capture).map_err(|_| failed())?;
         match execute_private(
-            &vm,
+            vm,
             &Process {
                 argv: &argv,
                 cwd: "/",
@@ -2931,17 +2935,18 @@ async fn private_session_inner(
             _ => Err(failed()),
         }
     };
-    Ok(private_transaction(execute, capture, cleanup.finish()).await)
+    Ok(private_transaction(vm, execute, capture, OwnedVm::close).await)
 }
 
-async fn private_transaction(
-    execute: impl Future<Output = Result<Ended, Failure>>,
-    capture: impl Future<Output = Result<std::collections::BTreeMap<String, Vec<u8>>, Failure>>,
-    close: impl Future<Output = ()>,
+async fn private_transaction<VM>(
+    vm: VM,
+    execute: impl AsyncFnOnce(&VM) -> Result<Ended, Failure>,
+    capture: impl AsyncFnOnce(&VM) -> Result<std::collections::BTreeMap<String, Vec<u8>>, Failure>,
+    close: impl AsyncFnOnce(VM),
 ) -> PrivateSession {
-    let ended = execute.await;
-    let files = capture.await;
-    close.await;
+    let ended = execute(&vm).await;
+    let files = capture(&vm).await;
+    close(vm).await;
     PrivateSession { ended, files }
 }
 
@@ -2952,12 +2957,15 @@ mod private_transaction_tests {
     async fn cancelled_provider_still_captures_its_new_login_before_vm_shutdown() {
         for capture_failed in [false, true] {
             let events = std::sync::Mutex::new(Vec::new());
+            let vm = std::sync::Arc::new(());
+            let released = std::sync::Arc::downgrade(&vm);
             let session = private_transaction(
-                async {
+                vm,
+                async |_| {
                     events.lock().unwrap().push("provider killed");
                     Err(Failure::Runtime(Sentence::Text("cancelled".into())))
                 },
-                async {
+                async |_| {
                     assert_eq!(*events.lock().unwrap(), vec!["provider killed"]);
                     events.lock().unwrap().push("capture");
                     if capture_failed {
@@ -2969,8 +2977,10 @@ mod private_transaction_tests {
                         )]))
                     }
                 },
-                async {
+                async |vm| {
                     assert_eq!(*events.lock().unwrap(), vec!["provider killed", "capture"]);
+                    drop(vm);
+                    assert!(released.upgrade().is_none());
                     events.lock().unwrap().push("close");
                 },
             )
