@@ -483,7 +483,7 @@ pub fn current_attempts(
 /// protected branch wants the commit, the jobs with a dependency cache whose
 /// current attempt ran for a pull request (a fast-forward merge): only a
 /// protected branch's run saves the cache, so they run again as one.
-fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
+pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
     let PipelineState::Jobs { jobs } = &run.pipeline else {
         return Ok(Vec::new());
     };
@@ -617,6 +617,8 @@ fn conclude(a: &mut Attempt, conclusion: &str, details: Option<String>, now: &st
 
 /// What a registration asks for.
 pub struct Registration {
+    /// Admission order only; never persisted.
+    pub order: Vec<String>,
     pub selection: Option<JobSelection>,
     pub repo: String,
     pub repo_path: String,
@@ -735,7 +737,7 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
                 )?;
             }
         }
-        admit_jobs(w, &mut run, &todo, reg.network, queue_max, now)?
+        admit_jobs(w, &mut run, &todo, &reg.order, reg.network, queue_max, now)?
     };
     refresh_failure(w, &mut run)?;
     let changed = old.as_ref() != Some(&run);
@@ -791,6 +793,7 @@ fn admit_jobs(
     w: &Wtx,
     run: &mut Run,
     jobs: &[JobDef],
+    order: &[String],
     network: bool,
     queue_max: usize,
     now: &str,
@@ -810,6 +813,13 @@ fn admit_jobs(
         run.waiting = true;
         return Ok(false);
     }
+    let mut jobs: Vec<_> = jobs.iter().collect();
+    jobs.sort_by_key(|job| {
+        order
+            .iter()
+            .position(|name| name == &job.name)
+            .unwrap_or(usize::MAX)
+    });
     for job in jobs {
         let a = new_attempt(w, run, job, network, now)?;
         put_attempt(w, None, &a)?;
@@ -818,22 +828,55 @@ fn admit_jobs(
     Ok(true)
 }
 
-/// Admits waiting runs in class order, then registration order, while they fit. Returns the
-/// (repo path, sha) of every run admitted.
-pub fn admit_waiting(w: &Wtx, queue_max: usize, now: &str) -> AppResult<Vec<(String, String)>> {
-    let mut admitted = Vec::new();
+/// Ephemeral admission orders by repository and commit.
+pub type AdmissionOrders = BTreeMap<(String, String), Vec<String>>;
+
+/// The same capacity snapshot is used before Git reads and at admission.
+/// Earlier candidates consume virtual slots in their own class.
+pub fn waiting_candidates(r: &impl Rd, queue_max: usize) -> AppResult<Vec<Run>> {
     let mut waiting = Vec::new();
-    for (_, key) in w.prefix_raw(store::IX_CI_WAITING, &[], None, usize::MAX)? {
-        let Some(old) = w.get::<Run>(store::CI_RUNS, &key)? else {
-            continue;
-        };
-        waiting.push((super::priority::run_class(w, &old)?.class, old.seq, old));
+    for (_, key) in r.prefix_raw(store::IX_CI_WAITING, &[], None, usize::MAX)? {
+        if let Some(run) = r.get::<Run>(store::CI_RUNS, &key)? {
+            waiting.push((super::priority::run_class(r, &run)?.class, run.seq, run));
+        }
     }
     waiting.sort_by_key(|(class, seq, _)| (*class, *seq));
-    for (_, _, mut run) in waiting {
+    let mut admitted = Vec::new();
+    let (mut added, mut active_added) = (0, 0);
+    for (class, _, run) in waiting {
+        let count = jobs_to_run(r, &run)?.len();
+        let active = class < super::priority::Class::Deferred;
+        let extra = if active { active_added } else { added };
+        if count != 0 && admission_count(r, class, queue_max + 1, None)? + extra + count > queue_max
+        {
+            break;
+        }
+        added += count;
+        if active {
+            active_added += count;
+        }
+        admitted.push(run);
+    }
+    Ok(admitted)
+}
+
+/// Admits waiting runs in class order, then registration order, while they fit.
+/// Returns the (repo path, sha) of every run admitted.
+pub fn admit_waiting(
+    w: &Wtx,
+    queue_max: usize,
+    orders: &AdmissionOrders,
+    now: &str,
+) -> AppResult<Vec<(String, String)>> {
+    let mut admitted = Vec::new();
+    for mut run in waiting_candidates(w, queue_max)? {
         let network = network_of(w, &run.repo)?;
         let jobs = jobs_to_run(w, &run)?;
-        admit_jobs(w, &mut run, &jobs, network, queue_max, now)?;
+        let order = orders
+            .get(&(run.repo.clone(), run.sha.clone()))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        admit_jobs(w, &mut run, &jobs, order, network, queue_max, now)?;
         if run.waiting {
             break;
         }
@@ -1881,6 +1924,7 @@ mod tests {
 
     pub(super) fn reg(sha: &str, branch: &str, jobs: &[&str]) -> Registration {
         Registration {
+            order: Vec::new(),
             inputs: Default::default(),
             selection: None,
             repo: "repo_1".into(),
@@ -1923,6 +1967,7 @@ mod tests {
 
     fn same_tree(sha: &str) -> Registration {
         Registration {
+            order: Vec::new(),
             selection: None,
             tree: Some("same-tree".into()),
             ..reg(sha, "main", &["test"])
@@ -1975,7 +2020,8 @@ mod tests {
             cancel(w, &a[0].id, "member1", T1)
         })
         .unwrap();
-        s.write_sync(|w| admit_waiting(w, 1, T1)).unwrap();
+        s.write_sync(|w| admit_waiting(w, 1, &BTreeMap::new(), T1))
+            .unwrap();
         let c = s
             .write_sync(|w| claim(w, "runner", 60, T1))
             .unwrap()
@@ -2444,6 +2490,7 @@ mod tests {
     /// `same_tree` with the input digest `d1` of its job.
     fn with_inputs(sha: &str) -> Registration {
         Registration {
+            order: Vec::new(),
             inputs: BTreeMap::from([("test".to_string(), "d1".to_string())]),
             ..same_tree(sha)
         }
@@ -2487,6 +2534,7 @@ mod tests {
             register(
                 w,
                 Registration {
+                    order: Vec::new(),
                     inputs: BTreeMap::from([("test".to_string(), "d2".to_string())]),
                     ..cached("s2")
                 },
@@ -2663,7 +2711,7 @@ mod tests {
                 10,
                 T1,
             )?;
-            admit_waiting(w, 1, T1)?;
+            admit_waiting(w, 1, &BTreeMap::new(), T1)?;
             let next = claim(w, "r", 60, T1)?.unwrap();
             assert_eq!(next.reuse.unwrap().attempt_id, first.attempt.id);
             expire(w, T2)?;
@@ -2788,6 +2836,7 @@ mod tests {
             .unwrap();
         }
         let merged = || Registration {
+            order: Vec::new(),
             selection: None,
             pipeline: pipeline.clone(),
             ..reg("s1", "main", &[])
@@ -3061,6 +3110,31 @@ mod tests {
     }
 
     #[test]
+    fn admission_uses_named_order_then_pipeline_and_never_reorders_existing_attempts() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            let mut r = reg("sha", "feature", &["a", "b", "c", "d"]);
+            r.order = vec!["removed".into(), "c".into(), "a".into()];
+            register(w, r, 10, T0)?;
+            let mut before = attempts_of(w, "repo_1", "sha")?;
+            before.sort_by_key(|a| a.seq);
+            assert_eq!(
+                before
+                    .iter()
+                    .map(|a| a.job.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["c", "a", "b", "d"]
+            );
+            register(w, reg("sha", "feature", &["a", "b", "c", "d"]), 10, T1)?;
+            let mut after = attempts_of(w, "repo_1", "sha")?;
+            after.sort_by_key(|a| a.seq);
+            assert_eq!(after, before);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn a_full_queue_makes_runs_wait_and_admits_them_in_order() {
         let (_d, s) = store();
         s.write_sync(|w| register(w, reg("s1", "a", &["x", "y"]), 2, T0))
@@ -3080,7 +3154,12 @@ mod tests {
         });
         let id = cancelled.unwrap();
         // One slot free: s2 fits now.
-        assert_eq!(s.write_sync(|w| admit_waiting(w, 2, T1)).unwrap().len(), 1);
+        assert_eq!(
+            s.write_sync(|w| admit_waiting(w, 2, &BTreeMap::new(), T1))
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(latest(&s, "s2")[0].status, "queued");
         // The queue is full again: a retry is refused explicitly.
         let full = s.write_sync(|w| retry(w, &id, 2, T1)).unwrap_err();
@@ -3271,7 +3350,12 @@ mod tests {
             cancel(w, &x[0].id, "ken", T1)
         })
         .unwrap();
-        assert_eq!(s.write_sync(|w| admit_waiting(w, 1, T1)).unwrap().len(), 1);
+        assert_eq!(
+            s.write_sync(|w| admit_waiting(w, 1, &BTreeMap::new(), T1))
+                .unwrap()
+                .len(),
+            1
+        );
         let all = s.read_sync(|r| attempts_of(r, "repo_1", "s1")).unwrap();
         let shape: Vec<(&str, u64, &str)> = all
             .iter()

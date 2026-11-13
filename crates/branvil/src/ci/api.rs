@@ -790,6 +790,7 @@ mod tests {
                     queue::register(
                         w,
                         queue::Registration {
+                            order: Vec::new(),
                             inputs: Default::default(),
                             selection: None,
                             repo: r2.id,

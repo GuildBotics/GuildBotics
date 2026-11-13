@@ -500,12 +500,12 @@ fn waiting_admission_sorts_all_runs_by_class_then_sequence() {
         assert!(get_run(w, "repo_1", "approved-sha")?.unwrap().waiting);
         take(w)?;
         assert_eq!(
-            admit_waiting(w, 4, T0)?,
+            admit_waiting(w, 4, &BTreeMap::new(), T0)?,
             vec![("acme/demo".into(), "approved-sha".into())]
         );
         take(w)?;
         assert_eq!(
-            admit_waiting(w, 4, T0)?,
+            admit_waiting(w, 4, &BTreeMap::new(), T0)?,
             vec![("acme/demo".into(), "normal-0".into())]
         );
         Ok(())

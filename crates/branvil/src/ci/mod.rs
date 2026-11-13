@@ -18,6 +18,7 @@ pub mod api;
 pub mod config;
 pub mod files;
 pub mod notify;
+mod order;
 pub mod pipeline;
 pub mod priority;
 pub mod queue;
@@ -150,6 +151,8 @@ pub struct Ci {
 }
 
 struct Inner {
+    #[cfg(test)]
+    history_reads: std::sync::atomic::AtomicUsize,
     store: Store,
     git: Git,
     events: Events,
@@ -177,6 +180,8 @@ impl Ci {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                #[cfg(test)]
+                history_reads: std::sync::atomic::AtomicUsize::new(0),
                 store,
                 git,
                 events,
@@ -293,46 +298,10 @@ impl Ci {
         if !checks.iter().any(running) {
             return;
         }
-        let dir = self.inner.git.repo_dir(&repo.path);
-        let depth = format!("--max-count={ESTIMATE_DEPTH}");
-        let ancestors = match self
-            .inner
-            .git
-            .run_ok(Some(&dir), &["rev-list", "--first-parent", &depth, sha])
-            .await
-        {
-            Ok(out) => out.lines().map(str::to_string).collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!("CI: cannot list the ancestors of {sha} for estimates: {e}");
-                return;
+        if let Some(history) = self.job_history(repo, sha).await {
+            for c in checks.iter_mut().filter(|c| running(c)) {
+                c.expected_secs = history.took.get(&c.name).copied();
             }
-        };
-        let id = repo.id.clone();
-        let took = self
-            .inner
-            .store
-            .read(move |r| {
-                let mut took = BTreeMap::new();
-                for sha in &ancestors {
-                    for a in queue::attempts_of(r, &id, sha)?.into_iter().rev() {
-                        if a.conclusion.as_deref() == Some("success")
-                            && a.reused_from.is_none()
-                            && let Some(secs) = queue::duration_secs(&a)
-                        {
-                            took.entry(a.job.name).or_insert(secs);
-                        }
-                    }
-                }
-                Ok(took)
-            })
-            .await;
-        match took {
-            Ok(took) => {
-                for c in checks.iter_mut().filter(|c| running(c)) {
-                    c.expected_secs = took.get(&c.name).copied();
-                }
-            }
-            Err(e) => tracing::warn!("CI: cannot read the attempts for estimates: {e}"),
         }
     }
 
@@ -474,7 +443,8 @@ impl Ci {
             )
             .await?;
         let inputs = self.job_inputs(repo, sha, &pipeline).await?;
-        let reg = Registration {
+        let mut reg = Registration {
+            order: Vec::new(),
             inputs,
             selection,
             repo: repo.id.clone(),
@@ -496,6 +466,33 @@ impl Ci {
             pipeline,
             network: repo.ci_network,
         };
+        let snapshot = (
+            repo.id.clone(),
+            sha.to_string(),
+            reg.pipeline.clone(),
+            reg.selection.clone(),
+            reg.protected,
+        );
+        let needs_order = self
+            .inner
+            .store
+            .read(move |r| {
+                let (id, sha, pipeline, selection, protected) = snapshot;
+                let Some(mut run) = queue::get_run(r, &id, &sha)? else {
+                    return Ok(true);
+                };
+                run.pipeline = pipeline;
+                run.selection = selection;
+                if protected {
+                    run.cache_scope = "protected".into();
+                    run.selection = None;
+                }
+                Ok(!queue::jobs_to_run(r, &run)?.is_empty())
+            })
+            .await?;
+        if needs_order {
+            reg.order = self.admission_order(repo, sha, &reg.pipeline).await;
+        }
         let queue_max = self.inner.config.queue_max;
         let now = util::now();
         let changed = self
@@ -656,10 +653,39 @@ impl Ci {
 
     async fn admit_waiting(&self) {
         let (queue_max, now) = (self.inner.config.queue_max, util::now());
+        let candidates = match self
+            .inner
+            .store
+            .read(move |r| queue::waiting_candidates(r, queue_max))
+            .await
+        {
+            Ok(runs) => runs,
+            Err(e) => {
+                tracing::error!("CI: reading waiting candidates failed: {e}");
+                return;
+            }
+        };
+        let mut orders = queue::AdmissionOrders::new();
+        for run in candidates {
+            let id = run.repo.clone();
+            match self
+                .inner
+                .store
+                .read(move |r| r.get::<Repo>(store::REPOS, &Repo::key(&id)))
+                .await
+            {
+                Ok(Some(repo)) => {
+                    let order = self.admission_order(&repo, &run.sha, &run.pipeline).await;
+                    orders.insert((run.repo, run.sha), order);
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("CI: reading waiting repository failed: {e}"),
+            }
+        }
         match self
             .inner
             .store
-            .write(move |w| queue::admit_waiting(w, queue_max, &now))
+            .write(move |w| queue::admit_waiting(w, queue_max, &orders, &now))
             .await
         {
             Ok(admitted) => self.publish(&admitted),
@@ -1071,6 +1097,7 @@ mod tests {
                     queue::register(
                         w,
                         Registration {
+                            order: Vec::new(),
                             inputs: Default::default(),
                             repo: "repo_1".into(),
                             repo_path: "acme/demo".into(),
@@ -1131,6 +1158,7 @@ mod tests {
             .write(move |w| {
                 w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
                 let reg = |sha: &str, selection| Registration {
+                    order: Vec::new(),
                     inputs: Default::default(),
                     repo: id.clone(),
                     repo_path: path.clone(),
@@ -1191,6 +1219,7 @@ mod tests {
                     key_files: vec![],
                 });
                 let reg = |sha: &str| Registration {
+                    order: Vec::new(),
                     inputs: Default::default(),
                     selection: None,
                     repo: id.clone(),
@@ -1770,6 +1799,7 @@ mod tests {
     async fn a_run_takes_its_commits_pipeline_and_counts_only_its_jobs() {
         let (_d, ci, repo) = setup();
         let reg = |jobs: Vec<JobDef>| Registration {
+            order: Vec::new(),
             inputs: Default::default(),
             selection: None,
             repo: repo.id.clone(),
@@ -1830,6 +1860,7 @@ mod tests {
         let (_d, ci, repo) = setup();
         let now = util::now();
         let reg = |sha: &str, jobs: Vec<JobDef>| Registration {
+            order: Vec::new(),
             inputs: Default::default(),
             selection: None,
             repo: repo.id.clone(),
