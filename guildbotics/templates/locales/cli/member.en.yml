@@ -1,8 +1,8 @@
 en:
   client:
     invalid_response: "The server returned an invalid member command response."
+    remote_workspace_required: "No workspace is selected on the Hub. Select one on the Hub machine with `guildbotics workspace use <path>` or in its screens."
     remote_workspace: "A forwarded Hub selects its workspace. Omit --workspace and select the workspace on the Hub."
-    backend_required: "Start the GuildBotics server (`guildbotics server start`, or its OS service) before using member commands, including --help."
     workspace_required: "Select a workspace with --workspace or `guildbotics workspace use <path>` first."
     current_repository: "Current workspace mode requires running inside the target git repository."
     current_path: "The repository path must match the current workspace repository: %{path}"

@@ -27,24 +27,21 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
         let workspace = selected_workspace(&data, explicit, language)?;
         gb_workspace::identity::read_workspace_identity(&workspace)?
             .map(|identity| identity.workspace_id)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(i18n::t(
+                    language,
+                    "cli.member.client.workspace_required",
+                    &[]
+                ))
+            })?
     } else {
         anyhow::ensure!(
             explicit.is_none(),
             i18n::t(language, "cli.member.client.remote_workspace", &[])
         );
-        owner
-            .health()
-            .await
-            .and_then(|health| health["workspace_id"].as_str().map(str::to_owned))
-    }
-    .filter(|id| !id.is_empty())
-    .ok_or_else(|| {
-        anyhow::anyhow!(i18n::t(
-            language,
-            "cli.member.client.workspace_required",
-            &[]
-        ))
-    })?;
+        remote_workspace_id(&owner, language).await?
+    };
     let response = owner
         .request(reqwest::Method::GET, "/member/redaction-keys")
         .timeout(super::TIMEOUT)
@@ -166,6 +163,24 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
         result.stdout = format!("{}\n", render(&payload, &plan["output_format"], language)?);
     }
     print(result)
+}
+
+async fn remote_workspace_id(owner: &OwnerClient, language: &str) -> anyhow::Result<String> {
+    let health = owner
+        .health()
+        .await
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[])))?;
+    health["workspace_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!(i18n::t(
+                language,
+                "cli.member.client.remote_workspace_required",
+                &[]
+            ))
+        })
 }
 
 fn selected_workspace(
@@ -444,4 +459,86 @@ fn size(reply: &Reply) -> anyhow::Result<usize> {
 struct Stream {
     prefix: Vec<u8>,
     response: reqwest::Response,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
+
+    #[tokio::test]
+    async fn remote_workspace_guidance_distinguishes_health_failure_from_missing_selection() {
+        for (status, body, expected) in [
+            (StatusCode::OK, r#"{"workspace_id":"hub-workspace"}"#, ""),
+            (
+                StatusCode::OK,
+                r#"{"workspace_id":null}"#,
+                "cli.member.client.remote_workspace_required",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"workspace_id":""}"#,
+                "cli.member.client.remote_workspace_required",
+            ),
+            (
+                StatusCode::OK,
+                "{}",
+                "cli.member.client.remote_workspace_required",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"workspace_id":42}"#,
+                "cli.member.client.remote_workspace_required",
+            ),
+            (StatusCode::UNAUTHORIZED, "{}", "cli.server.unreachable"),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{}",
+                "cli.server.unreachable",
+            ),
+            (StatusCode::OK, "not json", "cli.server.unreachable"),
+            (StatusCode::OK, "slow", "cli.server.unreachable"),
+        ] {
+            let app = Router::new().route(
+                "/-/guildbotics/api/health",
+                get(move || async move {
+                    if body == "slow" {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
+                    (status, body).into_response()
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let base = format!(
+                "http://{}/-/guildbotics/api",
+                listener.local_addr().unwrap()
+            );
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let owner = OwnerClient {
+                http: super::super::http().unwrap(),
+                base,
+                token: "fixture".into(),
+                language: "en",
+            };
+            for language in ["en", "ja"] {
+                let result = remote_workspace_id(&owner, language).await;
+                if expected.is_empty() {
+                    assert_eq!(result.unwrap(), "hub-workspace");
+                } else {
+                    let message = result.unwrap_err().to_string();
+                    assert_eq!(message, i18n::t(language, expected, &[]));
+                    assert!(!message.contains("--workspace"));
+                    assert!(!message.contains(expected));
+                }
+            }
+            server.abort();
+            let error = remote_workspace_id(&owner, "en").await.unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                i18n::t("en", "cli.server.unreachable", &[])
+            );
+        }
+    }
 }

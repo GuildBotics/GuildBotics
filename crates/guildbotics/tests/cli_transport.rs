@@ -468,6 +468,8 @@ async fn member_cli_renders_backend_plan_results_without_executing() {
         cli.env("GUILDBOTICS_WORKSPACE_ROOT", &workspace);
         let child = tokio::spawn(async move { cli.output().await.unwrap() });
         peer.prove().await;
+        let (socket, _) = peer.authorized("GET", "member/redaction-keys").await;
+        CliPeer::respond(socket, "200 OK", r#"["DATABASE_URL"]"#).await;
         let (socket, request) = peer.authorized("POST", "member/plan").await;
         assert_eq!(request["arguments"], json!(&args[1..]));
         assert_eq!(request["stdin"], "");
@@ -507,6 +509,8 @@ async fn member_attachment_resolves_a_relative_parent_on_the_caller() {
         .env("GUILDBOTICS_WORKSPACE_ROOT", workspace);
     let child = tokio::spawn(async move { cli.output().await.unwrap() });
     peer.prove().await;
+    let (socket, _) = peer.authorized("GET", "member/redaction-keys").await;
+    CliPeer::respond(socket, "200 OK", r#"["DATABASE_URL"]"#).await;
     let (socket, request) = peer.authorized("POST", "member/plan").await;
     assert_eq!(request["arguments"], json!(&args[1..]));
     let plan = member_plan(json!({"download":true,"arguments":&args[1..],"output_format":"json"}));
@@ -608,6 +612,8 @@ async fn member_cli_reads_files_and_stdin_locally_redacts_memory_and_never_retri
             .await
             .unwrap();
         peer.prove().await;
+        let (socket, _) = peer.authorized("GET", "member/redaction-keys").await;
+        CliPeer::respond(socket, "200 OK", r#"["DATABASE_URL"]"#).await;
         let (socket, request) = peer.authorized("POST", "member/plan").await;
         assert_eq!(request["stdin"], "");
         assert!(!request.to_string().contains("local-dummy-value"));

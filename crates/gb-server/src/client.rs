@@ -875,7 +875,7 @@ mod tests {
             for missing_backend in [false, true] {
                 let mut output = Vec::new();
                 let mut error = Vec::new();
-                let required = crate::i18n::t(language, "cli.git_credential.backend_required", &[]);
+                let required = crate::i18n::t(language, "cli.server.unreachable", &[]);
                 answer_git_credential(
                     "get",
                     &input[..],
@@ -896,7 +896,7 @@ mod tests {
                 if missing_backend {
                     assert_eq!(output, b"quit=1\n");
                     assert!(error.contains(&required));
-                    assert!(!required.contains("cli.git_credential.backend_required"));
+                    assert!(!required.contains("cli.server.unreachable"));
                 } else {
                     assert!(output.is_empty());
                     assert_eq!(
