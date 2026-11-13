@@ -2273,7 +2273,13 @@ fn member_uses_the_active_workspace_and_reads_only_planned_caller_content() {
     server.stop();
     let no_server = cli(&["member", "--help"]);
     assert!(!no_server.status.success());
-    assert!(String::from_utf8_lossy(&no_server.stderr).contains("Start the GuildBotics server"));
+    assert!(
+        String::from_utf8_lossy(&no_server.stderr).contains(&gb_server::i18n::t(
+            "en",
+            "cli.server.unreachable",
+            &[]
+        ))
+    );
 }
 
 #[test]
