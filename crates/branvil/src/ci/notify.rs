@@ -37,7 +37,7 @@ pub async fn sweep(app: &App) -> AppResult<()> {
                 }
                 .into_iter()
                 .map(|a| {
-                    let source = queue::result_attempt(r, &a)?;
+                    let source = queue::source_of(r, &a)?;
                     Ok((a, source))
                 })
                 .collect::<AppResult<Vec<_>>>()?;

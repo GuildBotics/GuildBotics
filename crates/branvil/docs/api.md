@@ -1079,9 +1079,12 @@ Each automatic gate pass can notify the webhook once its next action is
   jobs, including jobs skipped on head. Service skips are neither reuse
   sources nor duration estimates; retry queues an actual execution.
   A successful attempt belongs to that exact commit, but may reuse an actual
-  successful execution of the same tree, job definition, network setting,
+  successful execution of the same tree (on a pull request's head, the same
+  input digest of the job's `paths`), job definition, network setting,
   and image digest (`docs/ci.md`, "Trust"). Such a check includes
-  `reused_from: {"attempt_id","url","sha"}` linking its source; its
+  `reused_from: {"attempt_id","url","sha","basis"}` linking its source;
+  `basis` is `tree` when the source's commit has the check's tree, otherwise
+  `paths` (derived, not stored). Its
   `artifact_names` resolve to the source's unpruned artifacts. Cache refresh
   attempts are excluded from every checks response, including required checks
   and landing gates, while their actual executions count toward estimates.
@@ -1144,7 +1147,8 @@ is not the full sha of a commit of the repository.
   the refresh requested by a reused check, or `null`. Refreshes never count as
   checks and cannot be manually retried. `reused_from` is `null` for an actual
   execution, otherwise
-  `{"attempt_id","url","sha"}` of its source execution. Its own log explains
+  `{"attempt_id","url","sha","basis"}` of its source execution (`basis` as in
+  the checks). Its own log explains
   the reuse; the source URL leads to the execution log. `artifact_names` are
   the source's artifacts, empty after the source's retention expires.
   For automatic retries, `details` includes `Automatic retry 1/3 of att_…`
@@ -1210,10 +1214,13 @@ attempts are not interrupted by changes in class.
   waited in the queue (from its registration to this claim).
   `purpose` is `check` or `cache_refresh`; refreshes always execute with
   protected scope and `reuse: null`.
-  `reuse` is `null` or `{"attempt_id","sha","image_digest","cache_key"}`
+  `reuse` is `null` or `{"attempt_id","sha","image_digest","cache_key","basis"}`
   of the latest finished actual successful execution whose files have not
-  been pruned, with the same repository,
-  tree, job definition, and network. `cache_key` is present for cached jobs,
+  been pruned, with the same repository, job definition, and network, and
+  with the same tree (`basis: "tree"`) or the same input digest of the job's
+  `paths` (`basis: "paths"`, `docs/ci.md`, "Trust": only for a non-protected,
+  non-gate attempt of a job with paths whose run has its digest). The runner
+  logs which one it reused. `cache_key` is present for cached jobs,
   otherwise `null`. Manual retries, automatic retries, and refresh attempts
   receive no reuse offer.
   The runner compares the current image digest before fetching source. A match
@@ -1245,10 +1252,14 @@ attempts are not interrupted by changes in class.
   The check includes `cache_refresh` (the attempt ID) and a link in `details`
   when a refresh exists.
   The service validates that the source is an actual successful execution of
-  the same repository, tree, job, network, and image and that reuse is allowed;
+  the same repository, job, network, and image, with the same tree or input
+  digest as the claim's `basis` allowed, and that reuse is allowed;
   an invalid reuse report is `400 invalid`. When a cancellation was requested
   no reuse is recorded and the conclusion is `cancelled`
-  whatever was reported.
+  whatever was reported. A `paths` reuse reported after a protected branch
+  came to want the commit, from a source of another tree, concludes
+  `cancelled` (`Stopped: the commit became a protected branch's; it runs again
+  as one.`) and queues a new attempt in its place.
 
 A request with a lease that is not the attempt's current, unexpired lease
 (another runner's, expired, cancelled, re-queued) is `409 conflict` and changes

@@ -65,7 +65,8 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   append the deferred reason to their queue-capacity message.
 
   Claim order is 1, 2, 3, 4a, 4b. Within a class, attempts with an available
-  reusable successful result come first, then registration sequence (`seq`);
+  reusable successful result (of the same tree, or of the same contents of
+  paths; "Trust") come first, then registration sequence (`seq`);
   without a reusable result, sequence decides. Reuse is assessed after taking
   the run's current cache scope; retries with `allow_reuse = false` execute.
   Class 4a runs only when no class 1–3 attempt waits, and 4b only when no other
@@ -74,12 +75,20 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   higher-class work arrives. Under sustained load a failing head's remaining
   jobs may therefore finish only after its author has already pushed a fix.
 
-- `paths` selects PR-head jobs using Git's pathspec glob rules (up to 32
+- `paths` declares the files that decide the job: its result and artifacts
+  depend only on the files matching `paths` (on the whole tree when empty).
+  A job that reads other files must add them to `paths`, or leave `paths`
+  empty. Patterns use Git's pathspec glob rules (up to 32
   relative paths of at most 512 bytes; no `:`, `\\`, NUL, empty, `.` or `..`
   components). `**` matches recursively; `*` does not cross directories.
-  Matching is Git's `diff-tree -r --quiet --no-renames` from merge-base to
-  head, including deletions and both sides of renames. Empty `paths` runs
-  every time. Changing `paths` changes the job definition used for reuse.
+  On a PR head, a job whose matching files did not change since the
+  merge-base is skipped (Git's `diff-tree -r --quiet --no-renames` from
+  merge-base to head, including deletions and both sides of renames), and a
+  job whose matching files did change may reuse a success with the same input
+  digest of those files ("Trust"). Gates and protected branches reuse only
+  the same tree and never take a head's reuse by paths as their result, so a
+  file missing from `paths` shows there. Empty `paths` runs every time.
+  Changing `paths` changes the job definition used for reuse.
 - Validation is strict: an unknown key (`cpus` and `memory_mib` included,
   with a reason of their own: they are the runner's), a value out of range, a
   path that is absolute or contains `..`, an image reference that is not
@@ -176,7 +185,8 @@ request that changes the pipeline runs the changed pipeline as its checks, so
 a mistake in it shows before the merge. The first pull request in each
 repository/base landing queue also checks the combination of base and head.
 PR-head jobs with `paths` run if any matching file changed since the
-merge-base with the current base tip of any open PR sharing that head SHA.
+merge-base with the current base tip of any open PR sharing that head SHA
+(and may then reuse a success with the same contents of paths, below).
 A changed `.branvil/ci.toml`, a missing base, or no merge-base runs all jobs.
 The run saves each PR's base name, tip and merge-base and its skipped job
 names. Re-registration updates this snapshot when PRs or base tips change;
@@ -184,7 +194,11 @@ unchanged inputs do not create new attempts. Queue admission after waiting
 uses the saved selection and counts only jobs that actually run. Protected
 branches and gates always run every job when registered by the triggers below;
 protection alone does not register a non-default branch. A protected
-registration of a SHA that had path skips queues those jobs too.
+registration of a SHA that had path skips queues those jobs too, and so are
+the jobs whose current attempt reused another tree's result by the contents
+of paths. Such a reuse reported after the commit became a protected branch's
+ends `cancelled` ("Stopped: the commit became a protected branch's; it runs
+again as one.") and a new attempt takes its place in the queue.
 
 Service path skips are completed `skipped` attempts with `path_skip`
 metadata and a `[branvil] skipped: no file matching paths changed since …`
@@ -193,8 +207,9 @@ checks, never supply reusable results or duration estimates, and a manual
 retry executes the job. A runner's `skipped` has no `path_skip` and does not
 satisfy a required check.
 
-When head contains base and its selection skips no jobs, its existing run is
-the gate. Otherwise Branvil
+When head contains base, its selection skips no jobs, and none of its current
+attempts reused another tree's result by the contents of paths, its existing
+run is the gate. Otherwise Branvil
 creates a commit with parents `[base, head]` and runs that commit's pipeline
 through `refs/branvil/gate/<number>`. A conflict becomes a failed `gate` check;
 CI jobs appear as `gate/<job>` on the pull request. An up-to-date head with
@@ -202,7 +217,8 @@ path skips gets a gate with the head's tree and parents `[base, head]`. If
 that tree already equals the base's, it leaves as `already_in_base`.
 Gate checks require actual success; jobs
 that really succeeded on head can be reused for the identical tree. The PR
-stays in its queue while the skipped head jobs execute at the gate.
+stays in its queue while the skipped head jobs, and those that reused by the
+contents of paths, execute at the gate.
 Approvals still apply to
 the original head. Gate checks, including retries after leaving the queue,
 remain visible only while the entry's `head_sha` matches the pull request
@@ -219,7 +235,21 @@ execution of the same tree.
 
 When a runner claims an attempt, the service offers the most recently finished
 successful execution whose files have not been pruned, in the same repository
-with the same Git tree, parsed job definition, and network setting. Reused
+with the same parsed job definition and network setting, and with the same
+basis:
+
+| Order | Attempt (scope and input digest as copied at claim) | Basis |
+| --- | --- | --- |
+| 1 | A protected (`protected`) or gate (`branch:gate/…`) run's | Tree |
+| 2 | Its job has empty `paths` | Tree |
+| 3 | Its run has no input digest of the job yet | Tree |
+| 4 | Otherwise (a pull request's head) | Paths |
+
+The **tree** basis requires the same Git tree. The **paths** basis requires
+the same input digest of the job's `paths` (`ix_ci_inputs`), from any run:
+another branch or pull request, a protected branch, a gate, or a cache
+refresh; a source of the same tree has that digest too. Finish checks the
+reported source against the basis the attempt was claimed with. Reused
 attempts cannot themselves be a source. Retention after claim does not reject
 finish or extend the source's file lifetime. After resolving the image and
 before fetching source, the runner checks that the image's configuration
@@ -231,8 +261,8 @@ A different digest executes as usual. Registration, queue order,
 and commands are unchanged. Manual and automatic retries always execute,
 including after their first interruption.
 
-This treats inputs other than the tree, job definition, image, and network as
-equivalent: history, tags, `BRANVIL_SHA` and other per-attempt environment
+This treats inputs other than the tree (on a pull request's head, the files
+matching `paths`), job definition, image, and network as equivalent: history, tags, `BRANVIL_SHA` and other per-attempt environment
 variables, external services, and the runner's resource limits may differ.
 Jobs that inspect those inputs are outside this approximation. Selection uses
 the latest **successful** execution; a later failed retry does not erase it.
@@ -640,7 +670,7 @@ A host without `ps`, or a short-lived process that exits before `ps` sees it,
 gives no such line; an absent measurement is not reported as zero MiB.
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
-tree), image <digest>` and `job ended: success (reused)`, with the cache key
+tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`, with the cache key
 and save age when checked. It has no `source fetched`, `sandbox started`, or
 `commands ran for` line. `reuse declined` identifies the source and reason
 (digest mismatch, missing cache key/save, or save older than 86400 seconds)
