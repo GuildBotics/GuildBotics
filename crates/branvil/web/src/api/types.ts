@@ -411,6 +411,8 @@ export interface ReusedFrom {
   attempt_id: string;
   url: string;
   sha: string;
+  /** `tree`: the source's commit has the same tree; `paths`: only the job's `paths` have the same contents. */
+  basis: "tree" | "paths";
 }
 
 export interface PathSkip {
