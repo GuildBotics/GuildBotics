@@ -214,6 +214,8 @@ While a command runs, the machine never goes to sleep from being left idle (idle
 
 To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
 
+Ready-lane candidates follow board order, including tickets picked up by mentions. Assigned cards with unfinished dependencies are skipped. In-progress ticket and PR ordering is unchanged. Reordering takes effect at the next candidate fetch for scheduled and manual runs; patrol sees it after exhausting and refreshing its current candidate list.
+
 Patrol and scheduled ticket workflows defer only new ready-lane tickets while the member has reached the open PR limit (default 2, range 1–20). Drafts and PRs without tickets count; PRs linked to interactive tickets, including inherited interactive settings, do not. Counts are refreshed when listing candidates and immediately before starting work; merging or closing a PR frees capacity. Working-lane resumes, comments and mentions, PR feedback, reviews, CI resumes, and manual runs continue. Set the shared limit for all members on the Service screen; it applies from the next service start. While running, the screen shows each member’s last observed count / limit and whether new work is deferred.
 
 ### Pull Request Patrol

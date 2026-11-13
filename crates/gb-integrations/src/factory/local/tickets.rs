@@ -2,6 +2,20 @@ use super::*;
 use std::{collections::BTreeSet, fs};
 use unicode_casefold::UnicodeCaseFold;
 impl LocalService {
+    pub(super) fn lane_end(&self, tracker: &str, lane: &Value) -> Result<i64, ServiceError> {
+        self.store
+            .items(WorkKind::Ticket, Some(tracker))?
+            .iter()
+            .filter(|(_, v)| v["lane"] == *lane)
+            .map(|(_, v)| v["rank"].as_i64().ok_or(ServiceError::InvalidResult))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(ServiceError::InvalidResult)
+    }
+
     fn related(&self, url: &str) -> Result<String, ServiceError> {
         let r = Ref::locate(url, WorkKind::Ticket)?;
         self.store.load(&r)?;
@@ -348,6 +362,7 @@ impl TicketService for LocalService {
             } else {
                 Value::Null
             };
+            v["rank"] = json!(self.lane_end(&r.place, &v["lane"])?);
             v["interactive"] = json!(q.interactive);
             v["assignees"] = json!(q.assignee.into_iter().collect::<Vec<_>>());
             v["parent"] = json!(parent);
@@ -463,7 +478,17 @@ impl TicketService for LocalService {
                         "in_progress" => 1,
                         _ => 2,
                     },
-                    text(v, "created_at").to_owned(),
+                    if v["lane"] == "ready" {
+                        v["rank"].as_i64()
+                    } else {
+                        None
+                    },
+                    if v["lane"] == "ready" {
+                        ""
+                    } else {
+                        text(v, "created_at")
+                    }
+                    .to_owned(),
                 )
             });
             items
@@ -496,7 +521,10 @@ impl TicketService for LocalService {
                 WorkKind::Ticket,
             )?;
             let mut v = self.store.load(&r)?;
-            v["lane"] = json!(l);
+            if v["lane"] != json!(l) {
+                v["rank"] = json!(self.lane_end(&r.place, &json!(l))?);
+                v["lane"] = json!(l);
+            }
             self.store.save(&r, &mut v)?;
             Ok(true)
         })

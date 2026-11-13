@@ -1,4 +1,5 @@
 //! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
+//! Pass --board-order-only to run just the shared board-order contract.
 mod alerts;
 mod code_parity;
 #[path = "../support/contracts.rs"]
@@ -309,7 +310,7 @@ async fn ticket_relations(t: &dyn TicketService) {
             .is_empty()
     );
 }
-async fn scenario() {
+async fn scenario(board_order_only: bool) {
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("branvil");
     let owner_token = ::branvil::api::initialize(&data, "owner").unwrap();
@@ -389,6 +390,27 @@ async fn scenario() {
     .unwrap();
     let t = factory.create_ticket_service().unwrap();
     let c = factory.create_code_hosting_service().unwrap();
+    if board_order_only {
+        let git = Git::new(temp.path());
+        let driver = driver::Driver {
+            owner: &owner,
+            code: c.as_ref(),
+            git: &git,
+            base: &base,
+            runner: &runner.token,
+            sequence: std::sync::atomic::AtomicUsize::new(0),
+        };
+        contracts::ticket_board_order_contract(
+            t.as_ref(),
+            &driver,
+            REPO,
+            &ActorName("aiko-service".into()),
+            &ActorName("owner".into()),
+        )
+        .await;
+        running.stop().await.unwrap();
+        return;
+    }
     ticket_relations(t.as_ref()).await;
     contracts::chat_contract(factory.create_chat_service().unwrap().as_ref(), "contract").await;
     let git = Git::new(temp.path());
@@ -836,6 +858,6 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(scenario());
+        .block_on(scenario(args.iter().any(|a| a == "--board-order-only")));
     ExitCode::SUCCESS
 }
