@@ -205,6 +205,8 @@ opening it.
 
 CLI `guildbotics run` always sends a data copy, including cwd inside read/write grants and member clones. The server reconstructs it at the client spelling in private microVM storage, shadowing only cwd inside a grant; other granted paths stay mounted. The CLI saves exported file hashes locally per run ID before submission. On the same device, `--resume` also writes back with the original conflict checks, deleting the record after success. Commit after write-back in the interactive session. The following path-based rules apply only to server-initiated runs.
 
+Writable copies, whether received from the CLI or made on the server, use a dedicated 16 GiB disk per VM. Build output uses that disk too. The disk is deleted when the VM ends. A read-only command's empty working directory remains a 64 MiB tmpfs.
+
 Use the repository root as cwd. Copying only a subdirectory can leave the original parent `.git` visible through a grant or clone mount, so committing during execution changes the original history.
 
 Records are also removed on failed execution or definitive submission rejection. Transport errors and write-back conflicts retain them for retrieval. Records whose results are lost to retention limits or server restart are not automatically removed. After confirming a run is no longer needed, manually delete only its `run/worktree-receipts/<ID>.json` file under the CLI data directory.
@@ -257,8 +259,8 @@ Records are also removed on failed execution or definitive submission rejection.
   in place; a failure while putting them in place names the files already
   written back. A directory the command removed stays on the host, and a
   link (one in a `.venv` or `node_modules`, for example) is missing from the
-  copy. The copy is made on the microVM's own disk (about 4 GB on the default
-  image) when the command starts, and its file list is limited to 64 MiB.
+  copy. The copy is made on its dedicated 16 GiB disk when the command starts,
+  and its file list is limited to 64 MiB.
   When the original's `.git` is a directory, the copy's `.git` names it
   read-only, so `git status` and `git diff` work and nothing can be
   committed; when it is a file (a `git worktree` checkout or a submodule),

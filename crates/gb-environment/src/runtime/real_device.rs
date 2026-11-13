@@ -1,4 +1,4 @@
-//! The lifetime of a VM when its owner cannot run destructors.
+//! Real-device storage and VM lifetime checks.
 
 use super::*;
 use std::io::Write;
@@ -13,10 +13,7 @@ const TEST: &str = "runtime::real_device::real_device_owner_exit_stops_the_vm";
 const LOGIN: &str = "synthetic-owner-login";
 const CANARY: &str = "synthetic-owner-disk-positive-control";
 
-#[tokio::test]
-#[ignore = "real_device: owner approval and disposable snapshot; run with #108"]
-async fn real_device_large_stdin_reaches_all_guest_process_entries() {
-    use sha2::{Digest, Sha256};
+fn verification_snapshot() -> PathBuf {
     assert!(
         std::env::var_os("CI").is_none(),
         "real_device requires an attending owner"
@@ -27,7 +24,14 @@ async fn real_device_large_stdin_reaches_all_guest_process_entries() {
     .unwrap();
     let recipe =
         crate::recipe::Recipe::load(&gb_base::home::python_package().join("templates")).unwrap();
-    let snapshot = crate::snapshot::ready(&root.join("workspace"), &recipe.name(None)).unwrap();
+    crate::snapshot::ready(&root.join("workspace"), &recipe.name(None)).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "real_device: owner approval and disposable snapshot; run with #108"]
+async fn real_device_large_stdin_reaches_all_guest_process_entries() {
+    use sha2::{Digest, Sha256};
+    let snapshot = verification_snapshot();
     let dir = tempfile::Builder::new()
         .prefix("gb")
         .rand_bytes(6)
@@ -98,6 +102,108 @@ async fn real_device_large_stdin_reaches_all_guest_process_entries() {
     result.expect("large stdin probe timed out").unwrap();
 }
 
+#[tokio::test]
+#[ignore = "real_device: owner approval and disposable snapshot; run with #227"]
+async fn real_device_copy_disk_exceeds_64_mib_and_is_removed_with_the_vm() {
+    use crate::worktree::transfer::{Returned, Upload};
+    let snapshot = verification_snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let home = root.join("msb");
+    ensure(&home).unwrap();
+    let access = crate::contract::Resolved {
+        grants: vec![],
+        links: vec![],
+        denied: vec![],
+        view: serde_json::Value::Null,
+    };
+    let mut mounts = vec![];
+    for (read_only, cwd) in [(false, "/work-copy"), (true, "/work-empty")] {
+        let upload = (!read_only).then(|| {
+            std::sync::Arc::new(Upload {
+                directories: vec![],
+                files: vec![],
+                nested: vec![],
+                git: None,
+            })
+        });
+        mounts.extend(
+            crate::contract::received_plan(
+                &root.join("workspace"),
+                "probe",
+                Path::new(cwd),
+                &access,
+                vec![],
+                read_only,
+                upload,
+                Returned::default(),
+            )
+            .unwrap()
+            .mounts,
+        );
+    }
+    let boot = Boot {
+        files: None,
+        home: &home,
+        snapshot: &snapshot,
+        memory_mib: 4096,
+        cpus: 2,
+        mounts: &mounts,
+        links: &[],
+        network: &Network::default(),
+        worktree: None,
+    };
+    let vm = create_vm(&boot, SCRATCH_MIB).await.unwrap();
+    let prefix = format!("{}-", vm.name());
+    let argv = [
+        "python3".into(),
+        "-c".into(),
+        r#"
+import os, subprocess
+from pathlib import Path
+copy = Path('/work-copy')
+assert os.stat(copy).st_dev != os.stat('/').st_dev
+assert subprocess.check_output(['stat', '-f', '-c', '%T', str(copy)]).strip() != b'tmpfs'
+assert subprocess.check_output(['stat', '-f', '-c', '%T', '/work-empty']).strip() == b'tmpfs'
+empty = os.statvfs('/work-empty')
+assert empty.f_blocks * empty.f_frsize == 64 * 1024 * 1024
+with (copy / 'build-output').open('wb') as output:
+    for _ in range(65):
+        output.write(b'x' * (1024 * 1024))
+    output.flush()
+    os.fsync(output.fileno())
+assert (copy / 'build-output').stat().st_size == 65 * 1024 * 1024
+print('copy disk verified')
+"#
+        .into(),
+    ];
+    let result = tokio::time::timeout(
+        Duration::from_secs(120),
+        execute_private(
+            &vm,
+            &Process {
+                argv: &argv,
+                cwd: "/work-copy",
+                env: &[],
+                stdin: &[],
+            },
+            |_| {},
+        ),
+    )
+    .await;
+    vm.close().await;
+    let ended = result.expect("copy disk probe timed out").unwrap();
+    assert_eq!(ended.code, 0);
+    assert_eq!(ended.reply, b"copy disk verified\n");
+    assert!(
+        microsandbox::Volume::list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|v| !v.name().starts_with(&prefix))
+    );
+}
+
 #[test]
 fn the_disk_scan_detects_a_planted_login() {
     let home = tempfile::tempdir().unwrap();
@@ -119,17 +225,7 @@ fn the_disk_scan_detects_a_planted_login() {
 #[tokio::test]
 #[ignore = "real_device: owner approval and disposable snapshot"]
 async fn real_device_owner_exit_stops_the_vm() {
-    assert!(
-        std::env::var_os("CI").is_none(),
-        "real_device requires an attending owner"
-    );
-    let root = std::fs::canonicalize(
-        std::env::var_os("GUILDBOTICS_REAL_DEVICE_ROOT").expect("verification root required"),
-    )
-    .unwrap();
-    let recipe =
-        crate::recipe::Recipe::load(&gb_base::home::python_package().join("templates")).unwrap();
-    let snapshot = crate::snapshot::ready(&root.join("workspace"), &recipe.name(None)).unwrap();
+    let snapshot = verification_snapshot();
     if let Some(home) = std::env::var_os(CHILD_HOME) {
         hold_synthetic_login(Path::new(&home), &snapshot).await;
         return;

@@ -302,7 +302,13 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
         nested: vec![],
         git: None,
     });
-    for cwd in [&exchange, &child, &clone, &clone.join("subdir")] {
+    for cwd in [
+        &exchange,
+        &child,
+        &clone,
+        &clone.join("subdir"),
+        &root.join("client-only"),
+    ] {
         let plan = contract::received_plan(
             &workspace,
             "aiko",
@@ -321,6 +327,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
         assert_eq!(at_cwd.len(), 1);
         assert!(at_cwd[0].host.is_none());
         assert!(!at_cwd[0].readonly);
+        assert_eq!(at_cwd[0].quota_mib, Some(16 * 1024));
         assert!(plan.mounts.iter().any(|m| m.host.as_ref() == Some(&clones)));
         if cwd != &exchange {
             assert!(
@@ -345,7 +352,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
             readonly
                 .mounts
                 .iter()
-                .any(|m| m.guest == guest && m.host.is_none())
+                .any(|m| m.guest == guest && m.host.is_none() && m.quota_mib.is_none())
         );
     }
     let mut readonly_access = access.clone();

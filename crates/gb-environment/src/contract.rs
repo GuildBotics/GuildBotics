@@ -981,7 +981,7 @@ pub fn received_plan(
     let cwd = gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?;
     let guest = spelled(&cwd)?;
     mounts.retain(|m| m.guest != guest || m.host.is_some());
-    // Grants may cover the copy. A nested scratch mount shadows only its cwd;
+    // Grants may cover the copy. A private mount shadows only its cwd;
     // runtime-owned mounts must never be shadowed by an untrusted spelling.
     if mounts
         .iter()
@@ -1010,7 +1010,7 @@ pub fn received_plan(
         guest: guest.clone(),
         host: None,
         readonly: false,
-        quota_mib: None,
+        quota_mib: (!read_only).then_some(CLONE_QUOTA_MIB),
     });
     let copy = if read_only {
         if upload.is_some() {
@@ -1035,9 +1035,9 @@ pub fn received_plan(
     })
 }
 
-/// What a run may add to the member's clones: every repository the member
-/// works in shares one mount, and a full Rust workspace build writes more
-/// than the runtime's default.
+/// The write budget of the member's clone mount and the disk capacity of a
+/// private working copy: a full Rust workspace build exceeds the runtime's
+/// default, including when a command builds inside a received copy.
 pub const CLONE_QUOTA_MIB: u32 = 16 * 1024;
 
 /// Where a member's writable commands keep sccache's compilation results,
@@ -1096,21 +1096,19 @@ pub fn plan(
     if !read_only && covering.is_some_and(|m| m.readonly) {
         return Err("The working directory is inside a read-only grant".into());
     }
-    let copy = if read_only {
-        if !mounts.iter().any(|m| m.guest == guest) {
-            mounts.push(Mount {
-                guest: guest.clone(),
-                host: None,
-                readonly: false,
-                quota_mib: None,
-            });
-        }
-        None
-    } else if managed || covering.is_some() {
+    let copy = if read_only || managed || covering.is_some() {
         None
     } else {
         Some(copy_plan(workspace, person, &cwd, access, &mounts, lock)?)
     };
+    if copy.is_some() || (read_only && !mounts.iter().any(|m| m.guest == guest)) {
+        mounts.push(Mount {
+            guest: guest.clone(),
+            host: None,
+            readonly: false,
+            quota_mib: (!read_only).then_some(CLONE_QUOTA_MIB),
+        });
+    }
     mounts.sort_by_key(|mount| Path::new(&mount.guest).components().count());
     Ok(Plan {
         cwd: guest,
