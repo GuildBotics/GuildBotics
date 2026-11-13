@@ -10,6 +10,18 @@ Hub の CPU 用 archive を `guildbotics environment image load` で読み込ん
 [Hub の事前ビルド手順](../../docs/hub-server.md#レシピ変更のマージ前にスナップショットを用意する)
 に従い、稼働中の checkout は変更せず、snapshot が ready であることを確かめてからマージします。
 
+## Windows クライアントのクロスビルド
+
+Linux 上で Windows クライアントをビルドするため、Rust の target
+`x86_64-pc-windows-gnu` と、mingw-w64 の C コンパイラー・リンカーを導入します。
+`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` に `x86_64-w64-mingw32-gcc` を設定し、
+`cargo build --target x86_64-pc-windows-gnu` のリンクに使います。
+Dockerfile の `RUN` で target の導入とコンパイラー・リンカーの起動を確認します。
+
+イメージの実ビルドと Hub への反映は #211 で行います。
+この変更では CI ジョブを追加しません。Windows 向け clippy は #214、
+同じ commit のクライアントを Hub が配布するための成果物のジョブは #215 で扱います。
+
 ## cargo の実行前処理
 
 イメージの `cargo` は、作業ディレクトリから親へたどり、最初に見つけた

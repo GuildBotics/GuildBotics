@@ -14,6 +14,8 @@
 #   - the Rust toolchain for the Cargo workspace's checks, with cargo-nextest
 #     for its tests; `cargo` is cargo-wrapper.sh, which calls the nearest
 #     repository-owned .cargo/before-cargo.sh before running the real cargo
+#   - the x86_64-pc-windows-gnu Rust target and mingw-w64 C compiler and
+#     linker, for cross-building the Windows client on Linux
 #   - sccache, through which rustc runs (RUSTC_WRAPPER), keeping compilation
 #     results by their inputs up to SCCACHE_CACHE_SIZE. A member's writable
 #     command binds the workspace's
@@ -67,6 +69,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        mingw-w64 \
         pkg-config \
         libssl-dev \
         libcap-ng-dev \
@@ -104,6 +107,15 @@ RUN curl -fsSL https://sh.rustup.rs \
 # After rustup: its installer refuses to install over a `cargo` on PATH.
 COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN cargo --version
+
+# Windows clients use the GNU target; cc-rs also finds this cross compiler
+# by its target-prefixed name when building native dependencies.
+ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+RUN rustup target add --toolchain "${RUST_VERSION}" x86_64-pc-windows-gnu \
+    && rustup target list --toolchain "${RUST_VERSION}" --installed \
+        | grep -Fx x86_64-pc-windows-gnu \
+    && x86_64-w64-mingw32-gcc --version \
+    && x86_64-w64-mingw32-ld --version
 
 # cargo-nextest, which runs each test in a process of its own, for the CI's
 # Rust test jobs. On PATH rather than under CARGO_HOME: the jobs point
