@@ -173,7 +173,8 @@ class JsonRpcAdapter(ProviderAdapter):
         self._transport = LineJsonRpcTransport(
             label=label,
             include_version=include_version,
-            request_timeout=min(timeout, 30.0),
+            # The adapter bounds the whole turn, including startup.
+            request_timeout=None,
             on_reverse_request=self._handle_reverse_request,
         )
 

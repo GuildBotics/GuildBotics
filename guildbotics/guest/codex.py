@@ -121,55 +121,55 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        environment = await self._ensure_started(context, emit)
-        await self._check_account()
-        await self._check_rate_limits()
-        policy_event = AgentEvent(
-            AgentEventKind.APPROVAL,
-            "policy",
-            approval=_APPROVAL_POLICY,
-            details={"adapter_settings": _sandbox_overrides(environment.spec)},
-        )
-        await publish(emit, policy_event)
-        thread_id = await self._resolve_thread(context, conversation)
-        conversation.provider_session_id = thread_id
-        self._active_thread_id = thread_id
-        turn_settings = await self._turn_settings(context)
-        effective_model, effective_effort = await self._effective_settings(
-            turn_settings, conversation
-        )
-        try:
-            response = await self._request(
-                "turn/start",
-                {
-                    "threadId": thread_id,
-                    "input": [
-                        {
-                            "type": "text",
-                            "text": environment.broker.prompt(prompt),
-                        }
-                    ],
-                    "cwd": str(context.cwd),
-                    "approvalPolicy": _APPROVAL_POLICY,
-                    **turn_settings,
-                },
-            )
-        except RpcError as exc:
-            raise _agent_error_from_rpc(exc) from exc
-        turn = as_dict(as_dict(response).get("turn"))
-        self._active_turn_id = _identifier(turn)
-        events: list[AgentEvent] = []
-        assistant_deltas: list[str] = []
-        assistant_final = ""
-        usage: dict[str, int] = {}
-        finish_reason = "completed"
-
-        async def record(event: AgentEvent) -> None:
-            events.append(event)
-            await publish(emit, event)
-
         try:
             async with turn_deadline("Codex", self._timeout, self.interrupt):
+                environment = await self._ensure_started(context, emit)
+                await self._check_account()
+                await self._check_rate_limits()
+                policy_event = AgentEvent(
+                    AgentEventKind.APPROVAL,
+                    "policy",
+                    approval=_APPROVAL_POLICY,
+                    details={"adapter_settings": _sandbox_overrides(environment.spec)},
+                )
+                await publish(emit, policy_event)
+                thread_id = await self._resolve_thread(context, conversation)
+                conversation.provider_session_id = thread_id
+                self._active_thread_id = thread_id
+                turn_settings = await self._turn_settings(context)
+                effective_model, effective_effort = await self._effective_settings(
+                    turn_settings, conversation
+                )
+                try:
+                    response = await self._request(
+                        "turn/start",
+                        {
+                            "threadId": thread_id,
+                            "input": [
+                                {
+                                    "type": "text",
+                                    "text": environment.broker.prompt(prompt),
+                                }
+                            ],
+                            "cwd": str(context.cwd),
+                            "approvalPolicy": _APPROVAL_POLICY,
+                            **turn_settings,
+                        },
+                    )
+                except RpcError as exc:
+                    raise _agent_error_from_rpc(exc) from exc
+                turn = as_dict(as_dict(response).get("turn"))
+                self._active_turn_id = _identifier(turn)
+                events: list[AgentEvent] = []
+                assistant_deltas: list[str] = []
+                assistant_final = ""
+                usage: dict[str, int] = {}
+                finish_reason = "completed"
+
+                async def record(event: AgentEvent) -> None:
+                    events.append(event)
+                    await publish(emit, event)
+
                 while True:
                     message = await self._transport.next_notification()
                     method = str(message.get("method", ""))
@@ -214,52 +214,56 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                         if terminal_error is not None:
                             raise terminal_error
                         break
+
+                output = ("".join(assistant_deltas) or assistant_final).strip()
+                if not output:
+                    output = _terminal_output(events)
+                if finish_reason not in {"completed", "success"}:
+                    category = (
+                        AgentRuntimeErrorCategory.CANCELLED
+                        if finish_reason in {"interrupted", "cancelled"}
+                        else AgentRuntimeErrorCategory.PROCESS
+                    )
+                    raise AgentRuntimeError(
+                        category,
+                        f"Codex turn finished with status '{finish_reason}'.",
+                        rotate_session=True,
+                    )
+                if not output:
+                    raise AgentRuntimeError(
+                        AgentRuntimeErrorCategory.PROTOCOL,
+                        "Codex turn completed without a terminal response.",
+                        rotate_session=True,
+                    )
+                return AgentTerminalResult(
+                    output=output,
+                    events=tuple(events),
+                    provider_session_id=thread_id,
+                    provider_turn_id=_identifier(turn) or self._active_turn_id,
+                    finish_reason=finish_reason,
+                    stderr=self._transport.stderr_text(),
+                    usage=usage,
+                    model=effective_model,
+                    effort=effective_effort,
+                )
         finally:
             self._active_turn_id = ""
-
-        output = ("".join(assistant_deltas) or assistant_final).strip()
-        if not output:
-            output = _terminal_output(events)
-        if finish_reason not in {"completed", "success"}:
-            category = (
-                AgentRuntimeErrorCategory.CANCELLED
-                if finish_reason in {"interrupted", "cancelled"}
-                else AgentRuntimeErrorCategory.PROCESS
-            )
-            raise AgentRuntimeError(
-                category,
-                f"Codex turn finished with status '{finish_reason}'.",
-                rotate_session=True,
-            )
-        if not output:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                "Codex turn completed without a terminal response.",
-                rotate_session=True,
-            )
-        return AgentTerminalResult(
-            output=output,
-            events=tuple(events),
-            provider_session_id=thread_id,
-            provider_turn_id=_identifier(turn) or self._active_turn_id,
-            finish_reason=finish_reason,
-            usage=usage,
-            stderr=self._transport.stderr_text(),
-            model=effective_model,
-            effort=effective_effort,
-        )
 
     async def _cancel_turn(self) -> None:
         if self._active_thread_id and self._active_turn_id:
             # A second cancellation while the interrupt RPC is pending must not
             # skip the process-tree termination after it.
             with suppress(asyncio.CancelledError, Exception):
-                await self._request(
-                    "turn/interrupt",
-                    {
-                        "threadId": self._active_thread_id,
-                        "turnId": self._active_turn_id,
-                    },
+                await asyncio.wait_for(
+                    self._request(
+                        "turn/interrupt",
+                        {
+                            "threadId": self._active_thread_id,
+                            "turnId": self._active_turn_id,
+                        },
+                    ),
+                    # Interruption runs after the turn deadline has expired.
+                    timeout=min(self._timeout, 30.0),
                 )
 
     async def _ensure_started(

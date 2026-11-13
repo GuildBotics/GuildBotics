@@ -1711,3 +1711,66 @@ async def test_disabled_resume_without_load_session_is_unsupported(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "behavior"),
+    [
+        ("initialize", "slow"),
+        ("initialize", "silent"),
+        ("initialize", "exit"),
+        ("session/new", "silent"),
+        ("session/new", "exit"),
+        ("session/load", "silent"),
+        ("session/load", "exit"),
+    ],
+)
+async def test_startup_requests_share_the_turn_deadline(
+    monkeypatch, tmp_path, method, behavior
+) -> None:
+    process = _Peer()
+    handle = process.handle
+
+    def delayed(message):
+        if message.get("method") != method:
+            handle(message)
+        elif behavior == "slow":
+            # Exercise the former 30-second cap with a real delayed response.
+            asyncio.get_running_loop().call_later(30.05, handle, message)
+        elif behavior == "exit":
+            process.returncode = 7
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+        # A silent live peer never answers this request.
+
+    process.handle = delayed
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = GrokAcpAdapter(timeout=60 if behavior != "silent" else 0.05)
+    context = _context(tmp_path)
+    conversation = ConversationRecord(
+        key=context.conversation_key,
+        provider_session_id=_Peer.SESSION_ID
+        if method.endswith(("resume", "load"))
+        else "",
+    )
+    turn = adapter.run_turn("hello", context, conversation, lambda _event: None)
+    if behavior == "slow":
+        result = await turn
+        assert result.output == "hello world"
+    else:
+        # Exit must fail promptly, even though the turn has a 60-second budget.
+        with pytest.raises(AgentRuntimeError) as raised:
+            await asyncio.wait_for(turn, timeout=1)
+        assert raised.value.category is (
+            AgentRuntimeErrorCategory.TIMEOUT
+            if behavior == "silent"
+            else AgentRuntimeErrorCategory.PROCESS
+        )
+        assert raised.value.rotate_session is (behavior == "exit")
+    assert process.returncode is not None
+    assert not adapter._transport._pending

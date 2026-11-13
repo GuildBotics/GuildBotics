@@ -98,7 +98,8 @@ class LineJsonRpcTransport:
         label: Human-readable peer name used in transport error messages.
         include_version: Whether outgoing messages carry ``"jsonrpc": "2.0"``.
             The Codex App Server omits it; the Agent Client Protocol requires it.
-        request_timeout: Seconds to wait for a single request's response.
+        request_timeout: Seconds to wait for a single request's response, or
+            ``None`` when the caller bounds the whole turn.
         on_reverse_request: Handler for peer-initiated requests. When omitted,
             every reverse request is answered with ``method not found``.
     """
@@ -108,7 +109,7 @@ class LineJsonRpcTransport:
         *,
         label: str,
         include_version: bool = False,
-        request_timeout: float = 30.0,
+        request_timeout: float | None = 30.0,
         on_reverse_request: ReverseRequestHandler | None = None,
     ) -> None:
         self._label = label
