@@ -1,4 +1,4 @@
-//! Claim-time scheduling decisions, derived only from the current store snapshot.
+//! Scheduling, admission, and display decisions from the current store snapshot.
 use std::collections::BTreeMap;
 
 use super::{Check, queue};
@@ -37,10 +37,11 @@ impl Priority {
     }
 }
 
-/// Memoization belongs to one claim, never to persistent state.
+/// Memoization belongs to one read or admission decision, never to persistent state.
 #[derive(Default)]
 pub(crate) struct Snapshot {
     runs: BTreeMap<(String, String), Priority>,
+    retry_id: Option<String>,
 }
 
 /// PR/check memoization while classifying one run (which can have several branches).
@@ -48,6 +49,7 @@ pub(crate) struct Snapshot {
 struct Classifier {
     pulls: BTreeMap<(String, u64, String), Priority>,
     failed: BTreeMap<(String, String), Option<String>>,
+    retry_id: Option<String>,
 }
 
 pub fn class_of(r: &impl Rd, attempt: &queue::Attempt) -> AppResult<Priority> {
@@ -58,6 +60,13 @@ pub fn class_of(r: &impl Rd, attempt: &queue::Attempt) -> AppResult<Priority> {
 }
 
 impl Snapshot {
+    pub(crate) fn retrying(id: &str) -> Self {
+        Self {
+            retry_id: Some(id.into()),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn class_of(&mut self, r: &impl Rd, a: &queue::Attempt) -> AppResult<Priority> {
         if a.purpose == queue::Purpose::CacheRefresh {
             return Ok(Priority::reason(Class::Last, "cache refresh"));
@@ -66,7 +75,11 @@ impl Snapshot {
         if let Some(p) = self.runs.get(&key) {
             return Ok(p.clone());
         }
-        let p = class_of(r, a)?;
+        let p = Classifier {
+            retry_id: self.retry_id.clone(),
+            ..Default::default()
+        }
+        .run(r, a)?;
         self.runs.insert(key, p.clone());
         Ok(p)
     }
@@ -77,12 +90,16 @@ impl Classifier {
         let Some(run) = queue::get_run(r, &a.repo, &a.sha)? else {
             return Ok(Priority::reason(Class::Last, "no CI run"));
         };
+        self.classify_run(r, &run)
+    }
+
+    fn classify_run(&mut self, r: &impl Rd, run: &queue::Run) -> AppResult<Priority> {
         let Some(repo) = r.get::<Repo>(store::REPOS, &Repo::key(&run.repo))? else {
             return Ok(Priority::reason(Class::Last, "no repository record"));
         };
         let mut best: Option<Priority> = None;
         for branch in &run.branches {
-            let p = self.branch(r, &repo, &run, branch)?;
+            let p = self.branch(r, &repo, run, branch)?;
             if best.as_ref().is_none_or(|b| p.class < b.class) {
                 best = Some(p);
             }
@@ -130,7 +147,7 @@ impl Classifier {
                         let failed = match self.failed.entry(run_key) {
                             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
                             std::collections::btree_map::Entry::Vacant(entry) => {
-                                entry.insert(failed_check(r, repo, run)?)
+                                entry.insert(failed_check(r, repo, run, self.retry_id.as_deref())?)
                             }
                         };
                         pull_class(r, repo, run, &p, failed.as_deref())?
@@ -147,7 +164,12 @@ impl Classifier {
     }
 }
 
-fn failed_check(r: &impl Rd, repo: &Repo, run: &queue::Run) -> AppResult<Option<String>> {
+fn failed_check(
+    r: &impl Rd,
+    repo: &Repo,
+    run: &queue::Run,
+    retry_id: Option<&str>,
+) -> AppResult<Option<String>> {
     if repo.required_checks.is_empty() {
         return Ok(None);
     }
@@ -157,7 +179,13 @@ fn failed_check(r: &impl Rd, repo: &Repo, run: &queue::Run) -> AppResult<Option<
     };
     let latest = queue::current_attempts(r, &repo.id, &run.sha, jobs)?
         .into_iter()
-        .map(|a| (a.clone(), a))
+        .map(|mut a| {
+            if retry_id == Some(a.id.as_str()) {
+                a.status = "queued".into();
+                a.conclusion = None;
+            }
+            (a.clone(), a)
+        })
         .collect();
     let checks = super::run_checks(repo, run, latest, 0, |a, _| Check {
         name: a.job.name.clone(),
@@ -209,4 +237,37 @@ fn pull_class(
     } else {
         Class::Normal
     }))
+}
+
+/// Classify a registration before it has been persisted.
+pub fn run_class(r: &impl Rd, run: &queue::Run) -> AppResult<Priority> {
+    Classifier::default().classify_run(r, run)
+}
+
+impl Priority {
+    pub fn details(&self, existing: Option<String>, waiting: bool) -> Option<String> {
+        let Some(reason) = &self.reason else {
+            return existing;
+        };
+        let suffix = match self.class {
+            Class::Deferred if !waiting => {
+                " It runs when no protected-branch, near-landing or normal job is queued."
+            }
+            Class::Last if !waiting => " It runs when no other job is queued.",
+            Class::Deferred | Class::Last => "",
+            _ => return existing,
+        };
+        Some(format!(
+            "{}Deferred: {reason}.{suffix}",
+            existing.map(|s| format!("{s} ")).unwrap_or_default()
+        ))
+    }
+}
+
+pub fn attempt_details(r: &impl Rd, a: &queue::Attempt) -> AppResult<Option<String>> {
+    let existing = a.display_details();
+    if a.status != "queued" {
+        return Ok(existing);
+    }
+    Ok(class_of(r, a)?.details(existing, false))
 }

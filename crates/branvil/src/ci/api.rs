@@ -65,9 +65,14 @@ pub struct AttemptView {
 
 async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
     let own = a.clone();
-    let source = app
+    let (source, details) = app
         .store
-        .read(move |r| queue::result_attempt(r, &own))
+        .read(move |r| {
+            Ok((
+                queue::result_attempt(r, &own)?,
+                super::priority::attempt_details(r, &own)?,
+            ))
+        })
         .await?;
     Ok(AttemptView {
         path_skip: a.path_skip.clone(),
@@ -83,7 +88,7 @@ async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         reused_from: app.ci.reused_from(a, &source),
         status: a.status.clone(),
         conclusion: a.conclusion.clone(),
-        details: a.display_details(),
+        details,
         cancel_requested: a.cancel_requested,
         created_at: a.created_at.clone(),
         started_at: a.started_at.clone(),
@@ -851,6 +856,20 @@ mod tests {
             drop(held);
             let response = retry.await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
+            let checks = app.ci.head_checks(&repo, "gate-sha").await.unwrap();
+            assert!(checks.checks[0].details.as_deref().unwrap().contains(
+                "Deferred: no branch wants this commit. It runs when no other job is queued."
+            ));
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                value["details"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Deferred: no branch wants this commit.")
+            );
             let claimed = app
                 .store
                 .write(|w| queue::claim(w, "runner1", 60, &util::now()))

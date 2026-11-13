@@ -60,6 +60,10 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   PR, drafts, the failed required check, and the reviewer requesting changes
   (with the approval count).
 
+  Queued check and job `details` show the deferred reason and when the job can
+  run for classes 4a/4b, after any automatic retry explanation. Waiting runs
+  append the deferred reason to their queue-capacity message.
+
   Claim order is 1, 2, 3, 4a, 4b. Within a class, attempts with an available
   reusable successful result come first, then registration sequence (`seq`);
   without a reusable result, sequence decides. Reuse is assessed after taking
@@ -433,7 +437,7 @@ repository, commit, job, and links to failed and successful attempts.
 
 | Limit | Default | Where |
 | --- | --- | --- |
-| queued attempts | 256 (`ci.queue_max`) | a run whose jobs do not fit **waits**, visibly ("Waiting for room in the CI queue"), and is admitted in order as room frees up; a manual retry into a full queue is refused with `503 unavailable`; interruption recovery and automatic retries keep their old queue place even when new admissions have filled the queue |
+| queued attempts | 256 (`ci.queue_max`) | admission counts class 1–3 queued attempts for incoming class 1–3, and all queued attempts for class 4a/4b; a run whose jobs do not fit **waits**, visibly ("Waiting for room in the CI queue"), and waiting runs enter in class order, then registration order; total queued attempts can approach twice the limit, excluding registrations and retries that bypass admission; manual retries use the class after replacing the failed attempt, returning `503 unavailable` if that count is full; interruption recovery and automatic retries keep their old queue place even when new admissions have filled the queue |
 | log per attempt | 16 MiB (`ci.log_max_mib`) | then one truncation notice and nothing more; one log request is at most 1 MiB |
 | one artifact | 64 MiB (`ci.artifact_max_mib`) | `413 too_large`; at most 16 artifacts per attempt, zip only, names `[A-Za-z0-9_.-]` declared by the job |
 | artifacts per attempt (before zipping) | 64 MiB (`ci.executor.artifacts_max_mib`) | runner side |
