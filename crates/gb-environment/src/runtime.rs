@@ -2487,6 +2487,53 @@ mod volume_tests {
             other => panic!("{other:?}"),
         }
     }
+
+    #[test]
+    fn cleanup_selects_every_own_disk_and_no_other_mount() {
+        let vm = "guildbotics-0123456789ab";
+        let names = [format!("{vm}-0"), format!("{vm}-7")];
+        let dir = tempfile::tempdir().unwrap();
+        let named = |guest: &str, name: &str| {
+            MountBuilder::new(guest)
+                .named_with(name, |v| v.create().disk().size(4096))
+                .build()
+                .unwrap()
+        };
+        let mounts = [
+            named("/tmp", &names[0]),
+            named("/copy", &names[1]),
+            // Persisted configurations omit creation metadata.
+            MountBuilder::new("/persisted")
+                .named(format!("{vm}-12"))
+                .build()
+                .unwrap(),
+            named("/another-vm", "guildbotics-abcdef012345-7"),
+            named("/similar-vm", "guildbotics-0123456789abcd-7"),
+            MountBuilder::new("/bound")
+                .bind(dir.path())
+                .build()
+                .unwrap(),
+            MountBuilder::new("/scratch").tmpfs().build().unwrap(),
+        ];
+        assert_eq!(
+            temporary_disk_names(vm, &mounts).collect::<Vec<_>>(),
+            [&names[0], &names[1], &format!("{vm}-12")]
+        );
+    }
+}
+
+/// Only named volumes owned by this VM are removed after its destruction.
+fn temporary_disk_names<'a>(
+    vm: &str,
+    mounts: &'a [microsandbox::sandbox::VolumeMount],
+) -> impl Iterator<Item = &'a str> {
+    let prefix = format!("{vm}-");
+    mounts.iter().filter_map(move |mount| match mount {
+        microsandbox::sandbox::VolumeMount::Named { name, .. } if name.starts_with(&prefix) => {
+            Some(name.as_str())
+        }
+        _ => None,
+    })
 }
 
 async fn stop_vm(sandbox: &Sandbox) {
@@ -2498,12 +2545,8 @@ async fn stop_vm(sandbox: &Sandbox) {
         }
     }
     let _ = sandbox.destroy().await;
-    for mount in &sandbox.config().spec.mounts {
-        if let microsandbox::sandbox::VolumeMount::Named { name: disk, .. } = mount
-            && disk.starts_with(&format!("{name}-"))
-        {
-            let _ = microsandbox::Volume::remove(disk).await;
-        }
+    for disk in temporary_disk_names(name, &sandbox.config().spec.mounts) {
+        let _ = microsandbox::Volume::remove(disk).await;
     }
 }
 
