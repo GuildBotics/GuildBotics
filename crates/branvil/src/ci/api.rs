@@ -69,7 +69,7 @@ async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         .store
         .read(move |r| {
             Ok((
-                queue::result_attempt(r, &own)?,
+                queue::source_of(r, &own)?,
                 super::priority::attempt_details(r, &own)?,
             ))
         })
@@ -93,10 +93,15 @@ async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         created_at: a.created_at.clone(),
         started_at: a.started_at.clone(),
         finished_at: a.finished_at.clone(),
-        artifact_names: if source.files_pruned {
+        artifact_names: if source.attempt.files_pruned {
             Vec::new()
         } else {
-            source.artifacts.iter().map(|x| x.name.clone()).collect()
+            source
+                .attempt
+                .artifacts
+                .iter()
+                .map(|x| x.name.clone())
+                .collect()
         },
         log_bytes: app.ci.log_size(&a.id).await,
     })

@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::ci::config::ExecutorConfig;
 use crate::ci::pipeline::JobDef;
-use crate::ci::queue::{ResultInfo, Reuse};
+use crate::ci::queue::{Basis, ResultInfo, Reuse};
 use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
 
 #[derive(Subcommand)]
@@ -816,8 +816,12 @@ impl Runner {
                 ))
                 .await;
             } else {
+                let same = match source.basis {
+                    Basis::Tree => "the same tree",
+                    Basis::Paths => "the same contents of paths",
+                };
                 say(format!(
-                    "reused result of {} ({}, the same tree), image {digest}",
+                    "reused result of {} ({}, {same}), image {digest}",
                     source.attempt_id, source.sha
                 ))
                 .await;
@@ -1621,6 +1625,72 @@ esac
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_pull_requests_head_reuses_a_result_by_the_contents_of_paths() {
+        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\npaths = [\"src/**\"]\n").await;
+        let runner = Runner::new(
+            Api::new(&s.url, &s.runner_token),
+            s.dir.path().join("runner"),
+            None,
+            ExecutorConfig::default(),
+        );
+        let fake = Fake::new();
+        let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+        runner.once(&fake).await.unwrap();
+        let first = result_of(&s, &first_sha).await;
+        assert!(first.inputs.is_some());
+        // A pull request's head that changes only docs.
+        let work = s.dir.path().join("work");
+        git(&work, &["checkout", "-qb", "docs"]);
+        std::fs::write(work.join("notes.md"), "docs\n").unwrap();
+        git(&work, &["add", "notes.md"]);
+        git(&work, &["commit", "-qm", "docs"]);
+        git(&work, &["push", "-q", s.bare.to_str().unwrap(), "docs"]);
+        let sha = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
+        let tree = s.app.git.tree_oid(&s.bare, &sha).await.unwrap();
+        let (repo, at) = (s.repo.id.clone(), sha.clone());
+        let source_sha = first_sha.clone();
+        s.app
+            .store
+            .write(move |w| {
+                let main = crate::ci::queue::get_run(w, &repo, &source_sha)?.unwrap();
+                let reg = crate::ci::queue::Registration {
+                    order: Vec::new(),
+                    selection: None,
+                    repo,
+                    repo_path: "acme/demo".into(),
+                    sha: at,
+                    tree,
+                    branch: "docs".into(),
+                    protected: false,
+                    pipeline: main.pipeline,
+                    network: false,
+                    inputs: main.inputs,
+                };
+                crate::ci::queue::register(w, reg, 10, &crate::util::now())
+            })
+            .await
+            .unwrap();
+        runner.once(&fake).await.unwrap();
+        let reused = result_of(&s, &sha).await;
+        assert_eq!(reused.reused_from.as_deref(), Some(first.id.as_str()));
+        assert_eq!(fake.ran.lock().unwrap().len(), 1);
+        let log = s.app.ci.log_tail(&reused.id, 1 << 20).await.unwrap().0;
+        assert!(
+            log.contains(&format!(
+                "reused result of {} ({first_sha}, the same contents of paths)",
+                first.id
+            )),
+            "{log}"
+        );
+        let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
+        let from = checks[0].reused_from.as_ref().unwrap();
+        assert_eq!(
+            (from.sha.as_str(), from.basis),
+            (first_sha.as_str(), crate::ci::queue::Basis::Paths)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn reuse_skips_source_and_vm_but_digest_changes_and_retry_execute() {
         let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
         let runner = Runner::new(
@@ -1658,6 +1728,10 @@ esac
         assert!(checks[0].details.is_none());
         assert_eq!(checks[0].artifact_names, vec!["report"]);
         assert_eq!(checks[0].reused_from.as_ref().unwrap().attempt_id, first.id);
+        assert_eq!(
+            checks[0].reused_from.as_ref().unwrap().basis,
+            crate::ci::queue::Basis::Tree
+        );
         let response = s
             .http
             .get(format!(
@@ -1687,6 +1761,7 @@ esac
             .await
             .unwrap();
         assert_eq!(view["reused_from"]["sha"], first_sha);
+        assert_eq!(view["reused_from"]["basis"], "tree");
         assert_eq!(
             view["reused_from"]["url"],
             format!("{}/acme/demo/-/jobs/{}", s.url, first.id)

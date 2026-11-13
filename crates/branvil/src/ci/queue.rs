@@ -480,35 +480,36 @@ pub fn current_attempts(
 
 /// The jobs of `run`'s pipeline that have no current attempt, or whose
 /// current attempt ended because the commit was replaced, and, once a
-/// protected branch wants the commit, the jobs with a dependency cache whose
-/// current attempt ran for a pull request (a fast-forward merge): only a
-/// protected branch's run saves the cache, so they run again as one.
+/// protected branch wants the commit (a fast-forward merge), the jobs with a
+/// dependency cache whose current attempt ran for a pull request (only a
+/// protected branch's run saves the cache) and the jobs whose current
+/// attempt reused another tree's result by the contents of paths (a
+/// protected branch's check is an actual run): they run again as one.
 pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
     let PipelineState::Jobs { jobs } = &run.pipeline else {
         return Ok(Vec::new());
     };
     let current = current_attempts(r, &run.repo, &run.sha, jobs)?;
     let protected = run.cache_scope == "protected";
-    Ok(jobs
-        .iter()
-        .filter(|j| {
-            if run.skips(&j.name) {
-                return false;
+    let mut out = Vec::new();
+    for j in jobs.iter().filter(|j| !run.skips(&j.name)) {
+        let again = match current.iter().find(|a| a.job.name == j.name) {
+            None => true,
+            Some(a) => {
+                a.superseded
+                    || a.path_skip.is_some()
+                    || (protected
+                        && j.cache.is_some()
+                        && a.status != "queued"
+                        && a.cache_scope != "protected")
+                    || (protected && source_of(r, a)?.basis == Some(Basis::Paths))
             }
-            current
-                .iter()
-                .find(|a| a.job.name == j.name)
-                .is_none_or(|a| {
-                    a.superseded
-                        || a.path_skip.is_some()
-                        || (protected
-                            && j.cache.is_some()
-                            && a.status != "queued"
-                            && a.cache_scope != "protected")
-                })
-        })
-        .cloned()
-        .collect())
+        };
+        if again {
+            out.push(j.clone());
+        }
+    }
+    Ok(out)
 }
 
 fn next_number(r: &impl Rd, repo: &str, sha: &str, job: &str) -> AppResult<u64> {
@@ -942,6 +943,64 @@ pub struct Reuse {
     pub sha: String,
     pub image_digest: String,
     pub cache_key: Option<String>,
+    pub basis: Basis,
+}
+
+/// What makes a result reusable: the same tree, or the same input digest
+/// of the job's paths (`Ci::job_inputs`). Never stored: a reused attempt's
+/// basis follows from its run's tree and its source's (`reused_basis`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Basis {
+    Tree,
+    Paths,
+}
+
+/// The basis on which `a` (with the scope and inputs copied at its claim)
+/// may reuse a result. Protected and gate runs check every job for real, so
+/// they reuse only the same tree; so do jobs without paths and attempts
+/// whose run has no digest of the job.
+fn basis(a: &Attempt) -> Basis {
+    if a.cache_scope == "protected"
+        || a.cache_scope.starts_with("branch:gate/")
+        || a.job.paths.is_empty()
+        || a.inputs.is_none()
+    {
+        Basis::Tree
+    } else {
+        Basis::Paths
+    }
+}
+
+fn tree_of(r: &impl Rd, a: &Attempt) -> AppResult<Option<String>> {
+    Ok(get_run(r, &a.repo, &a.sha)?.and_then(|run| run.tree))
+}
+
+/// The attempt that owns a result's files (`result_attempt`), and how the
+/// result was reused (`reused_basis`).
+pub struct Source {
+    pub attempt: Attempt,
+    pub basis: Option<Basis>,
+}
+
+pub fn source_of(r: &impl Rd, a: &Attempt) -> AppResult<Source> {
+    let attempt = result_attempt(r, a)?;
+    let basis = reused_basis(r, a, &attempt)?;
+    Ok(Source { attempt, basis })
+}
+
+/// How `a` reused `source` (`result_attempt`): the same tree, or else the
+/// same contents of paths. None when `a` is not reused.
+pub fn reused_basis(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<Option<Basis>> {
+    if a.reused_from.is_none() {
+        return Ok(None);
+    }
+    let tree = tree_of(r, a)?;
+    Ok(Some(if tree.is_some() && tree == tree_of(r, source)? {
+        Basis::Tree
+    } else {
+        Basis::Paths
+    }))
 }
 
 /// The execution metadata reported by the runner at finish.
@@ -972,13 +1031,44 @@ fn can_reuse(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<bool> {
     if !reusable_shape(a, source) {
         return Ok(false);
     }
-    let tree = get_run(r, &a.repo, &a.sha)?.and_then(|run| run.tree);
-    Ok(tree.is_some() && tree == get_run(r, &source.repo, &source.sha)?.and_then(|run| run.tree))
+    Ok(match basis(a) {
+        Basis::Tree => {
+            let tree = tree_of(r, a)?;
+            tree.is_some() && tree == tree_of(r, source)?
+        }
+        Basis::Paths => a.inputs == source.inputs,
+    })
 }
 
-/// Load candidate history once per run during a claim, not once per job.
+/// What `reuse_sources` reads for `a`; a claim reads each once.
+fn sources_key(a: &Attempt) -> (Basis, String, String, String) {
+    match basis(a) {
+        Basis::Tree => (Basis::Tree, a.repo.clone(), a.sha.clone(), String::new()),
+        Basis::Paths => (
+            Basis::Paths,
+            a.repo.clone(),
+            a.job.name.clone(),
+            a.inputs.clone().unwrap_or_default(),
+        ),
+    }
+}
+
+/// The candidate history of `a`'s basis: every attempt of the runs with its
+/// tree, or the kept actual successes of its job with its input digest.
 fn reuse_sources(r: &impl Rd, a: &Attempt) -> AppResult<Vec<Attempt>> {
-    let Some(tree) = get_run(r, &a.repo, &a.sha)?.and_then(|run| run.tree) else {
+    if let (Basis::Paths, Some(digest)) = (basis(a), &a.inputs) {
+        let prefix = Key::new().s(&a.repo).s(&a.job.name).s(digest).bytes();
+        let mut sources = Vec::new();
+        for (_, id) in r.prefix_raw(store::IX_CI_INPUTS, &prefix, None, usize::MAX)? {
+            let id = String::from_utf8_lossy(&id);
+            sources.push(
+                get_attempt(r, &id)?
+                    .ok_or_else(|| AppError::internal("inputs index attempt is missing"))?,
+            );
+        }
+        return Ok(sources);
+    }
+    let Some(tree) = tree_of(r, a)? else {
         return Ok(Vec::new());
     };
     let prefix = Key::new().s(&a.repo).s(&tree).bytes();
@@ -1005,6 +1095,7 @@ fn reuse_candidate(a: &Attempt, sources: &[Attempt]) -> Option<Reuse> {
             sha: source.sha.clone(),
             image_digest: source.image_digest.clone().unwrap(),
             cache_key: source.cache_key.clone(),
+            basis: basis(a),
         })
 }
 
@@ -1049,8 +1140,7 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
         if !a.allow_reuse || a.purpose != Purpose::Check {
             continue;
         }
-        let key = (a.repo.clone(), a.sha.clone());
-        let sources = match sources.entry(key) {
+        let sources = match sources.entry(sources_key(a)) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => entry.insert(reuse_sources(w, a)?),
         };
@@ -1181,6 +1271,7 @@ pub fn finish(
         ));
     }
     let mut refresh_key = None;
+    let mut rerun = None;
     if let Some(id) = &info.reused_from {
         let source = get_attempt(w, id)?.ok_or_else(|| AppError::invalid("No reuse source."))?;
         if conclusion != "success"
@@ -1189,15 +1280,38 @@ pub fn finish(
             || info.image_digest != source.image_digest
         {
             return Err(AppError::invalid(
-                "The reuse source must be a successful execution of the same tree, job, network, and image.",
+                "The reuse source must be a successful execution of the same tree (or contents of paths), job, network, and image.",
             ));
         }
         if info.refresh_cache {
-            refresh_key = source.cache_key;
+            refresh_key = source.cache_key.clone();
+        }
+        // A protected branch came to want the commit after the claim: its
+        // check must be an actual run or a reuse of the same tree.
+        if let Some(run) = get_run(w, &a.repo, &a.sha)?
+            && run.cache_scope == "protected"
+            && basis(&a) == Basis::Paths
+            && (run.tree.is_none() || run.tree != tree_of(w, &source)?)
+            && !a.cancel_requested
+        {
+            let mut next = new_attempt(w, &run, &a.job, a.network, now)?;
+            next.seq = a.seq;
+            rerun = Some(next);
         }
     }
     a.image_digest = info.image_digest;
     a.cache_key = info.cache_key;
+    if let Some(next) = rerun {
+        conclude(
+            &mut a,
+            "cancelled",
+            Some("Stopped: the commit became a protected branch's; it runs again as one.".into()),
+            now,
+        );
+        put_attempt(w, Some(&old), &a)?;
+        put_attempt(w, None, &next)?;
+        return Ok(a);
+    }
     if a.cancel_requested {
         let why = a.details.clone().unwrap_or_else(|| "Cancelled.".into());
         let reported = details.map(|d| format!(" (the runner reported {conclusion}: {d})"));
@@ -3400,3 +3514,7 @@ mod tests {
 #[cfg(test)]
 #[path = "priority_tests.rs"]
 mod priority_tests;
+
+#[cfg(test)]
+#[path = "reuse_tests.rs"]
+mod reuse_tests;

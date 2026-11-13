@@ -53,6 +53,7 @@ pub struct ReusedFrom {
     pub attempt_id: String,
     pub url: String,
     pub sha: String,
+    pub basis: queue::Basis,
 }
 
 /// One check of a commit, in the shape of `docs/api.md` "Checks".
@@ -206,14 +207,33 @@ impl Ci {
         &self.inner.settings
     }
 
+    /// Whether the head's run cannot be the gate: it skipped jobs by paths,
+    /// or a current attempt reused another tree's result by the contents of
+    /// paths. Gate checks are actual runs or reuses of the same tree.
     pub async fn needs_gate_commit(&self, repo: &Repo, sha: &str) -> AppResult<bool> {
         let (id, sha) = (repo.id.clone(), sha.to_string());
         self.inner
             .store
             .read(move |r| {
-                Ok(queue::get_run(r, &id, &sha)?
-                    .and_then(|r| r.selection)
-                    .is_some_and(|s| !s.skipped_jobs.is_empty()))
+                let Some(run) = queue::get_run(r, &id, &sha)? else {
+                    return Ok(false);
+                };
+                if run
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| !s.skipped_jobs.is_empty())
+                {
+                    return Ok(true);
+                }
+                let PipelineState::Jobs { jobs } = &run.pipeline else {
+                    return Ok(false);
+                };
+                for a in queue::current_attempts(r, &id, &sha, jobs)? {
+                    if queue::source_of(r, &a)?.basis == Some(queue::Basis::Paths) {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
             })
             .await
     }
@@ -248,15 +268,18 @@ impl Ci {
         }
     }
 
-    pub fn reused_from(&self, a: &Attempt, source: &Attempt) -> Option<ReusedFrom> {
-        a.reused_from.as_ref().map(|id| ReusedFrom {
+    pub fn reused_from(&self, a: &Attempt, source: &queue::Source) -> Option<ReusedFrom> {
+        let (id, basis) = (a.reused_from.as_ref()?, source.basis?);
+        Some(ReusedFrom {
             attempt_id: id.clone(),
             url: self.job_url(&a.repo_path, id),
-            sha: source.sha.clone(),
+            sha: source.attempt.sha.clone(),
+            basis,
         })
     }
 
-    fn check_of(&self, a: &Attempt, source: &Attempt) -> Check {
+    fn check_of(&self, a: &Attempt, result: &queue::Source) -> Check {
+        let source = &result.attempt;
         Check {
             path_skip: a.path_skip.clone(),
             name: a.job.name.clone(),
@@ -281,7 +304,7 @@ impl Ci {
             } else {
                 source.artifacts.iter().map(|x| x.name.clone()).collect()
             },
-            reused_from: self.reused_from(a, source),
+            reused_from: self.reused_from(a, result),
             cache_refresh: a.cache_refresh.clone(),
             started_at: a.started_at.clone(),
             finished_at: a.finished_at.clone(),
@@ -328,7 +351,7 @@ impl Ci {
                 let latest = latest
                     .into_iter()
                     .map(|a| {
-                        let source = queue::result_attempt(r, &a)?;
+                        let source = queue::source_of(r, &a)?;
                         Ok((a, source))
                     })
                     .collect::<AppResult<Vec<_>>>()?;
@@ -380,8 +403,15 @@ impl Ci {
         &self,
         repo: &Repo,
         run: &queue::Run,
-        latest: Vec<(Attempt, Attempt)>,
+        latest: Vec<(Attempt, queue::Source)>,
     ) -> AppResult<Checks> {
+        // A protected branch's run requeues another tree's reuse by paths
+        // (`jobs_to_run`); while it waits for room, the job is pending.
+        let protected = run.cache_scope == "protected";
+        let latest = latest
+            .into_iter()
+            .filter(|(_, s)| !protected || s.basis != Some(queue::Basis::Paths))
+            .collect();
         run_checks(
             repo,
             run,
@@ -950,12 +980,12 @@ fn open_pull_heads(r: &impl Rd, repo: &str) -> AppResult<Vec<String>> {
 }
 
 /// Build registered checks inside or outside a store transaction using the same rules.
-fn run_checks(
+fn run_checks<S>(
     repo: &Repo,
     run: &queue::Run,
-    latest: Vec<(Attempt, Attempt)>,
+    latest: Vec<(Attempt, S)>,
     queue_max: usize,
-    check_of: impl Fn(&Attempt, &Attempt) -> Check,
+    check_of: impl Fn(&Attempt, &S) -> Check,
 ) -> AppResult<Checks> {
     // A formerly skipped job now waiting for capacity is pending, not a
     // satisfied check left over from the old base snapshot.
@@ -1203,6 +1233,61 @@ mod tests {
         assert_eq!(report.checks[0].status, "queued");
         assert!(report.checks[0].path_skip.is_none());
         assert!(!report.checks[0].head_satisfied());
+    }
+
+    #[tokio::test]
+    async fn a_paths_reuse_is_pending_while_its_protected_run_waits() {
+        let (_d, ci, repo) = setup();
+        let (id, path) = (repo.id.clone(), repo.path.clone());
+        let saved = repo.clone();
+        ci.inner
+            .store
+            .write(move |w| {
+                w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
+                let reg = |sha: &str, branch: &str| Registration {
+                    order: Vec::new(),
+                    inputs: BTreeMap::from([("test".to_string(), "d1".to_string())]),
+                    repo: id.clone(),
+                    repo_path: path.clone(),
+                    sha: sha.into(),
+                    tree: Some(format!("tree-{sha}")),
+                    branch: branch.into(),
+                    protected: branch == "main",
+                    network: false,
+                    pipeline: PipelineState::Jobs {
+                        jobs: vec![JobDef {
+                            paths: vec!["src/**".into()],
+                            ..job("test")
+                        }],
+                    },
+                    selection: None,
+                };
+                let now = "2026-10-27T00:00:00Z";
+                let digest =
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+                let mut source = None;
+                for sha in ["source", "head"] {
+                    queue::register(w, reg(sha, "feature"), 1, now)?;
+                    let c = queue::claim(w, "r", 60, now)?.unwrap();
+                    let info = queue::ResultInfo {
+                        image_digest: Some(digest.into()),
+                        reused_from: source.take(),
+                        ..Default::default()
+                    };
+                    let done =
+                        queue::finish(w, &c.attempt.id, &c.lease, "success", None, info, 1, now)?;
+                    source = Some(done.id);
+                }
+                queue::register(w, reg("busy", "main"), 1, now)?;
+                queue::register(w, reg("head", "main"), 1, now)?;
+                assert!(queue::get_run(w, &id, "head")?.unwrap().waiting);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let report = ci.head_checks(&repo, "head").await.unwrap();
+        assert_eq!(report.checks[0].status, "queued", "{:?}", report.checks[0]);
+        assert!(report.checks[0].reused_from.is_none());
     }
 
     #[tokio::test]

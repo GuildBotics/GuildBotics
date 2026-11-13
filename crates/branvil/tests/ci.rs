@@ -438,6 +438,119 @@ async fn paths_match_git_globs_and_a_pipeline_change_disables_selection() {
 }
 
 #[tokio::test]
+async fn a_later_heads_job_reuses_the_same_paths_contents_and_the_gate_executes_it() {
+    paths_reuse_gate(true).await;
+}
+
+#[tokio::test]
+async fn a_head_without_paths_reuse_is_its_own_gate() {
+    paths_reuse_gate(false).await;
+}
+
+/// The second head of a pull request changes only docs: `rust` (paths
+/// `src/**`) may reuse the first head's success by the contents of paths.
+async fn paths_reuse_gate(reused: bool) {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "paths-runner").await;
+    let pipeline = format!(
+        "{}paths=['src/**']\n{}",
+        pipeline(&["rust"]),
+        pipeline(&["always"])
+    );
+    land(
+        &w,
+        "setup",
+        &[(".branvil/ci.toml", &pipeline), ("src/a.rs", "a\n")],
+        None,
+    )
+    .await;
+    runner.drain("success").await;
+    set_required(&w, &["rust", "always"]).await;
+    std::fs::create_dir_all(w.work.join("src")).unwrap();
+    let first = w.push_change("feature", "src/a.rs", "changed\n");
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let mut source = Value::Null;
+    while let Some(c) = runner.claim().await {
+        assert_eq!(c["sha"], first);
+        if c["job"]["name"] == "rust" {
+            assert!(c["reuse"].is_null(), "src/ changed since main");
+            assert_eq!(runner.finish(&c, "success").await.0, 200);
+            source = c;
+        } else {
+            // Keeps the first head out of the landing queue.
+            assert_eq!(runner.finish(&c, "failure").await.0, 200);
+        }
+    }
+    let head = w.push_change("feature", "notes.md", "docs\n");
+    let rust = runner.next_claim().await;
+    assert_eq!(
+        (&rust["sha"], &rust["job"]["name"]),
+        (&json!(head), &json!("rust"))
+    );
+    assert_eq!(rust["reuse"]["attempt_id"], source["attempt_id"]);
+    assert_eq!(rust["reuse"]["sha"], first);
+    assert_eq!(rust["reuse"]["basis"], "paths");
+    let reported = if reused {
+        rust["reuse"]["attempt_id"].clone()
+    } else {
+        Value::Null
+    };
+    let (st, result) = runner.post(&rust, "finish", json!({"lease": rust["lease"], "conclusion": "success", "image_digest": DIGEST, "reused_from": reported})).await;
+    assert_eq!(st, 200, "{result}");
+    if reused {
+        assert_eq!(result["reused_from"]["sha"], first);
+        assert_eq!(result["reused_from"]["basis"], "paths");
+        let c = check(&checks(&w, n).await, "rust").clone();
+        assert_eq!(c["reused_from"]["basis"], "paths", "{c}");
+        assert_eq!(c["reused_from"]["attempt_id"], source["attempt_id"]);
+    }
+    let always = runner.next_claim().await;
+    assert_eq!(
+        (&always["sha"], &always["job"]["name"]),
+        (&json!(head), &json!("always"))
+    );
+    assert!(always["reuse"].is_null(), "another tree, and no paths");
+    assert_eq!(runner.finish(&always, "success").await.0, 200);
+    let pull_path = format!("{}/pulls/{n}", w.repo_path());
+    if !reused {
+        eventually("the head's run is the gate and passes", || async {
+            let landing = &w.server.ok(&pull_path, &w.owner).await["landing"];
+            landing["gate"] == json!(head) && landing["state"] == "passed"
+        })
+        .await;
+        assert!(runner.claim().await.is_none());
+        return;
+    }
+    let mut seen = Vec::new();
+    let mut next = Some(runner.next_claim().await);
+    while let Some(c) = next {
+        assert_ne!(c["sha"], head, "the gate is a commit of its own");
+        let name = c["job"]["name"].as_str().unwrap().to_string();
+        if name == "rust" {
+            assert!(c["reuse"].is_null(), "a paths reuse is no gate result");
+            let (st, result) = runner.finish(&c, "success").await;
+            assert_eq!(st, 200, "{result}");
+            assert!(result["reused_from"].is_null(), "{result}");
+        } else {
+            assert_eq!(c["reuse"]["attempt_id"], always["attempt_id"], "same tree");
+            assert_eq!(c["reuse"]["basis"], "tree");
+            let source = c["reuse"]["attempt_id"].clone();
+            assert_eq!(runner.post(&c, "finish", json!({"lease":c["lease"],"conclusion":"success","image_digest":DIGEST,"reused_from":source})).await.0, 200);
+        }
+        seen.push(name);
+        next = runner.claim().await;
+    }
+    seen.sort();
+    assert_eq!(seen, ["always", "rust"]);
+    eventually("gate passed", || async {
+        let landing = &w.server.ok(&pull_path, &w.owner).await["landing"];
+        landing["state"] == "passed" && landing["gate"] != json!(head)
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn paths_retry_actually_executes_a_skipped_job() {
     let w = World::new().await;
     let runner = Runner::new(&w, "paths-runner").await;

@@ -184,7 +184,7 @@ fn failed_check(
                 a.status = "queued".into();
                 a.conclusion = None;
             }
-            (a.clone(), a)
+            (a, ())
         })
         .collect();
     let checks = super::run_checks(repo, run, latest, 0, |a, _| Check {
