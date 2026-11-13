@@ -21,7 +21,10 @@ pub enum RunnerMode {
 #[serde(deny_unknown_fields, default)]
 pub struct CiConfig {
     pub runner: RunnerMode,
-    /// Queued attempts at most; runs that do not fit wait (visibly) for room.
+    /// Admission limit: classes 1–3 count only their queued attempts; 4a/4b
+    /// count all queued attempts. Waiting runs enter in class then seq order.
+    /// Total queued work can approach twice this limit, excluding bypasses.
+    /// Manual retries count against their class after replacing the failure.
     pub queue_max: usize,
     /// Lease length of a claimed attempt; the runner renews it by heartbeat.
     pub lease_secs: u64,

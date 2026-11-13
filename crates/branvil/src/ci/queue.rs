@@ -527,6 +527,34 @@ pub fn pending_count(r: &impl Rd, limit: usize) -> AppResult<usize> {
     Ok(r.prefix_raw(store::IX_CI_PENDING, &[], None, limit)?.len())
 }
 
+/// Capacity for the incoming class, with a hypothetical manual retry applied.
+fn admission_count(
+    r: &impl Rd,
+    class: super::priority::Class,
+    limit: usize,
+    retry_id: Option<String>,
+) -> AppResult<usize> {
+    if class >= super::priority::Class::Deferred {
+        return pending_count(r, limit);
+    }
+    let mut snapshot = retry_id
+        .as_deref()
+        .map(super::priority::Snapshot::retrying)
+        .unwrap_or_default();
+    let mut count = 0;
+    for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+        let a = get_attempt(r, &String::from_utf8_lossy(&id))?
+            .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+        if snapshot.class_of(r, &a)?.class < super::priority::Class::Deferred {
+            count += 1;
+            if count >= limit {
+                break;
+            }
+        }
+    }
+    Ok(count)
+}
+
 fn cut(text: &str) -> String {
     if text.len() <= MAX_DETAILS {
         return text.to_string();
@@ -771,7 +799,14 @@ fn admit_jobs(
         run.waiting = false;
         return Ok(false);
     }
-    if pending_count(w, queue_max + 1)? + jobs.len() > queue_max {
+    if admission_count(
+        w,
+        super::priority::run_class(w, run)?.class,
+        queue_max + 1,
+        None,
+    )? + jobs.len()
+        > queue_max
+    {
         run.waiting = true;
         return Ok(false);
     }
@@ -783,15 +818,19 @@ fn admit_jobs(
     Ok(true)
 }
 
-/// Admits waiting runs in registration order while they fit. Returns the
+/// Admits waiting runs in class order, then registration order, while they fit. Returns the
 /// (repo path, sha) of every run admitted.
 pub fn admit_waiting(w: &Wtx, queue_max: usize, now: &str) -> AppResult<Vec<(String, String)>> {
     let mut admitted = Vec::new();
-    for (_, key) in w.prefix_raw(store::IX_CI_WAITING, &[], None, 64)? {
+    let mut waiting = Vec::new();
+    for (_, key) in w.prefix_raw(store::IX_CI_WAITING, &[], None, usize::MAX)? {
         let Some(old) = w.get::<Run>(store::CI_RUNS, &key)? else {
             continue;
         };
-        let mut run = old.clone();
+        waiting.push((super::priority::run_class(w, &old)?.class, old.seq, old));
+    }
+    waiting.sort_by_key(|(class, seq, _)| (*class, *seq));
+    for (_, _, mut run) in waiting {
         let network = network_of(w, &run.repo)?;
         let jobs = jobs_to_run(w, &run)?;
         admit_jobs(w, &mut run, &jobs, network, queue_max, now)?;
@@ -1298,7 +1337,9 @@ pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attemp
             old.job.name
         )));
     }
-    if pending_count(w, queue_max + 1)? >= queue_max {
+    let mut snapshot = super::priority::Snapshot::retrying(&old.id);
+    let class = snapshot.class_of(w, &old)?.class;
+    if admission_count(w, class, queue_max + 1, Some(old.id.clone()))? >= queue_max {
         return Err(AppError::unavailable(format!(
             "The CI queue is full ({queue_max} queued attempts); retry later."
         )));

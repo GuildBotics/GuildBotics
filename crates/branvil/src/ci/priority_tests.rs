@@ -199,6 +199,10 @@ fn reviews_drafts_and_answers_are_recomputed_at_claim_time() {
 
 #[test]
 fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
+    const FAILED_DETAILS: &str = concat!(
+        "Deferred: required check test failed on this commit. ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
     let (_d, s) = store();
     s.write_sync(|w| {
         repo(w, &["test"], 1)?;
@@ -217,7 +221,24 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
             T0,
         )?;
         assert_eq!(class(w, "sha")?, Class::Deferred);
+        let queued = attempts_of(w, "repo_1", "sha")?
+            .into_iter()
+            .find(|a| a.job.name == "optional")
+            .unwrap();
+        assert_eq!(queued.status, "queued");
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &queued)?.as_deref(),
+            Some(FAILED_DETAILS)
+        );
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &failed)?,
+            failed.display_details()
+        );
         retry(w, &failed.id, 100, T0)?;
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &queued)?,
+            queued.display_details()
+        );
         assert_eq!(class(w, "sha")?, Class::Normal);
         let optional = take(w)?;
         assert_eq!(optional.attempt.job.name, "optional");
@@ -427,6 +448,197 @@ fn protected_automatic_retries_overtake_older_pull_work_without_reuse() {
         assert!(!automatic.attempt.allow_reuse);
         assert!(automatic.reuse.is_none());
         assert_eq!(take(w)?.attempt.sha, "older");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn admission_reserves_capacity_for_active_classes_and_reports_waiting_drafts() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        repo(w, &[], 1)?;
+        pull(w, 1, "draft", true)?;
+        pull(w, 2, "approved", false)?;
+        review(w, 2, "reviewer", "approve", "", "approved-sha")?;
+        register(w, reg("draft-sha", "draft", &["a", "b", "c", "d"]), 4, T0)?;
+        register(w, reg("approved-sha", "approved", &["one", "two"]), 4, T0)?;
+        assert!(!get_run(w, "repo_1", "approved-sha")?.unwrap().waiting);
+        register(w, reg("waiting", "draft", &["test"]), 4, T0)?;
+        let run = get_run(w, "repo_1", "waiting")?.unwrap();
+        assert!(run.waiting);
+        let priority = crate::ci::priority::run_class(w, &run)?;
+        assert_eq!(
+            priority
+                .details(Some("Waiting for room".into()), true)
+                .as_deref(),
+            Some("Waiting for room Deferred: draft pull request.")
+        );
+        assert_eq!(take(w)?.attempt.sha, "approved-sha");
+        assert_eq!(take(w)?.attempt.sha, "approved-sha");
+        // Refreshes still use total capacity, even for a protected source.
+        let a = attempts_of(w, "repo_1", "draft-sha")?.remove(0);
+        assert!(enqueue_refresh(w, &a, "cache-key", 4, T0)?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn waiting_admission_sorts_all_runs_by_class_then_sequence() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        repo(w, &[], 1)?;
+        pull(w, 1, "normal", false)?;
+        pull(w, 2, "approved", false)?;
+        review(w, 2, "reviewer", "approve", "", "approved-sha")?;
+        register(w, reg("busy", "normal", &["a", "b", "c", "d"]), 4, T0)?;
+        for i in 0..70 {
+            register(w, reg(&format!("normal-{i}"), "normal", &["test"]), 4, T0)?;
+        }
+        register(w, reg("approved-sha", "approved", &["test"]), 4, T0)?;
+        assert!(get_run(w, "repo_1", "approved-sha")?.unwrap().waiting);
+        take(w)?;
+        assert_eq!(
+            admit_waiting(w, 4, T0)?,
+            vec![("acme/demo".into(), "approved-sha".into())]
+        );
+        take(w)?;
+        assert_eq!(
+            admit_waiting(w, 4, T0)?,
+            vec![("acme/demo".into(), "normal-0".into())]
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn manual_retry_uses_the_class_after_replacing_only_its_own_failure() {
+    for (draft, failures, approved, accepted) in [
+        (false, 1, false, true),
+        (false, 1, true, true),
+        (true, 1, false, false),
+        (false, 2, false, false),
+    ] {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            repo(w, &["test", "other"], 1)?;
+            pull(w, 1, "feature", draft)?;
+            pull(w, 2, "backlog", true)?;
+            if approved {
+                review(w, 1, "reviewer", "approve", "", "sha")?;
+            }
+            register(w, reg("sha", "feature", &["test", "other"]), 4, T0)?;
+            let mut failed = None;
+            for i in 0..2 {
+                let c = take(w)?;
+                let a = finish(
+                    w,
+                    &c.attempt.id,
+                    &c.lease,
+                    if i < failures { "failure" } else { "success" },
+                    None,
+                    ResultInfo::default(),
+                    4,
+                    T0,
+                )?;
+                if i == 0 {
+                    failed = Some(a);
+                }
+            }
+            let failed = failed.unwrap();
+            register(
+                w,
+                reg("backlog-sha", "backlog", &["a", "b", "c", "d"]),
+                4,
+                T0,
+            )?;
+            let result = retry(w, &failed.id, 4, T0);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "draft={draft}, failures={failures}"
+            );
+            if !accepted {
+                let error = result.unwrap_err();
+                assert_eq!(error.status.as_u16(), 503);
+                assert_eq!(error.code, "unavailable");
+                assert_eq!(
+                    current_attempts(w, "repo_1", "sha", std::slice::from_ref(&failed.job))?[0].id,
+                    failed.id
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
+    use crate::ci::priority::attempt_details;
+    const NO_REPOSITORY: &str = concat!(
+        "Deferred: no repository record. ",
+        "It runs when no other job is queued."
+    );
+    const CHANGES_REQUESTED: &str = concat!(
+        "Deferred: changes requested by reviewer (approvals 0/1). ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
+    const AUTOMATIC_RETRY: &str = "Automatic retry 1/3 of root. runner interruption Deferred:";
+    const MISSING_CHECK: &str = concat!(
+        "Deferred: required check missing failed on this commit. ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        enqueue(w, "sha", "feature")?;
+        let mut a = attempts_of(w, "repo_1", "sha")?.remove(0);
+        assert_eq!(attempt_details(w, &a)?.unwrap(), NO_REPOSITORY);
+        repo(w, &[], 1)?;
+        let p = pull(w, 1, "feature", false)?;
+        assert_eq!(attempt_details(w, &a)?, a.display_details());
+        review(w, 1, "reviewer", "request_changes", "Please fix", "sha")?;
+        let details = attempt_details(w, &a)?.unwrap();
+        assert!(details.contains(CHANGES_REQUESTED));
+        a.auto_retry = Some(AutoRetry {
+            root_attempt: "root".into(),
+            number: 1,
+        });
+        a.details = Some("runner interruption".into());
+        assert!(
+            attempt_details(w, &a)?
+                .unwrap()
+                .starts_with(AUTOMATIC_RETRY)
+        );
+        a.auto_retry = None;
+        a.details = None;
+        repo(w, &["missing"], 1)?;
+        assert_eq!(attempt_details(w, &a)?.unwrap(), MISSING_CHECK);
+        a.status = "in_progress".into();
+        assert_eq!(attempt_details(w, &a)?, a.display_details());
+        a.status = "queued".into();
+        let mut closed = p.clone();
+        closed.state = "closed".into();
+        save_pull(w, Some(&p), &closed)?;
+        assert!(
+            attempt_details(w, &a)?
+                .unwrap()
+                .contains("Deferred: no open pull request.")
+        );
+        branch_left(w, "repo_1", "sha", "feature", "next", T0)?;
+        let retried = retry(w, &a.id, 100, T0)?;
+        assert!(
+            attempt_details(w, &retried)?
+                .unwrap()
+                .contains("Deferred: no branch wants this commit.")
+        );
+        a.purpose = Purpose::CacheRefresh;
+        assert_eq!(
+            attempt_details(w, &a)?.unwrap(),
+            "Deferred: cache refresh. It runs when no other job is queued."
+        );
         Ok(())
     })
     .unwrap();

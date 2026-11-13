@@ -345,7 +345,7 @@ impl Ci {
         let (id, s) = (repo.id.clone(), sha.to_string());
         // Attempts of a job the pipeline no longer has, or had with another
         // definition, are history, not checks.
-        let (run, latest) = self
+        let (run, latest, priority) = self
             .inner
             .store
             .read(move |r| {
@@ -363,7 +363,11 @@ impl Ci {
                         Ok((a, source))
                     })
                     .collect::<AppResult<Vec<_>>>()?;
-                Ok((run, latest))
+                let priority = run
+                    .as_ref()
+                    .map(|run| priority::run_class(r, run))
+                    .transpose()?;
+                Ok((run, latest, priority))
             })
             .await?;
         let mut checks = Vec::new();
@@ -388,7 +392,18 @@ impl Ci {
                 checks_expected: expected,
             });
         };
-        self.run_checks(repo, &run, latest)
+        let mut report = self.run_checks(repo, &run, latest)?;
+        if let Some(priority) = priority {
+            for check in &mut report.checks {
+                if check.status == "queued" {
+                    check.details = priority.details(
+                        check.details.take(),
+                        run.waiting && check.attempt_id.is_none(),
+                    );
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// Checks of a registered run, shared with required-failure notification.
@@ -1047,6 +1062,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_and_queued_checks_explain_current_deferral() {
+        let (_d, ci, repo) = setup();
+        ci.inner
+            .store
+            .write(|w| {
+                for sha in ["queued", "waiting"] {
+                    queue::register(
+                        w,
+                        Registration {
+                            inputs: Default::default(),
+                            repo: "repo_1".into(),
+                            repo_path: "acme/demo".into(),
+                            sha: sha.into(),
+                            tree: None,
+                            branch: "feature".into(),
+                            protected: false,
+                            network: false,
+                            pipeline: PipelineState::Jobs {
+                                jobs: vec![job("test")],
+                            },
+                            selection: None,
+                        },
+                        1,
+                        "2026-10-27T00:00:00Z",
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let queued = ci.head_checks(&repo, "queued").await.unwrap();
+        assert_eq!(
+            queued.checks[0].details.as_deref(),
+            Some("Deferred: no repository record. It runs when no other job is queued.")
+        );
+        let waiting = ci.head_checks(&repo, "waiting").await.unwrap();
+        assert_eq!(
+            waiting.checks[0].details.as_deref(),
+            Some(
+                "Waiting for room in the CI queue (1 attempts at most). Deferred: no repository record."
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn non_default_refs_without_open_pulls_do_not_register_even_when_protected() {
         let (_d, ci, mut repo) = setup();
         repo.protected_branches = vec!["release".into()];
@@ -1089,7 +1149,11 @@ mod tests {
                     skipped_jobs: vec!["test".into()],
                 };
                 queue::register(w, reg("head", Some(selection)), 1, "2026-10-27T00:00:00Z")?;
-                queue::register(w, reg("busy", None), 1, "2026-10-27T00:00:00Z")?;
+                // Fill the active-class budget; deferred work no longer blocks main.
+                let mut busy = reg("busy", None);
+                busy.branch = "main".into();
+                busy.protected = true;
+                queue::register(w, busy, 1, "2026-10-27T00:00:00Z")?;
                 let mut all = reg("head", None);
                 all.protected = true;
                 all.branch = "main".into();

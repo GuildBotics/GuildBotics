@@ -1149,6 +1149,12 @@ is not the full sha of a commit of the repository.
   the source's artifacts, empty after the source's retention expires.
   For automatic retries, `details` includes `Automatic retry 1/3 of att_…`
   and the attempt's own reason. Check `details` carries the same text.
+  Queued attempts in classes 4a/4b append `Deferred: <reason>.` and when they
+  run: `It runs when no protected-branch, near-landing or normal job is queued.`
+  (4a), or `It runs when no other job is queued.` (4b). This follows any
+  automatic retry explanation. Checks for runs waiting for queue capacity
+  append only `Deferred: <reason>.` to the waiting message. Other classes
+  and non-queued attempts keep their existing details.
   `404 not_found` for an id of another repository.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}/log?tail_bytes={n}` →
   `{"log": "...", "log_bytes": 12345, "truncated": true, "pruned": false}`; `log`
