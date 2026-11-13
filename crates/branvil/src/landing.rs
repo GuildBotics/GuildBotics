@@ -1155,6 +1155,7 @@ mod tests {
                     queue::register(
                         w,
                         queue::Registration {
+                            inputs: Default::default(),
                             selection: None,
                             repo: repo.id.clone(),
                             repo_path: repo.path.clone(),

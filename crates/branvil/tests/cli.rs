@@ -150,7 +150,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
-    as_schema_24(&db);
+    as_schema_25(&db);
     let admin = |what: &str| {
         std::process::Command::new(BIN)
             .args(["admin", what, "--data-dir"])
