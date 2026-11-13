@@ -8,6 +8,19 @@ pub(super) struct Driver<'a> {
     pub sequence: std::sync::atomic::AtomicUsize,
 }
 impl contracts::TicketContractDriver for Driver<'_> {
+    fn reorder_before<'a>(&'a self, url: &'a str, before: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            self.owner
+                .tickets_put_on_board(
+                    REPO,
+                    url.rsplit('/').next().unwrap(),
+                    input(json!({"lane":"ready", "before":format!("{REPO}#{}", before.rsplit('/').next().unwrap())})),
+                )
+                .await
+                .map_err(|_| ServiceError::Failed)?;
+            Ok(())
+        })
+    }
     fn human_comment<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
         Box::pin(async move {
             let key = url.rsplit('/').next().unwrap();

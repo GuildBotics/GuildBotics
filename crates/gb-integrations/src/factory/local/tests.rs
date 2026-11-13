@@ -888,6 +888,30 @@ struct LocalTicketContractDriver<'a> {
     human: LocalService,
 }
 impl contracts::TicketContractDriver for LocalTicketContractDriver<'_> {
+    fn reorder_before<'a>(&'a self, url: &'a str, before: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            let _g = lock()?;
+            let r = Ref::locate(url, WorkKind::Ticket)?;
+            let mut items = self.member.store.items(WorkKind::Ticket, Some(&r.place))?;
+            items.retain(|(_, v)| v["lane"] == "ready");
+            items.sort_by_key(|(_, v)| v["rank"].as_i64());
+            let index = items
+                .iter()
+                .position(|(r, _)| r.url() == url)
+                .ok_or(ServiceError::NotFound)?;
+            let item = items.remove(index);
+            let index = items
+                .iter()
+                .position(|(r, _)| r.url() == before)
+                .ok_or(ServiceError::NotFound)?;
+            items.insert(index, item);
+            for (rank, (r, mut v)) in items.into_iter().enumerate() {
+                v["rank"] = json!(rank as i64 + 1);
+                self.member.store.save(&r, &mut v)?;
+            }
+            Ok(())
+        })
+    }
     fn human_comment<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
         Box::pin(async move {
             TicketService::comment(&self.human, url, body, None).await?;
@@ -899,6 +923,7 @@ impl contracts::TicketContractDriver for LocalTicketContractDriver<'_> {
             let r = Ref::locate(url, WorkKind::Ticket)?;
             let mut v = self.member.store.load(&r)?;
             v["assignees"] = json!([actor]);
+            v["rank"] = json!(self.member.lane_end(&r.place, &json!("ready"))?);
             v["lane"] = json!("ready");
             self.member.store.save(&r, &mut v)
         })

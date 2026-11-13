@@ -243,8 +243,15 @@ impl BranvilService {
         }
         let mut cards: Vec<_> = unique.into_values().collect();
         cards.sort_by(|a, b| {
-            (text(a, "lane") != "ready", text(a, "created_at"))
-                .cmp(&(text(b, "lane") != "ready", text(b, "created_at")))
+            let key = |c: &Value| {
+                if text(c, "lane") == "ready" {
+                    "rank"
+                } else {
+                    "created_at"
+                }
+            };
+            (text(a, "lane") != "ready", text(a, key(a)))
+                .cmp(&(text(b, "lane") != "ready", text(b, key(b))))
         });
         let mut out = vec![];
         for c in cards {

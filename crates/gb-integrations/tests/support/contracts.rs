@@ -382,9 +382,128 @@ pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str) 
 }
 
 pub trait TicketContractDriver: Send + Sync {
+    fn reorder_before<'a>(&'a self, url: &'a str, before: &'a str) -> ServiceFuture<'a, ()>;
     fn human_comment<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()>;
     fn assign<'a>(&'a self, url: &'a str, actor: &'a ActorName) -> ServiceFuture<'a, ()>;
     fn merge_reference<'a>(&'a self, ticket_url: &'a str) -> ServiceFuture<'a, ()>;
+}
+pub async fn ticket_board_order_contract(
+    t: &dyn TicketService,
+    driver: &dyn TicketContractDriver,
+    tracker: &str,
+    actor: &ActorName,
+    other: &ActorName,
+) {
+    let mut urls = vec![];
+    for i in 0..4 {
+        let mut q = ticket_request(tracker, &format!("Board order {i}"));
+        q.lane = Some(CreateLane::Ready);
+        q.assignee = Some(if i == 2 { other } else { actor }.clone());
+        if i == 2 {
+            q.body = format!("@{} Please check", actor.0);
+        }
+        urls.push(t.create_ticket(q).await.unwrap().target.url);
+    }
+    async fn order(t: &dyn TicketService, urls: &[String]) -> Vec<String> {
+        t.candidates()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|task| task.url.filter(|u| urls.contains(u)))
+            .collect()
+    }
+    assert_eq!(order(t, &urls).await, urls);
+    driver.reorder_before(&urls[2], &urls[0]).await.unwrap();
+    assert_eq!(
+        order(t, &urls).await,
+        vec![
+            urls[2].clone(),
+            urls[0].clone(),
+            urls[1].clone(),
+            urls[3].clone()
+        ]
+    );
+    driver.reorder_before(&urls[1], &urls[2]).await.unwrap();
+    t.update_ticket(
+        &urls[1],
+        UpdateTicket {
+            add_blocked_by: vec![urls[0].clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        order(t, &urls).await,
+        vec![urls[2].clone(), urls[0].clone(), urls[3].clone()]
+    );
+    t.update_ticket(
+        &urls[1],
+        UpdateTicket {
+            remove_blocked_by: vec![urls[0].clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        order(t, &urls).await,
+        vec![
+            urls[1].clone(),
+            urls[2].clone(),
+            urls[0].clone(),
+            urls[3].clone()
+        ]
+    );
+    // Moving to the working lane keeps its original creation-time ordering.
+    for url in [&urls[1], &urls[0]] {
+        t.move_ticket(
+            &Task {
+                url: Some(url.clone()),
+                ..Default::default()
+            },
+            MoveLane::InProgress,
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        order(t, &urls).await,
+        vec![
+            urls[2].clone(),
+            urls[3].clone(),
+            urls[0].clone(),
+            urls[1].clone()
+        ]
+    );
+    // A moved card joins the lane's end; a newly created card does too.
+    t.move_ticket(
+        &Task {
+            url: Some(urls[0].clone()),
+            ..Default::default()
+        },
+        MoveLane::Ready,
+    )
+    .await
+    .unwrap();
+    let mut q = ticket_request(tracker, "Board order appended");
+    q.lane = Some(CreateLane::Ready);
+    q.assignee = Some(actor.clone());
+    urls.push(t.create_ticket(q).await.unwrap().target.url);
+    assert_eq!(
+        order(t, &urls).await,
+        vec![
+            urls[2].clone(),
+            urls[3].clone(),
+            urls[0].clone(),
+            urls[4].clone(),
+            urls[1].clone()
+        ]
+    );
+    for url in &urls {
+        finish_task(t, url).await;
+    }
+    t.comment(&urls[2], "Confirmed", None).await.unwrap();
 }
 pub async fn ticket_patrol_contract(
     t: &dyn TicketService,
@@ -394,6 +513,7 @@ pub async fn ticket_patrol_contract(
     actor: ActorName,
     other_actor: ActorName,
 ) {
+    ticket_board_order_contract(t, driver, tracker, &actor, &other_actor).await;
     let mention = format!("@{}", actor.0);
     let elsewhere = format!("@{} Please provide context.", other_actor.0);
     // Every creation combination publishes complete assignment, relations and lane.
