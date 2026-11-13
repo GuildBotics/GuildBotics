@@ -199,6 +199,10 @@ fn reviews_drafts_and_answers_are_recomputed_at_claim_time() {
 
 #[test]
 fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
+    const FAILED_DETAILS: &str = concat!(
+        "Deferred: required check test failed on this commit. ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
     let (_d, s) = store();
     s.write_sync(|w| {
         repo(w, &["test"], 1)?;
@@ -217,7 +221,24 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
             T0,
         )?;
         assert_eq!(class(w, "sha")?, Class::Deferred);
+        let queued = attempts_of(w, "repo_1", "sha")?
+            .into_iter()
+            .find(|a| a.job.name == "optional")
+            .unwrap();
+        assert_eq!(queued.status, "queued");
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &queued)?.as_deref(),
+            Some(FAILED_DETAILS)
+        );
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &failed)?,
+            failed.display_details()
+        );
         retry(w, &failed.id, 100, T0)?;
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &queued)?,
+            queued.display_details()
+        );
         assert_eq!(class(w, "sha")?, Class::Normal);
         let optional = take(w)?;
         assert_eq!(optional.attempt.job.name, "optional");
@@ -557,35 +578,68 @@ fn manual_retry_uses_the_class_after_replacing_only_its_own_failure() {
 #[test]
 fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
     use crate::ci::priority::attempt_details;
+    const NO_REPOSITORY: &str = concat!(
+        "Deferred: no repository record. ",
+        "It runs when no other job is queued."
+    );
+    const CHANGES_REQUESTED: &str = concat!(
+        "Deferred: changes requested by reviewer (approvals 0/1). ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
+    const AUTOMATIC_RETRY: &str = "Automatic retry 1/3 of root. runner interruption Deferred:";
+    const MISSING_CHECK: &str = concat!(
+        "Deferred: required check missing failed on this commit. ",
+        "It runs when no protected-branch, near-landing or normal job is queued."
+    );
     let (_d, s) = store();
     s.write_sync(|w| {
         enqueue(w, "sha", "feature")?;
         let mut a = attempts_of(w, "repo_1", "sha")?.remove(0);
-        assert_eq!(attempt_details(w, &a)?.unwrap(), "Deferred: no repository record. It runs when no other job is queued.");
+        assert_eq!(attempt_details(w, &a)?.unwrap(), NO_REPOSITORY);
         repo(w, &[], 1)?;
         let p = pull(w, 1, "feature", false)?;
         assert_eq!(attempt_details(w, &a)?, a.display_details());
         review(w, 1, "reviewer", "request_changes", "Please fix", "sha")?;
         let details = attempt_details(w, &a)?.unwrap();
-        assert!(details.contains("Deferred: changes requested by reviewer (approvals 0/1). It runs when no protected-branch, near-landing or normal job is queued."));
-        a.auto_retry = Some(AutoRetry { root_attempt: "root".into(), number: 1 });
+        assert!(details.contains(CHANGES_REQUESTED));
+        a.auto_retry = Some(AutoRetry {
+            root_attempt: "root".into(),
+            number: 1,
+        });
         a.details = Some("runner interruption".into());
-        assert!(attempt_details(w, &a)?.unwrap().starts_with("Automatic retry 1/3 of root. runner interruption Deferred:"));
+        assert!(
+            attempt_details(w, &a)?
+                .unwrap()
+                .starts_with(AUTOMATIC_RETRY)
+        );
         a.auto_retry = None;
         a.details = None;
         repo(w, &["missing"], 1)?;
-        assert_eq!(attempt_details(w, &a)?.unwrap(), "Deferred: required check missing failed on this commit. It runs when no protected-branch, near-landing or normal job is queued.");
+        assert_eq!(attempt_details(w, &a)?.unwrap(), MISSING_CHECK);
         a.status = "in_progress".into();
         assert_eq!(attempt_details(w, &a)?, a.display_details());
         a.status = "queued".into();
-        let mut closed = p.clone(); closed.state = "closed".into();
+        let mut closed = p.clone();
+        closed.state = "closed".into();
         save_pull(w, Some(&p), &closed)?;
-        assert!(attempt_details(w, &a)?.unwrap().contains("Deferred: no open pull request."));
+        assert!(
+            attempt_details(w, &a)?
+                .unwrap()
+                .contains("Deferred: no open pull request.")
+        );
         branch_left(w, "repo_1", "sha", "feature", "next", T0)?;
         let retried = retry(w, &a.id, 100, T0)?;
-        assert!(attempt_details(w, &retried)?.unwrap().contains("Deferred: no branch wants this commit."));
+        assert!(
+            attempt_details(w, &retried)?
+                .unwrap()
+                .contains("Deferred: no branch wants this commit.")
+        );
         a.purpose = Purpose::CacheRefresh;
-        assert_eq!(attempt_details(w, &a)?.unwrap(), "Deferred: cache refresh. It runs when no other job is queued.");
+        assert_eq!(
+            attempt_details(w, &a)?.unwrap(),
+            "Deferred: cache refresh. It runs when no other job is queued."
+        );
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 }
