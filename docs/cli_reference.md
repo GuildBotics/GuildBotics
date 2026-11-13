@@ -435,7 +435,7 @@ Arguments:
           Member subcommand and its options
 ```
 
-Start the GuildBotics server before running member commands. Use `member --workspace <path>` to verify the selected workspace.
+On the Hub, start the GuildBotics server before running member commands; use `member --workspace <path>` to verify the selected local workspace. On another machine, forward the Hub's port and run `guildbotics connect` first; the Hub selects the workspace.
 See the [member capability reference](../guildbotics/templates/member/reference.md) for examples and option semantics.
 
 ```text
