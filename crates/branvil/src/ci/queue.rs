@@ -14,6 +14,8 @@
 //!   └─no runner───────▶ completed(startup_failure)  the runner stops and finishes)
 //! ```
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::pipeline::JobDef;
@@ -119,6 +121,9 @@ pub struct Run {
     pub protected_branches: Vec<String>,
     /// Successful delivery of this run's required-check failure notice.
     pub failure_notified_at: Option<String>,
+    /// The input digest of every job of the pipeline with paths, by job
+    /// name, as of the latest registration (`Ci::job_inputs`).
+    pub inputs: BTreeMap<String, String>,
     /// A final required-check failure awaits delivery (maintained with every
     /// run/attempt change, so sweeps never scan successful history).
     pub failure_pending: bool,
@@ -207,6 +212,9 @@ pub struct Attempt {
     pub artifacts: Vec<ArtifactMeta>,
     /// Logs and artifacts were deleted by retention.
     pub files_pruned: bool,
+    /// The run's input digest of the job when it was claimed; none for a
+    /// job without paths or an attempt claimed before its run had one.
+    pub inputs: Option<String>,
 }
 
 impl Attempt {
@@ -306,6 +314,23 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
         out.push(IxEntry {
             table: store::IX_CI_REFRESH,
             key: Key::new().s(&a.repo).s(&a.job.name).s(key).bytes(),
+            value: a.id.as_bytes().to_vec(),
+        });
+    }
+    if a.status == "completed"
+        && a.conclusion.as_deref() == Some("success")
+        && a.reused_from.is_none()
+        && !a.files_pruned
+        && let Some(digest) = &a.inputs
+    {
+        out.push(IxEntry {
+            table: store::IX_CI_INPUTS,
+            key: Key::new()
+                .s(&a.repo)
+                .s(&a.job.name)
+                .s(digest)
+                .s(&a.id)
+                .bytes(),
             value: a.id.as_bytes().to_vec(),
         });
     }
@@ -549,6 +574,7 @@ fn new_attempt(w: &Wtx, run: &Run, job: &JobDef, network: bool, now: &str) -> Ap
         superseded: false,
         artifacts: Vec::new(),
         files_pruned: false,
+        inputs: None,
     })
 }
 
@@ -572,6 +598,8 @@ pub struct Registration {
     pub protected: bool,
     pub pipeline: PipelineState,
     pub network: bool,
+    /// The run's `inputs` from now on.
+    pub inputs: BTreeMap<String, String>,
 }
 
 /// Records that `branch` wants CI of `sha`. Creates the run or adds the
@@ -632,8 +660,10 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
             superseded_by: None,
             failure_notified_at: None,
             failure_pending: false,
+            inputs: BTreeMap::new(),
         },
     };
+    run.inputs = reg.inputs;
     run.selection = if run.cache_scope == "protected" {
         None
     } else {
@@ -924,9 +954,11 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
             candidates.clear();
         }
         // A protected branch may have come to want this commit since admission.
-        if let Some(run) = get_run(w, &a.repo, &a.sha)? {
-            a.cache_scope = run.cache_scope;
+        let run = get_run(w, &a.repo, &a.sha)?;
+        if let Some(run) = &run {
+            a.cache_scope = run.cache_scope.clone();
         }
+        a.inputs = run.and_then(|run| run.inputs.get(&a.job.name).cloned());
         candidates.push(a);
     }
     let mut sources = std::collections::BTreeMap::new();
@@ -1808,6 +1840,7 @@ mod tests {
 
     pub(super) fn reg(sha: &str, branch: &str, jobs: &[&str]) -> Registration {
         Registration {
+            inputs: Default::default(),
             selection: None,
             repo: "repo_1".into(),
             repo_path: "acme/demo".into(),
@@ -2361,6 +2394,121 @@ mod tests {
                     },
                     "{mismatch}"
                 );
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    /// `same_tree` with the input digest `d1` of its job.
+    fn with_inputs(sha: &str) -> Registration {
+        Registration {
+            inputs: BTreeMap::from([("test".to_string(), "d1".to_string())]),
+            ..same_tree(sha)
+        }
+    }
+
+    /// The attempts indexed by `test`'s input digest `d1`.
+    fn by_inputs(r: &impl Rd) -> AppResult<Vec<String>> {
+        let prefix = Key::new().s("repo_1").s("test").s("d1").bytes();
+        Ok(
+            r.prefix_raw(store::IX_CI_INPUTS, &prefix, None, usize::MAX)?
+                .into_iter()
+                .map(|(_, id)| String::from_utf8(id).unwrap())
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn claims_carry_the_runs_input_digest_of_their_job_for_every_purpose() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            let mut reg = reg("s1", "main", &["test", "plain"]);
+            reg.inputs = BTreeMap::from([("test".to_string(), "d1".to_string())]);
+            register(w, reg, 10, T0)?;
+            let mut claimed = BTreeMap::new();
+            while let Some(c) = claim(w, "r", 60, T0)? {
+                claimed.insert(c.attempt.job.name.clone(), c.attempt.inputs);
+            }
+            assert_eq!(
+                claimed,
+                BTreeMap::from([
+                    ("plain".to_string(), None),
+                    ("test".to_string(), Some("d1".to_string())),
+                ])
+            );
+            Ok(())
+        })
+        .unwrap();
+        let source = cached_source(&s);
+        s.write_sync(|w| {
+            let check = refresh_check(w, &source, "s2", 10)?;
+            register(
+                w,
+                Registration {
+                    inputs: BTreeMap::from([("test".to_string(), "d2".to_string())]),
+                    ..cached("s2")
+                },
+                10,
+                T1,
+            )?;
+            let refresh = claim(w, "runner", 60, T1)?.unwrap().attempt;
+            assert_eq!(Some(refresh.id), check.cache_refresh);
+            assert_eq!(refresh.purpose, Purpose::CacheRefresh);
+            assert_eq!(refresh.inputs.as_deref(), Some("d2"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn only_actual_kept_successes_with_inputs_are_found_by_them() {
+        for case in ["success", "failure", "no_inputs", "pruned"] {
+            let (_d, s) = store();
+            s.write_sync(|w| {
+                let reg = match case {
+                    "no_inputs" => same_tree("s1"),
+                    _ => with_inputs("s1"),
+                };
+                register(w, reg, 10, T0)?;
+                let c = claim(w, "r", 60, T0)?.unwrap();
+                assert!(by_inputs(w)?.is_empty(), "unfinished");
+                let conclusion = if case == "failure" {
+                    "failure"
+                } else {
+                    "success"
+                };
+                let info = ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    ..Default::default()
+                };
+                let done = finish(w, &c.attempt.id, &c.lease, conclusion, None, info, 10, T0)?;
+                if case == "pruned" {
+                    mark_pruned(w, &done.id)?;
+                }
+                let found = by_inputs(w)?;
+                assert_eq!(
+                    found,
+                    if case == "success" {
+                        vec![done.id.clone()]
+                    } else {
+                        vec![]
+                    },
+                    "{case}"
+                );
+                if case == "success" {
+                    // A reused success is not an execution of its inputs.
+                    register(w, with_inputs("s2"), 10, T1)?;
+                    let c = claim(w, "r", 60, T1)?.unwrap();
+                    assert_eq!(c.reuse.unwrap().attempt_id, done.id);
+                    let info = ResultInfo {
+                        image_digest: Some(DIGEST.into()),
+                        reused_from: Some(done.id.clone()),
+                        ..Default::default()
+                    };
+                    finish(w, &c.attempt.id, &c.lease, "success", None, info, 10, T1)?;
+                    assert_eq!(by_inputs(w)?, found);
+                }
                 Ok(())
             })
             .unwrap();

@@ -270,14 +270,14 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 24 wrote.
+    // A backup of the previous schema version: what version 25 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_24(&db);
+    as_schema_25(&db);
     let bytes = std::fs::read(&db).unwrap();
     let mut old = manifest.clone();
-    old["schema_version"] = json!(24);
+    old["schema_version"] = json!(25);
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {
             f["bytes"] = json!(bytes.len());
@@ -311,12 +311,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 24 to 25"),
+        text(&out).contains("from schema version 25 to 26"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("pull request(s) upgraded to have their host checks read again"),
+        text(&out).contains("upgraded to have no input digests yet"),
         "{}",
         text(&out)
     );

@@ -458,7 +458,9 @@ impl Ci {
                 gate.is_some() || repo.is_protected(branch),
             )
             .await?;
+        let inputs = self.job_inputs(repo, sha, &pipeline).await?;
         let reg = Registration {
+            inputs,
             selection,
             repo: repo.id.clone(),
             repo_path: repo.path.clone(),
@@ -1069,6 +1071,7 @@ mod tests {
             .write(move |w| {
                 w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
                 let reg = |sha: &str, selection| Registration {
+                    inputs: Default::default(),
                     repo: id.clone(),
                     repo_path: path.clone(),
                     sha: sha.into(),
@@ -1124,6 +1127,7 @@ mod tests {
                     key_files: vec![],
                 });
                 let reg = |sha: &str| Registration {
+                    inputs: Default::default(),
                     selection: None,
                     repo: id.clone(),
                     repo_path: path.clone(),
@@ -1213,18 +1217,213 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
-    async fn hidden_gate_refs_reconcile_exact_current_gates_and_supersede_on_move_or_delete() {
-        let (temp, ci, mut repo) = setup();
+    /// A service over `ci`'s store, for tests that register through `App`.
+    fn app(temp: &tempfile::TempDir, ci: &Ci) -> crate::app::Shared {
         ci.inner.layout.create().unwrap();
         let config = crate::config::Config::load(None, Some(temp.path()), None, None).unwrap();
-        let app = App::new(
+        App::new(
             config,
             "http://127.0.0.1:7878".into(),
             ci.inner.store.clone(),
             std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
+        )
+    }
+
+    /// Commits everything in the work tree `work` and returns the commit.
+    pub(super) async fn commit_all(git: &Git, work: &std::path::Path, message: &str) -> String {
+        let work = work.to_str().unwrap();
+        git.run_ok(None, &["-C", work, "add", "-A"]).await.unwrap();
+        let out = git
+            .run_env(
+                None,
+                &["-C", work, "commit", "--allow-empty", "-qm", message],
+                &[
+                    ("GIT_AUTHOR_NAME", "Test"),
+                    ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+                    ("GIT_COMMITTER_NAME", "Test"),
+                    ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+                ],
+            )
+            .await
+            .unwrap();
+        assert!(out.ok(), "{}", out.stderr);
+        git.run_ok(None, &["-C", work, "rev-parse", "HEAD"])
+            .await
+            .unwrap()
+    }
+
+    /// An open pull request of `repo` from `head` into `base`.
+    fn open_pull(repo: &str, number: u64, head: &str, base: &str) -> crate::model::Pull {
+        crate::model::Pull {
+            repo: repo.into(),
+            number,
+            title: "Gate ownership".into(),
+            body: String::new(),
+            state: "open".into(),
+            merged: false,
+            draft: false,
+            author: "member1".into(),
+            head: head.into(),
+            base: base.into(),
+            reviewers: vec![],
+            tickets: vec![],
+            labels: vec![],
+            reviewed_by: vec![],
+            ready_at: None,
+            created_at: util::now(),
+            updated_at: util::now(),
+            closed_at: None,
+            merged_at: None,
+            merge_sha: None,
+            merged_head: None,
+            merged_base: None,
+            upstream: None,
+            revision: 1,
+        }
+    }
+
+    fn put_pull(w: &store::Wtx, pull: &crate::model::Pull) -> AppResult<()> {
+        crate::model::put_indexed(
+            w,
+            store::PULLS,
+            &crate::model::Pull::key(&pull.repo, pull.number),
+            None,
+            pull,
+            crate::model::pull_index(pull),
+        )
+    }
+
+    /// The input digest by its definition, independently of `Ci::job_inputs`.
+    pub(super) async fn raw_digest(
+        git: &Git,
+        dir: &std::path::Path,
+        sha: &str,
+        paths: &[&str],
+    ) -> String {
+        let specs: Vec<String> = paths.iter().map(|p| format!(":(glob){p}")).collect();
+        let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        let mut args = vec![
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--raw",
+            empty_tree,
+            sha,
+            "--",
+        ];
+        args.extend(specs.iter().map(String::as_str));
+        let out = git.run(Some(dir), &args).await.unwrap();
+        assert!(out.ok() && !out.stdout.is_empty(), "{}", out.stderr);
+        util::hex(&util::sha256(&out.stdout))
+    }
+
+    /// A pipeline of `lint` with `paths` and `test` without.
+    pub(super) fn inputs_pipeline(paths: &str) -> String {
+        format!(
+            "[[jobs]]\nname = 'lint'\nimage = 'alpine'\ncommands = ['true']\npaths = [{paths}]\n\n\
+             [[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn registrations_record_the_inputs_of_the_jobs_with_paths() {
+        let (temp, ci, repo) = setup();
+        let app = app(&temp, &ci);
+        let (saved, pull) = (repo.clone(), open_pull(&repo.id, 1, "feature", "main"));
+        app.store
+            .write(move |w| {
+                w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
+                put_pull(w, &pull)
+            })
+            .await
+            .unwrap();
+        let dir = app.git.repo_dir(&repo.path);
+        app.git.init_bare(&dir, "main").await.unwrap();
+        let work = temp.path().join("work");
+        let w = work.to_str().unwrap();
+        app.git
+            .run_ok(None, &["init", "-q", "-b", "main", w])
+            .await
+            .unwrap();
+        std::fs::create_dir_all(work.join(".branvil")).unwrap();
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        std::fs::write(work.join(".branvil/ci.toml"), inputs_pipeline("'src/**'")).unwrap();
+        std::fs::write(work.join("src/a.txt"), "a").unwrap();
+        std::fs::write(work.join("src/b.txt"), "b").unwrap();
+        let main = commit_all(&app.git, &work, "main").await;
+        std::fs::write(work.join("src/a.txt"), "changed").unwrap();
+        let head = commit_all(&app.git, &work, "head").await;
+        let push = |refspecs: Vec<String>| {
+            let (git, dir) = (app.git.clone(), dir.clone());
+            async move {
+                let mut args = vec!["-C", w, "push", "-q", dir.to_str().unwrap()];
+                args.extend(refspecs.iter().map(String::as_str));
+                git.run_ok(None, &args).await.unwrap();
+            }
+        };
+        push(vec![
+            format!("{main}:refs/heads/main"),
+            format!("{head}:refs/heads/feature"),
+        ])
+        .await;
+        let run = |sha: &str| {
+            let (id, sha) = (repo.id.clone(), sha.to_string());
+            let store = app.store.clone();
+            async move {
+                store
+                    .read(move |r| queue::get_run(r, &id, &sha))
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        let lint = |digest: String| BTreeMap::from([("lint".to_string(), digest)]);
+        // The default branch and the pull request's head.
+        assert_eq!(app.ci.reconcile(&app).await.unwrap(), 2);
+        let expected = lint(raw_digest(&app.git, &dir, &head, &["src/**"]).await);
+        assert_eq!(
+            run(&main).await.inputs,
+            lint(raw_digest(&app.git, &dir, &main, &["src/**"]).await)
         );
+        assert_eq!(run(&head).await.inputs, expected);
+        assert_ne!(run(&main).await.inputs, expected);
+        // An upgraded run has none until the reconciler registers it again;
+        // a run read with other paths gets the digest of the commit's own.
+        for stale in [BTreeMap::new(), lint("stale".into())] {
+            let mut old = run(&head).await;
+            old.inputs = stale.clone();
+            if !stale.is_empty()
+                && let PipelineState::Jobs { jobs } = &mut old.pipeline
+            {
+                jobs[0].paths = vec!["other/**".into()];
+            }
+            app.store
+                .write(move |w| queue::put_run(w, &old))
+                .await
+                .unwrap();
+            assert_eq!(app.ci.reconcile(&app).await.unwrap(), 1);
+            assert_eq!(run(&head).await.inputs, expected);
+        }
+        // A commit that changes the job's paths has the digest of its paths.
+        std::fs::write(
+            work.join(".branvil/ci.toml"),
+            inputs_pipeline("'src/a.txt'"),
+        )
+        .unwrap();
+        let next = commit_all(&app.git, &work, "narrower paths").await;
+        push(vec![format!("{next}:refs/heads/feature")]).await;
+        assert_eq!(app.ci.reconcile(&app).await.unwrap(), 1);
+        let narrow = raw_digest(&app.git, &dir, &next, &["src/a.txt"]).await;
+        assert_ne!(narrow, raw_digest(&app.git, &dir, &next, &["src/**"]).await);
+        assert_eq!(run(&next).await.inputs, lint(narrow));
+    }
+
+    #[tokio::test]
+    async fn hidden_gate_refs_reconcile_exact_current_gates_and_supersede_on_move_or_delete() {
+        let (temp, ci, mut repo) = setup();
+        let app = app(&temp, &ci);
         // Even an explicit protection pattern cannot make a hidden gate save caches.
         repo.protected_branches = vec!["gate/7".into()];
         let saved_repo = repo.clone();
@@ -1248,40 +1447,9 @@ mod tests {
             "[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\n",
         )
         .unwrap();
-        app.git
-            .run_ok(None, &["-C", work.to_str().unwrap(), "add", "."])
-            .await
-            .unwrap();
         let mut shas = Vec::new();
         for message in ["first", "second"] {
-            let out = app
-                .git
-                .run_env(
-                    None,
-                    &[
-                        "-C",
-                        work.to_str().unwrap(),
-                        "commit",
-                        "--allow-empty",
-                        "-qm",
-                        message,
-                    ],
-                    &[
-                        ("GIT_AUTHOR_NAME", "Test"),
-                        ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-                        ("GIT_COMMITTER_NAME", "Test"),
-                        ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-                    ],
-                )
-                .await
-                .unwrap();
-            assert!(out.ok(), "{}", out.stderr);
-            shas.push(
-                app.git
-                    .run_ok(None, &["-C", work.to_str().unwrap(), "rev-parse", "HEAD"])
-                    .await
-                    .unwrap(),
-            );
+            shas.push(commit_all(&app.git, &work, message).await);
         }
         app.git
             .run_ok(
@@ -1343,42 +1511,10 @@ mod tests {
             error: None,
         };
         let saved = entry.clone();
-        let pull = crate::model::Pull {
-            repo: repo.id.clone(),
-            number: entry.number,
-            title: "Gate ownership".into(),
-            body: String::new(),
-            state: "open".into(),
-            merged: false,
-            draft: false,
-            author: "member1".into(),
-            head: "feature".into(),
-            base: entry.base.clone(),
-            reviewers: vec![],
-            tickets: vec![],
-            labels: vec![],
-            reviewed_by: vec![],
-            ready_at: None,
-            created_at: util::now(),
-            updated_at: util::now(),
-            closed_at: None,
-            merged_at: None,
-            merge_sha: None,
-            merged_head: None,
-            merged_base: None,
-            upstream: None,
-            revision: 1,
-        };
+        let pull = open_pull(&repo.id, entry.number, "feature", &entry.base);
         app.store
             .write(move |w| {
-                crate::model::put_indexed(
-                    w,
-                    store::PULLS,
-                    &crate::model::Pull::key(&pull.repo, pull.number),
-                    None,
-                    &pull,
-                    crate::model::pull_index(&pull),
-                )?;
+                put_pull(w, &pull)?;
                 w.put(
                     store::LANDING,
                     &crate::model::Pull::key(&saved.repo, saved.number),
@@ -1570,6 +1706,7 @@ mod tests {
     async fn a_run_takes_its_commits_pipeline_and_counts_only_its_jobs() {
         let (_d, ci, repo) = setup();
         let reg = |jobs: Vec<JobDef>| Registration {
+            inputs: Default::default(),
             selection: None,
             repo: repo.id.clone(),
             repo_path: repo.path.clone(),
@@ -1629,6 +1766,7 @@ mod tests {
         let (_d, ci, repo) = setup();
         let now = util::now();
         let reg = |sha: &str, jobs: Vec<JobDef>| Registration {
+            inputs: Default::default(),
             selection: None,
             repo: repo.id.clone(),
             repo_path: repo.path.clone(),

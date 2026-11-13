@@ -1264,46 +1264,6 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_upgrade_puts_publications_past_the_registration_of_their_host_checks() {
-    let (mut w, _gh) = followed().await;
-    with_aiko_account(&w).await;
-    w.push_change("feat", "f.txt", "one\n");
-    let n = w.open_pull("feat", json!([])).await["number"]
-        .as_u64()
-        .unwrap();
-    let (st, v) = publish(&w, n).await;
-    assert_eq!(st, StatusCode::OK, "{v}");
-    w.server.stop();
-    let db = w.server.data.join("branvil.redb");
-    let mut pulls = records(&db, "pulls");
-    as_schema_24(&db);
-    let out = std::process::Command::new(BIN)
-        .args(["admin", "upgrade", "--data-dir"])
-        .arg(&w.server.data)
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    pulls[0]["upstream"]["checks_registered_by"] = Value::Null;
-    pulls[0]["upstream"]["checks_settled"] = json!(false);
-    assert_eq!(records(&db, "pulls"), pulls);
-    let out = std::process::Command::new(BIN)
-        .args(["admin", "check", "--data-dir"])
-        .arg(&w.server.data)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_workflow_run_that_failed_without_a_job_is_a_failed_check() {
     let (w, gh) = followed().await;
     with_aiko_account(&w).await;

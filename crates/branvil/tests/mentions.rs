@@ -253,7 +253,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
     let before = w.server.ok(&query(), &w.aiko).await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_24(&db);
+    as_schema_25(&db);
     let old = tables(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0), ("upgrade", 0)] {
         let out = std::process::Command::new(BIN)
@@ -284,7 +284,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-24-")
+                .starts_with("branvil-schema-25-")
         })
         .unwrap();
     assert_eq!(tables(&copy), old);

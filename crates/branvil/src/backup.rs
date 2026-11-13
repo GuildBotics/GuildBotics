@@ -577,6 +577,7 @@ mod tests {
                     cache: None,
                 };
                 let registration = queue::Registration {
+                    inputs: Default::default(),
                     selection: None,
                     repo: "repo_1".into(),
                     repo_path: "acme/demo".into(),
