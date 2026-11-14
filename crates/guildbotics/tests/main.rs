@@ -10,6 +10,7 @@ mod hub_server;
 #[cfg(feature = "hub")]
 mod image_cli;
 mod install_cli;
+mod install_isolation;
 #[cfg(feature = "hub")]
 mod server;
 #[cfg(feature = "hub")]
