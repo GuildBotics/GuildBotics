@@ -17,7 +17,7 @@
 scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ```
 
-開発用のデータとポート（両サービス共通で 8866）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac、CIはLinux。Windowsの手順はOpenSSHでHubへ接続するクライアントに限る。
+開発用のデータとポート（両サービス共通で 8866）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac。Branvil の CI は Linux、GitHub Actions は macOS の Clippy と Windows クライアントの契約テストを行う。Windows のクライアントは OpenSSH で Hub へ接続する。
 
 ## 実装と責務境界
 
@@ -97,6 +97,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
 lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates
 ```
+
+クライアントだけのビルドは `cargo build --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu --release`。既定の `hub` feature は全コマンドと microVM を含む。Windows の GitHub Actions は同じ target でビルドし、クライアント・キーチェーン・パス・改行・インストール・Git credential・書き戻しの契約を検査する。Branvil の `rust-clippy` もこの target のクライアントを検査する。
 
 CI は Rust のテストを 2 つのジョブに分ける。`rust-test-branvil` が `branvil` と `loopback-auth` を、`rust-test` が残りの crate を流す。PR の head では `paths` に合う変更があるジョブだけが流れるので、各ジョブの `paths` には、テストする crate がビルドするワークスペースの crate をすべて含める（対象と `paths` は `tests/test_cargo_workspace.py` が固定する）。
 

@@ -272,8 +272,8 @@ mod tests {
     async fn receipt_reload_keeps_conflicts_atomic_and_is_removed_after_success() {
         let data = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("a"), "old").unwrap();
-        std::fs::write(root.path().join("b"), "old").unwrap();
+        std::fs::write(root.path().join("a"), "old\r\n").unwrap();
+        std::fs::write(root.path().join("b"), "old\r\n").unwrap();
         let copy = Copy::new(
             root.path().into(),
             "/work".into(),
@@ -286,7 +286,7 @@ mod tests {
         drop(copy);
 
         let changes =
-            b"{\"path\":\"a\",\"content\":\"bmV3\"}\n{\"path\":\"b\",\"content\":\"bmV3\"}";
+            b"{\"path\":\"a\",\"content\":\"bmV3DQo=\"}\n{\"path\":\"b\",\"content\":\"bmV3DQo=\"}";
         let answer = serde_json::json!({"state":"finished","status":200,
             "result":{"output":"done", "worktree_changes":std::str::from_utf8(changes).unwrap()}});
         let (owner, server) = serve(reqwest::StatusCode::OK, answer).await;
@@ -297,10 +297,10 @@ mod tests {
         assert!(error.to_string().contains("b"));
         assert_eq!(
             std::fs::read_to_string(root.path().join("a")).unwrap(),
-            "old"
+            "old\r\n"
         );
         assert!(load(data.path(), "run.1").unwrap().is_some());
-        std::fs::write(root.path().join("b"), "old").unwrap();
+        std::fs::write(root.path().join("b"), "old\r\n").unwrap();
         assert_eq!(
             collect_command(&owner, "run.1", "en", data.path())
                 .await
@@ -317,11 +317,11 @@ mod tests {
         assert!(load(data.path(), "run.1").unwrap().is_none());
         assert_eq!(
             std::fs::read_to_string(root.path().join("a")).unwrap(),
-            "new"
+            "new\r\n"
         );
         assert_eq!(
             std::fs::read_to_string(root.path().join("b")).unwrap(),
-            "new"
+            "new\r\n"
         );
     }
 }

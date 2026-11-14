@@ -23,8 +23,7 @@ pub const CSRF_HEADER: &str = "x-guildbotics-csrf";
 pub const SESSION_SECONDS: i64 = 30 * 24 * 3600;
 const OWNER_FILE: &str = "owner-file";
 /// The owner token file, beside the records.
-pub(crate) const OWNER_TOKEN: &str = "owner.token";
-const TOKEN_PREFIX: &str = "gbt";
+pub(crate) use crate::auth_protocol::{OWNER_TOKEN, TOKEN_PREFIX, directory, parse_token, proof};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -414,27 +413,6 @@ fn new_token() -> (String, String, String) {
     (id, loopback_auth::digest(&secret), text)
 }
 
-/// What the holder of a token's digest answers to a nonce.
-pub(crate) fn proof(digest: &str, token_id: &str, nonce: &str) -> String {
-    let message = format!("guildbotics-local-api-proof\n{nonce}\n{token_id}");
-    loopback_auth::hex(&loopback_auth::hmac_sha256(
-        digest.as_bytes(),
-        message.as_bytes(),
-    ))
-}
-
-/// The id and the secret of a token text.
-pub(crate) fn parse_token(text: &str) -> Option<(&str, &str)> {
-    let rest = text.trim().strip_prefix(TOKEN_PREFIX)?.strip_prefix('_')?;
-    let (id, secret) = rest.split_once('_')?;
-    (id.len() == 16
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        && !secret.is_empty())
-    .then_some((id, secret))
-}
-
 fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -446,11 +424,6 @@ fn iso(timestamp: f64) -> String {
     chrono::DateTime::from_timestamp_micros((timestamp * 1e6) as i64)
         .unwrap_or_default()
         .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
-}
-
-/// Where the credentials of the server on `port` are kept, under `data`.
-pub(crate) fn directory(data: &Path, port: u16) -> PathBuf {
-    data.join("server").join(port.to_string())
 }
 
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
@@ -780,6 +753,7 @@ mod tests {
                 } else if kind.is_file()
                     && path.extension().is_some_and(|ext| ext == "rs")
                     && !path.ends_with("gb-server/src/auth.rs")
+                    && !path.ends_with("gb-server/src/auth_protocol.rs")
                 {
                     let source = std::fs::read_to_string(&path).unwrap().to_ascii_lowercase();
                     if carriers.iter().any(|carrier| source.contains(carrier)) {

@@ -572,7 +572,7 @@ pub fn network(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<crate::runtime::Network, Sentence> {
+) -> Result<crate::Network, Sentence> {
     network_reading(config, templates, read_only).map(|(network, _)| network)
 }
 
@@ -580,7 +580,7 @@ pub fn network_reading(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
+) -> Result<(crate::Network, serde_json::Value), Sentence> {
     network_with_resolvers(config, templates, read_only, device_nameservers)
 }
 
@@ -589,7 +589,7 @@ fn network_with_resolvers(
     templates: &Path,
     read_only: bool,
     resolvers: impl FnOnce() -> Vec<String>,
-) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
+) -> Result<(crate::Network, serde_json::Value), Sentence> {
     let own = config.join(gb_config::agent_environment::PATH);
     let path = if own.exists() {
         own
@@ -680,7 +680,7 @@ fn network_with_resolvers(
         _ => nameservers.join(", "),
     };
     let view = serde_json::json!({"network":{"mode": match policy.mode { Mode::Deny=>"deny", Mode::Allowlist=>"allowlist", Mode::Unrestricted=>"unrestricted" },"allowed_domains":policy.allowed_domains,"allow_local_network":policy.allow_local_network},"dns":{"declared":declared,"nameservers":nameservers,"problem":""}});
-    let network = crate::runtime::Network {
+    let network = crate::Network {
         unrestricted: !read_only && policy.mode == Mode::Unrestricted,
         domains: if read_only {
             vec![]
@@ -691,6 +691,7 @@ fn network_with_resolvers(
         host_ports: vec![],
         nameservers,
     };
+    #[cfg(feature = "host")]
     network.policy().map_err(Sentence::Text)?;
     Ok((network, view))
 }

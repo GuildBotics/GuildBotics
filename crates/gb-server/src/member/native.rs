@@ -39,33 +39,7 @@ pub struct Native {
     pub guest: Option<gb_environment::guest_process::Channel>,
     pub keychain: Arc<dyn Keychain>,
 }
-/// Compare the executable builds, even when they share a package version.
-pub fn binary_version() -> anyhow::Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    static VERSION: OnceLock<String> = OnceLock::new();
-    if let Some(version) = VERSION.get() {
-        return Ok(version.clone());
-    }
-    let mut file = std::fs::File::open(std::env::current_exe()?)?;
-    let mut hasher = Sha256::new();
-    let mut bytes = [0; 65536];
-    loop {
-        let count = file.read(&mut bytes)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&bytes[..count]);
-    }
-    let hash = hasher
-        .finalize()
-        .iter()
-        .map(|v| format!("{v:02x}"))
-        .collect::<String>();
-    let version = format!("{}+{hash}", env!("CARGO_PKG_VERSION"));
-    let _ = VERSION.set(version.clone());
-    Ok(version)
-}
+pub use crate::member_protocol::binary_version;
 impl Native {
     pub fn new(workspace: PathBuf, data: PathBuf) -> anyhow::Result<Self> {
         Ok(Self {

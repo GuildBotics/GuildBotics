@@ -1,5 +1,5 @@
 en:
-  home_required: "Set HOME before selecting a workspace."
+  home_required: "Set HOME (USERPROFILE on Windows) before selecting a workspace."
   not_configured: "No active GuildBotics workspace is configured. Run `guildbotics workspace use <path>` or select a workspace in GuildBotics."
   selected: "Active workspace: %{workspace}\nConfig dir: %{config_dir}\nConfig dir exists: %{exists}\nState file: %{state_file}"
   missing: "Active workspace: not configured\nState file: %{state_file}"

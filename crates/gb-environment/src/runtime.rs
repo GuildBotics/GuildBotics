@@ -8,6 +8,8 @@
 //! state. It is told so through the backend, never through the process'
 //! environment, which the processes the server starts inherit.
 
+pub use crate::{Mount, Network};
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,19 +45,6 @@ pub const RUNTIME_VERSION: &str = "0.6.17";
 
 /// The runtime's home, which every microVM of this process boots through.
 static BACKEND: OnceCell<PathBuf> = OnceCell::const_new();
-
-/// One mount of the microVM: a host directory bound at `guest`, or an empty
-/// directory of the microVM's own.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Mount {
-    pub guest: String,
-    pub host: Option<PathBuf>,
-    pub readonly: bool,
-    /// The write budget of a bound directory, or the capacity of a private
-    /// disk, in MiB. Without it, binds use the runtime's 4 GiB default and
-    /// private directories use tmpfs.
-    pub quota_mib: Option<u32>,
-}
 
 /// What a microVM boots from and with.
 pub struct Boot<'a> {
@@ -1334,15 +1323,6 @@ impl Log {
     }
 }
 
-/// Egress policy for a VM; host windows are restricted to their leased ports.
-#[derive(Debug, Clone, Default)]
-pub struct Network {
-    pub unrestricted: bool,
-    pub domains: Vec<String>,
-    pub host_ports: Vec<u16>,
-    pub local_network: bool,
-    pub nameservers: Vec<String>,
-}
 impl Network {
     pub fn policy(&self) -> Result<microsandbox::NetworkPolicy, String> {
         use serde_json::json;

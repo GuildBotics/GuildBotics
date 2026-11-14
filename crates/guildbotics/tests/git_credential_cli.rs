@@ -7,7 +7,7 @@ use std::{
 fn answer(home: &Path, action: &str, request: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
         .args(["git-credential", action])
-        .env("HOME", home)
+        .env(gb_base::home::USER_HOME_ENV, home)
         .env("GUILDBOTICS_HOME", home.join(".guildbotics"))
         .env("GUILDBOTICS_IDENTITY_ROOT", home.join("identity"))
         .env("LANGUAGE", "en")
@@ -51,6 +51,7 @@ fn git_credential_ignores_invalid_origins_without_reading_identity_or_keychain()
         "protocol=https\nhost=forge.example.invalid/path\n",
         "protocol=http+unsafe\nhost=127.0.0.1:7878\n",
         "host=127.0.0.1:7878\n",
+        "host=127.0.0.1:7878\r\n",
     ] {
         let response = answer(
             home.path(),

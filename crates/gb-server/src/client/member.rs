@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{OwnerClient, checked};
 use crate::{
     i18n,
-    member::{MemberRequest, Result as Reply},
+    member_protocol::{MemberRequest, Result as Reply},
 };
 
 mod git;
@@ -52,7 +52,7 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
     let original = arguments;
     let (interactive_host, interactive_thread_key) = interactive_context();
     let mut request = MemberRequest {
-        version: crate::member::native::binary_version()?,
+        version: crate::member_protocol::binary_version()?,
         workspace_id,
         arguments: redacted(&redact, &original),
         stdin: String::new(),

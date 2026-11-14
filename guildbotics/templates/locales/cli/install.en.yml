@@ -1,5 +1,5 @@
 en:
-  home_required: "Set HOME before installing the GuildBotics CLI."
+  home_required: "Set HOME (USERPROFILE on Windows) before installing the GuildBotics CLI."
   cli: "CLI installed at %{path}"
   skill: "Skill for %{tool} installed at %{path}"
   kept: "Kept the existing skill for %{tool} at %{path}"

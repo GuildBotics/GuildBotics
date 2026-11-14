@@ -1,17 +1,21 @@
 //! The `guildbotics` executable: the server, with Branvil in the same
 //! process, and Branvil's commands as `guildbotics branvil`.
 
+#[cfg(feature = "hub")]
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
+#[cfg(feature = "hub")]
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+#[cfg(feature = "hub")]
 use tokio::sync::watch;
 
 /// How Branvil's commands are started on this executable: the hook scripts
 /// and the automatic runner start them again.
+#[cfg(feature = "hub")]
 const BRANVIL: branvil::Invocation = branvil::Invocation::under(&["branvil"]);
 
 #[derive(Parser)]
@@ -24,11 +28,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     #[command(hide = true)]
+    #[cfg(feature = "hub")]
     GenerateCliReference {
         #[arg(long)]
         check: bool,
     },
     /// Manage this device's isolated environment
+    #[cfg(feature = "hub")]
     Environment {
         /// Select the workspace whose environment declaration to use
         #[arg(long, global = true)]
@@ -37,6 +43,7 @@ enum Command {
         command: EnvironmentCommand,
     },
     /// Run the server
+    #[cfg(feature = "hub")]
     Server {
         #[command(subcommand)]
         command: ServerCommand,
@@ -56,6 +63,7 @@ enum Command {
     /// Install this executable and the GuildBotics skill for this user
     Install,
     /// Select the active workspace for the server and AI CLI tools
+    #[cfg(feature = "hub")]
     Workspace {
         #[command(subcommand)]
         command: workspace_cli::WorkspaceCommand,
@@ -78,12 +86,15 @@ enum Command {
         args: Vec<String>,
     },
     /// Read a workspace's recorded diagnostics
+    #[cfg(feature = "hub")]
     Diagnostics(diagnostics_cli::DiagnosticsCommand),
     /// Print the binary's version
     Version,
     /// Manage workspace or shared identity secrets
+    #[cfg(feature = "hub")]
     Secrets(secrets_cli::Secrets),
     /// Start or stop scheduled commands, ticket patrol, and chat events
+    #[cfg(feature = "hub")]
     Service {
         #[command(subcommand)]
         command: service_cli::ServiceCommand,
@@ -103,27 +114,39 @@ enum Command {
     },
     /// Branvil's commands (code hosting: `guildbotics branvil --help`)
     #[command(disable_help_flag = true)]
+    #[cfg(feature = "hub")]
     Branvil {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
     },
 }
 
+#[cfg(feature = "hub")]
 mod cli_reference;
+#[cfg(feature = "hub")]
 mod diagnostics_cli;
+#[cfg(feature = "hub")]
 mod environment_cli;
+#[cfg(feature = "hub")]
 mod hub_cli;
+#[cfg(feature = "hub")]
 mod hub_data;
 #[cfg(unix)]
+#[cfg(feature = "hub")]
 mod hub_update;
 mod install_cli;
+#[cfg(feature = "hub")]
 mod secrets_cli;
+#[cfg(feature = "hub")]
 mod service_cli;
 mod startup;
+#[cfg(feature = "hub")]
 mod workspace_cli;
+#[cfg(feature = "hub")]
 use environment_cli::EnvironmentCommand;
 
 #[derive(Subcommand)]
+#[cfg(feature = "hub")]
 enum ServerCommand {
     /// Back up or validate Hub records without starting a server.
     #[command(hide = true)]
@@ -208,32 +231,39 @@ enum ServerCommand {
 
 fn main() -> ExitCode {
     startup::initialize();
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "hub"))]
     gb_base::home::hold_source_tree();
-    // Started by Git as GIT_ASKPASS when Branvil talks to an upstream host.
-    if let Some(code) = branvil::askpass_main() {
-        return code;
-    }
-    if let Ok(data) = gb_base::home::data() {
-        let binary = gb_environment::placed_files(&data.join("msb"))[0].clone();
-        if let Err(error) =
-            branvil::set_runtime_binary(std::path::absolute(binary).unwrap_or_default())
-        {
-            eprintln!("guildbotics: {error}");
-            return ExitCode::FAILURE;
+    #[cfg(feature = "hub")]
+    {
+        // Started by Git as GIT_ASKPASS when Branvil talks to an upstream host.
+        if let Some(code) = branvil::askpass_main() {
+            return code;
+        }
+        if let Ok(data) = gb_base::home::data() {
+            let binary = gb_environment::placed_files(&data.join("msb"))[0].clone();
+            if let Err(error) =
+                branvil::set_runtime_binary(std::path::absolute(binary).unwrap_or_default())
+            {
+                eprintln!("guildbotics: {error}");
+                return ExitCode::FAILURE;
+            }
         }
     }
     match Cli::parse().command {
+        #[cfg(feature = "hub")]
         Command::GenerateCliReference { check } => outcome(cli_reference::run(check).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Environment { command, workspace } => {
             outcome(block(environment_cli::run(command, workspace)).map(|()| 0))
         }
+        #[cfg(feature = "hub")]
         Command::Branvil { args } => branvil_main(std::iter::once(OsString::new()).chain(args)),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
         Command::GitCredential { action } => {
             outcome(block(gb_server::client::git_credential(&action)).map(|()| 0))
         }
         Command::Install => outcome(block(install_cli::run()).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Workspace { command } => outcome(block(workspace_cli::run(command)).map(|()| 0)),
         Command::Run {
             person,
@@ -244,12 +274,15 @@ fn main() -> ExitCode {
         } => outcome(
             run_command(command.as_deref(), resume.as_deref(), args, person, cwd).map(|()| 0),
         ),
+        #[cfg(feature = "hub")]
         Command::Diagnostics(command) => outcome(block(diagnostics_cli::run(command)).map(|()| 0)),
         Command::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        #[cfg(feature = "hub")]
         Command::Secrets(command) => outcome(block(secrets_cli::run(command)).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Service { command } => outcome(block(service_cli::run(command)).map(|()| 0)),
         Command::Connect => outcome(
             block(gb_server::client::connect::run(|url| {
@@ -257,20 +290,8 @@ fn main() -> ExitCode {
             }))
             .map(|()| 0),
         ),
-        Command::Open {
-            print,
-            branvil: true,
-        } => {
-            let mut args = vec![OsString::new(), OsString::from("open")];
-            if print {
-                args.push("--print".into());
-            }
-            branvil_main(args)
-        }
-        Command::Open {
-            print,
-            branvil: false,
-        } => open(print),
+        Command::Open { print, branvil } => open(print, branvil),
+        #[cfg(feature = "hub")]
         Command::Server {
             command:
                 ServerCommand::HubChecks {
@@ -279,23 +300,29 @@ fn main() -> ExitCode {
                     sha,
                 },
         } => outcome(block(hub_cli::checks(repo, checkout, sha)).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubNotify,
         } => outcome(block(hub_cli::notify()).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubMigration,
         } => outcome(hub_cli::migration().map(|()| 0)),
         #[cfg(unix)]
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubAutoUpdate { checkout, once },
         } => outcome(hub_update::run(checkout, once).map(|()| 0)),
         #[cfg(not(unix))]
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubAutoUpdate { .. },
         } => outcome(Err(anyhow::anyhow!("The Hub runs only on macOS"))),
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubPrune { keep, builds },
         } => outcome(hub_cli::prune(&builds, &keep).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command:
                 ServerCommand::HubData {
@@ -304,12 +331,15 @@ fn main() -> ExitCode {
                     to,
                 },
         } => outcome(block(hub_data::run(operation, data_dir, to)).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::Start { services },
         } => outcome(start(services)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::Stop { force },
         } => outcome(block(service_cli::stop(force)).map(|()| 0)),
+        #[cfg(feature = "hub")]
         Command::Server {
             command:
                 ServerCommand::HubProbe {
@@ -382,12 +412,18 @@ fn run_command(
 
 /// Opens the screens with an entry link, or prints it when asked to or when
 /// no browser opens it.
-fn open(print: bool) -> ExitCode {
+fn open(print: bool, branvil: bool) -> ExitCode {
     let link = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())
-        .and_then(|runtime| runtime.block_on(gb_server::client::entry_link()));
+        .and_then(|runtime| {
+            runtime.block_on(gb_server::client::entry_link_for(if branvil {
+                "/"
+            } else {
+                "/-/guildbotics/"
+            }))
+        });
     match link {
         Ok(url) => {
             if print || !browse(&url) {
@@ -424,6 +460,7 @@ fn browse(url: &str) -> bool {
 }
 
 /// Branvil's commands, keeping its secrets in the identity store.
+#[cfg(feature = "hub")]
 fn branvil_main(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let url = match gb_server::port() {
@@ -433,6 +470,7 @@ fn branvil_main(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     branvil::main_with_client_url(BRANVIL, vault, args, Some(url))
 }
 
+#[cfg(feature = "hub")]
 fn start(services: bool) -> anyhow::Result<u8> {
     use tracing_subscriber::prelude::*;
     let configured = std::env::var("GUILDBOTICS_LOG").unwrap_or_default();
@@ -462,6 +500,7 @@ fn start(services: bool) -> anyhow::Result<u8> {
 /// Runs GuildBotics' port and Branvil until a signal stops them, or until
 /// either one ends, which stops the other. The machine's lock comes first and
 /// goes last: whoever stops the server waits for Branvil too.
+#[cfg(feature = "hub")]
 async fn serve(services: bool) -> anyhow::Result<u8> {
     let signals = server_stops(gb_server::client::language().await)?;
     let branvil_initialized = branvil::initialized()?;
@@ -493,6 +532,7 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
 /// How far a stop has gone: none yet, one that waits for the work running,
 /// or one that cancels it.
 #[derive(Clone, Copy, PartialEq)]
+#[cfg(feature = "hub")]
 enum Stop {
     None,
     Waiting,
@@ -502,6 +542,7 @@ enum Stop {
 /// When GuildBotics' port stops, and when it cancels the work it runs: the
 /// first SIGINT stops it once that work ends, and SIGTERM, which a service
 /// manager sends, or a second SIGINT cancels the work.
+#[cfg(feature = "hub")]
 fn server_stops(language: &'static str) -> std::io::Result<watch::Receiver<Stop>> {
     let (told, stops) = watch::channel(Stop::None);
     #[cfg(unix)]
@@ -540,6 +581,7 @@ fn server_stops(language: &'static str) -> std::io::Result<watch::Receiver<Stop>
     Ok(stops)
 }
 
+#[cfg(feature = "hub")]
 async fn wait_for_stop(mut signals: watch::Receiver<Stop>, stop: Stop) {
     let _ = signals
         .wait_for(|now| *now == stop || *now == Stop::Cancelling)

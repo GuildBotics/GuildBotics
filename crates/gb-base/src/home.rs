@@ -8,9 +8,21 @@ use std::path::{Path, PathBuf};
 /// development never touches the machine's own records.
 pub const HOME_ENV: &str = "GUILDBOTICS_HOME";
 
+/// The OS-owned home variable, independent of shell-specific HOME overrides.
+#[cfg(windows)]
+pub const USER_HOME_ENV: &str = "USERPROFILE";
+#[cfg(not(windows))]
+pub const USER_HOME_ENV: &str = "HOME";
+
+pub fn user_home() -> Option<PathBuf> {
+    std::env::var_os(USER_HOME_ENV)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
 /// `GUILDBOTICS_HOME`, else `~/.guildbotics`.
 pub fn machine_root() -> anyhow::Result<PathBuf> {
-    root_from(std::env::var_os(HOME_ENV), std::env::var_os("HOME"))
+    root_from(std::env::var_os(HOME_ENV), std::env::var_os(USER_HOME_ENV))
 }
 
 fn root_from(configured: Option<OsString>, home: Option<OsString>) -> anyhow::Result<PathBuf> {
@@ -19,7 +31,7 @@ fn root_from(configured: Option<OsString>, home: Option<OsString>) -> anyhow::Re
         Some(root) => Ok(root.into()),
         None => match home {
             Some(home) if !home.is_empty() => Ok(PathBuf::from(home).join(".guildbotics")),
-            _ => anyhow::bail!("HOME is not set; set {HOME_ENV}"),
+            _ => anyhow::bail!("{USER_HOME_ENV} is not set; set {HOME_ENV}"),
         },
     }
 }

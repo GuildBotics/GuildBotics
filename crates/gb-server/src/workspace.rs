@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use gb_workspace::selection;
 
 fn workspace_location(path: &Path, language: &str) -> anyhow::Result<PathBuf> {
-    let home = std::env::var_os("HOME")
+    let home = std::env::var_os(gb_base::home::USER_HOME_ENV)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| {

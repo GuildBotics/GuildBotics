@@ -5,7 +5,7 @@ pub(crate) fn initialize() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "hub"))]
 mod tests {
     // Run each probe in a fresh process, including under ordinary cargo test.
     #[test]
