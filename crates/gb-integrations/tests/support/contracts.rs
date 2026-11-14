@@ -63,7 +63,7 @@ async fn finish_task(t: &dyn TicketService, url: &str) {
     assert!(t.move_ticket(&task, MoveLane::Done).await.unwrap());
 }
 
-pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str) {
+pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str, author: &str) {
     // Read/write result shapes, label set semantics, comment IDs, and close idempotence.
     let mut request = ticket_request(tracker, "Fix login");
     request.body = "It fails.".into();
@@ -103,6 +103,7 @@ pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str) 
     );
     assert_eq!(detail["labels"], json!([label]));
     assert_eq!(detail["tracker"], tracker);
+    assert_eq!(detail["author"], author);
     assert!(detail["repository"].is_string());
     assert_eq!(detail["lane"], "new");
     assert!(!detail["key"].as_str().unwrap().is_empty());

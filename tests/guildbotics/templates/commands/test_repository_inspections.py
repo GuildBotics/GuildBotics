@@ -69,7 +69,14 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
     service = Pages(
         {
             "tickets": [
-                page({"title": "Ticket", "labels": ["bug"], "assignees": ["aiko"]})
+                page(
+                    {
+                        "title": "Ticket",
+                        "labels": ["bug"],
+                        "assignees": ["aiko"],
+                        "author": "yuki-service",
+                    }
+                )
             ],
             "ticket_comments": [
                 page({"id": "1"}, continuation="comments-2"),
@@ -88,6 +95,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
     result = json.loads(
         await command("issue_inspect").main(service.context(), TICKET_URL)
     )
+    assert result["author"] == "yuki-service"
     assert result["comments"] == [{"id": "1"}, {"id": "2"}]
     assert result["attachments"] == [{"id": "a1"}, {"id": "a2"}]
     assert "attachments_unavailable" not in result

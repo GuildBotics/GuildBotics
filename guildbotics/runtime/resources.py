@@ -113,6 +113,7 @@ class Ticket(WorkTarget):
     body: str
     state: str
     assignees: list[ActorName]
+    author: ActorName
     labels: list[str]
     #: The ticket's lane on the board; ``None`` when it is not on it.
     lane: Lane | None

@@ -154,6 +154,7 @@ impl LocalService {
                 "body",
                 "state",
                 "assignees",
+                "author",
                 "labels",
                 "lane",
                 "interactive",

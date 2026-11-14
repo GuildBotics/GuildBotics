@@ -51,6 +51,7 @@ pub struct Ticket {
     pub body: String,
     pub state: String,
     pub assignees: Vec<ActorName>,
+    pub author: ActorName,
     pub labels: Vec<String>,
     #[serde(deserialize_with = "required_nullable")]
     pub lane: Option<Lane>,

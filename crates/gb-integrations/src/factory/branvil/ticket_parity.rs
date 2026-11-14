@@ -1252,6 +1252,7 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
         format!("{}/test/repo/-/tickets/1", f.running.data.base_url())
     );
     assert_eq!(f.read(&url).await["label"], "#1");
+    assert_eq!(f.read(&url).await["author"], "agent1");
     for (assigned, expected) in [
         (None, json!([])),
         (Some("agent1"), json!(["agent1"])),
@@ -1262,6 +1263,7 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
             .await
             .unwrap();
         assert_eq!(f.read(&url).await["assignees"], expected);
+        assert_eq!(f.read(&url).await["author"], "agent1");
     }
     f.running.stop().await.unwrap();
 }

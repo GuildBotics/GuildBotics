@@ -36,6 +36,16 @@ module("guildbotics.utils.i18n_tool", "def t(key): return key")
 module("guildbotics.utils.process_limits", "STREAM_READ_LIMIT=10*1024*1024")
 port = module("guildbotics.runtime.port", source("port"))
 res = module("guildbotics.runtime.resources", source("resources"))
+
+
+class Ticket(res.Ticket):
+    """Extend the frozen ticket contract with its creator's service actor."""
+
+    author: res.ActorName
+
+
+res.Ticket = Ticket
+res.RESOURCES["tickets"] = Ticket
 extra = {}
 for name in ("ticket_service", "code_hosting_service"):
     tree = ast.parse(source(name))
