@@ -664,7 +664,7 @@ export const resources = {
           environment: {
             title: "Status on this device",
             description:
-              "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it here; logging in to a tool is done from a terminal.",
+              "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it and log in to supported tools here. The login is saved on the Hub.",
             runtime: "Runtime",
             runtimeAvailable: "Available ({{version}})",
             runtimeUnavailable: "Unavailable",
@@ -710,6 +710,13 @@ export const resources = {
             recheckError:
               "Could not complete the check. The previous result is still shown. Try again.",
             toolCredentialsMissing: "No credentials saved on {{machine}}",
+            login: "Log in",
+            browserLoginHint:
+              "Open the URL shown below in your browser and follow the provider's instructions. If asked for a code, paste it below. Closing this dialog cancels login.",
+            loginCode: "Code or answer",
+            loginSend: "Send",
+            loginSaved: "Login saved on the Hub.",
+            loginError: "Login did not complete. Try again.",
             loginHint: "To log in or log in again, run this command in a terminal:",
             loginRecheckHint: "After logging in, use Check again to verify usage retrieval.",
             copy: "Copy",
@@ -823,7 +830,7 @@ export const resources = {
           currentDevice: {
             title: "Current device readiness",
             description:
-              "Runtime, base image, snapshot, and tool login state on this device. Refresh, Build, and terminal login commands take effect immediately and are not part of Save.",
+              "Runtime, base image, snapshot, and tool login state on this device. Refresh, Build, and login commands take effect immediately and are not part of Save.",
           },
           workspace: {
             title: "Workspace-wide settings",
@@ -1764,7 +1771,7 @@ export const resources = {
           environment: {
             title: "この端末の状態",
             description:
-              "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドはここから行い、ツールへのログインはターミナルで行います。",
+              "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドと対応ツールへのログインはここから行います。ログインは Hub に保存します。",
             runtime: "ランタイム",
             runtimeAvailable: "利用可（{{version}}）",
             runtimeUnavailable: "利用不可",
@@ -1810,6 +1817,13 @@ export const resources = {
             recheckError:
               "確認を完了できませんでした。前回の結果を表示しています。もう一度お試しください。",
             toolCredentialsMissing: "{{machine}} に認証情報未保存",
+            login: "ログイン",
+            browserLoginHint:
+              "表示された URL をブラウザで開き、案内に従ってください。コードの入力を求められたら、下に貼り付けて送信してください。この画面を閉じるとログインを中止します。",
+            loginCode: "コードまたは応答",
+            loginSend: "送信",
+            loginSaved: "Hub にログインを保存しました。",
+            loginError: "ログインを完了できませんでした。再度お試しください。",
             loginHint: "ログイン・再ログインする場合は、ターミナルで次を実行してください。",
             loginRecheckHint:
               "ログイン後に「再確認」を押すと、利用レートを取得できるか確認できます。",
@@ -1925,7 +1939,7 @@ export const resources = {
           currentDevice: {
             title: "現在の端末の準備状態",
             description:
-              "この端末のランタイム、ベースイメージ、snapshot、ツールのログイン状態です。更新、ビルド、ターミナルでのログインは即時に反映され、「保存」には含まれません。",
+              "この端末のランタイム、ベースイメージ、snapshot、ツールのログイン状態です。更新、ビルド、ログインは即時に反映され、「保存」には含まれません。",
           },
           workspace: {
             title: "ワークスペース共通設定",

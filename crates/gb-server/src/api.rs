@@ -40,6 +40,8 @@ pub struct Api {
     pub(crate) activity_runner: std::sync::Mutex<Option<crate::activity::RefreshRunner>>,
     #[cfg(test)]
     pub(crate) usage_runner: std::sync::Mutex<Option<crate::environment::UsageRunner>>,
+    #[cfg(test)]
+    pub(crate) login_runner: std::sync::Mutex<Option<crate::tool_login::browser::LoginRunner>>,
     selection: std::sync::RwLock<Arc<Selected>>,
     /// Read while work for the selected workspace is admitted, and written
     /// while another workspace is selected, so that none is admitted for a
@@ -117,6 +119,8 @@ impl Api {
             activity_runner: Default::default(),
             #[cfg(test)]
             usage_runner: Default::default(),
+            #[cfg(test)]
+            login_runner: Default::default(),
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
             branvil: std::sync::OnceLock::new(),
@@ -806,6 +810,12 @@ routes!(
     (Public, post, "/session", start_session),
     (Public, post, "/apps/token", app_token),
     (Session, get, "/events", crate::events::stream),
+    (
+        Session,
+        get,
+        "/intelligences/cli-agents/{agent}/login",
+        crate::tool_login::browser::connect
+    ),
     // This route admits an application token as well as the owner.
     (OwnerOrConsent, post, "/session/links", entry_link),
 );

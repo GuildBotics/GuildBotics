@@ -239,19 +239,12 @@ async fn the_device_and_the_default_tool_are_checked_by_their_own_refusals() {
     let tool = check(&answer, "cli_agent_environment").unwrap();
     assert_eq!(tool["status"], "error");
     assert_eq!(tool["target"], "codex");
-    let cli = f.root.join("home/.guildbotics/bin/guildbotics");
     assert_eq!(
         tool["message"],
         crate::i18n::t(
             "en",
-            "intelligences.agent_environment.tool.credentials_missing",
-            &[
-                ("tool", "Codex"),
-                (
-                    "command",
-                    &gb_base::shell::managed_cli_command(&cli, &["environment", "login", "codex"])
-                ),
-            ],
+            "intelligences.agent_environment.tool.credentials_missing_browser",
+            &[("tool", "Codex")],
         )
     );
     // The tool is checked apart from the device, which still refuses, and a

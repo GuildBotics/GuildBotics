@@ -456,19 +456,12 @@ async fn a_requirement_is_met_as_the_device_and_the_project_provide_it() {
     assert_ne!(environment["message"], "");
     let tool = requirement(option(&listed, "agent"), "cli_agent");
     assert_eq!(tool["satisfied"], false);
-    let cli = f.root.join("home/.guildbotics/bin/guildbotics");
     assert_eq!(
         tool["message"],
         crate::i18n::t(
             "en",
-            "intelligences.agent_environment.tool.credentials_missing",
-            &[
-                ("tool", "Codex"),
-                (
-                    "command",
-                    &gb_base::shell::managed_cli_command(&cli, &["environment", "login", "codex"])
-                ),
-            ],
+            "intelligences.agent_environment.tool.credentials_missing_browser",
+            &[("tool", "Codex")],
         )
     );
     assert_eq!(

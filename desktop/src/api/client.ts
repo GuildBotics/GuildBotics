@@ -1654,3 +1654,44 @@ export async function getRunFiles(
 export function runFileUrl(traceId: string, path: string): string {
   return `${API_PREFIX}/diagnostics/traces/${encodeURIComponent(traceId)}/file?path=${encodeURIComponent(path)}`;
 }
+
+/** A private dialogue lives only as long as this browser connection. */
+export function loginCliAgent(
+  tool: string,
+  onOutput: (output: string) => void,
+  onDone: (saved: boolean, error?: string) => void,
+): { send: (code: string) => void; close: () => void } {
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(
+    `${scheme}//${window.location.host}${API_PREFIX}/intelligences/cli-agents/${encodeURIComponent(tool)}/login`,
+  );
+  socket.binaryType = "arraybuffer";
+  const decoder = new TextDecoder();
+  let finished = false;
+  socket.onopen = () => {
+    if (!finished) socket.send(JSON.stringify({ csrf: transport.getCsrf() }));
+  };
+  socket.onmessage = (event) => {
+    if (finished) return;
+    if (typeof event.data !== "string") {
+      onOutput(decoder.decode(event.data, { stream: true }));
+    } else {
+      finished = true;
+      const result = JSON.parse(event.data) as { saved: boolean; error?: string };
+      onDone(result.saved === true, result.error);
+      socket.close();
+    }
+  };
+  socket.onclose = () => {
+    if (!finished) onDone(false);
+  };
+  return {
+    send: (code) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(code + "\n");
+    },
+    close: () => {
+      finished = true;
+      socket.close();
+    },
+  };
+}

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getCliAgentUsage,
+  loginCliAgent,
   getCliAgentLastTurns,
   ApiRequestError,
   authorizeApp,
@@ -823,7 +824,7 @@ describe("error handling", () => {
 
 type SocketHandlers = {
   onopen?: () => void;
-  onmessage?: (event: { data: string }) => void;
+  onmessage?: (event: { data: string | ArrayBuffer }) => void;
   onerror?: () => void;
   onclose?: () => void;
 };
@@ -832,9 +833,13 @@ class MockWebSocket implements SocketHandlers {
   static instances: MockWebSocket[] = [];
   url: string;
   protocols: unknown;
+  binaryType = "blob";
+  static OPEN = 1;
+  readyState = 1;
+  send = vi.fn();
   close = vi.fn();
   onopen?: () => void;
-  onmessage?: (event: { data: string }) => void;
+  onmessage?: (event: { data: string | ArrayBuffer }) => void;
   onerror?: () => void;
   onclose?: () => void;
 
@@ -849,6 +854,53 @@ describe("websocket subscriptions", () => {
   beforeEach(() => {
     MockWebSocket.instances = [];
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+  });
+
+  it("authenticates private login before relaying input and streaming UTF-8 output", () => {
+    const output = vi.fn(),
+      done = vi.fn();
+    const connection = loginCliAgent("claude", output, done);
+    const socket = MockWebSocket.instances[0];
+    expect(socket.url).toBe(
+      `ws://${window.location.host}/-/guildbotics/api/intelligences/cli-agents/claude/login`,
+    );
+    expect(socket.binaryType).toBe("arraybuffer");
+    socket.onopen?.();
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ csrf: "test-csrf" }));
+    const bytes = new TextEncoder().encode("URL ログイン");
+    socket.onmessage?.({ data: bytes.slice(0, 5).buffer });
+    socket.onmessage?.({ data: bytes.slice(5).buffer });
+    expect(output.mock.calls.map(([value]) => value).join("")).toBe("URL ログイン");
+    connection.send("synthetic-code");
+    expect(socket.send).toHaveBeenCalledWith("synthetic-code\n");
+    socket.onmessage?.({ data: '{"saved":true}' });
+    socket.onclose?.();
+    expect(done).toHaveBeenCalledExactlyOnceWith(true, undefined);
+    connection.close();
+  });
+
+  it("preserves the server's failure reason", () => {
+    const done = vi.fn();
+    loginCliAgent("claude", vi.fn(), done);
+    MockWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({ saved: false, error: "Build the agent environment first." }),
+    });
+    expect(done).toHaveBeenCalledWith(false, "Build the agent environment first.");
+  });
+
+  it("reports a disconnected login as failed and suppresses completion after cancellation", () => {
+    const done = vi.fn();
+    loginCliAgent("codex", vi.fn(), done);
+    MockWebSocket.instances[0].onclose?.();
+    expect(done).toHaveBeenCalledWith(false);
+    const cancelled = vi.fn();
+    const connection = loginCliAgent("copilot", vi.fn(), cancelled);
+    connection.close();
+    MockWebSocket.instances[1].onopen?.();
+    MockWebSocket.instances[1].onmessage?.({ data: '{"saved":true}' });
+    MockWebSocket.instances[1].onclose?.();
+    expect(MockWebSocket.instances[1].send).not.toHaveBeenCalled();
+    expect(cancelled).not.toHaveBeenCalled();
   });
 
   it("connects to this page's /-/guildbotics/api/events without a subprotocol and drives status transitions", () => {
