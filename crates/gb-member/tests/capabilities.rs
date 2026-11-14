@@ -257,6 +257,8 @@ fn only_pending_checks_of_nondraft_prs_can_be_awaited() {
         (false, vec!["checks_pending"], true),
         (true, vec!["checks_pending"], false),
         (false, vec!["checks_pending", "base_out_of_date"], false),
+        (false, vec!["checks_pending", "base_conflict"], false),
+        (false, vec!["base_conflict"], false),
         (false, vec!["checks_failed"], false),
         (false, vec![], false),
     ] {
@@ -631,7 +633,7 @@ async fn roster_assignment_and_initial_ticket_state_reach_the_provider() {
 #[test]
 fn blockers_keep_diagnostics_and_omit_ready_targets() {
     let ready = (json!({}), readiness(&[]));
-    for code in ["checks_failed", "base_out_of_date"] {
+    for code in ["checks_failed", "base_out_of_date", "base_conflict"] {
         let blocked = (json!({}), readiness(&[code]));
         for error in [
             ensure_ready(&[ready.clone(), blocked.clone()]).unwrap_err(),

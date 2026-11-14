@@ -1834,6 +1834,8 @@ pub struct ChecksView {
     pub base_sha: String,
     /// `None` when the head or the base branch is gone.
     pub behind_by: Option<u64>,
+    /// Sorted conflict paths, or None for closed pulls or missing branches.
+    pub conflicts: Option<Vec<String>>,
     pub checks: Vec<Check>,
     pub checks_expected: bool,
     pub base_checks: usize,
@@ -1858,6 +1860,15 @@ pub async fn checks(
                 .await?,
         )
     };
+    let conflicts = if p.state != "open" || head_sha.is_empty() || base_sha.is_empty() {
+        None
+    } else {
+        Some(
+            app.git
+                .conflicts(&app.git.repo_dir(&repo.path), &base_sha, &head_sha)
+                .await?,
+        )
+    };
     let head = display_checks(app, &repo, &p, &head_sha).await?;
     let base_checks = if base_sha.is_empty() {
         0
@@ -1877,6 +1888,7 @@ pub async fn checks(
         head_sha,
         base_sha,
         behind_by,
+        conflicts,
         checks,
         checks_expected: head.checks_expected,
         base_checks,

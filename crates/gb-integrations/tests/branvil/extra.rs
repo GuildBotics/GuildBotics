@@ -146,6 +146,19 @@ pub(super) async fn reused_and_gates(
             )
             .await
             .unwrap();
+        if conclusion == "conflict" {
+            let before_review = c
+                .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
+                .await
+                .unwrap();
+            assert!(
+                before_review
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "base_conflict" && b.message.contains("a.py"))
+            );
+            assert!(before_review.checks.iter().all(|c| c.name != "gate"));
+        }
         owner
             .pulls_review(
                 &repo,
@@ -209,54 +222,42 @@ pub(super) async fn reused_and_gates(
         assert_eq!(result.head_sha, head);
         assert_eq!(result.behind_by, Some(1));
         assert_eq!(result.out_of_date, Some(true));
-        let gate = result.checks.iter().find(|c| c.name == name).unwrap();
-        assert_eq!(gate.status, "completed");
-        assert_eq!(
-            gate.conclusion.as_deref(),
-            Some(if conclusion == "success" {
-                "success"
-            } else {
-                "failure"
-            })
-        );
-        if conclusion != "success" {
+        if conclusion == "conflict" {
             assert_eq!(result.readiness, ReadinessReadiness::Blocked);
+            assert!(result.checks.iter().all(|c| c.name != "gate"));
             assert!(
                 result
                     .completion_blockers
                     .iter()
-                    .any(|b| b.code == "checks_failed")
+                    .any(|b| b.code == "base_conflict" && b.message.contains("a.py"))
             );
             assert!(
                 !result
                     .completion_blockers
                     .iter()
-                    .any(|b| b.code == "base_behind")
+                    .any(|b| b.code == "checks_failed")
             );
-            if conclusion == "conflict" {
-                assert!(gate.details.as_deref().unwrap().contains("a.py"));
-                let page = c
-                    .read(
-                        Resource::PullRequestReadiness,
-                        &feature.target.url,
-                        Some(&json!({"failed_logs":true})),
-                        "",
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(page.items()[0]["failed_logs"], json!([]));
-                assert!(
-                    page.items()[0]["checks"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|check| check["name"] == "gate"
-                            && check["details"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .contains("a.py"))
-                );
-            }
+            let page = c
+                .read(
+                    Resource::PullRequestReadiness,
+                    &feature.target.url,
+                    Some(&json!({"failed_logs":true})),
+                    "",
+                )
+                .await
+                .unwrap();
+            assert_eq!(page.items()[0]["failed_logs"], json!([]));
+        } else {
+            let gate = result.checks.iter().find(|c| c.name == name).unwrap();
+            assert_eq!(gate.status, "completed");
+            assert_eq!(gate.conclusion.as_deref(), Some(conclusion));
+            assert_eq!(
+                result
+                    .completion_blockers
+                    .iter()
+                    .any(|b| b.code == "checks_failed"),
+                conclusion == "failure"
+            );
         }
     }
 }

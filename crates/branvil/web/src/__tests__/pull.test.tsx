@@ -9,7 +9,7 @@ import { BASE, HEAD, NEW_HEAD, card, pull } from "./fixtures";
 
 const P = "/api/v1/repos/acme/demo/pulls/3";
 const SUCCESS: Check = { name: "test", status: "completed", conclusion: "success" };
-const CHECKS: Checks = { head_sha: HEAD, base_sha: BASE, behind_by: 0, checks: [SUCCESS], checks_expected: true, base_checks: 1 };
+const CHECKS: Checks = { conflicts: [], head_sha: HEAD, base_sha: BASE, behind_by: 0, checks: [SUCCESS], checks_expected: true, base_checks: 1 };
 
 it("keeps the server's queue order and reloads it when another PR changes priority", async () => {
   const queued = (name: string): Check => ({ name, status: "queued", conclusion: null });
@@ -940,5 +940,18 @@ describe("pull request review", () => {
     renderApp("/acme/demo/-/jobs/att_1");
     expect(await screen.findByRole("heading", { name: "Try it" })).toBeInTheDocument();
     expect(await within(await screen.findByRole("dialog", { name: /test/ })).findByText("test login ... FAILED")).toBeInTheDocument();
+  });
+});
+
+
+describe.each(["en", "ja"] as const)("conflict guidance (%s)", (language) => {
+  it.each([null, [], ["a.py", "日本\n語.txt"]])("displays conflict paths for %j", async (conflicts) => {
+    fakeApi(pullRoutes({ [`GET ${P}/checks`]: json(200, { ...CHECKS, conflicts }) }));
+    renderApp("/acme/demo/-/pulls/3", language);
+    const checks = within(await screen.findByRole("region", { name: dictionaries[language]["pull.checks"] }));
+    await checks.findByText("test");
+    const label = dictionaries[language]["pull.conflicts"].split("{files}")[0]!;
+    if (conflicts?.length) expect(checks.getByText((_, node) => node?.textContent === format(dictionaries[language]["pull.conflicts"], { files: conflicts.join(", ") }))).toBeInTheDocument();
+    else expect(checks.queryByText(new RegExp(label))).not.toBeInTheDocument();
   });
 });

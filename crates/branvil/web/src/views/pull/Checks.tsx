@@ -102,6 +102,7 @@ export function ChecksCard({ repo, pull, requiredChecks, onOpen }: { repo: strin
   const behind = checks.data?.behind_by ?? 0;
   return (
     <CheckList repo={repo} title={t("pull.checks")} query={checks} sha={checks.data?.head_sha} requiredChecks={requiredChecks} onOpen={onOpen}>
+      {!!checks.data?.conflicts?.length && <Text size="sm" c="var(--color-danger-text)" mb="xs">{t("pull.conflicts", { files: checks.data.conflicts.join(", ") })}</Text>}
       {pull.state === "open" && !pull.merged && behind > 0 && (
         <Text size="sm" c="dimmed" mb="xs">
           {t("pull.behindBy", { base: pull.base, count: behind })}

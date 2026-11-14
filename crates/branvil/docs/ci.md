@@ -281,7 +281,7 @@ When head contains base, its selection skips no jobs, and none of its current
 attempts reused another tree's result by the contents of paths, its existing
 run is the gate. Otherwise Branvil
 creates a commit with parents `[base, head]` and runs that commit's pipeline
-through `refs/branvil/gate/<number>`. A conflict becomes a failed `gate` check;
+through `refs/branvil/gate/<number>`. A conflict appears in the pull request checks response's `conflicts` field;
 CI jobs appear as `gate/<job>` on the pull request. An up-to-date head with
 path skips gets a gate with the head's tree and parents `[base, head]`. If
 that tree already equals the base's, it leaves as `already_in_base`.

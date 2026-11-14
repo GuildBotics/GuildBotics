@@ -2431,4 +2431,167 @@
 {"input": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "head_sha": "head", "current_head_sha": "new-head", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": true, "freshness": null, "failed_logs": null}, "expected": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "base_sha": null, "head_sha": "head", "behind_by": null, "out_of_date": null, "current_base_sha": null, "current_head_sha": "new-head", "rollup": "failure", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": false, "readiness": "not_applicable", "completion_blockers": []}},
 {"input": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "head_sha": "head", "current_head_sha": "new-head", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": true, "freshness": {"base_sha": "base", "behind_by": 2, "current_base_sha": "new-base", "requires_up_to_date": true}, "failed_logs": null}, "expected": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "base_sha": "base", "head_sha": "head", "behind_by": 2, "out_of_date": true, "current_base_sha": "new-base", "current_head_sha": "new-head", "rollup": "failure", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": true, "readiness": "blocked", "completion_blockers": [{"code": "base_out_of_date", "message": "The PR head is 2 commit(s) behind its base.", "next_action": "Merge or rebase the base branch, push, and check again."}, {"code": "head_changed", "message": "The PR head changed while readiness was being checked.", "next_action": "Check the new head SHA and its CI results again."}, {"code": "base_changed", "message": "The PR base changed while readiness was being checked.", "next_action": "Check freshness against the new base SHA again."}, {"code": "checks_failed", "message": "CI checks are failing.", "next_action": "Inspect failed logs, fix the failures, and check again."}]}},
 {"input": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "head_sha": "head", "current_head_sha": "new-head", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": true, "freshness": null, "failed_logs": null}, "expected": {"target": {"kind": "pull_request", "url": "local:pr/1", "title": "PR 🦀", "label": "!1"}, "base_sha": null, "head_sha": "head", "behind_by": null, "out_of_date": null, "current_base_sha": null, "current_head_sha": "new-head", "rollup": "failure", "checks": [{"name": "failure", "status": "completed", "conclusion": "failure", "details_url": ""}, {"name": "pending", "status": "queued", "conclusion": null, "details_url": ""}], "checks_expected": false, "readiness": "not_applicable", "completion_blockers": []}}
+,
+{
+  "input": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "head_sha": "head",
+    "current_head_sha": "head",
+    "checks": [],
+    "checks_expected": false,
+    "freshness": {
+      "base_sha": "base",
+      "behind_by": 0,
+      "current_base_sha": "base",
+      "requires_up_to_date": false,
+      "conflicts": [
+        "a.py",
+        "z.txt"
+      ]
+    },
+    "failed_logs": null
+  },
+  "expected": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "base_sha": "base",
+    "head_sha": "head",
+    "behind_by": 0,
+    "out_of_date": false,
+    "current_base_sha": "base",
+    "current_head_sha": "head",
+    "rollup": "no_checks",
+    "checks": [],
+    "checks_expected": false,
+    "readiness": "blocked",
+    "completion_blockers": [
+      {
+        "code": "base_conflict",
+        "message": "The PR head conflicts with its base in: a.py, z.txt.",
+        "next_action": "Merge the base branch into the head, resolve the conflicts, push, and check again."
+      }
+    ]
+  }
+},
+{
+  "input": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "head_sha": "head",
+    "current_head_sha": "new-head",
+    "checks": [],
+    "checks_expected": true,
+    "freshness": {
+      "base_sha": "base",
+      "behind_by": 2,
+      "current_base_sha": "new-base",
+      "requires_up_to_date": true,
+      "conflicts": [
+        "a.py",
+        "z.txt"
+      ]
+    },
+    "failed_logs": null
+  },
+  "expected": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "base_sha": "base",
+    "head_sha": "head",
+    "behind_by": 2,
+    "out_of_date": true,
+    "current_base_sha": "new-base",
+    "current_head_sha": "new-head",
+    "rollup": "no_checks",
+    "checks": [],
+    "checks_expected": true,
+    "readiness": "blocked",
+    "completion_blockers": [
+      {
+        "code": "base_out_of_date",
+        "message": "The PR head is 2 commit(s) behind its base.",
+        "next_action": "Merge or rebase the base branch, push, and check again."
+      },
+      {
+        "code": "base_conflict",
+        "message": "The PR head conflicts with its base in: a.py, z.txt.",
+        "next_action": "Merge the base branch into the head, resolve the conflicts, push, and check again."
+      },
+      {
+        "code": "head_changed",
+        "message": "The PR head changed while readiness was being checked.",
+        "next_action": "Check the new head SHA and its CI results again."
+      },
+      {
+        "code": "base_changed",
+        "message": "The PR base changed while readiness was being checked.",
+        "next_action": "Check freshness against the new base SHA again."
+      },
+      {
+        "code": "checks_pending",
+        "message": "CI checks have not been registered for the PR head yet.",
+        "next_action": "Wait for CI to start, then check again."
+      }
+    ]
+  }
+}
+,
+{
+  "input": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "head_sha": "head",
+    "current_head_sha": "head",
+    "checks": [],
+    "checks_expected": false,
+    "freshness": {
+      "base_sha": "base",
+      "behind_by": 0,
+      "current_base_sha": "base",
+      "requires_up_to_date": false,
+      "conflicts": []
+    },
+    "failed_logs": null
+  },
+  "expected": {
+    "target": {
+      "kind": "pull_request",
+      "url": "local:pr/1",
+      "title": "PR 🦀",
+      "label": "!1"
+    },
+    "base_sha": "base",
+    "head_sha": "head",
+    "behind_by": 0,
+    "out_of_date": false,
+    "current_base_sha": "base",
+    "current_head_sha": "head",
+    "rollup": "no_checks",
+    "checks": [],
+    "checks_expected": false,
+    "readiness": "ready",
+    "completion_blockers": []
+  }
+}
 ]

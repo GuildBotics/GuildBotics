@@ -1,6 +1,7 @@
 // English messages. `ja.ts` must have exactly the same keys.
 
 export const en = {
+  "pull.conflicts": "Conflicting files: {files}",
   "markdown.ticket": "Ticket",
   "markdown.pull": "Pull request",
   "markdown.diagram": "Diagram",

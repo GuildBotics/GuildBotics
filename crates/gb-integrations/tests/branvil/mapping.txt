@@ -16,7 +16,7 @@ integration/branvil/test_smoke.py:
   test_open_pull_requests_follow_newest_first_pages -> code_open_order_contract (101 open pull requests)
   test_checks_decide_readiness_of_the_current_head -> main.rs scenario (pending, failing logs, success, moved head, artifact freshness)
   test_a_reused_result_is_ready_through_the_provider -> extra.rs reused_and_gates
-  test_a_behind_head_exposes_the_landing_gate_checks -> extra.rs reused_and_gates (success/failure/conflict, separate repositories)
+  test_a_behind_head_exposes_the_landing_gate_checks -> extra.rs reused_and_gates (gate success/failure; conflicts expose base_conflict with a.py and no synthetic gate, separate repositories)
 
 Detailed test_branvil_tickets.py inventory: ticket-frozen-map.txt (26 individual tests and branch conditions).
 Detailed test_branvil_code_hosting.py inventory: code-frozen-map.txt (59 individual tests and branch conditions).

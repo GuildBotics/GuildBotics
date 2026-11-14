@@ -459,20 +459,38 @@ impl Git {
         base: &str,
         head: &str,
     ) -> AppResult<Result<String, Vec<String>>> {
-        let out = self
-            .run(
-                Some(dir),
-                &[
-                    "merge-tree",
-                    "--write-tree",
-                    "--name-only",
-                    "--no-messages",
-                    "-z",
-                    base,
-                    head,
-                ],
-            )
-            .await?;
+        self.merge_tree_with(dir, base, head, false).await
+    }
+
+    /// Inspect conflict paths even when the two commits have independent roots.
+    /// Landing retains the stricter merge policy of `merge_tree`.
+    pub async fn conflicts(&self, dir: &Path, base: &str, head: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .merge_tree_with(dir, base, head, true)
+            .await?
+            .err()
+            .unwrap_or_default())
+    }
+
+    async fn merge_tree_with(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+        allow_unrelated: bool,
+    ) -> AppResult<Result<String, Vec<String>>> {
+        let mut args = vec![
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "-z",
+        ];
+        if allow_unrelated {
+            args.push("--allow-unrelated-histories");
+        }
+        args.extend([base, head]);
+        let out = self.run(Some(dir), &args).await?;
         if out.truncated || !matches!(out.status, 0 | 1) {
             return Err(AppError::internal(format!(
                 "git merge-tree failed: {}",
@@ -1130,6 +1148,42 @@ mod tests {
                 files: vec!["conflicted file\n.txt".into()]
             }
         );
+    }
+
+    #[tokio::test]
+    async fn unrelated_conflict_inspection_does_not_relax_landing_merges() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = Layout::new(&temp.path().join("service"));
+        layout.create().unwrap();
+        let git = Git::new(layout, 2, Duration::from_secs(10));
+        let work = temp.path().join("work");
+        git.run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+            .await
+            .unwrap();
+        let base = commit_file(&git, &work, "a.txt", "base\n").await;
+        git.run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "checkout",
+                "--orphan",
+                "orphan",
+            ],
+        )
+        .await
+        .unwrap();
+        git.run_ok(None, &["-C", work.to_str().unwrap(), "rm", "-rf", "."])
+            .await
+            .unwrap();
+        let head = commit_file(&git, &work, "a.txt", "head\n").await;
+        let dir = work.join(".git");
+        assert_eq!(
+            git.conflicts(&dir, &base, &head).await.unwrap(),
+            vec!["a.txt"]
+        );
+        assert!(git.merge_tree(&dir, &base, &head).await.is_err());
+        assert!(git.gate_commit(&dir, &base, &head, 7, true).await.is_err());
     }
 
     #[test]

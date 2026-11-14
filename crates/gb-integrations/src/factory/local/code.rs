@@ -163,6 +163,7 @@ impl LocalService {
                 .parse()
                 .map_err(|_| ServiceError::Failed)?;
             Some(Freshness {
+                conflicts: self.store.conflicts(&r.place, &base, &head)?,
                 base_sha: base.clone(),
                 behind_by: n,
                 current_base_sha: base,

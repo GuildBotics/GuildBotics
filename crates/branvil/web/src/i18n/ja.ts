@@ -3,6 +3,7 @@
 import type { MessageKey } from "./en";
 
 export const ja: Record<MessageKey, string> = {
+  "pull.conflicts": "衝突したファイル：{files}",
   "markdown.ticket": "チケット",
   "markdown.pull": "プルリクエスト",
   "markdown.diagram": "図",

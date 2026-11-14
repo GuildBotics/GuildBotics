@@ -737,7 +737,10 @@ impl BranvilService {
                     [("url", text(&current, "url").to_owned())],
                 ));
             }
-            if report.base_sha.is_empty() || text(&current, "base_sha").is_empty() {
+            if report.base_sha.is_empty()
+                || text(&current, "base_sha").is_empty()
+                || report.conflicts.is_none()
+            {
                 return Err(diagnostic(
                     "integrations.branvil.api.no_base",
                     [("url", text(&current, "url").to_owned())],
@@ -748,6 +751,10 @@ impl BranvilService {
                 behind_by: report.behind_by.ok_or(ServiceError::InvalidResult)? as i64,
                 current_base_sha: text(&current, "base_sha").into(),
                 requires_up_to_date: false,
+                conflicts: report
+                    .conflicts
+                    .clone()
+                    .ok_or(ServiceError::InvalidResult)?,
             })
         } else {
             None
