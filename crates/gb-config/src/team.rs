@@ -385,7 +385,7 @@ mod tests {
     fn unreadable_config_retains_file_reason_and_io_source() {
         let root = tempfile::tempdir().unwrap();
         let config = root.path().join("config");
-        let path = config.join("team/project.yml");
+        let path = config.join("team").join("project.yml");
         let error = Team::load(&config, &root.path().join("identity")).unwrap_err();
         let file = error.downcast_ref::<crate::ConfigFile>().unwrap();
         assert_eq!(file.path(), path);
@@ -449,9 +449,16 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let config = dir.path().join("config");
             let identity = dir.path().join("identity");
-            let project = config.join("team/project.yml");
-            let participation = config.join("team/members/aiko/member.yml");
-            let member = identity.join(".guildbotics/config/team/members/aiko/identity.yml");
+            let project = config.join("team").join("project.yml");
+            let participation = config
+                .join("team")
+                .join("members")
+                .join("aiko")
+                .join("member.yml");
+            let member = identity
+                .join(".guildbotics/config/team/members")
+                .join("aiko")
+                .join("identity.yml");
             for (path, content) in [
                 (&project, "language: en"),
                 (&participation, "is_active: true"),
