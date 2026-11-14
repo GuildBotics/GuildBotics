@@ -682,11 +682,17 @@ impl Ci {
         let mut registered = 0;
         for repo in repos {
             let id = repo.id.clone();
-            registered += app
+            let result = app
                 .locked(&id, move |app| async move {
                     app.ci.reconcile_locked(&repo).await
                 })
-                .await?;
+                .await;
+            match result {
+                Ok(count) => registered += count,
+                Err(e) => tracing::warn!(
+                    "CI: reconciling repository {id} failed (retried in a minute): {e}"
+                ),
+            }
         }
         Ok(registered)
     }
@@ -717,7 +723,13 @@ impl Ci {
                 Ok(wanted)
             })
             .await?;
-        registered += self.advance_verification(repo, true).await?;
+        match self.advance_verification(repo, true).await {
+            Ok(count) => registered += count,
+            Err(e) => tracing::warn!(
+                "CI: verifying {} failed (retried in a minute): {e}",
+                repo.path
+            ),
+        }
         wanted.sort();
         wanted.dedup();
         for branch in wanted {
@@ -1144,6 +1156,9 @@ fn run_checks<S>(
 }
 
 #[cfg(test)]
+mod verification_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ci::pipeline::JobDef;
@@ -1545,7 +1560,7 @@ mod tests {
     }
 
     /// A service over `ci`'s store, for tests that register through `App`.
-    fn app(temp: &tempfile::TempDir, ci: &Ci) -> crate::app::Shared {
+    pub(super) fn app(temp: &tempfile::TempDir, ci: &Ci) -> crate::app::Shared {
         ci.inner.layout.create().unwrap();
         let config = crate::config::Config::load(None, Some(temp.path()), None, None).unwrap();
         App::new(
@@ -1581,7 +1596,7 @@ mod tests {
     }
 
     /// An open pull request of `repo` from `head` into `base`.
-    fn open_pull(repo: &str, number: u64, head: &str, base: &str) -> crate::model::Pull {
+    pub(super) fn open_pull(repo: &str, number: u64, head: &str, base: &str) -> crate::model::Pull {
         crate::model::Pull {
             repo: repo.into(),
             number,
@@ -1610,7 +1625,7 @@ mod tests {
         }
     }
 
-    fn put_pull(w: &store::Wtx, pull: &crate::model::Pull) -> AppResult<()> {
+    pub(super) fn put_pull(w: &store::Wtx, pull: &crate::model::Pull) -> AppResult<()> {
         crate::model::put_indexed(
             w,
             store::PULLS,
