@@ -1166,6 +1166,7 @@ mod tests {
                             protected: false,
                             pipeline: queue::PipelineState::Jobs {
                                 jobs: vec![JobDef {
+                                    verified_sha: false,
                                     paths: Vec::new(),
                                     name: "test".into(),
                                     image: "alpine".into(),

@@ -51,7 +51,7 @@ closure returns `Ok` and aborts otherwise.
 
 ## Schema version
 
-`meta["schema_version"]` is written on creation (currently `26`). The current
+`meta["schema_version"]` is written on creation (currently `27`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
 publication-resume state. CI runs hold their commit's pipeline and tree;
@@ -59,9 +59,13 @@ attempts hold reuse sources and cache keys. Runs retain the protected branches t
 requested them, whether a required failure awaits notification, and its
 successful webhook delivery time.
 Runs also hold the input digest of each job with `paths`, and attempts the one
-of their job when claimed. The 25 → 26 upgrade gives every run and attempt
-none (it does not use Git); the reconciler's next registration gives a run its
-digests, and attempts claimed after that carry them.
+of their job when claimed. `ci_verifications` is keyed by repository id and stores
+`sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
+`failed_jobs` (name, last attempt id or null, details), `failing_since`, and
+`last_verified` (SHA and time). Attempts store optional `verified_sha`; job
+snapshots store the opt-in boolean of the same name. The 26 → 27 upgrade starts
+the verification table empty and these inputs undeclared, preserving existing
+runs, attempts, and their input digests.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.

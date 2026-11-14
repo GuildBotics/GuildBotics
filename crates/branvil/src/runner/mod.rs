@@ -147,6 +147,7 @@ pub struct Claim {
     pub sha: String,
     pub attempt: u64,
     pub job: JobDef,
+    pub verified_sha: Option<String>,
     pub cache_scope: String,
     pub network: bool,
     pub queued_secs: u64,
@@ -923,15 +924,7 @@ impl Runner {
                     Err(e) => say(format!("cache restore failed: {e}")).await,
                 }
             }
-            let env = vec![
-                ("CI".to_string(), "true".to_string()),
-                ("BRANVIL_CI".to_string(), "true".to_string()),
-                ("BRANVIL_REPOSITORY".to_string(), c.repo.clone()),
-                ("BRANVIL_SHA".to_string(), c.sha.clone()),
-                ("BRANVIL_JOB".to_string(), job.name.clone()),
-                ("BRANVIL_ATTEMPT_ID".to_string(), c.attempt_id.clone()),
-                ("BRANVIL_ATTEMPT".to_string(), c.attempt.to_string()),
-            ];
+            let env = job_environment(c);
             info.cache_key = key.clone();
             let outcome = executor
                 .run(
@@ -1120,6 +1113,26 @@ async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) {
             return;
         }
     }
+}
+
+/// Environment supplied to a job, including only its declared inputs.
+fn job_environment(c: &Claim) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("CI".to_string(), "true".to_string()),
+        ("BRANVIL_CI".to_string(), "true".to_string()),
+        ("BRANVIL_REPOSITORY".to_string(), c.repo.clone()),
+        ("BRANVIL_SHA".to_string(), c.sha.clone()),
+        ("BRANVIL_JOB".to_string(), c.job.name.clone()),
+        ("BRANVIL_ATTEMPT_ID".to_string(), c.attempt_id.clone()),
+        ("BRANVIL_ATTEMPT".to_string(), c.attempt.to_string()),
+    ];
+    if c.job.verified_sha {
+        env.push((
+            "BRANVIL_VERIFIED_SHA".into(),
+            c.verified_sha.clone().unwrap_or_default(),
+        ));
+    }
+    env
 }
 
 /// Runs the test `test` (its full path) again in a child process with `env`
@@ -2546,5 +2559,28 @@ esac
         let diag = app.ci.diagnostics().await;
         assert_eq!(diag["state"], "executor_unavailable", "{diag}");
         assert!(!runner.once(&fake).await.unwrap(), "nothing left");
+    }
+    #[test]
+    fn only_declared_jobs_receive_verified_sha_in_the_executor_environment() {
+        for declared in [false, true] {
+            for verified in [None, Some("verified")] {
+                let c: Claim = serde_json::from_value(serde_json::json!({
+                    "attempt_id":"att", "lease":"lease", "lease_secs":60,
+                    "repo":"acme/demo", "sha":"head", "attempt":1,
+                    "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
+                        "timeout_secs":null, "artifacts":[], "cache":null, "verified_sha":declared},
+                    "verified_sha":verified, "cache_scope":"protected", "network":false,
+                    "queued_secs":0, "reuse":null
+                }))
+                .unwrap();
+                let env = job_environment(&c);
+                let value = env
+                    .iter()
+                    .find(|(k, _)| k == "BRANVIL_VERIFIED_SHA")
+                    .map(|(_, v)| v.as_str());
+                assert_eq!(value, declared.then_some(verified.unwrap_or_default()));
+                assert!(env.contains(&("BRANVIL_SHA".into(), "head".into())));
+            }
+        }
     }
 }

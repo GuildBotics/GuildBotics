@@ -276,6 +276,7 @@ mod tests {
     fn jobs() -> PipelineState {
         PipelineState::Jobs {
             jobs: vec![JobDef {
+                verified_sha: false,
                 paths: Vec::new(),
                 name: "test".into(),
                 image: "alpine".into(),

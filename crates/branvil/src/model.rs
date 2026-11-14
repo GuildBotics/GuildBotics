@@ -927,6 +927,7 @@ pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
             out.extend(idempotency_index(parts[0].s(), parts[1].s(), &x));
         }
     }
+    let _: Vec<crate::ci::verify::Verification> = r.prefix_all(store::CI_VERIFICATIONS, &[])?;
     out.extend(crate::ci::queue::expected_index(r)?);
     Ok(out)
 }

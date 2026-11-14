@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 26;
+pub const SCHEMA_VERSION: u64 = 27;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -44,6 +44,7 @@ pub const INLINE: Tbl = TableDefinition::new("inline_comments");
 pub const REFS: Tbl = TableDefinition::new("ref_snapshots");
 pub const JOURNAL: Tbl = TableDefinition::new("ref_journal");
 pub const IDEMPOTENCY: Tbl = TableDefinition::new("idempotency");
+pub const CI_VERIFICATIONS: Tbl = TableDefinition::new("ci_verifications");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
 
@@ -98,6 +99,7 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     REFS,
     JOURNAL,
     IDEMPOTENCY,
+    CI_VERIFICATIONS,
     CI_RUNS,
     CI_ATTEMPTS,
 ];

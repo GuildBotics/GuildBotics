@@ -25,6 +25,7 @@ pub mod queue;
 mod selection;
 pub mod settings;
 pub mod supervise;
+pub mod verify;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -483,7 +484,10 @@ impl Ci {
             {
                 return Ok(false);
             }
-        } else if branch != repo.default_branch {
+        } else {
+            if branch == repo.default_branch {
+                return Ok(false);
+            }
             let (id, b) = (repo.id.clone(), branch.to_string());
             if !self
                 .inner
@@ -494,17 +498,23 @@ impl Ci {
                 return Ok(false);
             }
         }
+        let reg = self.registration(repo, branch, sha, gate.is_some()).await?;
+        self.register(repo, sha, reg).await
+    }
+
+    async fn registration(
+        &self,
+        repo: &Repo,
+        branch: &str,
+        sha: &str,
+        gate: bool,
+    ) -> AppResult<Registration> {
         let pipeline = self.read_pipeline(repo, sha).await?;
         let selection = self
-            .select_jobs(
-                repo,
-                sha,
-                &pipeline,
-                gate.is_some() || repo.is_protected(branch),
-            )
+            .select_jobs(repo, sha, &pipeline, gate || repo.is_protected(branch))
             .await?;
         let inputs = self.job_inputs(repo, sha, &pipeline).await?;
-        let mut reg = Registration {
+        let reg = Registration {
             order: Vec::new(),
             inputs,
             selection,
@@ -523,10 +533,14 @@ impl Ci {
                     .to_string(),
             ),
             branch: branch.to_string(),
-            protected: gate.is_none() && repo.is_protected(branch),
+            protected: !gate && repo.is_protected(branch),
             pipeline,
             network: repo.ci_network,
         };
+        Ok(reg)
+    }
+
+    async fn register(&self, repo: &Repo, sha: &str, mut reg: Registration) -> AppResult<bool> {
         let snapshot = (
             repo.id.clone(),
             sha.to_string(),
@@ -581,6 +595,29 @@ impl Ci {
 
     async fn apply_ref_changes(&self, repo: &Repo, changes: &[RefChange]) -> AppResult<()> {
         let mut left = false;
+        // Attach new owners before dropping old ones in the same ref batch.
+        // In particular a merged head's queued jobs must survive its deletion.
+        for c in changes {
+            let Some((branch, _)) = ci_ref(&c.refname) else {
+                continue;
+            };
+            if c.new != ZERO_SHA {
+                // A failed registration does not hold up the other changes;
+                // the reconciler retries it.
+                match self.consider(repo, &c.refname, &c.new).await {
+                    Ok(true) => self.publish(&[(repo.path.clone(), c.new.clone())]),
+                    Ok(false) => {}
+                    Err(e) => tracing::error!(
+                        "CI registration of {} {branch} {} failed: {e}",
+                        repo.path,
+                        c.new
+                    ),
+                }
+            }
+        }
+        if let Err(e) = self.advance_verification(repo, false).await {
+            tracing::error!("CI verification of {} failed: {e}", repo.path);
+        }
         for c in changes {
             let Some((branch, _)) = ci_ref(&c.refname) else {
                 continue;
@@ -603,23 +640,11 @@ impl Ci {
                     self.publish(&[(repo.path.clone(), c.old.clone())]);
                 }
             }
-            if c.new != ZERO_SHA {
-                // A failed registration does not hold up the other changes;
-                // the reconciler retries it.
-                match self.consider(repo, &c.refname, &c.new).await {
-                    Ok(true) => self.publish(&[(repo.path.clone(), c.new.clone())]),
-                    Ok(false) => {}
-                    Err(e) => tracing::error!(
-                        "CI registration of {} {branch} {} failed: {e}",
-                        repo.path,
-                        c.new
-                    ),
-                }
-            }
         }
         if left {
             self.admit_waiting().await;
         }
+        self.advance_verification(repo, false).await?;
         Ok(())
     }
 
@@ -692,7 +717,7 @@ impl Ci {
                 Ok(wanted)
             })
             .await?;
-        wanted.push(format!("refs/heads/{}", repo.default_branch));
+        registered += self.advance_verification(repo, true).await?;
         wanted.sort();
         wanted.dedup();
         for branch in wanted {
@@ -947,6 +972,7 @@ impl Ci {
     /// Starts the periodic work: sweep every 5 s, reconcile every minute,
     /// retention every hour, and one orphan-file collection at start.
     pub fn start(app: crate::app::Shared) {
+        verify::start(app.clone());
         tokio::spawn(async move {
             let ci = app.ci.clone();
             match files::collect_orphans(&app).await {
@@ -1160,6 +1186,7 @@ mod tests {
 
     fn job(name: &str) -> JobDef {
         JobDef {
+            verified_sha: false,
             paths: Vec::new(),
             name: name.into(),
             image: "alpine".into(),
@@ -1374,6 +1401,7 @@ mod tests {
                     network: false,
                     pipeline: PipelineState::Jobs {
                         jobs: vec![JobDef {
+                            verified_sha: false,
                             paths: vec!["src/**".into()],
                             ..job("test")
                         }],
@@ -2118,5 +2146,314 @@ mod tests {
                 lint.attempt_id.as_deref().unwrap()
             )
         );
+    }
+    #[tokio::test]
+    async fn verification_batches_main_and_marks_only_completed_success() {
+        let (temp, ci, mut repo) = setup();
+        repo.required_checks.clear();
+        let app = app(&temp, &ci);
+        let saved = repo.clone();
+        app.store
+            .write(move |w| w.put(store::REPOS, &Repo::key(&saved.id), &saved))
+            .await
+            .unwrap();
+        let dir = app.git.repo_dir(&repo.path);
+        app.git.init_bare(&dir, "main").await.unwrap();
+        let work = temp.path().join("work");
+        app.git
+            .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+            .await
+            .unwrap();
+        std::fs::create_dir(work.join(".branvil")).unwrap();
+        std::fs::write(work.join(".branvil/ci.toml"), "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n[[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\n").unwrap();
+        let mut shas = vec![];
+        for message in ["first", "second", "third"] {
+            shas.push(commit_all(&app.git, &work, message).await);
+        }
+        app.git
+            .run_ok(
+                None,
+                &[
+                    "-C",
+                    work.to_str().unwrap(),
+                    "push",
+                    "-q",
+                    dir.to_str().unwrap(),
+                    "HEAD:refs/heads/main",
+                ],
+            )
+            .await
+            .unwrap();
+        app.git
+            .update_ref(&dir, "refs/heads/main", &shas[0], &shas[2], "test")
+            .await
+            .unwrap();
+        crate::refs::record_refs(&app, &repo).await.unwrap();
+        assert_eq!(
+            ci.inner
+                .store
+                .read(|r| queue::pending_count(r, 100))
+                .await
+                .unwrap(),
+            2,
+            "verification bypasses queue_max=1"
+        );
+        let first = ci
+            .inner
+            .store
+            .write(|w| queue::claim(w, "runner", 60, &util::now()))
+            .await
+            .unwrap()
+            .unwrap();
+        for n in 1..3 {
+            app.git
+                .update_ref(&dir, "refs/heads/main", &shas[n], &shas[n - 1], "test")
+                .await
+                .unwrap();
+            crate::refs::record_refs(&app, &repo).await.unwrap();
+        }
+        let id = repo.id.clone();
+        let sha = shas[0].clone();
+        let run = ci
+            .inner
+            .store
+            .read(move |r| queue::get_run(r, &id, &sha))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.branches, vec!["main"]);
+        assert!(run.superseded_by.is_none());
+        let id = repo.id.clone();
+        let sha = shas[2].clone();
+        assert!(
+            ci.inner
+                .store
+                .read(move |r| queue::get_run(r, &id, &sha))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let second = ci
+            .inner
+            .store
+            .write(|w| queue::claim(w, "runner", 60, &util::now()))
+            .await
+            .unwrap()
+            .unwrap();
+        for c in [first, second] {
+            ci.inner
+                .store
+                .write(move |w| {
+                    queue::finish(
+                        w,
+                        &c.attempt.id,
+                        &c.lease,
+                        "success",
+                        None,
+                        queue::ResultInfo::default(),
+                        1,
+                        &util::now(),
+                    )
+                })
+                .await
+                .unwrap();
+        }
+        // Simulate stopping after the ref was created but before recording success.
+        app.git
+            .update_ref(
+                &dir,
+                &format!("refs/branvil/verified/{}", shas[0]),
+                &shas[0],
+                ZERO_SHA,
+                "test",
+            )
+            .await
+            .unwrap();
+        ci.advance_verification(&repo, true).await.unwrap();
+        let id = repo.id.clone();
+        let v = ci
+            .inner
+            .store
+            .read(move |r| verify::get(r, &id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(v.state, "running");
+        assert_eq!(v.sha, shas[2]);
+        assert_eq!(v.last_verified.unwrap().sha, shas[0]);
+        assert_eq!(v.base, Some(shas[0].clone()));
+        let id = repo.id.clone();
+        let sha = shas[0].clone();
+        assert!(
+            ci.inner
+                .store
+                .read(move |r| queue::get_run(r, &id, &sha))
+                .await
+                .unwrap()
+                .unwrap()
+                .branches
+                .is_empty()
+        );
+        // Same tree and no cache: the next verification can reuse the actual successes.
+        for _ in 0..2 {
+            let c = ci
+                .inner
+                .store
+                .write(|w| queue::claim(w, "runner", 60, &util::now()))
+                .await
+                .unwrap()
+                .unwrap();
+            ci.inner
+                .store
+                .write(move |w| {
+                    queue::finish(
+                        w,
+                        &c.attempt.id,
+                        &c.lease,
+                        "success",
+                        None,
+                        queue::ResultInfo::default(),
+                        1,
+                        &util::now(),
+                    )
+                })
+                .await
+                .unwrap();
+        }
+        ci.advance_verification(&repo, true).await.unwrap();
+        let id = repo.id.clone();
+        let v = ci
+            .inner
+            .store
+            .read(move |r| verify::get(r, &id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(v.state, "passed");
+        assert_eq!(v.last_verified.unwrap().sha, shas[2]);
+        assert_eq!(ci.advance_verification(&repo, true).await.unwrap(), 0);
+    }
+    #[tokio::test]
+    async fn verification_finishes_invalid_missing_empty_and_exhausted_failures() {
+        for kind in ["absent", "invalid", "missing", "failed", "recovered"] {
+            let (temp, ci, mut repo) = setup();
+            if kind != "missing" {
+                repo.required_checks.clear();
+            }
+            let app = app(&temp, &ci);
+            let saved = repo.clone();
+            app.store
+                .write(move |w| w.put(store::REPOS, &Repo::key(&saved.id), &saved))
+                .await
+                .unwrap();
+            let dir = app.git.repo_dir(&repo.path);
+            app.git.init_bare(&dir, "main").await.unwrap();
+            let work = temp.path().join("work");
+            app.git
+                .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+                .await
+                .unwrap();
+            if kind != "absent" {
+                std::fs::create_dir(work.join(".branvil")).unwrap();
+                let pipeline = if kind == "invalid" {
+                    "invalid"
+                } else {
+                    "[[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\n"
+                };
+                std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
+            }
+            let sha = commit_all(&app.git, &work, "verification").await;
+            app.git
+                .run_ok(
+                    None,
+                    &[
+                        "-C",
+                        work.to_str().unwrap(),
+                        "push",
+                        "-q",
+                        dir.to_str().unwrap(),
+                        "HEAD:refs/heads/main",
+                    ],
+                )
+                .await
+                .unwrap();
+            ci.advance_verification(&repo, true).await.unwrap();
+            if !matches!(kind, "absent" | "invalid") {
+                for n in 0..=queue::MAX_AUTO_RETRIES {
+                    let c = ci
+                        .inner
+                        .store
+                        .write(|w| queue::claim(w, "r", 60, &util::now()))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    let conclusion = if kind == "missing" || (kind == "recovered" && n == 1) {
+                        "success"
+                    } else {
+                        "failure"
+                    };
+                    ci.inner
+                        .store
+                        .write(move |w| {
+                            queue::finish(
+                                w,
+                                &c.attempt.id,
+                                &c.lease,
+                                conclusion,
+                                None,
+                                queue::ResultInfo::default(),
+                                0,
+                                &util::now(),
+                            )
+                        })
+                        .await
+                        .unwrap();
+                    ci.advance_verification(&repo, true).await.unwrap();
+                    let id = repo.id.clone();
+                    let v = ci
+                        .inner
+                        .store
+                        .read(move |r| verify::get(r, &id))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if conclusion == "success" {
+                        break;
+                    }
+                    assert_eq!(
+                        v.state,
+                        if n < queue::MAX_AUTO_RETRIES {
+                            "running"
+                        } else {
+                            "failed"
+                        }
+                    );
+                }
+            }
+            ci.advance_verification(&repo, true).await.unwrap();
+            let id = repo.id.clone();
+            let v = ci
+                .inner
+                .store
+                .read(move |r| verify::get(r, &id))
+                .await
+                .unwrap()
+                .unwrap();
+            let passed = matches!(kind, "absent" | "recovered");
+            assert_eq!(v.state, if passed { "passed" } else { "failed" });
+            if passed {
+                assert!(v.failing_since.is_none());
+                assert_eq!(v.last_verified.unwrap().sha, sha);
+            } else {
+                assert_eq!(v.failing_since, Some(sha.clone()));
+                assert!(!v.failed_jobs.is_empty());
+                assert_eq!(v.failed_jobs[0].attempt_id.is_some(), kind == "failed");
+            }
+            let refs = app.git.all_refs(&dir).await.unwrap();
+            assert_eq!(
+                refs.contains_key(&format!("refs/branvil/verified/{sha}")),
+                passed
+            );
+        }
     }
 }

@@ -13,6 +13,7 @@ pub enum Class {
     Landing,
     Normal,
     Deferred,
+    Verify,
     Last,
 }
 
@@ -114,6 +115,33 @@ impl Classifier {
         run: &queue::Run,
         branch: &str,
     ) -> AppResult<Priority> {
+        if branch == repo.default_branch
+            && let Some(v) = super::verify::get(r, &repo.id)?
+            && v.sha == run.sha
+        {
+            let failed = queue::attempts_of(r, &repo.id, &run.sha)?.iter().any(|a| {
+                a.status == "completed"
+                    && matches!(
+                        a.conclusion.as_deref(),
+                        Some("failure" | "timed_out" | "startup_failure")
+                    )
+                    || (a.after_interrupt
+                        && a.status == "completed"
+                        && a.conclusion.as_deref() == Some("cancelled")
+                        && !a.cancel_requested
+                        && !a.superseded)
+            });
+            return Ok(
+                if v.failing_since.is_some() || (v.state == "running" && failed) {
+                    Priority::new(Class::Protected)
+                } else {
+                    Priority::reason(
+                        Class::Verify,
+                        "main is verified after the jobs that lead to a merge",
+                    )
+                },
+            );
+        }
         if repo.is_protected(branch) {
             return Ok(Priority::new(Class::Protected));
         }
@@ -254,7 +282,7 @@ impl Priority {
                 " It runs when no protected-branch, near-landing or normal job is queued."
             }
             Class::Last if !waiting => " It runs when no other job is queued.",
-            Class::Deferred | Class::Last => "",
+            Class::Deferred | Class::Verify | Class::Last => "",
             _ => return existing,
         };
         Some(format!(
