@@ -1654,6 +1654,7 @@ esac
             .write(move |w| {
                 let main = crate::ci::queue::get_run(w, &repo, &source_sha)?.unwrap();
                 let reg = crate::ci::queue::Registration {
+                    order: Vec::new(),
                     selection: None,
                     repo,
                     repo_path: "acme/demo".into(),

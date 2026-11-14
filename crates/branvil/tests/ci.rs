@@ -1423,11 +1423,23 @@ async fn a_merge_runs_the_jobs_with_a_cache_again_as_the_default_branchs() {
         assert_eq!(runner.finish(&c, "success").await.0, 200);
     }
 
-    let head = w.push_change("feature", "f.txt", "one\n");
+    w.push_change("feature", "f.txt", "one\n");
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
+    // Seed a failed PR build, so its next head puts build before lint
+    // independently of the setup run's sub-second durations.
+    for _ in 0..2 {
+        let c = runner.claim().await.unwrap();
+        let result = if c["job"]["name"] == "build" {
+            "failure"
+        } else {
+            "success"
+        };
+        assert_eq!(runner.finish(&c, result).await.0, 200);
+    }
+    let head = w.push_change("feature", "f.txt", "two\n");
     // `build` still runs for the pull request when it is merged.
-    let running = runner.claim().await.unwrap();
+    let running = runner.next_claim().await;
     assert_eq!(running["job"]["name"], "build");
     assert_eq!(running["cache_scope"], "branch:feature", "{running}");
     let lint = runner.claim().await.unwrap();
@@ -1939,7 +1951,17 @@ async fn running_test_and_queued_lint(w: &World, runner: &Runner) -> Value {
     sync_main(w);
     w.push_change("feature", "f.txt", "1\n");
     w.open_pull("feature", json!([])).await;
-    let running = runner.claim().await.unwrap();
+    for _ in 0..2 {
+        let c = runner.claim().await.unwrap();
+        let result = if c["job"]["name"] == "test" {
+            "failure"
+        } else {
+            "success"
+        };
+        assert_eq!(runner.finish(&c, result).await.0, 200);
+    }
+    w.push_change("feature", "f.txt", "2\n");
+    let running = runner.next_claim().await;
     assert_eq!(running["job"]["name"], "test");
     running
 }

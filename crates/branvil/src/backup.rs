@@ -577,6 +577,7 @@ mod tests {
                     cache: None,
                 };
                 let registration = queue::Registration {
+                    order: Vec::new(),
                     inputs: Default::default(),
                     selection: None,
                     repo: "repo_1".into(),

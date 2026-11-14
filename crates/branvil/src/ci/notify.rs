@@ -239,6 +239,7 @@ mod tests {
                 queue::register(
                     w,
                     queue::Registration {
+                        order: Vec::new(),
                         inputs: Default::default(),
                         selection: None,
                         repo: repo.id.clone(),
@@ -320,6 +321,7 @@ mod tests {
                 queue::register(
                     w,
                     queue::Registration {
+                        order: Vec::new(),
                         inputs: Default::default(),
                         selection: None,
                         repo: repo.id.clone(),
@@ -430,6 +432,7 @@ mod tests {
                 queue::register(
                     w,
                     queue::Registration {
+                        order: Vec::new(),
                         inputs: Default::default(),
                         selection: None,
                         repo: repo.id.clone(),
@@ -470,6 +473,7 @@ mod tests {
             .write_sync(|w| {
                 w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
                 let mut registration = queue::Registration {
+                    order: Vec::new(),
                     inputs: Default::default(),
                     selection: None,
                     repo: repo.id.clone(),
@@ -489,6 +493,7 @@ mod tests {
                     jobs[0].commands.push("different".into());
                 }
                 registration = queue::Registration {
+                    order: Vec::new(),
                     inputs: Default::default(),
                     selection: None,
                     repo: repo.id.clone(),

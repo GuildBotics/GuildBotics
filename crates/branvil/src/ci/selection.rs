@@ -323,6 +323,7 @@ mod tests {
         // The run's digests are kept while its pipeline is the same, and
         // computed again for another one.
         let reg = queue::Registration {
+            order: Vec::new(),
             inputs: BTreeMap::from([("lint".to_string(), "kept".to_string())]),
             selection: None,
             repo: repo.id.clone(),

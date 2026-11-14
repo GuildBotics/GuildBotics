@@ -1155,6 +1155,7 @@ mod tests {
                     queue::register(
                         w,
                         queue::Registration {
+                            order: Vec::new(),
                             inputs: Default::default(),
                             selection: None,
                             repo: repo.id.clone(),

@@ -37,6 +37,20 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
 - Jobs of one run are queued together; a runner runs queued jobs, of any
   run, up to `ci.executor.max_jobs` at once, each in a microVM of its own
   (there are no dependencies between jobs).
+  Admission assigns sequence numbers within a run in this order:
+  failures in the previous run, jobs without a result, then successes (including
+  reused successes). The previous run is the nearest recorded run on the first
+  20 first-parent ancestors, excluding the commit itself. Failures include failure,
+  timeout, startup failure, and cancellation other than supersession. Failures
+  of a protected-branch run are treated as jobs without a result; so are missing,
+  unfinished, superseded, path-skipped, and newly added jobs.
+  Within each group, jobs with a known estimate go first, shortest first;
+  equal estimates and jobs without estimates keep pipeline order. Estimates use
+  the nearest non-reused successful duration in the same history as the running
+  checks' estimates. If Git cannot read history, pipeline order is used.
+  Registering the same run again does not change existing attempts or their
+  sequence numbers. Waiting runs receive this order when admitted; individual
+  retries, interrupted attempts, and cache refreshes keep their existing rules.
   At each claim the service derives a class from current store records, without
   Git or a saved priority. The first matching rule wins:
 
