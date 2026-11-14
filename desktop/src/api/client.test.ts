@@ -875,8 +875,17 @@ describe("websocket subscriptions", () => {
     expect(socket.send).toHaveBeenCalledWith("synthetic-code\n");
     socket.onmessage?.({ data: '{"saved":true}' });
     socket.onclose?.();
-    expect(done).toHaveBeenCalledExactlyOnceWith(true);
+    expect(done).toHaveBeenCalledExactlyOnceWith(true, undefined);
     connection.close();
+  });
+
+  it("preserves the server's failure reason", () => {
+    const done = vi.fn();
+    loginCliAgent("claude", vi.fn(), done);
+    MockWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({ saved: false, error: "Build the agent environment first." }),
+    });
+    expect(done).toHaveBeenCalledWith(false, "Build the agent environment first.");
   });
 
   it("reports a disconnected login as failed and suppresses completion after cancellation", () => {

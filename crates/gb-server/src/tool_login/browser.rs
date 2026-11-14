@@ -73,7 +73,7 @@ pub(crate) async fn connect(
                     while let Ok(chunk) = chunks.try_recv() {
                         if socket.send(Message::Binary(chunk.into())).await.is_err() { break; }
                     }
-                    let _ = socket.send(Message::Text(serde_json::json!({"saved":result.is_ok()}).to_string().into())).await;
+                    let _ = socket.send(Message::Text(serde_json::json!({"saved":result.is_ok(), "error":result.err()}).to_string().into())).await;
                     return;
                 },
                 _ = cancelled.cancelled() => break,
@@ -132,7 +132,7 @@ mod tests {
             .start_session(link.url.split_once('#').unwrap().1)
             .unwrap()
             .unwrap();
-        let cookie = format!("guildbotics_session_{port}={cookie}");
+        let cookie = format!("{}={cookie}", auth.cookie);
         let api = std::sync::Arc::new(crate::api::Api::new(
             crate::api::Selected {
                 workspace: Some(root.path().join("workspace")),
@@ -171,6 +171,7 @@ mod tests {
                         _ = cancelled.cancelled() => return Err(PrivateError::Start("cancelled".into())),
                         answer = io.input.recv() => answer.unwrap(),
                     };
+                    if answer == b"synthetic-failure\n" { return Err(PrivateError::Start("Build the agent environment first.".into())); }
                     assert_eq!(answer, b"synthetic-answer\n");
                         Ok((0, credentials("synthetic-browser-login"), vec![]))
                     },
@@ -283,6 +284,33 @@ mod tests {
             )[0]["saved"]
                 == true
         );
+        let mut request =
+            format!("ws://127.0.0.1:{port}/-/guildbotics/api/intelligences/cli-agents/codex/login")
+                .into_client_request()
+                .unwrap();
+        request
+            .headers_mut()
+            .insert("cookie", cookie.parse().unwrap());
+        request.headers_mut().insert(
+            "origin",
+            format!("http://127.0.0.1:{port}").parse().unwrap(),
+        );
+        let (mut failure, _) = connect_async(request).await.unwrap();
+        failure
+            .send(ClientMessage::Text(
+                serde_json::json!({"csrf":csrf}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        let _ = failure.next().await;
+        failure
+            .send(ClientMessage::Text("synthetic-failure\n".into()))
+            .await
+            .unwrap();
+        let result = failure.next().await.unwrap().unwrap().into_text().unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["saved"], false);
+        assert_eq!(result["error"], "Build the agent environment first.");
         server.abort();
     }
 }

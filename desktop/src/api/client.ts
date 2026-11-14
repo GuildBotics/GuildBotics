@@ -1659,7 +1659,7 @@ export function runFileUrl(traceId: string, path: string): string {
 export function loginCliAgent(
   tool: string,
   onOutput: (output: string) => void,
-  onDone: (saved: boolean) => void,
+  onDone: (saved: boolean, error?: string) => void,
 ): { send: (code: string) => void; close: () => void } {
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(
@@ -1677,7 +1677,8 @@ export function loginCliAgent(
       onOutput(decoder.decode(event.data, { stream: true }));
     } else {
       finished = true;
-      onDone(JSON.parse(event.data).saved === true);
+      const result = JSON.parse(event.data) as { saved: boolean; error?: string };
+      onDone(result.saved === true, result.error);
       socket.close();
     }
   };

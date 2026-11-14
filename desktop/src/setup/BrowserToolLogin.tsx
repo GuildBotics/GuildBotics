@@ -1,7 +1,18 @@
-import { Button, Code, Group, Modal, ScrollArea, Stack, Text, TextInput } from "@mantine/core";
+import {
+  Anchor,
+  Button,
+  Code,
+  Group,
+  Modal,
+  ScrollArea,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
+import { loginText } from "./loginText";
 import { loginCliAgent } from "../api/client";
 
 /** Provider prompts, URLs and device codes stay in this mounted dialog only. */
@@ -11,6 +22,7 @@ export function BrowserToolLogin({ tool }: { tool: string }) {
   const [opened, setOpened] = useState(false);
   const [output, setOutput] = useState("");
   const [code, setCode] = useState("");
+  const [error, setError] = useState("");
   const [result, setResult] = useState<boolean | null>(null);
   const connection = useRef<ReturnType<typeof loginCliAgent> | null>(null);
   useEffect(() => () => connection.current?.close(), []);
@@ -19,17 +31,24 @@ export function BrowserToolLogin({ tool }: { tool: string }) {
     connection.current = null;
     setOutput("");
     setCode("");
+    setError("");
     setOpened(false);
   }
   function start() {
     setOutput("");
     setCode("");
     setResult(null);
+    setError("");
+    const clean = loginText();
     setOpened(true);
     connection.current = loginCliAgent(
       tool,
-      (chunk) => setOutput((previous) => (previous + chunk).slice(-65536)),
-      (saved) => {
+      (chunk) => {
+        const text = clean(chunk);
+        setOutput((previous) => (previous + text).slice(-65536));
+      },
+      (saved, reason) => {
+        setError(reason ?? "");
         setCode("");
         setResult(saved);
         void query.invalidateQueries({ queryKey: ["agent-environment-status"] });
@@ -53,7 +72,15 @@ export function BrowserToolLogin({ tool }: { tool: string }) {
           <Text size="sm">{t("setup.intelligence.environment.browserLoginHint")}</Text>
           <ScrollArea.Autosize mah={320}>
             <Code block style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-              {output}
+              {output.split(/(https?:\/\/[^\s<>"']+)/g).map((part, index) =>
+                /^https?:\/\//.test(part) ? (
+                  <Anchor key={index} href={part} target="_blank" rel="noopener noreferrer">
+                    {part}
+                  </Anchor>
+                ) : (
+                  part
+                ),
+              )}
             </Code>
           </ScrollArea.Autosize>
           {result === null ? (
@@ -75,9 +102,12 @@ export function BrowserToolLogin({ tool }: { tool: string }) {
               </Group>
             </form>
           ) : (
-            <Text role="status" c={result ? "success" : "danger"}>
-              {t(`setup.intelligence.environment.${result ? "loginSaved" : "loginError"}`)}
-            </Text>
+            <Stack gap="xs">
+              <Text role="status" c={result ? "success" : "danger"}>
+                {t(`setup.intelligence.environment.${result ? "loginSaved" : "loginError"}`)}
+              </Text>
+              {error && <Text role="alert">{error}</Text>}
+            </Stack>
           )}
         </Stack>
       </Modal>

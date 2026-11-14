@@ -954,7 +954,7 @@ async fn real_device_copilot_reads_quota_from_its_synthetic_account() {
 
 /// Attended login contract for each pinned CLI:
 /// 1. Build this checkout's snapshot under GUILDBOTICS_REAL_DEVICE_ROOT.
-/// 2. On a client connected to the Hub, open Settings / Intelligence / Agent
+/// 2. On a client connected to the Hub, open Setup / Agent execution
 ///    environment. Choose Log in for Codex, Claude, Grok and Copilot in turn.
 /// 3. Open the URL printed by the CLI in the client's browser. For device auth,
 ///    enter the displayed device code there. For Claude's paste-code flow,

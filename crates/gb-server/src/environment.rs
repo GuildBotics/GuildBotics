@@ -1064,6 +1064,11 @@ mod tests {
                     language,
                 );
                 assert!(browser.contains("Codex"));
+                assert!(browser.contains(if language == "en" {
+                    "Setup → Agent execution environment"
+                } else {
+                    "設定 → エージェント実行環境"
+                }));
                 assert!(!browser.contains("terminal-only") && !browser.contains("_browser"));
                 assert!(
                     tool_sentence(

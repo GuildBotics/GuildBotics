@@ -3276,16 +3276,25 @@ pub(crate) async fn login_with_io(
         .find(|entry| entry["name"] == tool)
         .cloned()
         .ok_or("Unknown provisioned tool.")?;
+    let language = std::fs::read_to_string(workspace.join(".guildbotics/config/team/project.yml"))
+        .ok()
+        .and_then(|text| gb_config::yaml_value(&text).ok())
+        .and_then(|value| value["language"].as_str().map(crate::i18n::language))
+        .unwrap_or("en");
     let status = gb_environment::device::read(host, workspace).await;
     if let Some(problem) = status.refusal {
-        return Err(crate::commands::say(problem, "en"));
+        return Err(crate::commands::say(problem, language));
     }
     let vm = LoginVm {
         data: host.data.clone(),
         package: host.package.clone(),
-        snapshot: status
-            .snapshot
-            .ok_or("Build the agent environment first.")?,
+        snapshot: status.snapshot.ok_or_else(|| {
+            crate::i18n::t(
+                language,
+                "intelligences.agent_environment.snapshot.missing",
+                &[],
+            )
+        })?,
         memory_mib: status.resources.memory_mib,
         cpus: status.resources.cpus,
         nameservers: status.view["dns"]["nameservers"]
@@ -3296,11 +3305,6 @@ pub(crate) async fn login_with_io(
             .map(str::to_owned)
             .collect(),
     };
-    let language = std::fs::read_to_string(workspace.join(".guildbotics/config/team/project.yml"))
-        .ok()
-        .and_then(|text| gb_config::yaml_value(&text).ok())
-        .and_then(|value| value["language"].as_str().map(crate::i18n::language))
-        .unwrap_or("en");
     let tool = tool.to_owned();
     let task = spawn_private(private_tasks(), async move {
         let device = DeviceKey {
