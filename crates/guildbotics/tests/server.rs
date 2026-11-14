@@ -1760,7 +1760,7 @@ fn run_accepts_options_after_the_command_but_requires_a_server() {
     assert!(without_server.stdout.is_empty());
     let error = String::from_utf8_lossy(&without_server.stderr);
     assert!(
-        error.contains("guildbotics run requires a running GuildBotics server."),
+        error.contains(&gb_server::i18n::t("en", "cli.server.unreachable", &[])),
         "{error}"
     );
     assert!(!error.contains("unknown"), "{error}");
