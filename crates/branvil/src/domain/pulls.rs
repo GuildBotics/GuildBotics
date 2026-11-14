@@ -25,6 +25,9 @@ use crate::util::{self, fold};
 /// Patches are cut at this size (`patch_complete: false`).
 const PATCH_LIMIT: usize = 256 << 10;
 
+#[path = "pull_order.rs"]
+mod ordering;
+
 #[derive(Serialize, Debug, Clone)]
 pub struct LinkView {
     pub url: String,
@@ -33,6 +36,9 @@ pub struct LinkView {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct PullView {
+    /// Present on lists requested with sort=readiness; compared lexicographically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_order: Option<[u64; 3]>,
     pub url: String,
     pub repository: String,
     pub number: u64,
@@ -259,6 +265,7 @@ pub async fn pull_view(app: &App, repo: &Repo, p: &Pull, tips: &Tips) -> AppResu
         _ => Vec::new(),
     };
     Ok(PullView {
+        merge_order: None,
         url,
         unanswered,
         repository: repo.path.clone(),
@@ -529,9 +536,18 @@ pub async fn create(
 
 #[derive(Deserialize, Debug, Default)]
 pub struct PullQuery {
+    pub sort: Option<PullSort>,
     pub state: Option<String>,
     pub head: Option<String>,
     pub base: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PullSort {
+    #[default]
+    Updated,
+    Readiness,
 }
 
 pub async fn list(
@@ -541,44 +557,58 @@ pub async fn list(
     q: PullQuery,
     page: PageReq,
 ) -> AppResult<Page<PullView>> {
+    let readiness = matches!(q.sort, Some(PullSort::Readiness));
     let state = q.state.clone().unwrap_or_else(|| "open".into());
     if !["open", "closed", "all"].contains(&state.as_str()) {
         return Err(AppError::invalid("state must be open, closed, or all."));
     }
     let repo = domain::repos::visible(app, caller, repo_path).await?;
     let r2 = repo.clone();
-    let (pulls, next_cursor) = app
+    let pulls: Vec<Pull> = app
         .store
         .read(move |r| {
             let all: Vec<Pull> = r.prefix_all(store::PULLS, &Key::new().s(&r2.id).bytes())?;
-            let mut positioned: Vec<_> = all
+            Ok(all
                 .into_iter()
                 .filter(|p| {
                     (state == "all" || p.state == state)
                         && q.head.as_ref().is_none_or(|h| &p.head == h)
                         && q.base.as_ref().is_none_or(|b| &p.base == b)
                 })
-                .map(|p| {
-                    // Complement the key so PageReq's ascending positions
-                    // mean newest update first, then largest number first.
-                    let position: Vec<u8> = Key::new()
-                        .s(&p.updated_at)
-                        .u(p.number)
-                        .bytes()
-                        .into_iter()
-                        .map(|b| !b)
-                        .collect();
-                    (position, p)
-                })
-                .collect();
-            positioned.sort_by(|a, b| a.0.cmp(&b.0));
-            Ok(page.slice(positioned))
+                .collect())
         })
         .await?;
     let tips = tips(app, &repo).await?;
+    let mut positioned = Vec::new();
+    for p in pulls {
+        let order = if readiness {
+            Some(ordering::rank(app, &repo, &p, &tips).await?)
+        } else {
+            None
+        };
+        let mut position = Vec::new();
+        if let Some(order) = order {
+            for part in order {
+                position.extend(Key::new().u(part).bytes());
+            }
+        }
+        position.extend(
+            Key::new()
+                .s(&p.updated_at)
+                .u(p.number)
+                .bytes()
+                .into_iter()
+                .map(|b| !b),
+        );
+        positioned.push((position, (p, order)));
+    }
+    positioned.sort_by(|a, b| a.0.cmp(&b.0));
+    let (pulls, next_cursor) = page.slice(positioned);
     let mut items = Vec::new();
-    for p in &pulls {
-        items.push(pull_view(app, &repo, p, &tips).await?);
+    for (p, order) in &pulls {
+        let mut view = pull_view(app, &repo, p, &tips).await?;
+        view.merge_order = *order;
+        items.push(view);
     }
     Ok(Page { items, next_cursor })
 }
@@ -1829,15 +1859,7 @@ pub async fn checks(
                 .await?,
         )
     };
-    let head = if head_sha.is_empty() {
-        crate::ci::Checks {
-            run_registered: false,
-            checks: Vec::new(),
-            checks_expected: !repo.required_checks.is_empty(),
-        }
-    } else {
-        app.ci.head_checks(&repo, &head_sha).await?
-    };
+    let head = display_checks(app, &repo, &p, &head_sha).await?;
     let base_checks = if base_sha.is_empty() {
         0
     } else {
@@ -1850,10 +1872,38 @@ pub async fn checks(
             .count()
     };
     let mut checks = head.checks;
-    checks.extend(crate::landing::checks(app, &repo, number, &head_sha).await?);
     app.ci.estimate(&repo, &head_sha, &mut checks).await;
+    app.ci.order_checks(&mut checks).await?;
+    Ok(ChecksView {
+        head_sha,
+        base_sha,
+        behind_by,
+        checks,
+        checks_expected: head.checks_expected,
+        base_checks,
+    })
+}
+
+/// The exact checks shown by the PR and used to order its CI cell.
+async fn display_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head_sha: &str,
+) -> AppResult<crate::ci::Checks> {
+    let mut head = if head_sha.is_empty() {
+        crate::ci::Checks {
+            run_registered: false,
+            checks: Vec::new(),
+            checks_expected: !repo.required_checks.is_empty(),
+        }
+    } else {
+        app.ci.head_checks(repo, head_sha).await?
+    };
+    let checks = &mut head.checks;
+    checks.extend(crate::landing::checks(app, repo, p.number, head_sha).await?);
     if let Some(published) = &p.upstream
-        && published.pushed.as_deref() == Some(head_sha.as_str())
+        && published.pushed.as_deref() == Some(head_sha)
     {
         let provider = &published.provider;
         checks.extend(published.checks.iter().map(|c| Check {
@@ -1877,14 +1927,7 @@ pub async fn checks(
             });
         }
     }
-    Ok(ChecksView {
-        head_sha,
-        base_sha,
-        behind_by,
-        checks,
-        checks_expected: head.checks_expected,
-        base_checks,
-    })
+    Ok(head)
 }
 
 // ---------------------------------------------------------------- merge

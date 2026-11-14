@@ -19,6 +19,7 @@ import type {
   Job,
   JobLog,
   Lane,
+  ListedPull,
   Landing,
   Member,
   MemberKind,
@@ -107,7 +108,7 @@ export const repos = {
   create: (body: { path: string; default_branch: string; labels: string[] }) => create<Repository>("/repos", body),
   update: (repo: string, body: RepoPatch) => request<Repository>("PATCH", `/repos/${enc(repo)}`, { body }),
   pulls: (repo: string, state: "open" | "closed" | "all", cursor?: string | null) =>
-    get<Page<PullRequest>>(`/repos/${enc(repo)}/pulls`, { state, cursor, limit: 30 }),
+    get<Page<ListedPull>>(`/repos/${enc(repo)}/pulls`, { state, sort: "readiness", cursor, limit: 30 }),
   landing: (repo: string) => get<{ items: Landing[] }>(`/repos/${enc(repo)}/landing`),
   branch: (repo: string, name: string) => get<Branch>(`/repos/${enc(repo)}/branches/${enc(name)}`),
   commit: (repo: string, sha: string) => get<Commit>(`/repos/${enc(repo)}/commits/${enc(sha)}`),

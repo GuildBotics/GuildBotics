@@ -272,6 +272,9 @@ export interface PullRequest {
   revision: number;
 }
 
+/** The readiness-sorted list carries its server-computed comparison key. */
+export type ListedPull = PullRequest & { merge_order: [number, number, number] };
+
 export type LandingState = "waiting" | "gating" | "passed" | "left";
 
 export type LandingNext = "gate" | "publishing" | "owner_publish" | "host_checks" | "owner_merge_host" | "following" | "owner_fix_following" | "host_closed" | "owner_fix_auto" | "auto_merge" | "owner_merge";

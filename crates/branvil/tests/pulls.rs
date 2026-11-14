@@ -13,6 +13,71 @@ fn pulls(w: &World) -> String {
 }
 
 #[tokio::test]
+async fn readiness_order_is_applied_before_pagination_and_bound_to_the_cursor() {
+    let w = World::new().await;
+    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+    let (status, body) = w
+        .server
+        .patch(
+            &w.repo_path(),
+            &w.owner,
+            json!({"revision": repo["revision"], "required_approvals": 1}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    for i in 0..32 {
+        let branch = format!("feature-{i}");
+        w.push_change(&branch, "f.txt", &i.to_string());
+        let p = w.open_pull(&branch, json!([])).await;
+        if i > 0 {
+            let (status, body) = w
+                .server
+                .patch(
+                    &format!("{}/{}", pulls(&w), p["number"]),
+                    &w.aiko,
+                    json!({"draft":true}),
+                )
+                .await;
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+    let url = format!("{}?sort=readiness&limit=2", pulls(&w));
+    let first = w.server.ok(&url, &w.aiko).await;
+    assert_eq!(first["items"][0]["number"], 1);
+    assert_eq!(first["items"][0]["merge_order"][0], 6);
+    assert_eq!(first["items"][1]["merge_order"][0], 8);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let (status, _) = w
+        .server
+        .get(
+            &format!("{}?sort=updated&cursor={cursor}", pulls(&w)),
+            &w.aiko,
+        )
+        .await;
+    assert_eq!(status, 400);
+    let mut found = first["items"].as_array().unwrap().clone();
+    let mut cursor = Some(cursor.to_string());
+    while let Some(next) = cursor {
+        let page = w.server.ok(&format!("{url}&cursor={next}"), &w.aiko).await;
+        found.extend(page["items"].as_array().unwrap().iter().cloned());
+        cursor = page["next_cursor"].as_str().map(str::to_string);
+    }
+    assert_eq!(found.len(), 32);
+    let mut numbers: Vec<_> = found
+        .iter()
+        .map(|p| p["number"].as_u64().unwrap())
+        .collect();
+    numbers.sort();
+    numbers.dedup();
+    assert_eq!(numbers.len(), 32);
+    let (status, _) = w
+        .server
+        .get(&format!("{}?sort=unknown", pulls(&w)), &w.aiko)
+        .await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
 async fn repository_pages_put_recent_updates_first_and_visit_every_matching_pull() {
     let w = World::new().await;
     w.push_change("feature", "f.txt", "one");

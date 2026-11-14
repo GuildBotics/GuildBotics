@@ -134,6 +134,8 @@ fn classes_override_registration_order_and_do_not_cancel_running_work() {
         review(w, 4, "reviewer", "approve", "", "landing")?;
         enqueue(w, "protected", "main")?;
         for expected in ["protected", "landing", "normal", "deferred", "last2"] {
+            let planned = scheduled(w, false)?;
+            assert_eq!(planned.first().unwrap().0.sha, expected);
             assert_eq!(take(w)?.attempt.sha, expected);
         }
         assert!(
@@ -177,6 +179,7 @@ fn reviews_drafts_and_answers_are_recomputed_at_claim_time() {
         review(w, 2, "author", "comment", "Answered", "newer")?;
         assert_eq!(class(w, "newer")?, Class::Normal);
         review(w, 2, "reviewer", "approve", "", "newer")?;
+        assert_eq!(scheduled(w, false)?[0].0.sha, "newer");
         assert_eq!(take(w)?.attempt.sha, "newer");
         let mut draft = p.clone();
         draft.draft = true;
@@ -335,6 +338,7 @@ fn reuse_is_preferred_only_within_class_and_retries_must_execute() {
         let mut registration = reg("reuse", "feature", &["test"]);
         registration.tree = Some("tree-source".into());
         register(w, registration, 100, T0)?;
+        assert_eq!(scheduled(w, false)?[0].0.sha, "reuse");
         let reused = take(w)?;
         assert_eq!(reused.attempt.sha, "reuse");
         assert!(reused.reuse.is_some());

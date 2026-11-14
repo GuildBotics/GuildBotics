@@ -1,4 +1,4 @@
-import type { Card, Landing, PullRequest } from "../api/types";
+import type { Card, Landing, ListedPull } from "../api/types";
 
 /** A card of ticket `key` of `repository` (acme/demo unless `extra` names another). */
 export function card(key: string, lane: Card["lane"], extra: Partial<Card> = {}): Card {
@@ -48,8 +48,9 @@ export function landing(extra: Partial<Landing> = {}): Landing {
   };
 }
 
-export function pull(extra: Partial<PullRequest> = {}): PullRequest {
+export function pull(extra: Partial<ListedPull> = {}): ListedPull {
   return {
+    merge_order: [0, 0, 0],
     url: `${window.location.origin}/acme/demo/-/pulls/3`,
     repository: "acme/demo",
     number: 3,

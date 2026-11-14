@@ -4,6 +4,11 @@ import * as api from "../api/endpoints";
 import { apiError, fakeApi, json } from "../test/fakeApi";
 
 describe("API client", () => {
+  it("requests server readiness order with the page cursor", async () => {
+    const fake = fakeApi({ "GET /api/v1/repos/acme/demo/pulls": json(200, { items: [], next_cursor: null }) });
+    await api.repos.pulls("acme/demo", "open", "next-page");
+    expect(Object.fromEntries(new URLSearchParams(fake.requests[0]!.search))).toEqual({ state: "open", sort: "readiness", cursor: "next-page", limit: "30" });
+  });
   it("sends the CSRF header on non-GET requests only, with same-origin credentials", async () => {
     const fake = fakeApi({
       "GET /api/v1/me": json(200, { name: "owner" }),
