@@ -1,7 +1,6 @@
 //! The interactive member client and server wire contract.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::OnceLock;
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -35,30 +34,7 @@ pub struct Result {
     #[serde(flatten)]
     pub metadata: serde_json::Map<String, Value>,
 }
-/// Compare the executable builds, even when they share a package version.
+/// Identity of the source commit, shared across build targets.
 pub fn binary_version() -> anyhow::Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    static VERSION: OnceLock<String> = OnceLock::new();
-    if let Some(version) = VERSION.get() {
-        return Ok(version.clone());
-    }
-    let mut file = std::fs::File::open(std::env::current_exe()?)?;
-    let mut hasher = Sha256::new();
-    let mut bytes = [0; 65536];
-    loop {
-        let count = file.read(&mut bytes)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&bytes[..count]);
-    }
-    let hash = hasher
-        .finalize()
-        .iter()
-        .map(|v| format!("{v:02x}"))
-        .collect::<String>();
-    let version = format!("{}+{hash}", env!("CARGO_PKG_VERSION"));
-    let _ = VERSION.set(version.clone());
-    Ok(version)
+    Ok(gb_base::BUILD_VERSION.into())
 }

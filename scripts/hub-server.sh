@@ -223,6 +223,9 @@ build_head() {
         fail "\"$identity\" is not a valid code signing identity in the Keychain. See docs/hub-server.md."
     stage=build
     revision=$(git -C "$repo" rev-parse --verify HEAD)
+    # Manual updates may proceed before the CI distribution is available.
+    "$current" server hub-clients --checkout "$repo" --sha "$revision" ||
+        printf 'Client distribution is unavailable. Retry the update after client CI finishes.\n' >&2
     source=$builds/$revision
     candidate=$source/guildbotics-bin
     if [ -x "$candidate" ]; then

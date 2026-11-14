@@ -114,3 +114,5 @@ mod git_credentials;
 mod command_protocol;
 pub mod endpoint;
 pub mod member_protocol;
+
+pub mod client_release;

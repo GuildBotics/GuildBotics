@@ -8,3 +8,6 @@ en:
   connected: "This machine's CLI is connected to the GuildBotics server."
   invalid_token: "The server returned an invalid application token."
   invalid_link: "The GuildBotics server returned an invalid entry link."
+  update_unavailable: "The Hub has no client release for this build yet. Wait for client-windows CI, then run scripts/hub-server.sh update on the Hub."
+  update_installed: "Installed client %{version}; resuming the command."
+  update_failed: "Client update failed: %{reason}. No command was run. Check the Hub client-windows artifact and retry, or install the client from the Hub."

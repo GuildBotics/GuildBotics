@@ -19,7 +19,7 @@ use tokio::sync::watch;
 const BRANVIL: branvil::Invocation = branvil::Invocation::under(&["branvil"]);
 
 #[derive(Parser)]
-#[command(name = "guildbotics", version, about = "GuildBotics")]
+#[command(name = "guildbotics", version = gb_base::BUILD_VERSION, about = "GuildBotics")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -148,6 +148,13 @@ use environment_cli::EnvironmentCommand;
 #[derive(Subcommand)]
 #[cfg(feature = "hub")]
 enum ServerCommand {
+    #[command(hide = true)]
+    HubClients {
+        #[arg(long)]
+        checkout: std::path::PathBuf,
+        #[arg(long)]
+        sha: String,
+    },
     /// Back up or validate Hub records without starting a server.
     #[command(hide = true)]
     HubData {
@@ -249,7 +256,35 @@ fn main() -> ExitCode {
             }
         }
     }
-    match Cli::parse().command {
+    let command = Cli::parse().command;
+    if matches!(
+        &command,
+        Command::Member { .. } | Command::Run { .. } | Command::GitCredential { .. }
+    ) {
+        match block(gb_server::client::update::prepare()) {
+            Ok(Some(executable)) => {
+                let result = (|| -> anyhow::Result<u8> {
+                    let install = std::process::Command::new(&executable)
+                        .arg("install")
+                        .output()?;
+                    eprint!(
+                        "{}{}",
+                        String::from_utf8_lossy(&install.stdout),
+                        String::from_utf8_lossy(&install.stderr)
+                    );
+                    anyhow::ensure!(install.status.success(), "skill installation failed");
+                    let status = std::process::Command::new(executable)
+                        .args(std::env::args_os().skip(1))
+                        .status()?;
+                    Ok(status.code().unwrap_or(1).try_into().unwrap_or(1))
+                })();
+                return outcome(result);
+            }
+            Ok(None) => (),
+            Err(error) => return outcome(Err(error)),
+        }
+    }
+    match command {
         #[cfg(feature = "hub")]
         Command::GenerateCliReference { check } => outcome(cli_reference::run(check).map(|()| 0)),
         #[cfg(feature = "hub")]
@@ -277,7 +312,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Diagnostics(command) => outcome(block(diagnostics_cli::run(command)).map(|()| 0)),
         Command::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", gb_base::BUILD_VERSION);
             ExitCode::SUCCESS
         }
         #[cfg(feature = "hub")]
@@ -291,6 +326,10 @@ fn main() -> ExitCode {
             .map(|()| 0),
         ),
         Command::Open { print, branvil } => open(print, branvil),
+        #[cfg(feature = "hub")]
+        Command::Server {
+            command: ServerCommand::HubClients { checkout, sha },
+        } => outcome(block(hub_cli::clients(checkout, sha)).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command:

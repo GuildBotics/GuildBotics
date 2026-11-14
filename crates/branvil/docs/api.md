@@ -1108,6 +1108,8 @@ Each automatic gate pass can notify the webhook once its next action is
   `reused_from: {"attempt_id","url","sha","basis"}` linking its source;
   `basis` is `tree` when the source's commit has the check's tree, otherwise
   `paths` (derived, not stored). Its
+  Jobs declaring artifacts reuse executions only of the same commit, since a
+  distributed executable can embed its commit identity even with identical trees.
   `artifact_names` resolve to the source's unpruned artifacts. Cache refresh
   attempts are excluded from every checks response, including required checks
   and landing gates, while their actual executions count toward estimates.

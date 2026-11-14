@@ -20,6 +20,7 @@ mod git_credentials;
 pub mod member;
 #[cfg(feature = "server")]
 pub mod secrets;
+pub mod update;
 mod writeback;
 
 const PROOF_TIMEOUT: Duration = Duration::from_secs(2);

@@ -441,6 +441,18 @@ impl Hub {
         let current = self.current.clone();
         let source = self.run(&current, &["server", "hub-probe", "--source"], None, None)?;
         self.clear_blocker("preflight");
+        // Repair missing distribution of the running build, including manual updates.
+        if let Some(commit) = Path::new(&source).file_name().and_then(|v| v.to_str()) {
+            let checkout = self.checkout.to_string_lossy().into_owned();
+            let _ = self.cli(&[
+                "server",
+                "hub-clients",
+                "--checkout",
+                &checkout,
+                "--sha",
+                commit,
+            ]);
+        }
         if Path::new(&source)
             .file_name()
             .is_some_and(|name| name == sha.as_str())
@@ -512,6 +524,9 @@ impl Hub {
         if checks["state"] != "success" {
             return Ok(());
         }
+        *stage = "clients";
+        self.cli(&["server", "hub-clients", "--checkout", &repo, "--sha", sha])?;
+        self.clear_blocker(stage);
         *stage = "migration";
         let declared = !self
             .git(&["ls-tree", "--name-only", sha, "--", "hub-update.json"])?

@@ -1723,3 +1723,30 @@ fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
     )));
     assert!(!plist.contains("/unrelated/identity"));
 }
+
+#[test]
+fn automatic_updates_wait_for_client_artifacts_but_manual_updates_continue() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    hub.auto_candidate();
+    hub.mark("missing-clients");
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.installed_build(), old);
+    assert!(hub.lines("notifications").contains("clients"));
+    fs::remove_file(hub.root().join("missing-clients")).unwrap();
+    hub.run("auto-once", None, true);
+    assert_ne!(hub.installed_build(), old);
+    // The same-build loop must still attempt to repair its distribution.
+    hub.run("auto-once", None, true);
+    assert!(
+        hub.lines("calls")
+            .contains("|server|hub-clients|--checkout|")
+    );
+    hub.commit("newer");
+    hub.mark("missing-clients");
+    let before = hub.installed_build();
+    let out = hub.run("update", None, true);
+    assert_ne!(hub.installed_build(), before);
+    assert!(text(&out).contains("Client distribution is unavailable"));
+}

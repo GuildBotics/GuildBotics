@@ -102,6 +102,37 @@ pub fn migration() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fetch and verify the client for an exact commit before making it available.
+pub async fn clients(checkout: PathBuf, sha: String) -> anyhow::Result<()> {
+    let version = gb_server::client_release::version(&sha)?;
+    let data = gb_base::home::data()?;
+    if gb_server::client_release::load(&data, &version, gb_server::client_release::TARGET).is_ok() {
+        println!("{}", json!({"ready":true}));
+        return Ok(());
+    }
+
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(["remote", "get-url", "origin"])
+        .output()?;
+    anyhow::ensure!(output.status.success(), "could not read origin");
+    let archive = branvil::hub::artifact(
+        std::str::from_utf8(&output.stdout)?.trim(),
+        &sha,
+        gb_server::client_release::ARTIFACT,
+    )
+    .await?;
+    let binary = gb_server::client_release::unpack(&archive, &sha)?;
+    gb_server::client_release::store(
+        &gb_base::home::data()?,
+        &gb_server::client_release::version(&sha)?,
+        &binary,
+    )?;
+    println!("{}", json!({"ready":true}));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

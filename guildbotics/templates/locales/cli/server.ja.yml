@@ -8,3 +8,6 @@ ja:
   connected: "このマシンの CLI を GuildBotics サーバーにつなぎました。"
   invalid_token: "サーバーから返されたアプリのトークンが無効です。"
   invalid_link: "GuildBotics サーバーから返された入口リンクが無効です。"
+  update_unavailable: "この Hub の版のクライアントはまだありません。client-windows CI の完了後、Hub で scripts/hub-server.sh update を実行してください。"
+  update_installed: "クライアント %{version} を導入しました。コマンドを再開します。"
+  update_failed: "クライアントの更新に失敗しました: %{reason}。コマンドは実行していません。Hub の client-windows 成果物を確認して再試行するか、Hub からクライアントを導入してください。"

@@ -144,6 +144,10 @@ case "$name" in
                     *) exit 2 ;;
                 esac
                 ;;
+            server:hub-clients)
+                [ ! -f "$FAKE_ROOT/missing-clients" ] || exit 1
+                printf '{"ready":true}\n'
+                ;;
             server:hub-checks)
                 state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
                 printf '{"state":"%s"}\n' "$state"

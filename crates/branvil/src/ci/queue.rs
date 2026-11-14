@@ -1019,6 +1019,8 @@ fn reusable_shape(a: &Attempt, source: &Attempt) -> bool {
         && a.id != source.id
         && a.repo == source.repo
         && a.job == source.job
+        // Distributed binaries can embed the commit even when the tree is identical.
+        && (a.job.artifacts.is_empty() || a.sha == source.sha)
         && a.network == source.network
         && source.status == "completed"
         && source.conclusion.as_deref() == Some("success")

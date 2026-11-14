@@ -392,6 +392,13 @@ routes!(
         crate::provider_api::entry
     ),
     (OwnerOrConsent, get, "/health", health),
+    (OwnerOrConsent, get, "/clients/{target}", client_manifest),
+    (
+        OwnerOrConsent,
+        get,
+        "/clients/{target}/binary",
+        client_binary
+    ),
     (
         OwnerOrConsent,
         get,
@@ -996,6 +1003,31 @@ async fn redaction_keys(State(api): State<Shared>, headers: HeaderMap) -> Respon
     }
 }
 
+fn release_bytes(api: &Api, target: &str) -> anyhow::Result<Vec<u8>> {
+    crate::client_release::load(&api.data, gb_base::BUILD_VERSION, target)
+}
+
+async fn client_manifest(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    axum::extract::Path(target): axum::extract::Path<String>,
+) -> Response {
+    match release_bytes(&api, &target) {
+        Ok(bytes) => Json(json!({"version": gb_base::BUILD_VERSION, "target": target, "sha256": crate::client_release::digest(&bytes)})).into_response(),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"message": crate::i18n::t(i18n::language(headers.get(LANGUAGE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("en")), "cli.server.update_unavailable", &[])}))).into_response(),
+    }
+}
+
+async fn client_binary(
+    State(api): State<Shared>,
+    axum::extract::Path(target): axum::extract::Path<String>,
+) -> Response {
+    match release_bytes(&api, &target) {
+        Ok(bytes) => ([("content-type", "application/octet-stream")], bytes).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 /// The server, the workspace it opened by the identity a client compares
 /// with the one it means, and this machine by its name. The identities are
 /// read, or created on first use, on every answer.
@@ -1027,7 +1059,7 @@ async fn health(State(api): State<Shared>) -> Response {
     };
     Json(json!({
         "status": "ok",
-        "version": selected.member.as_ref().map(|v|v.version.as_str()).unwrap_or(env!("CARGO_PKG_VERSION")),
+        "version": selected.member.as_ref().map(|v|v.version.as_str()).unwrap_or(gb_base::BUILD_VERSION),
         "workspace_id": selected.member.as_ref().map(|v|v.workspace_id.as_str()).or(workspace_id.as_deref()),
         "service_instance_id": api.instance_id,
         "command_time": crate::commands::Results::now(),
@@ -1190,6 +1222,56 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn consent_downloads_only_the_running_builds_verified_client() {
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let api = Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        );
+        let token = api.auth.test_consent();
+        let app = router(Arc::new(api));
+        let request = |path: &str| {
+            axum::http::Request::builder()
+                .uri(format!("/-/guildbotics/api/clients/{path}"))
+                .header("host", "127.0.0.1:8765")
+                .header("authorization", format!("Bearer {token}"))
+                .header(LANGUAGE_HEADER, "ja")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let target = crate::client_release::TARGET;
+        let unavailable = app.clone().oneshot(request(target)).await.unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let message = axum::body::to_bytes(unavailable.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&message).contains("まだありません"));
+        crate::client_release::store(root.path(), gb_base::BUILD_VERSION, b"verified client")
+            .unwrap();
+        let manifest = app.clone().oneshot(request(target)).await.unwrap();
+        assert_eq!(manifest.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(manifest.into_body(), 4096)
+            .await
+            .unwrap();
+        let manifest: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(manifest["version"], gb_base::BUILD_VERSION);
+        let binary = app
+            .oneshot(request(&format!("{target}/binary")))
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(binary.into_body(), 4096)
+            .await
+            .unwrap();
+        crate::client_release::verify(&bytes, manifest["sha256"].as_str().unwrap()).unwrap();
+        assert_eq!(bytes.as_ref(), b"verified client");
+    }
+
+    #[tokio::test]
     async fn config_reports_embedded_topology_before_branvil_is_ready() {
         use tower::ServiceExt;
         struct EmptyKeychain;
@@ -1307,6 +1389,8 @@ mod tests {
         let app = router(Arc::new(api));
         let permitted = [
             ("get", "/health"),
+            ("get", "/clients/{target}"),
+            ("get", "/clients/{target}/binary"),
             ("post", "/commands/run"),
             ("get", "/commands/runs/{id}"),
             ("get", "/member/redaction-keys"),
