@@ -917,14 +917,15 @@ async fn run_cli_never_falls_back_when_the_peer_cannot_confirm_the_workspace() {
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).unwrap();
+        let key = match state {
+            "other-workspace" | "malformed" => "cli.run.workspace_mismatch",
+            "proof-failed" | "missing-token" => "cli.server.unreachable",
+            _ => "cli.run.backend_required",
+        };
         assert!(
-            stderr.contains("requires a running")
-                || stderr.contains("different workspace selected"),
+            stderr.contains(&gb_server::i18n::t("en", key, &[])),
             "{state}: {stderr}"
         );
-        if state == "other-workspace" || state == "malformed" {
-            assert!(stderr.contains(&gb_server::i18n::t("en", "cli.run.workspace_mismatch", &[])));
-        }
         peer.expect_no_retry().await;
     }
 }

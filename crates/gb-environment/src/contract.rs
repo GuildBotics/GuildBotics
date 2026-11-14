@@ -926,12 +926,17 @@ pub fn copy_plan(
 }
 
 /// Protect the source on a client that has no workspace or device registry.
-pub fn client_directory(cwd: &Path, home: &Path) -> Result<(), String> {
+pub fn client_directory(cwd: &Path, home: &Path, registered: &[PathBuf]) -> Result<(), String> {
     let access = Resolved {
         grants: vec![],
         links: vec![],
         view: serde_json::Value::Null,
-        denied: SENSITIVE.iter().map(|p| home.join(p)).collect(),
+        denied: SENSITIVE
+            .iter()
+            .map(|p| home.join(p))
+            .chain(registered.iter().map(|p| p.join(".guildbotics")))
+            .flat_map(|p| protected_names(&p))
+            .collect(),
     };
     validate_client_name(cwd, &access, false)
 }
@@ -1599,11 +1604,66 @@ mod client_tests {
                 protected.join("child"),
                 protected.parent().unwrap().into(),
             ] {
-                assert!(client_directory(&cwd, &home).is_err(), "{}", cwd.display());
+                assert!(
+                    client_directory(&cwd, &home, &[]).is_err(),
+                    "{}",
+                    cwd.display()
+                );
             }
         }
-        assert!(client_directory(&home.join("work"), &home).is_ok());
-        assert!(client_directory(&root.path().join("other"), &home).is_ok());
+        assert!(client_directory(&home.join("work"), &home, &[]).is_ok());
+        assert!(client_directory(&root.path().join("other"), &home, &[]).is_ok());
+    }
+
+    #[test]
+    fn client_protects_all_registered_workspace_states_and_their_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let registered = vec![
+            root.path().join("projects/one"),
+            root.path().join("projects/two"),
+        ];
+        for workspace in &registered {
+            let state = workspace.join(".guildbotics");
+            for cwd in [
+                &state,
+                &state.join("local/clones"),
+                workspace,
+                workspace.parent().unwrap(),
+            ] {
+                assert!(
+                    client_directory(cwd, &home, &registered).is_err(),
+                    "{}",
+                    cwd.display()
+                );
+            }
+        }
+        assert!(client_directory(&root.path().join("ordinary"), &home, &registered).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_protects_alias_targets_for_sensitive_and_registered_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        for protected in SENSITIVE
+            .iter()
+            .map(|name| home.join(name))
+            .chain([workspace.join(".guildbotics")])
+        {
+            let target = root.path().join("target");
+            std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, &protected).unwrap();
+            assert!(
+                client_directory(&target, &home, std::slice::from_ref(&workspace)).is_err(),
+                "{}",
+                protected.display()
+            );
+            std::fs::remove_file(protected).unwrap();
+        }
     }
 
     #[test]

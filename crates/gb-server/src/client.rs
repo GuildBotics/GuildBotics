@@ -211,31 +211,40 @@ async fn run_at(
         .health()
         .await
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.backend_required", &[])))?;
-    let workspace_id = health["workspace_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?
-        .to_owned();
     let workspace = if local {
         let workspace = crate::workspace::resolve(&data, None, language)?;
         anyhow::ensure!(
             gb_workspace::identity::read_workspace_identity(&workspace)?
-                .is_some_and(|identity| identity.workspace_id == workspace_id),
+                .is_some_and(|identity| health["workspace_id"] == identity.workspace_id),
             i18n::t(language, "cli.run.workspace_mismatch", &[])
         );
         Some(workspace)
     } else {
         None
     };
+    let workspace_id = health["workspace_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?
+        .to_owned();
     let source = gb_base::host_path::normalize(&cwd.unwrap_or(std::env::current_dir()?))?;
+    let registered = gb_environment::device::registered_workspaces(&data).map_err(|reason| {
+        anyhow::anyhow!(i18n::t(
+            language,
+            "cli.run.worktree_refused",
+            &[("reason", &reason)]
+        ))
+    })?;
     if !local {
-        gb_environment::contract::client_directory(&source, &home).map_err(|reason| {
-            anyhow::anyhow!(i18n::t(
-                language,
-                "cli.run.worktree_refused",
-                &[("reason", &reason)]
-            ))
-        })?;
+        gb_environment::contract::client_directory(&source, &home, &registered).map_err(
+            |reason| {
+                anyhow::anyhow!(i18n::t(
+                    language,
+                    "cli.run.worktree_refused",
+                    &[("reason", &reason)]
+                ))
+            },
+        )?;
     }
     let instance = health["service_instance_id"]
         .as_str()
@@ -301,14 +310,6 @@ async fn run_at(
             .to_owned(),
     );
     let copy = if let Some(workspace) = &workspace {
-        let registered =
-            gb_environment::device::registered_workspaces(&data).map_err(|reason| {
-                anyhow::anyhow!(i18n::t(
-                    language,
-                    "cli.run.worktree_refused",
-                    &[("reason", &reason)]
-                ))
-            })?;
         let access =
             gb_environment::contract::resolve(workspace, &home, &registered, read_only, false)
                 .map_err(|reason| {
@@ -819,7 +820,9 @@ mod tests {
                     "before"
                 );
                 assert!(writeback::load(&data, &id).unwrap().is_some());
-                let owner = consent_client(port, "en", |_| Some(token)).await.unwrap();
+                let owner = consent_client(port, "en", |_| Some(token.clone()))
+                    .await
+                    .unwrap();
                 assert_eq!(
                     collect_command(&owner, &id, "en", &data).await.unwrap(),
                     "done"
@@ -834,6 +837,38 @@ mod tests {
             assert!(writeback::load(&data, &id).unwrap().is_none());
             assert!(!data.join("app-api.lock").exists());
             assert!(!source.join(".guildbotics").exists());
+            for registry in [
+                serde_json::to_string(&vec![source.join("registered-workspace")]).unwrap(),
+                "malformed".into(),
+            ] {
+                std::fs::write(data.join("workspaces.json"), registry).unwrap();
+                let owner = consent_client(port, "en", |_| Some(token.clone()))
+                    .await
+                    .unwrap();
+                let refused = run_at(
+                    "probe@aiko",
+                    vec![],
+                    None,
+                    || panic!("refused before reading stdin"),
+                    Some(source.clone()),
+                    CommandServer {
+                        owner,
+                        data: data.clone(),
+                        local: false,
+                        home: root.path().join("home"),
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    refused.to_string().starts_with(
+                        i18n::t("en", "cli.run.worktree_refused", &[("reason", "")]).trim()
+                    ),
+                    "{refused}"
+                );
+                assert!(writeback::load(&data, &id).unwrap().is_none());
+                assert_eq!(receipt.lock().unwrap().as_str(), id);
+            }
             server.abort();
         }
     }
