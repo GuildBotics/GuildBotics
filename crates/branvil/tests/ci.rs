@@ -231,10 +231,18 @@ pub(crate) fn pipeline(jobs: &[&str]) -> String {
     let mut s = String::new();
     for j in jobs {
         s.push_str(&format!(
-            "[[jobs]]\nname = \"{j}\"\nimage = \"{IMAGE}\"\ncommands = [\"echo {j}\"]\nartifacts = [{{name = \"report\", paths = [\"out/\"]}}]\n\n"
+            "[[jobs]]\nname = \"{j}\"\nimage = \"{IMAGE}\"\ncommands = [\"echo {j}\"]\n\n"
         ));
     }
     s
+}
+
+// Only tests that upload artifacts opt in; ordinary pipeline fixtures may reuse commits.
+fn artifact_pipeline(jobs: &[&str]) -> String {
+    pipeline(jobs).replace(
+        "\ncommands =",
+        "\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\ncommands =",
+    )
 }
 
 fn filtered_pipeline() -> String {
@@ -507,17 +515,11 @@ async fn a_head_without_paths_reuse_is_its_own_gate() {
 async fn paths_reuse_gate(reused: bool) {
     let w = World::new().await;
     let runner = Runner::new(&w, "paths-runner").await;
-    // This fixture exercises cross-commit reuse, which applies to jobs without artifacts.
     let pipeline = format!(
         "{}paths=['src/**']\n{}",
         pipeline(&["rust"]),
         pipeline(&["always"])
-    )
-    .lines()
-    .filter(|line| !line.starts_with("artifacts"))
-    .collect::<Vec<_>>()
-    .join("\n")
-        + "\n";
+    );
     land(
         &w,
         "setup",
@@ -1243,7 +1245,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".branvil/ci.toml", &artifact_pipeline(&["test"]))],
         None,
     )
     .await;
@@ -1253,7 +1255,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
 
     // The head changes its pipeline; its own pipeline runs.
     sync_main(&w);
-    let changed = pipeline(&["test"]).replace("echo test", "echo changed");
+    let changed = artifact_pipeline(&["test"]).replace("echo test", "echo changed");
     std::fs::write(w.work.join(".branvil/ci.toml"), changed).unwrap();
     git_ok(&w.work, &["add", ".branvil/ci.toml"]);
     let head = w.push_change("feature", "f.txt", "one\n");
@@ -2331,7 +2333,7 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".branvil/ci.toml", &artifact_pipeline(&["test"]))],
         None,
     )
     .await;
