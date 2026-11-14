@@ -105,13 +105,16 @@ fn grant_problem(key: &'static str, name: &str, text: impl Into<String>) -> Gran
         sentence: Sentence::Key(key, vec![("path", name.into())]),
     }
 }
+fn rooted(name: &str) -> bool {
+    let path = Path::new(name);
+    path.has_root()
+        || matches!(path.components().next(), Some(Component::Prefix(_)))
+        || name.starts_with("\\\\")
+        || (name.as_bytes().get(1) == Some(&b':')
+            && matches!(name.as_bytes().get(2), Some(b'/' | b'\\')))
+}
 fn proposed_target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, GrantProblem> {
-    if !absolute
-        && (Path::new(name).is_absolute()
-            || name.starts_with("\\\\")
-            || (name.as_bytes().get(1) == Some(&b':')
-                && matches!(name.as_bytes().get(2), Some(b'/' | b'\\'))))
-    {
+    if !absolute && rooted(name) {
         return Err(grant_problem(
             "intelligences.agent_environment.grants.path_not_relative",
             name,
@@ -165,7 +168,7 @@ fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
         || (!absolute && name.contains('\\'))
         || name.contains("//")
         || name.contains('\0')
-        || (!absolute && path.is_absolute())
+        || (!absolute && rooted(name))
         || path
             .components()
             .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
@@ -1178,6 +1181,8 @@ mod frozen_tests {
         }
         for path in [
             "/etc",
+            "/etc/",
+            "C:/Users/x",
             "C:\\Users\\x",
             "",
             ".",
@@ -1185,12 +1190,21 @@ mod frozen_tests {
             "Documents/../secrets",
             "a//b",
             "./a",
-        ] {
+        ]
+        .into_iter()
+        .chain(std::iter::once("C:relative").filter(|_| cfg!(windows)))
+        {
             put(
                 &workspace,
                 SHARED,
                 &serde_json::json!({"documents":[{"path":path,"access":"read"}]}).to_string(),
             );
+            let shared: Shared = load(&workspace.join(SHARED)).unwrap();
+            assert!(
+                validate_names(&shared, &Local::default(), &home).is_err(),
+                "{path}"
+            );
+            assert!(target(path, &home, false).is_err(), "{path}");
             assert!(
                 resolve(&workspace, &home, &[], false, true).is_err(),
                 "{path}"
@@ -1244,7 +1258,7 @@ mod frozen_tests {
     fn preflight_enumerates_open_grants_and_existing_parents_before_creating_anything() {
         let dir = tempfile::tempdir().unwrap();
         // The probe sees resolved paths; macOS temporary directories sit behind a link.
-        let root = dir.path().canonicalize().unwrap();
+        let root = gb_base::host_path::normalize(dir.path()).unwrap();
         let home = root.join("home");
         std::fs::create_dir(&home).unwrap();
         let workspace = root.join("workspace");
@@ -1262,7 +1276,7 @@ mod frozen_tests {
             }
         })
         .unwrap_err();
-        assert!(error.contains("permission denied"));
+        assert!(error.contains("permission denied"), "{error}");
         assert!(!home.join("Documents/project").exists());
         put(&workspace, SHARED, "{}");
         for scope in [SHARED, LOCAL] {
