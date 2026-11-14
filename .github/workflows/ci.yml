@@ -107,8 +107,19 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release/guildbotics.exe "$scratch/guildbotics.exe"
           source="$GITHUB_WORKSPACE"
           cd "$scratch"
-          mv "$source" "$source.source-away"
-          trap 'mv "$source.source-away" "$source"' EXIT
+          moved=()
+          restore_source() {
+            local status=0
+            for dir in "${moved[@]}"; do
+              mv "$source/$dir.source-away" "$source/$dir" || status=$?
+            done
+            return "$status"
+          }
+          trap restore_source EXIT
+          for dir in guildbotics skills; do
+            mv "$source/$dir" "$source/$dir.source-away"
+            moved+=("$dir")
+          done
           mkdir -p "$scratch/home/.codex"
           export USERPROFILE="$(cygpath -w "$scratch/home")" GUILDBOTICS_HOME="$(cygpath -w "$scratch/home/.guildbotics")" CODEX_HOME="$(cygpath -w "$scratch/home/.codex")"
           ./guildbotics.exe version

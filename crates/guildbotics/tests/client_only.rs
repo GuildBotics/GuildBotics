@@ -113,7 +113,7 @@ fn windows_install_uses_userprofile_and_updates_user_path_once() {
         assert!(result.status.success(), "{result:?}");
     };
     install();
-    let bin = home.join(".guildbotics/bin");
+    let bin = home.join(".guildbotics").join("bin");
     let expected = if original.is_empty() {
         bin.display().to_string()
     } else {
@@ -127,4 +127,97 @@ fn windows_install_uses_userprofile_and_updates_user_path_once() {
         std::fs::read(home.join(".agents/skills/guildbotics/SKILL.md")).unwrap(),
         include_bytes!("../../../skills/guildbotics/SKILL.md")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn source_free_ci_step_preserves_the_checkout_and_restores_partial_moves() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let workflow = include_str!("../../../.github/workflows/ci.yml");
+    let script = workflow
+        .split("- name: Run without the build checkout")
+        .nth(1)
+        .unwrap()
+        .split("run: |\n")
+        .nth(1)
+        .unwrap()
+        .split("\n      - uses:")
+        .next()
+        .unwrap()
+        .lines()
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for failure in ["none", "install", "skills"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("checkout space");
+        let tools = temp.path().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        for name in [
+            "guildbotics",
+            "skills",
+            "target/x86_64-pc-windows-gnu/release",
+        ] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        for name in ["guildbotics", "skills"] {
+            fs::write(root.join(name).join("original"), name).unwrap();
+        }
+        let write_executable = |path: &std::path::Path, content: &str| {
+            fs::write(path, content).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let binary = root.join("target/x86_64-pc-windows-gnu/release/guildbotics.exe");
+        let client = r#"#!/bin/bash
+set -eu
+ test -d "$GITHUB_WORKSPACE"
+ test ! -e "$GITHUB_WORKSPACE/guildbotics"
+ test ! -e "$GITHUB_WORKSPACE/skills"
+ if [ "$1" = install ]; then
+   [ "$FAIL_STEP" != install ] || exit 71
+   mkdir -p "$USERPROFILE/.agents/skills/guildbotics"
+   touch "$USERPROFILE/.agents/skills/guildbotics/SKILL.md"
+ fi
+"#;
+        write_executable(&binary, client);
+        write_executable(
+            &tools.join("cygpath"),
+            "#!/bin/bash\nprintf '%s\\n' \"$2\"\n",
+        );
+        write_executable(
+            &tools.join("mv"),
+            r#"#!/bin/bash
+set -eu
+ [ "$1" != "$GITHUB_WORKSPACE" ] || exit 72
+ if [ "$FAIL_STEP" = skills ] && [ "$1" = "$GITHUB_WORKSPACE/skills" ]; then exit 73; fi
+ exec /bin/mv "$@"
+"#,
+        );
+        let output = Command::new("bash")
+            .args(["-e", "-o", "pipefail", "-c", &script])
+            .current_dir(&root)
+            .env("GITHUB_WORKSPACE", &root)
+            .env("FAIL_STEP", failure)
+            .env("TMPDIR", temp.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(match failure {
+                "none" => 0,
+                "install" => 71,
+                _ => 73,
+            }),
+            "{failure}: {output:?}"
+        );
+        for name in ["guildbotics", "skills"] {
+            assert_eq!(
+                fs::read_to_string(root.join(name).join("original")).unwrap(),
+                name
+            );
+            assert!(!root.join(format!("{name}.source-away")).exists());
+        }
+        assert_eq!(fs::read_to_string(&binary).unwrap(), client);
+    }
 }

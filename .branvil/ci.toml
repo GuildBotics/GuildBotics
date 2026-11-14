@@ -122,6 +122,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 [[jobs]]
 name = "rust-test"
 paths = [
+  ".github/workflows/ci.yml",
   "crates/*/src/**",
   "crates/*/tests/**",
   "crates/*/examples/**",
@@ -146,6 +147,7 @@ image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace --exclude branvil --exclude loopback-auth",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
