@@ -68,19 +68,45 @@ pub struct ToolLogin {
 }
 
 fn login_problem(catalog: &Value, key: &str, command: &str, language: &str) -> String {
+    login_sentence(
+        catalog["name"].as_str().unwrap_or_default(),
+        catalog["label"]
+            .as_str()
+            .or_else(|| catalog["name"].as_str())
+            .unwrap_or("tool"),
+        key,
+        command,
+        language,
+    )
+}
+
+pub(crate) fn login_sentence(
+    name: &str,
+    label: &str,
+    key: &str,
+    command: &str,
+    language: &str,
+) -> String {
+    let browser = browser::supported(name);
+    let key = if browser
+        && [
+            "credentials_missing",
+            "authentication_failed",
+            "credentials_unavailable",
+            "credentials_corrupt",
+            "refresh_failed",
+            "login_refused",
+        ]
+        .contains(&key)
+    {
+        format!("{key}_browser")
+    } else {
+        key.to_owned()
+    };
     crate::i18n::t(
         language,
         &format!("intelligences.agent_environment.tool.{key}"),
-        &[
-            (
-                "tool",
-                catalog["label"]
-                    .as_str()
-                    .or_else(|| catalog["name"].as_str())
-                    .unwrap_or("tool"),
-            ),
-            ("command", command),
-        ],
+        &[("tool", label), ("command", command)],
     )
 }
 
@@ -1869,6 +1895,53 @@ mod tests {
             reqwest::StatusCode::FORBIDDEN
         );
     }
+    #[test]
+    fn login_problem_guides_every_tool_and_reason_in_both_languages() {
+        for language in ["en", "ja"] {
+            for name in ["codex", "claude", "grok", "copilot", "antigravity"] {
+                let catalog = json!({"name": name, "label": "CLI label"});
+                for key in [
+                    "credentials_missing",
+                    "authentication_failed",
+                    "credentials_unavailable",
+                    "credentials_corrupt",
+                    "refresh_failed",
+                    "login_refused",
+                    "credentials_locked",
+                    "login_not_an_account",
+                ] {
+                    let text = login_problem(&catalog, key, "terminal-only", language);
+                    let browser = name != "antigravity"
+                        && !["credentials_locked", "login_not_an_account"].contains(&key);
+                    let expected_key = if browser {
+                        format!("{key}_browser")
+                    } else {
+                        key.into()
+                    };
+                    assert_eq!(
+                        text,
+                        crate::i18n::t(
+                            language,
+                            &format!("intelligences.agent_environment.tool.{expected_key}"),
+                            &[("tool", "CLI label"), ("command", "terminal-only")]
+                        )
+                    );
+                    if browser {
+                        assert!(text.contains(if language == "en" {
+                            "Setup → Agent execution environment"
+                        } else {
+                            "設定 → エージェント実行環境"
+                        }));
+                        assert!(!text.contains("terminal-only"));
+                    }
+                    assert!(
+                        !text.contains("%{") && !text.contains("intelligences.agent_environment")
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn end_preserves_the_localized_sticky_refusal_before_releasing_credentials() {
         let dir = tempfile::tempdir().unwrap();

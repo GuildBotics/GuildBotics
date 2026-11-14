@@ -198,31 +198,12 @@ fn tool_refusal(row: &Value, label: &str, language: &str) -> String {
 }
 
 fn tool_sentence(row: &Value, label: &str, key: &str, language: &str) -> String {
-    let browser = row["name"]
-        .as_str()
-        .is_some_and(crate::tool_login::browser::supported);
-    let key = if browser
-        && [
-            "credentials_missing",
-            "authentication_failed",
-            "credentials_unavailable",
-            "credentials_corrupt",
-            "refresh_failed",
-            "login_refused",
-        ]
-        .contains(&key)
-    {
-        format!("{key}_browser")
-    } else {
-        key.to_owned()
-    };
-    crate::i18n::t(
+    crate::tool_login::login_sentence(
+        row["name"].as_str().unwrap_or_default(),
+        label,
+        key,
+        row["login_command"].as_str().unwrap_or_default(),
         language,
-        &format!("intelligences.agent_environment.tool.{key}"),
-        &[
-            ("tool", label),
-            ("command", row["login_command"].as_str().unwrap_or_default()),
-        ],
     )
 }
 

@@ -384,7 +384,13 @@ fn status_shares_declaration_runtime_snapshot_and_logins_between_text_and_json()
         assert_eq!(row["credentials_saved"], false);
         assert_eq!(row["authentication_failed"], false);
         let problem = row["problem"].as_str().unwrap();
-        assert!(problem.contains("No credentials are saved") && text.contains(problem));
+        let expected = gb_server::i18n::t(
+            "en",
+            "intelligences.agent_environment.tool.credentials_missing_browser",
+            &[("tool", row["label"].as_str().unwrap())],
+        );
+        assert_eq!(problem, expected);
+        assert!(text.contains(problem));
     }
     std::fs::write(
         &declaration,
