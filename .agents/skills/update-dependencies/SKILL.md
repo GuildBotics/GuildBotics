@@ -197,27 +197,52 @@ A failed read is a failure, never zero alerts: report it, leave the locks
 alone, and go on with the tools. Dismissed alerts are a human decision and are
 not touched.
 
-Each alert names the lock in `manifest_path`, the `package`, the
-`affected_versions` range, and the `patched_version`. A lock can hold several
-versions of one package, so work per locked version: match each alert to the
-versions of its package the lock holds within its `affected_versions`, and
-give each such locked version the highest `patched_version` among the alerts
-that match it as its target. A locked version that no alert matches is left
-alone.
+Each alert names in `manifest_path` a lock, or a manifest that declares the
+package directly (`pyproject.toml`, `crates/<crate>/Cargo.toml`), and the
+`package`, the `affected_versions` range, and the `patched_version`. An alert on
+a manifest is one fix with the alert of the same advisory on its lock: judge
+and report the two together. When the lock's alert of that advisory is not
+among the open alerts (the lock already holds the fix), judge the manifest's
+alert alone.
 
-First look at the remote default branch's lock: an alert none of whose
-versions there is within its `affected_versions` is fixed where it ships; the
-code host has not re-evaluated it yet. Otherwise look at the update branch:
-when it already holds every target (an earlier run), this run's PR carries the
+A lock can hold several versions of one package, and manifests can declare it
+in several requirements, each stating one version, its lower bound (`"1.2.0"`,
+`^1.2.0` and `>=1.2.0,<2` state 1.2.0). Work per locked version and per
+requirement, each with its own target:
+
+- Match each alert of the package, on the lock or on a manifest it locks, to
+  the locked versions and the stated versions within its `affected_versions`.
+  Each matched one takes the highest `patched_version` among the alerts that
+  match it.
+- A requirement also takes the target of the locked version it resolves to,
+  when it has no target of its own or that one is higher.
+- A locked version or requirement without a target is left alone.
+
+An alert concerns the locked versions and requirements it matches, and the
+requirements that resolve to a locked version it matches. A lock that already
+holds the fix gives no locked version a target, while a requirement that still
+states an affected version keeps one. For example, with `affected_versions`
+`< 1.2.4`, `patched_version` 1.2.4, a locked 1.2.4 and a `Cargo.toml`
+requirement `"1.2.0"`, only the requirement has a target: it becomes
+`"1.2.4"` and `Cargo.lock` stays (`uv.lock` and `package-lock.json` also
+record requirements, so they change with them).
+
+First look at the remote default branch: an alert none of whose concerned
+locked versions and requirements there has a target is fixed where it ships;
+the code host has not re-evaluated it yet. Otherwise look at the update
+branch: when none of them has a target there and each locked version is in
+the same major as the one it replaced (an earlier run raised them), this
+run's PR carries the
 fix, and the report says it awaits that PR's merge (and, for a repository that
 follows an upstream host, its publishing there). Otherwise raise each locked
-version to exactly its target:
+version and requirement that has a target to exactly its target, and leave
+the others as they are:
 
 | `manifest_path` | Raise it with |
 | --- | --- |
-| `uv.lock`, `guildbotics/templates/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
-| `Cargo.lock` | `cargo update -p <package>@<locked_version> --precise <target>` for each affected locked version. If the registry cannot be written, point `CARGO_HOME` to a writable directory. |
-| `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
+| `uv.lock`, `guildbotics/templates/environment/requirements.txt`, `pyproject.toml` | First raise the lower bound of each requirement in `pyproject.toml` that has a target to its target, keeping its other clauses, so that the manifest states the fix. Then, when a locked version has a target, `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major); otherwise `uv lock`, which records the requirement and keeps the locked version (`--upgrade-package` would move it down to the target). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). Then export the snapshot's list again (both manifests are one fix) |
+| `Cargo.lock`, `crates/<crate>/Cargo.toml` | `cargo update -p <package>@<locked_version> --precise <target>` for each locked version that has a target. If the registry cannot be written, point `CARGO_HOME` to a writable directory. Raise each requirement that has a target in each `crates/<crate>/Cargo.toml` (every dependency table, including dev, build and target-specific ones) to `"<target>"`, keeping the entry's other keys, so that the manifest states the fix. A requirement with an operator other than caret (`~`, `=`, `<`, `>`) changes meaning when rewritten: leave the alert open instead. |
+| `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` for each requirement that has a target (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
@@ -229,10 +254,12 @@ This is the export `tests/test_environment_requirements.py` checks.
 
 Then read every version of the package the lock now holds (`cargo tree -i <package>@<version>` for each version in
 `Cargo.lock`, `uv tree --frozen --universal --package <package>`,
-`npm ls <package> --all`, or the lock entries) and compare each with the one it replaced. An alert is resolved only
-when each locked version it matched is now at or above that version's target
-and in the same major as before
-(for a `0.x` version, the same minor): moving to another major is a human
+`npm ls <package> --all`, or the lock entries) and compare each with the one it replaced, and read each requirement of it in the
+manifests. An alert is resolved only
+when each locked version it concerns is now at or above its target and in the
+same major as before (for a `0.x` version, the same minor), each requirement it
+concerns states its target or above, and no other locked version of the
+package moved to another major: moving to another major is a human
 decision, whichever version the tool picked. A command that ran is not a fix:
 uv and npm succeed without changing anything when what requires the package
 does not admit the target, and `npm update` succeeds when it moves
@@ -242,7 +269,7 @@ been raised.
 Leave an alert open and report why when:
 
 - it has no `patched_version`;
-- its final locked version is not resolved as above: the target is in
+- its final locked versions or requirements are not resolved as above: a target is in
   another major, the packages that require it do not admit it, a direct
   dependency's range in `Cargo.toml`, `pyproject.toml` or `package.json` has an upper bound
   that excludes it, or the tool picked a version in another major;
@@ -252,9 +279,10 @@ Leave an alert open and report why when:
   checks fail with it;
 - its `manifest_path` is not one of the above.
 
-To leave a raised package open again, restore the lock, its manifest, and for
+To leave a raised package open again, restore the lock, every manifest this
+run changed for that package, and for
 `uv.lock` the exported `requirements.txt` from the update branch, then raise
-the other alerts of that lock again.
+the other alerts of that lock and of the manifests it locks again.
 
 After the npm changes, read `npm audit` in `desktop` to confirm that the raised
 packages are no longer reported. It exits non-zero while any finding remains,
@@ -284,7 +312,7 @@ cargo nextest run --locked -p gb-environment --test main -E 'test(/^snapshot::/)
 uv run --no-sync python -m pytest tests/test_environment_requirements.py tests/scripts/test_environment_catalog.py
 ```
 
-When `Cargo.lock` changes, run the workspace checks:
+When `Cargo.lock` or a `Cargo.toml` changes, run the workspace checks:
 
 ```sh
 cargo fmt --all --check
@@ -344,7 +372,7 @@ everything, finish with the reasons and no PR. If the code host is
 unavailable, keep the local changes and report the specific blocker.
 
 The body lists each tool's old, latest and adopted version with official
-sources; each alert resolved (number, package, old and new version, lock),
+sources; each alert resolved (number, package, `manifest_path`, and the old and new version of each locked version and requirement raised),
 awaiting this PR's merge or the code host's re-evaluation, or left open with
 its reason; the non-device checks
 and their results; held pins and their reasons; historical observations left
