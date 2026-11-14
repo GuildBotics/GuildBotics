@@ -21,6 +21,19 @@ export function DeviceSettings() {
       <Text c="dimmed" size="sm">
         {t("setup.device.subtitle")}
       </Text>
+      <Card withBorder radius="md" p="md">
+        <Stack gap="sm">
+          <Title order={4}>{t("setup.device.clientTitle")}</Title>
+          <Text size="sm">{t("setup.device.clientBody")}</Text>
+          <Button
+            component="a"
+            href="/-/guildbotics/api/clients/x86_64-pc-windows-gnu/binary"
+            download="guildbotics.exe"
+          >
+            {t("setup.device.clientDownload")}
+          </Button>
+        </Stack>
+      </Card>
       <RegisteredWorkspacesCard />
     </Stack>
   );

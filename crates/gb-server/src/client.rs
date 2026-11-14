@@ -17,6 +17,7 @@ pub mod connect;
 #[cfg(feature = "server")]
 pub mod diagnostics;
 mod git_credentials;
+pub mod install;
 pub mod member;
 #[cfg(feature = "server")]
 pub mod secrets;

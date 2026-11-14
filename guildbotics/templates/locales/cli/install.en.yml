@@ -4,3 +4,7 @@ en:
   skill: "Skill for %{tool} installed at %{path}"
   kept: "Kept the existing skill for %{tool} at %{path}"
   not_installed: "Skipped %{tool} because it is not installed."
+  shadowed: "Another CLI precedes the managed CLI on PATH: %{path}"
+  cleanup: "Desktop copies to delete (other files, device ID, CLI, Git and consent tokens, and SSH forwarding are kept):"
+  confirm: "Type DELETE to remove only the listed copies, or press Enter to keep them: "
+  cleanup_invalid: "The Desktop cleanup path or secret namespace is invalid or changed. Keep the copies and check their paths before retrying."

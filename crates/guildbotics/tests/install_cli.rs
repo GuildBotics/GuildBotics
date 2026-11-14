@@ -5,10 +5,11 @@ use std::{fs, path::Path, process::Command};
 const BIN: &str = env!("CARGO_BIN_EXE_guildbotics");
 const SKILL: &[u8] = include_bytes!("../../../skills/guildbotics/SKILL.md");
 
-fn install(home: &Path, copilot: &Path) {
+fn install(home: &Path, copilot: &Path) -> String {
     let result = Command::new(BIN)
         .args(["install"])
         .env("HOME", home)
+        .env(gb_base::home::USER_HOME_ENV, home)
         .env("GUILDBOTICS_HOME", home.join(".guildbotics"))
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
@@ -22,9 +23,10 @@ fn install(home: &Path, copilot: &Path) {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+    String::from_utf8(result.stdout).unwrap()
 }
 
-#[cfg(feature = "hub")]
+#[cfg(all(unix, feature = "hub"))]
 #[test]
 fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() {
     let dir = tempfile::tempdir().unwrap();
@@ -55,6 +57,7 @@ fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() 
         let result = Command::new(cli)
             .args(["workspace", "status", "--format", "json"])
             .env("HOME", home)
+            .env(gb_base::home::USER_HOME_ENV, home)
             .env("GUILDBOTICS_HOME", home.join(".guildbotics"))
             .output()
             .unwrap();
@@ -64,6 +67,7 @@ fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() 
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn installation_preserves_user_commands_and_edited_skills() {
     let dir = tempfile::tempdir().unwrap();
@@ -109,4 +113,146 @@ fn installation_preserves_user_commands_and_edited_skills() {
         fs::read_to_string(on_path).unwrap(),
         "#!/bin/sh\nexec mine\n"
     );
+}
+
+#[test]
+fn helper_uses_this_machines_managed_cli_and_is_idempotent() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("a home 'quoted'");
+    fs::create_dir_all(&home).unwrap();
+    for _ in 0..2 {
+        install(&home, &home.join("copilot"));
+    }
+    let result = Command::new("git")
+        .args([
+            "config",
+            "--global",
+            "--get-all",
+            "credential.http://127.0.0.1:7878.helper",
+        ])
+        .env("HOME", &home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let binary = home.join(if cfg!(windows) {
+        ".guildbotics/bin/guildbotics.exe"
+    } else {
+        ".guildbotics/bin/guildbotics"
+    });
+    let binary = binary.canonicalize().unwrap();
+    #[cfg(windows)]
+    let binary = std::path::PathBuf::from(
+        binary
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .replace('\\', "/"),
+    );
+    let expected = format!(
+        "\n!{}\n",
+        gb_base::shell::managed_cli_command(&binary, &["git-credential"])
+    );
+    assert_eq!(String::from_utf8(result.stdout).unwrap(), expected);
+}
+
+#[cfg(not(feature = "hub"))]
+#[test]
+fn cleanup_deletes_only_the_list_after_confirmation() {
+    let temp = tempfile::tempdir().unwrap();
+    let machine = temp.path().join("machine");
+    let workspace = temp.path().join("workspace");
+    let identity = machine.join("identity");
+    for path in [
+        workspace.join(".guildbotics/config"),
+        identity.join("config"),
+        machine.join("data"),
+        machine.join("bin"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(
+        machine.join("data/workspaces.json"),
+        serde_json::json!([workspace]).to_string(),
+    )
+    .unwrap();
+    fs::write(workspace.join("notes.txt"), "mine").unwrap();
+    fs::write(machine.join("data/device.json"), "keep").unwrap();
+    fs::write(machine.join("bin/guildbotics"), "keep").unwrap();
+    fs::create_dir_all(identity.join(".guildbotics/local")).unwrap();
+    fs::create_dir_all(identity.join(".guildbotics/config")).unwrap();
+    fs::write(
+        identity.join(".guildbotics/local/secrets.json"),
+        r#"{"store_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+    )
+    .unwrap();
+    fs::write(
+        identity.join(".guildbotics/config/secrets.yml"),
+        "keys: [EXAMPLE_TOKEN]\n",
+    )
+    .unwrap();
+    let plan = gb_server::client::install::Cleanup::discover(&machine, &identity, "en").unwrap();
+    assert_eq!(plan.directories.len(), 2);
+    plan.apply(false, |_, _| panic!("deleting before confirmation"))
+        .unwrap();
+    assert!(workspace.join(".guildbotics").is_dir());
+    assert!(identity.is_dir());
+    assert!(
+        plan.apply(true, |_, _| anyhow::bail!("fixture locked keychain"))
+            .is_err()
+    );
+    assert!(workspace.join(".guildbotics").is_dir());
+    assert!(identity.is_dir());
+    let mut removed = vec![];
+    plan.apply(true, |service, account| {
+        removed.push((service.to_owned(), account.to_owned()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        removed,
+        vec![
+            (
+                "GuildBotics/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                "EXAMPLE_TOKEN".into()
+            ),
+            ("GuildBotics".into(), "agent-environment-credentials".into())
+        ]
+    );
+    assert!(!workspace.join(".guildbotics").exists());
+    assert!(!identity.exists());
+    for path in [
+        workspace.join("notes.txt"),
+        machine.join("data/device.json"),
+        machine.join("bin/guildbotics"),
+    ] {
+        assert!(path.is_file());
+    }
+}
+
+#[cfg(not(feature = "hub"))]
+#[test]
+fn installer_lists_copies_but_eof_does_not_delete() {
+    let temp = tempfile::tempdir().unwrap();
+    let machine = temp.path().join(".guildbotics");
+    let workspace = temp.path().join("work");
+    fs::create_dir_all(machine.join("data")).unwrap();
+    fs::create_dir_all(workspace.join(".guildbotics")).unwrap();
+    fs::write(
+        machine.join("data/workspaces.json"),
+        serde_json::json!([workspace]).to_string(),
+    )
+    .unwrap();
+    let output = install(temp.path(), &temp.path().join("copilot"));
+    assert!(
+        output.contains(
+            &workspace
+                .join(".guildbotics")
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert!(output.contains("DELETE"));
+    assert!(workspace.join(".guildbotics").exists());
 }

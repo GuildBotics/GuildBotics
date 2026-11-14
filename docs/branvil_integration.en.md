@@ -98,6 +98,17 @@ Follow the [GuildBotics installation steps](../README.md#installation) on the Hu
 
 Members and their tokens are not created in Branvil: GuildBotics does that.
 
+## Install the Windows client
+
+Uninstall the old GuildBotics Desktop application first. Keep human checkouts and SSH forwarding.
+
+1. Set up SSH forwarding with `scripts/hub-forward.ps1` as described below.
+2. On the Hub, run `guildbotics open --print` and open its entry link in the Windows browser.
+3. In Settings → This machine, download `guildbotics.exe` from the Windows client card. The browser session authorizes the download of the Hub's current build.
+4. In PowerShell, run `./guildbotics.exe install`. This installs the managed CLI in `~/.guildbotics/bin`, adds PATH, reports each AI tool's skill status, and configures human Git with the managed CLI's credential helper for the forwarded Hub origin. Open a new terminal after PATH changes. Resolve any warning about an earlier CLI on PATH.
+5. The client-only installer lists existing registered workspaces' `.guildbotics` directories, the identity root, and exact keychain entries. Only typing `DELETE` removes them. Enter or EOF keeps them. General files and checkouts, human Git tokens (`GuildBotics/branvil-git`), consent tokens (`guildbotics-server`), device ID, managed CLI and SSH forwarding remain.
+6. Run `guildbotics connect` and approve this machine in the browser. Re-run `guildbotics install` to check or refresh skills; user-edited skills are preserved. Subsequent CLI calls update to the Hub's build automatically.
+
 ## Set up SSH forwarding on another machine
 
 Run the bundled script from a checkout on each machine other than the Hub. It

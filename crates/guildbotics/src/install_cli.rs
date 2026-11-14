@@ -84,7 +84,99 @@ pub async fn run() -> anyhow::Result<()> {
             )
         );
     }
+    install_git(&managed)?;
+    if let Some(path) = shadowing(std::env::var_os("PATH").as_deref(), &managed) {
+        println!(
+            "{}",
+            i18n::t(
+                language,
+                "cli.install.shadowed",
+                &[("path", &path.to_string_lossy())]
+            )
+        );
+    }
+    #[cfg(not(feature = "hub"))]
+    {
+        use std::io::{self, Write};
+        let plan =
+            client::install::Cleanup::discover(&root, &gb_base::home::identity_root()?, language)?;
+        if !plan.directories.is_empty() {
+            println!("{}", i18n::t(language, "cli.install.cleanup", &[]));
+            for path in &plan.directories {
+                println!("{}", path.display());
+            }
+            for (service, account) in &plan.credentials {
+                println!("{service}/{account}");
+            }
+            print!("{}", i18n::t(language, "cli.install.confirm", &[]));
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            plan.remove(answer.trim() == "DELETE")?;
+        }
+    }
     Ok(())
+}
+
+fn install_git(managed: &Path) -> anyhow::Result<()> {
+    let origin = format!("http://127.0.0.1:{}", gb_server::endpoint::port()?);
+    let key = format!("credential.{origin}.helper");
+    #[cfg(windows)]
+    let shell_path = managed.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let shell_path = shell_path.strip_prefix("//?/").unwrap_or(&shell_path);
+    #[cfg(windows)]
+    let shell_path = shell_path
+        .strip_prefix("UNC/")
+        .map(|path| format!("//{path}"))
+        .unwrap_or_else(|| shell_path.to_owned());
+    #[cfg(windows)]
+    let managed = Path::new(&shell_path);
+    let helper = format!(
+        "!{}",
+        gb_base::shell::managed_cli_command(managed, &["git-credential"])
+    );
+    // An empty first entry resets inherited helpers for this origin only.
+    for (operation, value) in [("--replace-all", ""), ("--add", helper.as_str())] {
+        let output = std::process::Command::new("git")
+            .args(["config", "--global", operation, &key, value])
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn shadowing(path: Option<&std::ffi::OsStr>, managed: &Path) -> Option<PathBuf> {
+    for directory in std::env::split_paths(path?) {
+        #[cfg(windows)]
+        let names: Vec<String> = std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|ext| !ext.is_empty())
+            .map(|ext| format!("guildbotics{ext}"))
+            .collect();
+        #[cfg(unix)]
+        let names = [EXECUTABLE];
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if candidate.metadata().ok()?.permissions().mode() & 0o111 == 0 {
+                        continue;
+                    }
+                }
+                let resolved = candidate.canonicalize().ok()?;
+                return (resolved != managed).then_some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn install_binary(source: &Path, destination: &Path) -> anyhow::Result<()> {
@@ -333,5 +425,33 @@ mod path_tests {
             None
         );
         assert_eq!(super::user_path(&format!("\"{bin}\""), bin), None);
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    #[test]
+    fn first_executable_on_path_is_reported_only_when_it_shadows_managed() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("old");
+        let bin = temp.path().join("bin");
+        for path in [&old, &bin] {
+            std::fs::create_dir(path).unwrap();
+            let cli = path.join(super::EXECUTABLE);
+            std::fs::write(&cli, "fixture").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let managed = bin.join(super::EXECUTABLE).canonicalize().unwrap();
+        let path = std::env::join_paths([&old, &bin]).unwrap();
+        assert_eq!(
+            super::shadowing(Some(&path), &managed),
+            Some(old.join(super::EXECUTABLE))
+        );
+        let path = std::env::join_paths([&bin, &old]).unwrap();
+        assert_eq!(super::shadowing(Some(&path), &managed), None);
     }
 }

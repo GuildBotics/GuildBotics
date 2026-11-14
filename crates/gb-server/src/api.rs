@@ -1033,7 +1033,17 @@ async fn client_binary(
     axum::extract::Path(target): axum::extract::Path<String>,
 ) -> Response {
     match release_bytes(&api, &target) {
-        Ok(bytes) => ([("content-type", "application/octet-stream")], bytes).into_response(),
+        Ok(bytes) => (
+            [
+                ("content-type", "application/octet-stream"),
+                (
+                    "content-disposition",
+                    "attachment; filename=\"guildbotics.exe\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -1242,13 +1252,18 @@ mod tests {
             "fixture".into(),
             root.path().into(),
         );
-        let token = api.auth.test_consent();
+        let consent = api.auth.test_consent();
+        let entry = api.auth.entry_link("/-/guildbotics/");
+        let url = url::Url::parse(&entry.url).unwrap();
+        let code = url.fragment().unwrap();
+        let (cookie, _) = api.auth.start_session(code).unwrap().unwrap();
+        let cookie = format!("{}={cookie}", api.auth.cookie);
         let app = router(Arc::new(api));
         let request = |path: &str| {
             axum::http::Request::builder()
                 .uri(format!("/-/guildbotics/api/clients/{path}"))
                 .header("host", "127.0.0.1:8765")
-                .header("authorization", format!("Bearer {token}"))
+                .header("cookie", &cookie)
                 .header(LANGUAGE_HEADER, "ja")
                 .body(axum::body::Body::empty())
                 .unwrap()
@@ -1269,11 +1284,31 @@ mod tests {
             .unwrap();
         let manifest: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(manifest["version"], gb_base::BUILD_VERSION);
+        let mut anonymous = request(&format!("{target}/binary"));
+        anonymous.headers_mut().remove("cookie");
+        assert_eq!(
+            app.clone().oneshot(anonymous).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let mut consent_request = request(target);
+        consent_request.headers_mut().remove("cookie");
+        consent_request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {consent}").parse().unwrap(),
+        );
+        assert_eq!(
+            app.clone().oneshot(consent_request).await.unwrap().status(),
+            StatusCode::OK
+        );
         let binary = app
             .oneshot(request(&format!("{target}/binary")))
             .await
             .unwrap();
         assert_eq!(binary.status(), StatusCode::OK);
+        assert_eq!(
+            binary.headers()["content-disposition"],
+            "attachment; filename=\"guildbotics.exe\""
+        );
         let bytes = axum::body::to_bytes(binary.into_body(), 4096)
             .await
             .unwrap();
