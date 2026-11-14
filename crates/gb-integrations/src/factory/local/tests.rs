@@ -1277,3 +1277,68 @@ async fn conflicting_head_blocks_readiness_without_a_ci_failure() {
     );
     assert!(s.store.conflicts("acme/repo", "missing", "main").is_err());
 }
+
+#[tokio::test]
+async fn unrelated_histories_preserve_readiness_and_report_conflicting_paths() {
+    let (d, s) = fixture();
+    let seed = d.path().join("seed");
+    fs::create_dir(&seed).unwrap();
+    git(&seed, &["init", "-b", "main"]);
+    fs::write(seed.join("a.py"), "seed\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "seed"]);
+    git(&seed, &["checkout", "--orphan", "feature"]);
+    git(&seed, &["rm", "-rf", "."]);
+    fs::write(seed.join("unrelated.txt"), "independent\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "unrelated"]);
+    let bare = s.store.bare("acme/repo");
+    fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    git(&seed, &["clone", "--bare", ".", bare.to_str().unwrap()]);
+    let pr = s
+        .create_pull_request(CreatePullRequest {
+            repository: "acme/repo".into(),
+            head: "feature".into(),
+            base: "main".into(),
+            title: "Unrelated histories".into(),
+            body: "".into(),
+            draft: false,
+            tickets: vec![],
+        })
+        .await
+        .unwrap();
+    for conflict in [false, true] {
+        if conflict {
+            fs::write(seed.join("a.py"), "different root\n").unwrap();
+            git(&seed, &["add", "."]);
+            git(&seed, &["commit", "-m", "add conflict"]);
+            git(&seed, &["push", bare.to_str().unwrap(), "feature"]);
+        }
+        let ready = s
+            .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(ready.head_sha, git(&seed, &["rev-parse", "HEAD"]));
+        assert_eq!(
+            ready
+                .completion_blockers
+                .iter()
+                .any(|b| b.code == "base_conflict" && b.message.contains("a.py")),
+            conflict
+        );
+        assert!(
+            !ready
+                .completion_blockers
+                .iter()
+                .any(|b| b.code == "checks_failed")
+        );
+        assert_eq!(
+            s.store.conflicts("acme/repo", "main", "feature").unwrap(),
+            if conflict {
+                vec!["a.py".to_owned()]
+            } else {
+                vec![]
+            }
+        );
+    }
+}

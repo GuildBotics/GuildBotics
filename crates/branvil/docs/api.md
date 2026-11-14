@@ -1057,7 +1057,9 @@ Each automatic gate pass can notify the webhook once its next action is
 - `head_sha` / `base_sha` are `""` and `behind_by` is `null` when that branch is gone.
   A merged pull request's `head_sha` is the original reviewed head, as in its view.
 - `conflicts` lists the conflicting file paths, sorted and deduplicated, computed
-  with `git merge-tree --write-tree` for this response's `base_sha` and `head_sha`.
+  with `git merge-tree --write-tree --allow-unrelated-histories` for this response's
+  `base_sha` and `head_sha`. Independent histories are compared against an empty
+  ancestor for conflict inspection; this does not relax the landing merge policy.
   It is `[]` for a clean merge and `null` for a closed PR or a missing branch.
 - `checks` include the latest attempt of every job of the head's run, as the
   run's pipeline defines the job (`docs/ci.md`),

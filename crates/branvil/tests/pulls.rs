@@ -1433,3 +1433,44 @@ async fn checks_conflicts_are_empty_or_unknown_for_closed_or_missing_branches() 
     git_ok(&bare, &["update-ref", "-d", "refs/heads/main"]);
     assert_eq!(read().await["conflicts"], Value::Null);
 }
+
+#[tokio::test]
+async fn checks_report_conflicts_for_unrelated_histories_without_losing_ci() {
+    let w = World::new().await;
+    w.push_change("feature", "extra.txt", "feature\n");
+    w.open_pull("feature", json!([])).await;
+    git_ok(&w.work, &["checkout", "--orphan", "orphan"]);
+    git_ok(&w.work, &["rm", "-rf", "."]);
+    std::fs::write(w.work.join("unrelated.txt"), "independent\n").unwrap();
+    git_ok(&w.work, &["add", "."]);
+    git_ok(&w.work, &["commit", "-qm", "unrelated"]);
+    for conflict in [false, true] {
+        if conflict {
+            std::fs::write(w.work.join("README.md"), "different root\n").unwrap();
+            git_ok(&w.work, &["add", "."]);
+            git_ok(&w.work, &["commit", "-qm", "add conflict"]);
+        }
+        git_as_ok(
+            &w.work,
+            "alice",
+            &w.owner,
+            &["push", "-q", "origin", "+orphan:refs/heads/feature"],
+        );
+        let head = git_ok(&w.work, &["rev-parse", "HEAD"]);
+        let (status, checks) = w
+            .server
+            .get(&format!("{}/pulls/1/checks", w.repo_path()), &w.owner)
+            .await;
+        assert_eq!(status, 200, "{checks}");
+        assert_eq!(checks["head_sha"], head.trim());
+        assert!(checks["checks"].is_array());
+        assert_eq!(
+            checks["conflicts"],
+            if conflict {
+                json!(["README.md"])
+            } else {
+                json!([])
+            }
+        );
+    }
+}

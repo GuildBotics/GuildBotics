@@ -287,6 +287,7 @@ impl Store {
             &[
                 "merge-tree",
                 "--write-tree",
+                "--allow-unrelated-histories",
                 "--name-only",
                 "--no-messages",
                 "-z",

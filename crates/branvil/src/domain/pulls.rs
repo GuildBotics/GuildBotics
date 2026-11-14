@@ -1865,10 +1865,8 @@ pub async fn checks(
     } else {
         Some(
             app.git
-                .merge_tree(&app.git.repo_dir(&repo.path), &base_sha, &head_sha)
-                .await?
-                .err()
-                .unwrap_or_default(),
+                .conflicts(&app.git.repo_dir(&repo.path), &base_sha, &head_sha)
+                .await?,
         )
     };
     let head = display_checks(app, &repo, &p, &head_sha).await?;
