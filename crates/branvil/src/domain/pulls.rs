@@ -195,7 +195,7 @@ pub async fn tips(app: &App, repo: &Repo) -> AppResult<Tips> {
 /// merged, then what was merged (its branch may be gone). Merged on the
 /// upstream host, that is what Branvil pushed there, whichever way the host
 /// merged it (a squash or a rebase makes commits of its own).
-fn head_of(p: &Pull, tips: &Tips) -> Option<String> {
+pub(crate) fn head_of(p: &Pull, tips: &Tips) -> Option<String> {
     if !p.merged {
         return tips.get(&p.head).cloned();
     }
@@ -342,7 +342,7 @@ fn target(p: &Pull) -> Target {
 }
 
 /// A repository the caller can read and one of its pull requests.
-async fn visible(
+pub(crate) async fn visible(
     app: &App,
     caller: &Caller,
     repo_path: &str,

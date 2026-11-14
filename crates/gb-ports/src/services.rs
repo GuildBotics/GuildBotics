@@ -209,6 +209,11 @@ pub trait TicketService: Send + Sync {
     fn aclose(&self) -> ServiceFuture<'_, ()>;
 }
 pub trait CodeHostingService: Send + Sync {
+    /// Yield running checks when an author starts changing a deferred PR head.
+    fn yield_pull_request_checks<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, usize> {
+        Box::pin(async { Err(ServiceError::Unsupported) })
+    }
+
     /// Canonical ticket links, including reference-only links.
     fn linked_tickets<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         Box::pin(async { Err(ServiceError::Unsupported) })

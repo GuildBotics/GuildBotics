@@ -869,6 +869,16 @@ async fn pull_commits(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNu
     Ok(ok(pulls::commits(&app, &c, &repo, number(&n)?, page).await?))
 }
 
+async fn pull_yield_checks(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {
+    Ok(ok(crate::ci::api::yield_pull_checks(
+        &app,
+        &c,
+        &repo,
+        number(&n)?,
+    )
+    .await?))
+}
+
 async fn pull_checks(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {
     Ok(ok(pulls::checks(&app, &c, &repo, number(&n)?).await?))
 }
@@ -1292,6 +1302,7 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/repos/{repo}/pulls/{number}/files", (get, pull_files, MemberSession)),
     ("/repos/{repo}/pulls/{number}/commits", (get, pull_commits, MemberSession)),
     ("/repos/{repo}/pulls/{number}/checks", (get, pull_checks, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/checks/yield", (post, pull_yield_checks, MemberSession)),
     ("/repos/{repo}/pulls/{number}/merge", (post, pull_merge, OwnerSession)),
     ("/repos/{repo}/pulls/{number}/close", (post, pull_close, MemberSession)),
     ("/repos/{repo}/pulls/{number}/reopen", (post, pull_reopen, MemberSession)),
