@@ -1078,15 +1078,6 @@ pub async fn checks(app: &App, repo: &Repo, number: u64, head: &str) -> AppResul
     if e.head_sha != head {
         return Ok(Vec::new());
     }
-    if let Some(why) = e.reason.as_ref().filter(|r| r.code == "conflict") {
-        return Ok(vec![Check {
-            name: "gate".into(),
-            status: "completed".into(),
-            conclusion: Some("failure".into()),
-            details: Some(format!("{}\n{}", why.message, why.files.join("\n"))),
-            ..Check::default()
-        }]);
-    }
     let Some(gate) = e.gate else {
         return Ok(Vec::new());
     };

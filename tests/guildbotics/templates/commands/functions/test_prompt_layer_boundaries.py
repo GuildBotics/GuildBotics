@@ -454,6 +454,7 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         assert "`readiness`" in body, language
         assert "`completion_blockers`" in body, language
         assert "`base_out_of_date`" in body, language
+        assert "`base_conflict`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language
         # Pending checks end the run instead of a wait in the turn, and the
@@ -666,3 +667,11 @@ def test_agent_facing_layers_name_only_options_that_exist():
         )
     }
     assert {(path, option) for path, option in named if option not in known} == set()
+
+
+def test_member_guidance_explains_base_conflicts():
+    for path in (
+        "guildbotics/templates/member/reference.md",
+        "skills/guildbotics/SKILL.md",
+    ):
+        assert "`base_conflict`" in Path(path).read_text(encoding="utf-8")

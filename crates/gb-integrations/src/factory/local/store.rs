@@ -253,6 +253,13 @@ impl Store {
         self.dir(WorkKind::PullRequest, p).join("repository.git")
     }
     pub fn git_bytes(&self, p: &str, args: &[&str]) -> Result<Vec<u8>, ServiceError> {
+        let o = self.git_output(p, args)?;
+        if !o.status.success() {
+            return Err(ServiceError::Failed);
+        }
+        Ok(o.stdout)
+    }
+    fn git_output(&self, p: &str, args: &[&str]) -> Result<std::process::Output, ServiceError> {
         let bare = self.bare(p);
         if !bare.is_dir() {
             return Err(ServiceError::NotFound);
@@ -272,11 +279,40 @@ impl Store {
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
             .env("GIT_TERMINAL_PROMPT", "0");
-        let o = c.output().map_err(|_| ServiceError::Failed)?;
-        if !o.status.success() {
-            return Err(ServiceError::Failed);
+        c.output().map_err(|_| ServiceError::Failed)
+    }
+    pub fn conflicts(&self, p: &str, base: &str, head: &str) -> Result<Vec<String>, ServiceError> {
+        let out = self.git_output(
+            p,
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                "-z",
+                base,
+                head,
+            ],
+        )?;
+        match out.status.code() {
+            Some(0) => Ok(vec![]),
+            Some(1) => {
+                let text = String::from_utf8(out.stdout).map_err(|_| ServiceError::Failed)?;
+                let mut files: Vec<_> = text
+                    .split('\0')
+                    .skip(1)
+                    .take_while(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                files.sort();
+                files.dedup();
+                if files.is_empty() {
+                    return Err(ServiceError::Failed);
+                }
+                Ok(files)
+            }
+            _ => Err(ServiceError::Failed),
         }
-        Ok(o.stdout)
     }
     pub fn git(&self, p: &str, args: &[&str]) -> Result<String, ServiceError> {
         String::from_utf8(self.git_bytes(p, args)?)

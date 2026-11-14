@@ -3,7 +3,7 @@ test_only_the_call_that_drafted_a_pr_reports_a_conversion -> code_contract (toki
 test_draft_conversion_refuses_a_write_outside_scope -> code_contract (absent outside URL is rejected before read)
 test_a_closed_pull_request_is_not_drafted -> code_closed_contract
 test_a_pull_request_with_a_current_head_and_passing_ci_is_ready -> code_contract + provider current-head CI fixtures
-test_base_progress_blocks_only_when_the_host_requires_up_to_date -> tests/readiness.rs shared Freshness cases + provider behind-head fixtures
+test_base_progress_blocks_only_when_the_host_requires_up_to_date -> tests/readiness.rs shared Freshness cases + provider behind-head fixtures; base_conflict is independent of freshness enforcement (branvil extra.rs reused_and_gates, local tests)
 test_a_pull_request_whose_base_is_gone_is_not_judged -> code_missing_base_contract
 test_a_pull_request_is_reviewed_and_its_threads_replied_to -> code_contract + code_other_actor_contract
 test_a_verdict_lands_only_on_the_head_the_member_read -> code_stale_head_contract + code_other_actor_contract

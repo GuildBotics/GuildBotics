@@ -15,6 +15,7 @@ fn run(input: &Value) -> Result<Readiness, ServiceError> {
             behind_by: f["behind_by"].as_i64().unwrap(),
             current_base_sha: f["current_base_sha"].as_str().unwrap().into(),
             requires_up_to_date: f["requires_up_to_date"].as_bool().unwrap(),
+            conflicts: serde_json::from_value(f["conflicts"].clone()).unwrap_or_default(),
         }),
         serde_json::from_value(input["failed_logs"].clone()).unwrap(),
     )
@@ -23,7 +24,7 @@ fn run(input: &Value) -> Result<Readiness, ServiceError> {
 #[test]
 fn frozen_python_decisions() {
     let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/readiness.json")).unwrap();
-    assert_eq!(cases.len(), 2432);
+    assert_eq!(cases.len(), 2435);
     for (i, case) in cases.iter().enumerate() {
         assert_eq!(
             serde_json::to_value(run(&case["input"]).unwrap()).unwrap(),

@@ -513,7 +513,7 @@ async fn one_gate_per_base_and_a_stale_head_merges_the_gate_without_changing_its
 }
 
 #[tokio::test]
-async fn conflicts_leave_a_check_and_a_branvil_comment_without_rejoining_until_the_head_moves() {
+async fn conflicts_leave_paths_and_a_branvil_comment_without_rejoining_until_the_head_moves() {
     let w = World::new().await;
     w.push_change("feature", "README.md", "feature\n");
     git_ok(&w.work, &["checkout", "-q", "main"]);
@@ -541,8 +541,9 @@ async fn conflicts_leave_a_check_and_a_branvil_comment_without_rejoining_until_t
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c["name"] == "gate" && c["conclusion"] == "failure")
+            .all(|c| c["name"] != "gate")
     );
+    assert_eq!(checks["conflicts"], json!(["README.md"]));
     let comments = w
         .server
         .ok(&format!("{}/pulls/2/comments", w.repo_path()), &w.aiko)

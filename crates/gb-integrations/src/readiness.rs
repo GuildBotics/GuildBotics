@@ -11,6 +11,7 @@ pub struct Freshness {
     pub behind_by: i64,
     pub current_base_sha: String,
     pub requires_up_to_date: bool,
+    pub conflicts: Vec<String>,
 }
 
 /// Conclusions whose jobs provide failure logs. A provider's synthetic
@@ -106,6 +107,13 @@ pub fn readiness_of(
                 "base_out_of_date",
                 format!("The PR head is {} commit(s) behind its base.", f.behind_by),
                 "Merge or rebase the base branch, push, and check again.",
+            ));
+        }
+        if !f.conflicts.is_empty() {
+            b.push(blocker(
+                "base_conflict",
+                format!("The PR head conflicts with its base in: {}.", f.conflicts.join(", ")),
+                "Merge the base branch into the head, resolve the conflicts, push, and check again.",
             ));
         }
         if result.current_head_sha != result.head_sha {

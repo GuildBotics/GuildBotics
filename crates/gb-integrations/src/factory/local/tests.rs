@@ -1225,3 +1225,55 @@ async fn full_shared_code_state_and_link_contracts() {
         .unwrap();
     contracts::code_cross_repo_link_contract(&s, &missing, &foreign.target.url).await;
 }
+
+#[tokio::test]
+async fn conflicting_head_blocks_readiness_without_a_ci_failure() {
+    let (d, s) = fixture();
+    let seed = d.path().join("seed");
+    fs::create_dir(&seed).unwrap();
+    git(&seed, &["init", "-b", "main"]);
+    fs::write(seed.join("a.py"), "seed\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "seed"]);
+    git(&seed, &["checkout", "-b", "feature"]);
+    fs::write(seed.join("a.py"), "feature\n").unwrap();
+    git(&seed, &["commit", "-am", "feature"]);
+    git(&seed, &["checkout", "main"]);
+    fs::write(seed.join("a.py"), "base\n").unwrap();
+    git(&seed, &["commit", "-am", "base"]);
+    let bare = s.store.bare("acme/repo");
+    fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    git(&seed, &["clone", "--bare", ".", bare.to_str().unwrap()]);
+    let pr = s
+        .create_pull_request(CreatePullRequest {
+            repository: "acme/repo".into(),
+            head: "feature".into(),
+            base: "main".into(),
+            title: "Conflict".into(),
+            body: "".into(),
+            draft: false,
+            tickets: vec![],
+        })
+        .await
+        .unwrap();
+    let r = s
+        .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(r.readiness, ReadinessReadiness::Blocked);
+    assert!(
+        r.completion_blockers
+            .iter()
+            .any(|b| b.code == "base_conflict" && b.message.contains("a.py"))
+    );
+    assert!(
+        !r.completion_blockers
+            .iter()
+            .any(|b| b.code == "checks_failed")
+    );
+    assert_eq!(
+        s.store.conflicts("acme/repo", "main", "main").unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(s.store.conflicts("acme/repo", "missing", "main").is_err());
+}

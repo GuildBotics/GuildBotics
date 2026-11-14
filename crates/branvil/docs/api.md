@@ -991,7 +991,7 @@ Gate failures and conflicts add a comment by the service author `branvil`,
 including the gate inputs and failed jobs with log links or conflicting files.
 A `host_failed` departure adds one too, with the head and the failed host
 checks with their links, so that the author learns of it on the pull request.
-Required checks appear as `gate/<job>`; a conflict is a failed `gate` check.
+Required checks appear as `gate/<job>`; conflicts appear in the checks response's `conflicts` field, without a synthetic check.
 These checks remain visible, including retries after departure, only while
 the entry's `head_sha` equals the head of the pull request's checks response.
 The entry retains its gate SHA, reason, and timestamps after departure so
@@ -1041,7 +1041,7 @@ Each automatic gate pass can notify the webhook once its next action is
 
 ```json
 {
-  "head_sha": "...", "base_sha": "...", "behind_by": 0,
+  "head_sha": "...", "base_sha": "...", "behind_by": 0, "conflicts": [],
   "checks": [
     {"name": "test", "status": "completed", "conclusion": "success",
      "attempt_id": "att_01JA...", "attempt": 1,
@@ -1056,6 +1056,9 @@ Each automatic gate pass can notify the webhook once its next action is
 
 - `head_sha` / `base_sha` are `""` and `behind_by` is `null` when that branch is gone.
   A merged pull request's `head_sha` is the original reviewed head, as in its view.
+- `conflicts` lists the conflicting file paths, sorted and deduplicated, computed
+  with `git merge-tree --write-tree` for this response's `base_sha` and `head_sha`.
+  It is `[]` for a clean merge and `null` for a closed PR or a missing branch.
 - `checks` include the latest attempt of every job of the head's run, as the
   run's pipeline defines the job (`docs/ci.md`),
   plus entries without an `attempt_id` that say why something is missing, each
@@ -1119,8 +1122,7 @@ Each automatic gate pass can notify the webhook once its next action is
   registered yet", never "no checks".
 - `base_checks` counts the checks of the base tip.
 - The current or last gate's checks are included as `gate/<job>`, with the same
-  attempt IDs, timing, and job/log links as the gate commit's checks. A conflict
-  has a `gate` check with `completed`/`failure` and the files in `details`.
+  attempt IDs, timing, and job/log links as the gate commit's checks.
   These checks appear only when the landing entry's `head_sha` matches this
   response's `head_sha`, whatever the entry's state. Retries remain visible
   after departure while that head is current; changing head hides the old gate.

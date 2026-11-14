@@ -1404,3 +1404,32 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
     }
     drop(running);
 }
+
+#[tokio::test]
+async fn checks_conflicts_are_empty_or_unknown_for_closed_or_missing_branches() {
+    let w = World::new().await;
+    w.push_change("feature", "extra.txt", "feature\n");
+    w.open_pull("feature", json!([])).await;
+    let at = format!("{}/pulls/1", w.repo_path());
+    let checks_url = format!("{at}/checks");
+    let read = || w.server.ok(&checks_url, &w.owner);
+    assert_eq!(read().await["conflicts"], json!([]));
+    let (st, v) = w
+        .server
+        .post(&format!("{at}/close"), &w.owner, json!({}))
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(read().await["conflicts"], Value::Null);
+    let (st, v) = w
+        .server
+        .post(&format!("{at}/reopen"), &w.owner, json!({}))
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let bare = w.server.data.join("repos/acme/demo.git");
+    let feature = git_ok(&bare, &["rev-parse", "refs/heads/feature"]);
+    git_ok(&bare, &["update-ref", "-d", "refs/heads/feature"]);
+    assert_eq!(read().await["conflicts"], Value::Null);
+    git_ok(&bare, &["update-ref", "refs/heads/feature", feature.trim()]);
+    git_ok(&bare, &["update-ref", "-d", "refs/heads/main"]);
+    assert_eq!(read().await["conflicts"], Value::Null);
+}

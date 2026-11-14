@@ -37,7 +37,7 @@ describe("board ordering", () => {
   });
 
   it("never reports success for missing or unfinished checks", () => {
-    const base: Checks = { head_sha: "", base_sha: "", behind_by: 0, checks: [], checks_expected: true, base_checks: 0 };
+    const base: Checks = { conflicts: [], head_sha: "", base_sha: "", behind_by: 0, checks: [], checks_expected: true, base_checks: 0 };
     expect(rollup(base)).toBe("not_registered");
     expect(rollup({ ...base, checks_expected: false })).toBe("none");
     expect(rollup({ ...base, checks: [{ name: "t", status: "queued", conclusion: null }] })).toBe("pending");

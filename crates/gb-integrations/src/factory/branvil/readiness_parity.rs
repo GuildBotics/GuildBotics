@@ -7,6 +7,7 @@ fn report() -> pulls::ChecksView {
         head_sha: "observed-head".into(),
         base_sha: "observed-base".into(),
         behind_by: Some(2),
+        conflicts: Some(vec![]),
         checks: vec![Default::default()],
         checks_expected: true,
         base_checks: 0,
@@ -93,6 +94,7 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
     for (missing, expected) in [
         ("head", "integrations.branvil.api.no_head"),
         ("report_base", "integrations.branvil.api.no_base"),
+        ("conflicts", "integrations.branvil.api.no_base"),
         ("current_base", "integrations.branvil.api.no_base"),
     ] {
         let mut checks = report();
@@ -101,6 +103,7 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
         match missing {
             "head" => checks.head_sha.clear(),
             "report_base" => checks.base_sha.clear(),
+            "conflicts" => checks.conflicts = None,
             _ => current["base_sha"] = json!(""),
         }
         assert_eq!(

@@ -448,6 +448,7 @@ export interface CheckSet {
 }
 
 export interface Checks extends CheckSet {
+  conflicts: string[] | null;
   head_sha: string;
   base_sha: string;
   /** null when a branch is gone. */
