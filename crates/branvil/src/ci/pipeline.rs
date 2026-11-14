@@ -83,6 +83,7 @@ pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> 
 /// registered; retries reuse it).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct JobDef {
+    pub verified_sha: bool,
     pub name: String,
     pub image: String,
     pub commands: Vec<String>,
@@ -130,6 +131,8 @@ fn one() -> u32 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JobSchema {
+    #[serde(default)]
+    verified_sha: bool,
     name: String,
     image: String,
     commands: Vec<String>,
@@ -260,6 +263,7 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
         }
     }
     Ok(JobDef {
+        verified_sha: j.verified_sha,
         name,
         image: j.image,
         commands: j.commands,
@@ -446,5 +450,12 @@ mod tests {
         assert!(valid_digest(DIGEST));
         assert!(!valid_digest("sha256:abc"));
         assert!(!valid_digest(&DIGEST.replace("sha256", "sha512")));
+    }
+    #[test]
+    fn verified_sha_is_an_explicit_optional_pipeline_input() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        assert!(!parse(job).unwrap()[0].verified_sha);
+        assert!(parse(&format!("{job}verified_sha=true\n")).unwrap()[0].verified_sha);
+        assert!(parse(&format!("{job}verified_sha='yes'\n")).is_err());
     }
 }

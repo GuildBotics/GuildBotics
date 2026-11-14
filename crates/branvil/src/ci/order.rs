@@ -271,7 +271,8 @@ mod tests {
             assert_eq!(ci.admission_order(&repo, &h2, &pipeline()).await, expected);
         }
         // The default-branch registration uses the very same order.
-        ci.consider(&repo, "refs/heads/main", &h2).await.unwrap();
+        let registration = ci.registration(&repo, "main", &h2, false).await.unwrap();
+        ci.register(&repo, &h2, registration).await.unwrap();
         let (r, s) = (repo.clone(), h2.clone());
         let before = ci
             .inner
@@ -292,7 +293,8 @@ mod tests {
             .inner
             .history_reads
             .load(std::sync::atomic::Ordering::Relaxed);
-        ci.consider(&repo, "refs/heads/main", &h2).await.unwrap();
+        let registration = ci.registration(&repo, "main", &h2, false).await.unwrap();
+        ci.register(&repo, &h2, registration).await.unwrap();
         assert_eq!(
             ci.inner
                 .history_reads
@@ -330,7 +332,8 @@ mod tests {
         // Reconciliation still registers the waiting run, but must leave
         // admission history to admit_waiting once there is capacity.
         for _ in 0..2 {
-            ci.consider(&repo, "refs/heads/main", &gap).await.unwrap();
+            let registration = ci.registration(&repo, "main", &gap, false).await.unwrap();
+            ci.register(&repo, &gap, registration).await.unwrap();
         }
         assert_eq!(
             ci.inner

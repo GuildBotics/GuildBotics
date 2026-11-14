@@ -69,7 +69,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
+async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -120,23 +120,23 @@ async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let mut attempts = records(&db, "ci_attempts");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
-    as_schema_25(&db);
+    as_schema_26(&db);
     let before = tables(&db);
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 25 to 26"), "{output}");
+    assert!(output.contains("from schema version 26 to 27"), "{output}");
     for a in &mut attempts {
-        a["inputs"] = Value::Null;
+        a["verified_sha"] = Value::Null;
     }
     assert_eq!(records(&db, "ci_attempts"), attempts);
     let runs = records(&db, "ci_runs");
-    assert!(runs.iter().all(|r| r["inputs"] == json!({})));
+    assert!(records(&db, "ci_verifications").is_empty());
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
     assert!(run["failure_notified_at"].is_null());
     assert!(!tables(&db)["ix_ci_unnotified"].is_empty());
-    assert!(tables(&db)["ix_ci_inputs"].is_empty());
+    assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let backup = std::fs::read_dir(&data)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -144,7 +144,7 @@ async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-25-")
+                .starts_with("branvil-schema-26-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -502,21 +502,26 @@ async fn paths_match_git_globs_and_a_pipeline_change_disables_selection() {
 
 #[tokio::test]
 async fn a_later_heads_job_reuses_the_same_paths_contents_and_the_gate_executes_it() {
-    paths_reuse_gate(true).await;
+    paths_reuse_gate(true, false).await;
 }
 
 #[tokio::test]
 async fn a_head_without_paths_reuse_is_its_own_gate() {
-    paths_reuse_gate(false).await;
+    paths_reuse_gate(false, false).await;
+}
+
+#[tokio::test]
+async fn declared_verified_input_prevents_paths_reuse_between_pushed_heads() {
+    paths_reuse_gate(false, true).await;
 }
 
 /// The second head of a pull request changes only docs: `rust` (paths
 /// `src/**`) may reuse the first head's success by the contents of paths.
-async fn paths_reuse_gate(reused: bool) {
+async fn paths_reuse_gate(reused: bool, verified: bool) {
     let w = World::new().await;
     let runner = Runner::new(&w, "paths-runner").await;
     let pipeline = format!(
-        "{}paths=['src/**']\n{}",
+        "{}paths=['src/**']\nverified_sha={verified}\n{}",
         pipeline(&["rust"]),
         pipeline(&["always"])
     );
@@ -546,14 +551,28 @@ async fn paths_reuse_gate(reused: bool) {
         }
     }
     let head = w.push_change("feature", "notes.md", "docs\n");
-    let rust = runner.next_claim().await;
+    let first_claim = runner.next_claim().await;
+    let (rust, claimed_always) = if verified && first_claim["job"]["name"] == "always" {
+        (runner.next_claim().await, Some(first_claim))
+    } else {
+        (first_claim, None)
+    };
     assert_eq!(
         (&rust["sha"], &rust["job"]["name"]),
         (&json!(head), &json!("rust"))
     );
-    assert_eq!(rust["reuse"]["attempt_id"], source["attempt_id"]);
-    assert_eq!(rust["reuse"]["sha"], first);
-    assert_eq!(rust["reuse"]["basis"], "paths");
+    if verified {
+        assert!(
+            rust["reuse"].is_null(),
+            "verified input requires the same tree even with matching paths"
+        );
+        assert_eq!(rust["verified_sha"], source["verified_sha"]);
+        assert!(rust["verified_sha"].is_string());
+    } else {
+        assert_eq!(rust["reuse"]["attempt_id"], source["attempt_id"]);
+        assert_eq!(rust["reuse"]["sha"], first);
+        assert_eq!(rust["reuse"]["basis"], "paths");
+    }
     let reported = if reused {
         rust["reuse"]["attempt_id"].clone()
     } else {
@@ -568,7 +587,10 @@ async fn paths_reuse_gate(reused: bool) {
         assert_eq!(c["reused_from"]["basis"], "paths", "{c}");
         assert_eq!(c["reused_from"]["attempt_id"], source["attempt_id"]);
     }
-    let always = runner.next_claim().await;
+    let always = match claimed_always {
+        Some(c) => c,
+        None => runner.next_claim().await,
+    };
     assert_eq!(
         (&always["sha"], &always["job"]["name"]),
         (&json!(head), &json!("always"))
@@ -881,7 +903,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_25(&db);
+    as_schema_26(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
@@ -1169,6 +1191,8 @@ async fn checks_say_when_they_ran_and_how_long_the_job_took_where_it_last_succee
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     runner.finish(&main_test, "success").await;
     runner.finish(&main_lint, "failure").await;
+    // Main retries every failed job before head work while verification is broken.
+    assert_eq!(runner.drain("failure").await, 3);
     let tip = main_test["sha"].as_str().unwrap();
     let on_main = w
         .server

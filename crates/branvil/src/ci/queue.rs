@@ -166,6 +166,7 @@ pub struct AutoRetry {
 /// One try of one job.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Attempt {
+    pub verified_sha: Option<String>,
     pub path_skip: Option<PathSkip>,
     pub id: String,
     pub purpose: Purpose,
@@ -496,7 +497,11 @@ pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
         let again = match current.iter().find(|a| a.job.name == j.name) {
             None => true,
             Some(a) => {
-                a.superseded
+                (protected
+                    && a.status == "completed"
+                    && a.conclusion.as_deref() != Some("success")
+                    && a.cache_scope != "protected")
+                    || a.superseded
                     || a.path_skip.is_some()
                     || (protected
                         && j.cache.is_some()
@@ -535,9 +540,6 @@ fn admission_count(
     limit: usize,
     retry_id: Option<String>,
 ) -> AppResult<usize> {
-    if class >= super::priority::Class::Deferred {
-        return pending_count(r, limit);
-    }
     let mut snapshot = retry_id
         .as_deref()
         .map(super::priority::Snapshot::retrying)
@@ -546,7 +548,11 @@ fn admission_count(
     for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
         let a = get_attempt(r, &String::from_utf8_lossy(&id))?
             .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-        if snapshot.class_of(r, &a)?.class < super::priority::Class::Deferred {
+        let pending_class = snapshot.class_of(r, &a)?.class;
+        if pending_class != super::priority::Class::Verify
+            && (class >= super::priority::Class::Deferred
+                || pending_class < super::priority::Class::Deferred)
+        {
             count += 1;
             if count >= limit {
                 break;
@@ -570,6 +576,7 @@ fn cut(text: &str) -> String {
 fn new_attempt(w: &Wtx, run: &Run, job: &JobDef, network: bool, now: &str) -> AppResult<Attempt> {
     let number = next_number(w, &run.repo, &run.sha, &job.name)?;
     Ok(Attempt {
+        verified_sha: None,
         path_skip: None,
         id: util::new_id("att"),
         purpose: Purpose::Check,
@@ -803,13 +810,14 @@ fn admit_jobs(
         run.waiting = false;
         return Ok(false);
     }
-    if admission_count(
-        w,
-        super::priority::run_class(w, run)?.class,
-        queue_max + 1,
-        None,
-    )? + jobs.len()
-        > queue_max
+    if !super::verify::running(w, &run.repo, &run.sha)?
+        && admission_count(
+            w,
+            super::priority::run_class(w, run)?.class,
+            queue_max + 1,
+            None,
+        )? + jobs.len()
+            > queue_max
     {
         run.waiting = true;
         return Ok(false);
@@ -906,6 +914,9 @@ pub fn branch_left(
     by: &str,
     now: &str,
 ) -> AppResult<bool> {
+    if super::verify::running(w, repo, sha)? {
+        return Ok(false);
+    }
     let Some(old) = get_run(w, repo, sha)? else {
         return Ok(false);
     };
@@ -1033,6 +1044,13 @@ fn can_reuse(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<bool> {
     if !reusable_shape(a, source) {
         return Ok(false);
     }
+    if a.job.verified_sha
+        && (a.verified_sha != source.verified_sha
+            || tree_of(r, a)?.is_none()
+            || tree_of(r, a)? != tree_of(r, source)?)
+    {
+        return Ok(false);
+    }
     Ok(match basis(a) {
         Basis::Tree => {
             let tree = tree_of(r, a)?;
@@ -1134,6 +1152,9 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
         if let Some(run) = &run {
             a.cache_scope = run.cache_scope.clone();
         }
+        if a.job.verified_sha {
+            a.verified_sha = super::verify::latest_verified(r, &a.repo)?.map(|v| v.sha);
+        }
         a.inputs = run.and_then(|run| run.inputs.get(&a.job.name).cloned());
         candidates.push((class, a));
     }
@@ -1147,7 +1168,18 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
                     entry.insert(reuse_sources(r, &a)?)
                 }
             };
-            reuse_candidate(&a, sources)
+            let eligible = sources
+                .iter()
+                .map(|source| Ok((source, can_reuse(r, &a, source)?)))
+                .collect::<AppResult<Vec<_>>>()?;
+            reuse_candidate(
+                &a,
+                &eligible
+                    .into_iter()
+                    .filter(|(_, ok)| *ok)
+                    .map(|(s, _)| s.clone())
+                    .collect::<Vec<_>>(),
+            )
         } else {
             None
         };
@@ -1373,18 +1405,17 @@ fn prepare_auto_retry(
     if run.cache_scope != "protected" || run.superseded_by.is_some() || number > MAX_AUTO_RETRIES {
         return Ok(None);
     }
-    let Some(repo) =
-        w.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&old.repo))?
-    else {
+    if w.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&old.repo))?
+        .is_none()
+    {
         return Ok(None);
-    };
+    }
     let PipelineState::Jobs { jobs } = &run.pipeline else {
         return Ok(None);
     };
-    if !repo.required_checks.contains(&old.job.name)
-        || !current_attempts(w, &old.repo, &old.sha, jobs)?
-            .iter()
-            .any(|a| a.id == old.id)
+    if !current_attempts(w, &old.repo, &old.sha, jobs)?
+        .iter()
+        .any(|a| a.id == old.id)
     {
         return Ok(None);
     }
@@ -1510,10 +1541,42 @@ pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attemp
     }
     let mut snapshot = super::priority::Snapshot::retrying(&old.id);
     let class = snapshot.class_of(w, &old)?.class;
-    if admission_count(w, class, queue_max + 1, Some(old.id.clone()))? >= queue_max {
+    let reopen = super::verify::get(w, &old.repo)?.filter(|v| {
+        v.state == "failed" && v.sha == old.sha && old.conclusion.as_deref() != Some("success")
+    });
+    let reopen = if let Some(v) = reopen {
+        let repo =
+            w.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&old.repo))?;
+        let tip: Option<String> = match repo {
+            Some(repo) => w.get(
+                store::REFS,
+                &Key::new()
+                    .s(&old.repo)
+                    .s(&format!("refs/heads/{}", repo.default_branch))
+                    .bytes(),
+            )?,
+            None => None,
+        };
+        (tip.as_deref() == Some(&old.sha)).then_some(v)
+    } else {
+        None
+    };
+    if reopen.is_none()
+        && admission_count(w, class, queue_max + 1, Some(old.id.clone()))? >= queue_max
+    {
         return Err(AppError::unavailable(format!(
             "The CI queue is full ({queue_max} queued attempts); retry later."
         )));
+    }
+    if let Some(mut v) = reopen {
+        v.state = "running".into();
+        v.failed_jobs.clear();
+        v.finished_at = None;
+        w.put(
+            store::CI_VERIFICATIONS,
+            &Key::new().s(&old.repo).bytes(),
+            &v,
+        )?;
     }
     let network = network_of(w, &old.repo)?;
     let mut a = new_attempt(w, &run, &old.job, network, now)?;
@@ -1641,7 +1704,7 @@ pub fn yield_checks(
 /// (`why`); the first interruption of a job that was not cancelled or
 /// superseded is queued again as a new attempt in the place `old` had in the
 /// queue, ahead of what was queued after it. A second interruption may use
-/// the automatic retry budget of a protected required check.
+/// the automatic retry budget of a protected check.
 fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
     let mut a = old.clone();
     let requeue = !old.cancel_requested && !old.superseded && !old.after_interrupt;
@@ -1846,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_retry_targets_only_required_protected_checks_and_retryable_endings() {
+    fn automatic_retry_targets_all_protected_checks_and_only_retryable_endings() {
         for case in [
             "pr",
             "optional",
@@ -1909,7 +1972,7 @@ mod tests {
                         .iter()
                         .filter(|a| a.auto_retry.is_some())
                         .count(),
-                    0,
+                    usize::from(case == "optional"),
                     "{case}"
                 );
                 Ok(())
@@ -2085,6 +2148,7 @@ mod tests {
 
     fn job(name: &str) -> JobDef {
         JobDef {
+            verified_sha: false,
             paths: Vec::new(),
             name: name.into(),
             image: "alpine".into(),
@@ -3627,6 +3691,175 @@ mod tests {
         let a2 = s.write_sync(|w| retry(w, &l[0].id, 10, T1)).unwrap();
         assert_eq!(a2.number, 2);
         assert_eq!(latest(&s, "s1")[0].id, a2.id);
+    }
+    #[test]
+    fn verified_inputs_require_equal_sha_and_tree_even_with_paths() {
+        for declared in [false, true] {
+            for same_tree in [false, true] {
+                for same_verified in [false, true] {
+                    let (_d, s) = store();
+                    s.write_sync(|w| {
+                        let mut reg1 = reg("s1", "feature", &["test"]);
+                        if let PipelineState::Jobs { jobs } = &mut reg1.pipeline {
+                            jobs[0].verified_sha = declared;
+                            jobs[0].paths = vec!["src/**".into()];
+                        }
+                        reg1.inputs.insert("test".into(), "inputs".into());
+                        register(w, reg1, 10, T0)?;
+                        let mut source = claim(w, "r", 60, T0)?.unwrap();
+                        source.attempt.verified_sha = Some("v1".into());
+                        source.attempt.status = "completed".into();
+                        source.attempt.conclusion = Some("success".into());
+                        source.attempt.image_digest = Some(DIGEST.into());
+                        let mut reg2 = reg("s2", "feature", &["test"]);
+                        reg2.pipeline = get_run(w, "repo_1", "s1")?.unwrap().pipeline;
+                        reg2.inputs.insert("test".into(), "inputs".into());
+                        reg2.tree = Some("tree-s1".into());
+                        if !same_tree {
+                            reg2.tree = Some("different".into());
+                        }
+                        register(w, reg2, 10, T0)?;
+                        let mut target = claim(w, "r", 60, T0)?.unwrap().attempt;
+                        target.verified_sha = Some(if same_verified { "v1" } else { "v2" }.into());
+                        assert_eq!(
+                            can_reuse(w, &target, &source.attempt)?,
+                            !declared || (same_tree && same_verified)
+                        );
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn verification_claims_latest_sha_and_escalates_nonrequired_failures() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            require_test(w)?;
+            let mut v = super::super::verify::Verification {
+                sha: "sha".into(),
+                base: None,
+                state: "running".into(),
+                started_at: T0.into(),
+                finished_at: None,
+                failed_jobs: vec![],
+                failing_since: None,
+                last_verified: Some(super::super::verify::Verified {
+                    sha: "verified".into(),
+                    at: T0.into(),
+                }),
+            };
+            w.put(store::CI_VERIFICATIONS, &Key::new().s("repo_1").bytes(), &v)?;
+            let mut registration = reg("sha", "main", &["lint"]);
+            if let PipelineState::Jobs { jobs } = &mut registration.pipeline {
+                jobs[0].verified_sha = true;
+            }
+            register(w, registration, 0, T0)?;
+            assert_eq!(
+                admission_count(w, super::super::priority::Class::Normal, 10, None)?,
+                0
+            );
+            assert_eq!(
+                admission_count(w, super::super::priority::Class::Deferred, 10, None)?,
+                0
+            );
+            v.last_verified = Some(super::super::verify::Verified {
+                sha: "at-claim".into(),
+                at: T0.into(),
+            });
+            w.put(store::CI_VERIFICATIONS, &Key::new().s("repo_1").bytes(), &v)?;
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(c.attempt.verified_sha.as_deref(), Some("at-claim"));
+            assert_eq!(
+                super::super::priority::class_of(w, &c.attempt)?.class,
+                super::super::priority::Class::Verify
+            );
+            finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "failure",
+                None,
+                ResultInfo::default(),
+                0,
+                T1,
+            )?;
+            let next = latest_attempts(w, "repo_1", "sha")?.remove(0);
+            assert_eq!(next.status, "queued");
+            assert_eq!(next.auto_retry.unwrap().number, 1);
+            assert_eq!(
+                super::super::priority::class_of(w, &c.attempt)?.class,
+                super::super::priority::Class::Protected
+            );
+            assert_eq!(
+                admission_count(w, super::super::priority::Class::Normal, 10, None)?,
+                1
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    #[test]
+    fn only_failed_current_main_verification_reopens_with_retry_over_capacity() {
+        for state in ["failed", "passed"] {
+            for current in [false, true] {
+                let (_d, s) = store();
+                s.write_sync(|w| {
+                    require_test(w)?;
+                    register(w, reg("sha", "main", &["lint"]), 1, T0)?;
+                    let mut last = None;
+                    for _ in 0..=MAX_AUTO_RETRIES {
+                        let c = claim(w, "r", 60, T0)?.unwrap();
+                        finish(
+                            w,
+                            &c.attempt.id,
+                            &c.lease,
+                            "failure",
+                            None,
+                            ResultInfo::default(),
+                            1,
+                            T1,
+                        )?;
+                        last = Some(c.attempt.id);
+                    }
+                    let v = super::super::verify::Verification {
+                        sha: "sha".into(),
+                        base: None,
+                        state: state.into(),
+                        started_at: T0.into(),
+                        finished_at: Some(T1.into()),
+                        failed_jobs: vec![],
+                        failing_since: Some("first".into()),
+                        last_verified: None,
+                    };
+                    w.put(store::CI_VERIFICATIONS, &Key::new().s("repo_1").bytes(), &v)?;
+                    w.put(
+                        store::REFS,
+                        &Key::new().s("repo_1").s("refs/heads/main").bytes(),
+                        &if current { "sha" } else { "new" },
+                    )?;
+                    let id = last.unwrap();
+                    if state == "failed" && current {
+                        let a = retry(w, &id, 0, T2)?;
+                        assert_eq!(a.status, "queued");
+                        let v = super::super::verify::get(w, "repo_1")?.unwrap();
+                        assert_eq!(v.state, "running");
+                        assert_eq!(v.failing_since.as_deref(), Some("first"));
+                    } else {
+                        assert!(retry(w, &id, 0, T2).is_err());
+                        retry(w, &id, 1, T2)?;
+                        assert_eq!(
+                            super::super::verify::get(w, "repo_1")?.unwrap().state,
+                            state
+                        );
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
     }
 }
 

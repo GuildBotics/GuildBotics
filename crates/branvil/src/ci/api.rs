@@ -388,6 +388,7 @@ pub struct ClaimView {
     pub sha: String,
     pub attempt: u64,
     pub job: JobDef,
+    pub verified_sha: Option<String>,
     pub cache_scope: String,
     pub network: bool,
     /// How long the attempt waited in the queue, in seconds.
@@ -442,6 +443,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         sha: a.sha.clone(),
         attempt: a.number,
         job: a.job.clone(),
+        verified_sha: a.verified_sha.clone(),
         cache_scope: a.cache_scope.clone(),
         network: a.network,
         queued_secs: chrono::DateTime::parse_from_rfc3339(&a.created_at)
@@ -856,6 +858,7 @@ mod tests {
                             protected: false,
                             pipeline: queue::PipelineState::Jobs {
                                 jobs: vec![JobDef {
+                                    verified_sha: false,
                                     paths: Vec::new(),
                                     name: "build".into(),
                                     image: "alpine".into(),

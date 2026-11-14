@@ -96,6 +96,24 @@ async fn protected_branches_and_internal_refs_refuse_pushes() {
         .status
         .success()
     );
+    // Even the owner cannot forge a verification mark.
+    let sha = String::from_utf8_lossy(&git(work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    assert!(
+        !git_as(
+            work,
+            "alice",
+            &w.owner,
+            &[
+                "push",
+                "origin",
+                &format!("HEAD:refs/branvil/verified/{sha}")
+            ]
+        )
+        .status
+        .success()
+    );
     // Internal and unknown refs.
     assert!(
         !git_as(

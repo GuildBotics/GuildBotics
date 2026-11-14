@@ -645,6 +645,7 @@ mod tests {
         fs::write(work.join("Cargo.lock"), "v1").unwrap();
         fs::write(work.join("target/a.o"), "object").unwrap();
         let job = JobDef {
+            verified_sha: false,
             paths: Vec::new(),
             name: "t".into(),
             image: "alpine".into(),

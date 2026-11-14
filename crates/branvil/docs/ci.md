@@ -13,6 +13,54 @@ git push ─▶ guildbotics branvil serve ─ register run (pipeline from the co
                  └──────────────────────────────────────────────── guildbotics branvil runner ─ msb run ─▶ microVM
 ```
 
+## Default-branch verification
+
+The default branch is verified serially per repository, separately from ordinary
+ref-following runs. When no verification is running and the tip differs from the
+last verification SHA, Branvil records `running` before registering all jobs at
+that tip with protected cache scope. Queue capacity never blocks these jobs.
+Main advancing leaves those queued and running attempts intact. Completion starts
+one verification at the then-current tip, batching intervening merges. The minute
+reconciler restores registration from the durable running record after a crash.
+Check events and ref-change batches advance verification under the repository lock.
+
+All checks must complete, including missing-required-job and invalid-pipeline
+markers. All must succeed; no pipeline and no required checks also passes.
+Required checks govern publication and merging on PR heads; in main verification
+they require that those names exist, while *all* pipeline jobs determine success.
+Only the default branch is verified: merging into another base branch does not
+start verification of that base.
+
+Before recording success, Branvil creates an immutable internal
+`refs/branvil/verified/<sha>` ref. These refs are hidden from Git clients and cannot
+be pushed, even by the owner. The record retains the last verified SHA and time,
+the verification's starting base, failed jobs, and the first failing SHA since the
+last success. A crash between ref creation and the success transaction is safe to
+resume. Completion detaches main from the old run if the branch has advanced.
+
+A member or owner retry of an unsuccessful job of a failed verification reopens
+it atomically only while main still points to that SHA. This retry bypasses queue
+capacity, preserves `failing_since`, and clears the failed-job list. Other manual
+retries change neither the verification record nor its verified ref.
+
+Verification attempts normally use class **4m**, after merge-directed work
+(classes 1–3 and 4a), before drafts and cache refresh (4b). They display
+`Deferred: main is verified after the jobs that lead to a merge.` They do not
+consume admission capacity for any class. If `failing_since` is set, or any attempt
+of the running verification has failed, timed out, lacked a runner, or exhausted
+interruption recovery, all verification jobs use class **1** and count in ordinary
+class 1–3 admission. Other protected branches always retain class 1.
+This batches merges without a fixed delay while main is healthy; when it might
+be broken, verification and repair become part of the path to merging.
+
+Jobs declaring `verified_sha = true` record the latest verified SHA when claimed,
+return it in the claim response, and receive `BRANVIL_VERIFIED_SHA` (empty before
+any success). Reuse for these jobs requires both the same verified SHA and the
+same commit tree, even when `paths` match: ancestry of a verified commit is not a
+property of those paths. Undeclared jobs retain the usual reuse rules and have
+no such environment variable. Protected registration reruns unsuccessful attempts
+previously executed for PRs; successful cacheless actual executions remain valid.
+
 ## The pipeline: `.branvil/ci.toml`
 
 ```toml
@@ -23,6 +71,7 @@ name = "test"                     # [A-Za-z0-9_.-]{1,64}, not "pipeline", unique
 image = "docker.io/library/alpine:3.22"   # [registry/]name[:tag], no digest
 commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bin/sh -c
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
+verified_sha = false             # optional; declares BRANVIL_VERIFIED_SHA as an input
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # up to 16
 cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # optional
@@ -32,7 +81,8 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   with its exit code. The job's environment has only CI metadata (besides
   the image's own variables and `HOME`): `CI=true`, `BRANVIL_CI=true`,
   `BRANVIL_REPOSITORY`, `BRANVIL_SHA`, `BRANVIL_JOB`, `BRANVIL_ATTEMPT`,
-  `BRANVIL_ATTEMPT_ID`. No tokens, no host variables. See "The job's
+  `BRANVIL_ATTEMPT_ID`. Jobs declaring `verified_sha = true` also receive
+  `BRANVIL_VERIFIED_SHA` (the latest verified commit at claim, or empty). No tokens, no host variables. See "The job's
   environment" for `/work`, the user, and `/tmp`.
 - Jobs of one run are queued together; a runner runs queued jobs, of any
   run, up to `ci.executor.max_jobs` at once, each in a microVM of its own
@@ -58,7 +108,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | --- | --- | --- |
   | Attempt | Cache refresh | 4b (last) |
   | Run | Missing run or repository, or no branches want the commit | 4b |
-  | Branch | Protected (including the default branch) | 1 |
+  | Branch | Protected, except healthy default-branch verification (4m) | 1 |
   | Branch | `gate/<n>` with a gating/passed landing record whose gate matches the commit | 2 (near landing) |
   | Branch | No open PR using this head branch | 4b |
   | PR | Draft | 4b |
@@ -78,7 +128,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   run for classes 4a/4b, after any automatic retry explanation. Waiting runs
   append the deferred reason to their queue-capacity message.
 
-  Claim order is 1, 2, 3, 4a, 4b. Within a class, attempts with an available
+  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, attempts with an available
   reusable successful result (of the same tree, or of the same contents of
   paths; "Trust") come first, then registration sequence (`seq`);
   without a reusable result, sequence decides. Reuse is assessed after taking
@@ -330,11 +380,11 @@ shows its head's, a commit's page that commit's, and the pull request list's hea
 
 What registers a run:
 
-- a push of the default branch or of the head of an open pull request (after
+- a push of the head of an open pull request (after
   the push is recorded, `Ci::on_ref_changes`), opening or reopening a pull
   request, a merge, and creating or moving a current landing gate ref;
 - the reconciler (at start and every minute), which registers every
-  default-branch tip, open pull request head, and current gate ref again:
+  running verification SHA, open pull request head, and current gate ref again:
   a crash between recording a push and registering its run, or a Git failure
   while reading its pipeline, is repaired, and until then the checks say "No
   CI run is registered for this commit yet" (`queued`, never `no checks`).
@@ -443,7 +493,7 @@ No runner, no executor:
 - When no runner has contacted the service for `ci.runner_absent_secs`
   (default 120 s), queued attempts older than that are concluded
   `startup_failure` ("No CI runner has contacted Branvil …"). Its details ask
-  the owner to start the runner. Eligible required checks queue an automatic
+  the owner to start the runner. Eligible protected-run checks queue an automatic
   retry that waits until a runner claims it; this wait does not exhaust the
   retry budget. Other checks require a manual retry; cache refreshes explain
   that a later check can request another refresh.
@@ -461,11 +511,11 @@ finishes before the new attempt is queued, so it cannot cancel that retry.
 
 ## Automatic retries
 
-A required check of a protected run automatically retries up to three times
+Every job of a protected run automatically retries up to three times
 after its initial failure. Eligible endings are command failure, timeout,
 no runner contacting the service, and the second interruption of an attempt.
 Other startup failures (such as a missing image), requested cancellations,
-supersession, nonrequired jobs, pull-request/gate runs, and cache refreshes do
+supersession, pull-request/gate runs, and cache refreshes do
 not trigger automatic retries.
 
 The failed attempt and the next queued attempt are recorded in one transaction:

@@ -1231,7 +1231,7 @@ attempts are not interrupted by changes in class.
 - `POST /claim` `{"executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "..."}`
   → `204` (nothing queued, or the service is stopping: see "Stopping the
   service" in `docs/ci.md`) or
-  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","job":{"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>","network":false,"queued_secs","reuse"}`.
+  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>","network":false,"queued_secs","reuse"}`.
   `timeout_secs` is `null` when the pipeline gives none; the runner applies its
   own CPUs, memory, and time limit. `cache_scope` is `protected` for a run a
   protected branch asked for, the only runs that save the dependency cache

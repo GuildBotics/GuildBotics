@@ -114,6 +114,28 @@ fn classes_override_registration_order_and_do_not_cancel_running_work() {
         enqueue(w, "last", "draft")?;
         let running = take(w)?;
         enqueue(w, "last", "draft")?;
+        let verification = crate::ci::verify::Verification {
+            sha: "verify".into(),
+            base: None,
+            state: "running".into(),
+            started_at: T0.into(),
+            finished_at: None,
+            failed_jobs: vec![],
+            failing_since: None,
+            last_verified: None,
+        };
+        w.put(
+            store::CI_VERIFICATIONS,
+            &Key::new().s("repo_1").bytes(),
+            &verification,
+        )?;
+        enqueue(w, "verify", "main")?;
+        assert_eq!(class(w, "verify")?, Class::Verify);
+        assert_eq!(
+            crate::ci::priority::attempt_details(w, &attempts_of(w, "repo_1", "verify")?[0])?
+                .as_deref(),
+            Some("Deferred: main is verified after the jobs that lead to a merge.")
+        );
         // Keep another last-class job queued while the first is running.
         pull(w, 6, "draft2", true)?;
         enqueue(w, "last2", "draft2")?;
@@ -132,8 +154,15 @@ fn classes_override_registration_order_and_do_not_cancel_running_work() {
         pull(w, 4, "landing", false)?;
         enqueue(w, "landing", "landing")?;
         review(w, 4, "reviewer", "approve", "", "landing")?;
-        enqueue(w, "protected", "main")?;
-        for expected in ["protected", "landing", "normal", "deferred", "last2"] {
+        enqueue(w, "protected", "release")?;
+        for expected in [
+            "protected",
+            "landing",
+            "normal",
+            "deferred",
+            "verify",
+            "last2",
+        ] {
             let planned = scheduled(w, false)?;
             assert_eq!(planned.first().unwrap().0.sha, expected);
             assert_eq!(take(w)?.attempt.sha, expected);

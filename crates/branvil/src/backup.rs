@@ -568,6 +568,7 @@ mod tests {
                     &attachment,
                 )?;
                 let job = crate::ci::pipeline::JobDef {
+                    verified_sha: false,
                     paths: Vec::new(),
                     name: "test".into(),
                     image: "alpine".into(),
