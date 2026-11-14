@@ -312,6 +312,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.cacheRefresh": "キャッシュの更新",
   "ci.cacheRefreshEffect": "この結果はチェックと自動更新に影響しません。",
   "ci.reused": "再利用元",
+  "ci.reusedPaths": "再利用元（paths が同じ）",
   "ci.log": "ログ",
   "ci.tailSize": "末尾の表示量",
   "ci.truncated": "全 {total} バイトのうち末尾 {shown} バイトを表示しています。",

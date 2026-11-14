@@ -204,9 +204,19 @@ describe("pages", () => {
     expect(fake.calls("GET", `/api/v1/repos/acme/demo/commits/${sha}/checks`)).toHaveLength(1);
   });
 
-  it.each(["en", "ja"] as const)("links a reused check and attempt to its source execution (%s)", async (language) => {
+  const REUSED_LABELS = {
+    en: { tree: "Reused from", paths: "Reused from (same contents of paths)" },
+    ja: { tree: "再利用元", paths: "再利用元（paths が同じ）" },
+  } as const;
+
+  it.each([
+    ["en", "tree"],
+    ["en", "paths"],
+    ["ja", "tree"],
+    ["ja", "paths"],
+  ] as const)("links a reused check and attempt to its source execution (%s, basis %s)", async (language, basis) => {
     const sha = "d".repeat(40);
-    const source = { attempt_id: "att_original", url: `${window.location.origin}/acme/demo/-/jobs/att_original`, sha: "e".repeat(40) };
+    const source = { attempt_id: "att_original", url: `${window.location.origin}/acme/demo/-/jobs/att_original`, sha: "e".repeat(40), basis };
     fakeApi({
       ...SHELL,
       [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "Same tree", author: "Test", authored_at: "2026-10-14T10:00:00.000Z", parents: [] }),
@@ -218,9 +228,11 @@ describe("pages", () => {
     });
     const user = userEvent.setup();
     renderApp(`/acme/demo/-/commits/${sha}`, language);
-    const label = language === "ja" ? "再利用元" : "Reused from";
-    const link = await screen.findByRole("link", { name: new RegExp(label) });
+    const label = REUSED_LABELS[language][basis];
+    const otherLabel = REUSED_LABELS[language][basis === "paths" ? "tree" : "paths"];
+    const link = await screen.findByRole("link", { name: label });
     expect(link).toHaveAttribute("href", "/acme/demo/-/jobs/att_original");
+    expect(screen.queryByText(otherLabel)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: source.sha.slice(0, 10) })).toHaveAttribute("href", `/acme/demo/-/commits/${source.sha}`);
     expect(link.querySelector("a")).toBeNull();
     expect(screen.getByRole("link", { name: language === "ja" ? "キャッシュの更新" : "Cache refresh" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_refresh");
@@ -229,6 +241,7 @@ describe("pages", () => {
     await user.click(screen.getByRole("button", { name: language === "ja" ? "チェック test を開く" : "Open check test" }));
     const drawer = await screen.findByRole("dialog", { name: /test/ });
     expect(await within(drawer).findByText(label)).toBeInTheDocument();
+    expect(within(drawer).queryByText(otherLabel)).not.toBeInTheDocument();
     expect(within(drawer).queryByText(reason)).not.toBeInTheDocument();
     expect(within(drawer).getByRole("link", { name: /att_original/ })).toHaveAttribute("href", "/acme/demo/-/jobs/att_original");
     expect(within(drawer).getByRole("link", { name: source.sha.slice(0, 10) })).toHaveAttribute("href", `/acme/demo/-/commits/${source.sha}`);

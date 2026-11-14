@@ -310,6 +310,7 @@ export const en = {
   "ci.cacheRefresh": "Cache refresh",
   "ci.cacheRefreshEffect": "This result does not affect checks or automatic updates.",
   "ci.reused": "Reused from",
+  "ci.reusedPaths": "Reused from (same contents of paths)",
   "ci.log": "Log",
   "ci.tailSize": "Show the last",
   "ci.truncated": "Showing the last {shown} of {total} bytes.",

@@ -6,7 +6,7 @@ import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/reac
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "../../api/endpoints";
-import type { Check, CheckSet, PathSkip, PullRequest } from "../../api/types";
+import type { Check, CheckSet, PathSkip, PullRequest, ReusedFrom } from "../../api/types";
 import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
 import { useChecks, useCommitChecks, useJob, useJobLog } from "../../query/hooks";
@@ -25,6 +25,9 @@ function toneOf(c: Pick<Check, "status" | "conclusion">): Tone {
   if (c.conclusion && FAILED.has(c.conclusion)) return "danger";
   return "neutral";
 }
+
+/** A paths reuse ran on a commit whose files outside the job's `paths` differ, so it is labeled apart. */
+const reusedLabel = (r: ReusedFrom) => (r.basis === "paths" ? "ci.reusedPaths" : "ci.reused");
 
 const ROLLUP_TONE: Record<CiRollup, Tone> = { passing: "success", failing: "danger", pending: "warning", not_registered: "warning", none: "neutral" };
 
@@ -214,7 +217,7 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
       {check.reused_from && (
         <Text size="xs" ml={24} mb={4}>
           <Link to={href.job(repo, check.reused_from.attempt_id)}>
-            {t("ci.reused")}
+            {t(reusedLabel(check.reused_from))}
           </Link>{" "}· <Sha repo={repo} value={check.reused_from.sha} />
         </Text>
       )}
@@ -305,7 +308,7 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
         <dd>{j.started_at ? <RunTime startedAt={j.started_at} finishedAt={j.finished_at} /> : "—"}</dd>
         {j.reused_from && (
           <>
-            <dt>{t("ci.reused")}</dt>
+            <dt>{t(reusedLabel(j.reused_from))}</dt>
             <dd>
               <Link to={href.job(repo, j.reused_from.attempt_id)}>
                 {j.reused_from.attempt_id}
