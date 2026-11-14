@@ -1070,9 +1070,9 @@ Each automatic gate pass can notify the webhook once its next action is
     reason in `details`;
   - a job of a superseded run that never got queued: `completed`, `cancelled`.
 - Checks with execution times appear first, by `started_at` ascending (or
-  `finished_at` for checks completed without starting). Untimed completed
-  checks follow. Queued Branvil attempts then follow the runner's current
-  claim order: priority class, reusable results first within the class, then
+  `finished_at` for checks completed without starting). Untimed in-progress
+  or completed checks follow. Queued Branvil attempts then follow the runner's
+  current claim order: priority class, reusable results first within the class, then
   admission sequence. Jobs awaiting admission follow those attempts, in the
   admission planner's current job order; checks without a local schedule,
   including upstream placeholders, retain their relative response order.
