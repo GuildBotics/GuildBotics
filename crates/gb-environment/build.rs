@@ -3,6 +3,9 @@
 //! The SDK does not fetch Windows assets: release builders must supply the
 //! pinned Windows msb.exe and libkrunfw.dll under MSB_HOME before compiling.
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_HOST").is_none() {
+        return;
+    }
     let home = std::env::var_os("MSB_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {

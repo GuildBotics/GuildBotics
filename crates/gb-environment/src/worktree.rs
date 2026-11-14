@@ -978,14 +978,29 @@ mod portable {
             outer.path().join("lock"),
         )
         .unwrap();
-        std::fs::rename(&host, outer.path().join("moved")).unwrap();
-        std::fs::create_dir(&host).unwrap();
-        assert_feedback(
-            &write_back(&copy, b"", b"").unwrap_err(),
-            &copy,
-            "refused",
-            "",
-        );
+        #[cfg(unix)]
+        {
+            std::fs::rename(&host, outer.path().join("moved")).unwrap();
+            std::fs::create_dir(&host).unwrap();
+            assert_feedback(
+                &write_back(&copy, b"", b"").unwrap_err(),
+                &copy,
+                "refused",
+                "",
+            );
+        }
+        #[cfg(windows)]
+        {
+            // The held root capability prevents replacement on Windows.
+            let moved = outer.path().join("moved");
+            let error = std::fs::rename(&host, &moved).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(32), "{error}");
+            assert!(host.is_dir());
+            assert!(!moved.exists());
+            write_back(&copy, b"", b"").unwrap();
+            drop(copy);
+            std::fs::rename(&host, moved).unwrap();
+        }
     }
     #[test]
     fn worktree_payload_limits_include_the_exact_boundary() {

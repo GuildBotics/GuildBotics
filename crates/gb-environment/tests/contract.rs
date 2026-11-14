@@ -113,6 +113,7 @@ fn network_is_closed_for_readonly_and_rejects_inconsistent_declarations() {
     assert!(!network.unrestricted);
     assert!(!network.local_network);
     assert_eq!(network.nameservers, ["1.1.1.1"]);
+    #[cfg(feature = "host")]
     network.policy().unwrap();
     write(
         &templates,

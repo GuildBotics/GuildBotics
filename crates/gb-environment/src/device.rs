@@ -189,14 +189,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
     device
 }
 
-pub fn registered_workspaces(data: &Path) -> Result<Vec<PathBuf>, String> {
-    match std::fs::read(data.join("workspaces.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|e| format!("Cannot read workspace registry: {e}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
-        Err(error) => Err(error.to_string()),
-    }
-}
+pub use crate::registered_workspaces;
 
 #[cfg(test)]
 mod tests {

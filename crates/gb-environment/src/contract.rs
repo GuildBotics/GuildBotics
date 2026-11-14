@@ -105,13 +105,16 @@ fn grant_problem(key: &'static str, name: &str, text: impl Into<String>) -> Gran
         sentence: Sentence::Key(key, vec![("path", name.into())]),
     }
 }
+fn rooted(name: &str) -> bool {
+    let path = Path::new(name);
+    path.has_root()
+        || matches!(path.components().next(), Some(Component::Prefix(_)))
+        || name.starts_with("\\\\")
+        || (name.as_bytes().get(1) == Some(&b':')
+            && matches!(name.as_bytes().get(2), Some(b'/' | b'\\')))
+}
 fn proposed_target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, GrantProblem> {
-    if !absolute
-        && (Path::new(name).is_absolute()
-            || name.starts_with("\\\\")
-            || (name.as_bytes().get(1) == Some(&b':')
-                && matches!(name.as_bytes().get(2), Some(b'/' | b'\\'))))
-    {
+    if !absolute && rooted(name) {
         return Err(grant_problem(
             "intelligences.agent_environment.grants.path_not_relative",
             name,
@@ -165,7 +168,7 @@ fn target(name: &str, home: &Path, absolute: bool) -> Result<PathBuf, String> {
         || (!absolute && name.contains('\\'))
         || name.contains("//")
         || name.contains('\0')
-        || (!absolute && path.is_absolute())
+        || (!absolute && rooted(name))
         || path
             .components()
             .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
@@ -572,7 +575,7 @@ pub fn network(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<crate::runtime::Network, Sentence> {
+) -> Result<crate::Network, Sentence> {
     network_reading(config, templates, read_only).map(|(network, _)| network)
 }
 
@@ -580,7 +583,7 @@ pub fn network_reading(
     config: &Path,
     templates: &Path,
     read_only: bool,
-) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
+) -> Result<(crate::Network, serde_json::Value), Sentence> {
     network_with_resolvers(config, templates, read_only, device_nameservers)
 }
 
@@ -589,7 +592,7 @@ fn network_with_resolvers(
     templates: &Path,
     read_only: bool,
     resolvers: impl FnOnce() -> Vec<String>,
-) -> Result<(crate::runtime::Network, serde_json::Value), Sentence> {
+) -> Result<(crate::Network, serde_json::Value), Sentence> {
     let own = config.join(gb_config::agent_environment::PATH);
     let path = if own.exists() {
         own
@@ -680,7 +683,7 @@ fn network_with_resolvers(
         _ => nameservers.join(", "),
     };
     let view = serde_json::json!({"network":{"mode": match policy.mode { Mode::Deny=>"deny", Mode::Allowlist=>"allowlist", Mode::Unrestricted=>"unrestricted" },"allowed_domains":policy.allowed_domains,"allow_local_network":policy.allow_local_network},"dns":{"declared":declared,"nameservers":nameservers,"problem":""}});
-    let network = crate::runtime::Network {
+    let network = crate::Network {
         unrestricted: !read_only && policy.mode == Mode::Unrestricted,
         domains: if read_only {
             vec![]
@@ -691,6 +694,7 @@ fn network_with_resolvers(
         host_ports: vec![],
         nameservers,
     };
+    #[cfg(feature = "host")]
     network.policy().map_err(Sentence::Text)?;
     Ok((network, view))
 }
@@ -1204,6 +1208,8 @@ mod frozen_tests {
         }
         for path in [
             "/etc",
+            "/etc/",
+            "C:/Users/x",
             "C:\\Users\\x",
             "",
             ".",
@@ -1211,12 +1217,21 @@ mod frozen_tests {
             "Documents/../secrets",
             "a//b",
             "./a",
-        ] {
+        ]
+        .into_iter()
+        .chain(std::iter::once("C:relative").filter(|_| cfg!(windows)))
+        {
             put(
                 &workspace,
                 SHARED,
                 &serde_json::json!({"documents":[{"path":path,"access":"read"}]}).to_string(),
             );
+            let shared: Shared = load(&workspace.join(SHARED)).unwrap();
+            assert!(
+                validate_names(&shared, &Local::default(), &home).is_err(),
+                "{path}"
+            );
+            assert!(target(path, &home, false).is_err(), "{path}");
             assert!(
                 resolve(&workspace, &home, &[], false, true).is_err(),
                 "{path}"
@@ -1270,7 +1285,7 @@ mod frozen_tests {
     fn preflight_enumerates_open_grants_and_existing_parents_before_creating_anything() {
         let dir = tempfile::tempdir().unwrap();
         // The probe sees resolved paths; macOS temporary directories sit behind a link.
-        let root = dir.path().canonicalize().unwrap();
+        let root = gb_base::host_path::normalize(dir.path()).unwrap();
         let home = root.join("home");
         std::fs::create_dir(&home).unwrap();
         let workspace = root.join("workspace");
@@ -1288,7 +1303,7 @@ mod frozen_tests {
             }
         })
         .unwrap_err();
-        assert!(error.contains("permission denied"));
+        assert!(error.contains("permission denied"), "{error}");
         assert!(!home.join("Documents/project").exists());
         put(&workspace, SHARED, "{}");
         for scope in [SHARED, LOCAL] {

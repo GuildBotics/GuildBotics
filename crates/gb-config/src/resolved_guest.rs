@@ -1098,11 +1098,8 @@ mod tests {
             "fixture"
         );
         assert_eq!(
-            data["commands"]["probe"],
-            config
-                .join("commands/probe.ja.py")
-                .to_string_lossy()
-                .to_string()
+            Path::new(data["commands"]["probe"].as_str().unwrap()),
+            config.join("commands/probe.ja.py")
         );
         put(
             &config,

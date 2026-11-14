@@ -11,18 +11,21 @@ publish = false
 # The integration tests are modules of tests/main.rs.
 autotests = false
 
+[features]
+default = ["hub"]
+hub = ["dep:branvil", "gb-server/server", "gb-environment/host"]
 [dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1.0.154"
 anyhow = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-branvil = { path = "../branvil" }
+branvil = { path = "../branvil", optional = true }
 crossterm = "0.29"
 clap = { version = "4.6.7", features = ["derive"] }
-gb-server = { path = "../gb-server" }
+gb-server = { path = "../gb-server", default-features = false }
 gb-base = { path = "../gb-base" }
-gb-environment = { path = "../gb-environment" }
+gb-environment = { path = "../gb-environment", default-features = false }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1"

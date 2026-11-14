@@ -636,3 +636,34 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_credential_tests {
+    #[test]
+    fn windows_consent_and_git_credentials_round_trip() {
+        if std::env::var_os("CI").is_none() {
+            return;
+        }
+        for service in ["guildbotics-server-test", "GuildBotics/branvil-git-test"] {
+            let account = uuid::Uuid::new_v4().to_string();
+            super::keep_os_credential(service, &account, "test-only-value-同意").unwrap();
+            assert_eq!(
+                super::get_os_credential(service, &account)
+                    .unwrap()
+                    .as_deref(),
+                Some("test-only-value-同意")
+            );
+            let entry = super::system_entry(service, &account).unwrap();
+            assert_eq!(
+                entry.get_secret().unwrap(),
+                "test-only-value-同意".as_bytes()
+            );
+            entry.delete_credential().unwrap();
+            assert!(
+                super::get_os_credential(service, &account)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}

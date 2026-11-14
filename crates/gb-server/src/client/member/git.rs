@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use super::{Client, MemberRequest, size};
-use crate::member::Phase;
+use crate::member_protocol::Phase;
 
 struct Checkout(PathBuf);
 

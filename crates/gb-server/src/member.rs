@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 pub use gb_member::command::{grammar, usage};
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use std::{
     future::Future,
@@ -22,39 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_METADATA: usize = 4 << 20;
 const MAX_BUNDLE: usize = 1 << 30;
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    Identity,
-    Record,
-    Known,
-    Push,
-    Tracking,
-}
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemberRequest {
-    pub version: String,
-    pub workspace_id: String,
-    pub arguments: Vec<String>,
-    #[serde(default)]
-    pub stdin: String,
-    #[serde(default)]
-    pub interactive_host: String,
-    #[serde(default)]
-    pub interactive_thread_key: String,
-    pub phase: Option<Phase>,
-    #[serde(default)]
-    pub data: serde_json::Map<String, Value>,
-}
-#[derive(Default, Deserialize, Serialize)]
-pub struct Result {
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-    #[serde(flatten)]
-    pub metadata: serde_json::Map<String, Value>,
-}
+pub use crate::member_protocol::{MemberRequest, Phase, Result};
 pub type Execution<'a> = Pin<Box<dyn Future<Output = Result> + Send + 'a>>;
 /// The application supplies the member command grammar and service assembly.
 /// Transport metadata can never assign a run, guest, lease, or identity.

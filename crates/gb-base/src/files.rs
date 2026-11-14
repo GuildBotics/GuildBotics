@@ -57,11 +57,11 @@ impl FileLock {
                 return Ok(Some(FileLock(file)));
             }
             let error = std::io::Error::last_os_error();
-            return if error.raw_os_error() == Some(33) {
+            if error.raw_os_error() == Some(33) {
                 Ok(None)
             } else {
                 Err(error)
-            };
+            }
         }
         #[cfg(not(windows))]
         match file.try_lock() {

@@ -270,12 +270,12 @@ mod tests {
             config: "/w".into(),
             templates: "/t".into(),
         };
-        let candidates: Vec<String> = roots
+        let candidates: Vec<PathBuf> = roots
             .candidates("x", "ja", Some("aiko"))
             .unwrap()
             .iter()
             .take(12)
-            .map(|p| p.to_string_lossy().into_owned())
+            .cloned()
             .collect();
         assert_eq!(
             candidates,
@@ -293,6 +293,7 @@ mod tests {
                 "/w/commands/x.md",
                 "/t/commands/x.md",
             ]
+            .map(PathBuf::from)
         );
         let named = roots.candidates("x.py", "", None).unwrap();
         assert_eq!(

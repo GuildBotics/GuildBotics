@@ -7,27 +7,60 @@
 //! provider endpoints. Read-only commands use a private working directory;
 //! writing commands use an authorized mount or a checked copy with write-back.
 
+#[cfg(feature = "host")]
 pub mod broker;
 pub mod configuration;
 pub mod contract;
+#[cfg(feature = "host")]
 pub mod device;
+#[cfg(feature = "host")]
 pub mod gateway;
+#[cfg(feature = "host")]
 pub mod guest_process;
+#[cfg(feature = "host")]
 pub mod image;
+#[cfg(feature = "host")]
 pub mod image_archive;
 pub mod language;
+#[cfg(feature = "host")]
 pub mod recipe;
+#[cfg(feature = "host")]
 pub mod runtime;
+#[cfg(feature = "host")]
 pub mod snapshot;
 pub mod worktree;
 
+#[cfg(feature = "host")]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "host")]
 use gb_wire::{CommandAccess, CommandFacts, CommandReply, CommandRequest, InspectsItem};
 
 pub use configuration::Configuration;
-pub use runtime::{Mount, load_image, placed_files};
+#[cfg(feature = "host")]
+pub use runtime::{load_image, placed_files};
+
+/// One mount: a bound host directory or a private directory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mount {
+    pub guest: String,
+    pub host: Option<PathBuf>,
+    pub readonly: bool,
+    /// The write budget of a bound directory, or the capacity of a private
+    /// disk, in MiB. Without it, binds use the runtime's 4 GiB default and
+    /// private directories use tmpfs.
+    pub quota_mib: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Network {
+    pub unrestricted: bool,
+    pub domains: Vec<String>,
+    pub host_ports: Vec<u16>,
+    pub local_network: bool,
+    pub nameservers: Vec<String>,
+}
 
 /// Where the code every microVM mounts is inside it.
 pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
@@ -37,6 +70,7 @@ pub const CODE_ROOT: &str = "/opt/guildbotics/code/guildbotics";
 /// host's home is linked from the same place under this one.
 pub const GUEST_HOME: &str = "/opt/guildbotics/home";
 /// Private run storage and its lifetime lease.
+#[cfg(feature = "host")]
 pub mod run_files;
 /// GuildBotics' own roots in the microVM: its code, its venv, the home and
 /// its run state. No host path is taken over or under them.
@@ -98,6 +132,7 @@ pub struct Host {
 /// One command to run: who runs it, as which run and work, the file the host
 /// resolved for it in the run's copy of the configuration, what it declared,
 /// and its arguments, working directory (as the host spells it) and input.
+#[cfg(feature = "host")]
 pub struct Command {
     pub files: Option<std::sync::Arc<run_files::Lease>>,
     pub client_copy: bool,
@@ -124,6 +159,7 @@ pub struct Command {
 
 /// What a command's microVM is made of, and what its entry is given.
 #[derive(Debug, PartialEq)]
+#[cfg(feature = "host")]
 pub struct Shape {
     pub copy: Option<worktree::Copy>,
     pub mounts: Vec<Mount>,
@@ -134,6 +170,7 @@ pub struct Shape {
 }
 
 /// Per-command host windows and non-secret data, owned until the VM stops.
+#[cfg(feature = "host")]
 pub struct Session {
     pub guest_process: guest_process::Channel,
     pub window_url: String,
@@ -146,6 +183,7 @@ pub struct Session {
 
 /// Runs `command` of the workspace `workspace` in a microVM of its own, which
 /// is gone when this returns, and says how the command ended.
+#[cfg(feature = "host")]
 pub async fn run(
     host: &Host,
     workspace: &Path,
@@ -260,6 +298,7 @@ pub async fn run(
 /// The microVM `command` runs in, and what its entry is given, told the
 /// host's UI `language`. Every host path is taken as the host spells it
 /// (macOS's `/tmp` is `/private/tmp`), and so is it inside the microVM.
+#[cfg(feature = "host")]
 pub fn shape(
     host: &Host,
     workspace: &Path,
@@ -459,6 +498,7 @@ pub fn shape(
 /// The workspace's own directories a command inspecting `scopes` mounts,
 /// read-only at their own paths, by name: those that exist. The
 /// configuration is the run's copy of it.
+#[cfg(feature = "host")]
 fn inspected_mounts(
     host: &Host,
     workspace: &Path,
@@ -505,12 +545,14 @@ fn inspected_mounts(
 }
 
 /// `path` as the host spells it.
+#[cfg(feature = "host")]
 fn normalized(path: &Path) -> Result<PathBuf, Failure> {
     gb_base::host_path::normalize(path).map_err(|e| Failure::Command(Sentence::Text(e.to_string())))
 }
 
 /// A directory to bind, every component of which opens as a directory
 /// without following a link.
+#[cfg(feature = "host")]
 fn checked_directory(path: &Path) -> Result<PathBuf, Failure> {
     gb_base::host_path::directory(path, false)
         .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))
@@ -519,6 +561,7 @@ fn checked_directory(path: &Path) -> Result<PathBuf, Failure> {
 /// Where a command file is inside the microVM: a packaged one in the code
 /// every microVM mounts, one of the run's copy of the configuration at the
 /// configuration's own path, any other at its own path.
+#[cfg(feature = "host")]
 pub fn command_path(host: &Host, config: &Configuration, path: &Path) -> Result<String, Failure> {
     if path.starts_with(&host.package) {
         code_path(host, path)
@@ -528,6 +571,7 @@ pub fn command_path(host: &Host, config: &Configuration, path: &Path) -> Result<
 }
 
 /// Where a file of the package is inside the microVM.
+#[cfg(feature = "host")]
 fn code_path(host: &Host, path: &Path) -> Result<String, Failure> {
     let relative = path.strip_prefix(&host.package).expect("under the package");
     let relative = relative
@@ -585,4 +629,71 @@ fn unnamed(path: &Path) -> Failure {
         "'{}' cannot be named inside the environment.",
         path.display()
     )))
+}
+
+pub fn registered_workspaces(data: &Path) -> Result<Vec<PathBuf>, String> {
+    match std::fs::read(data.join("workspaces.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Cannot read workspace registry: {e}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use std::path::Path;
+    #[test]
+    fn guest_paths_keep_posix_spelling_and_map_windows_drives() {
+        for (path, guest) in [
+            ("/Users/x/repo", "/Users/x/repo"),
+            ("/Users/x/./repo", "/Users/x/./repo"),
+            (r"C:\tmp\gb\repo", "/c/tmp/gb/repo"),
+            (r"d:\", "/d"),
+            ("C:/work", "/c/work"),
+            (r"D:\Work Area\資料", "/d/Work Area/資料"),
+        ] {
+            assert_eq!(super::guest_path(Path::new(path)).unwrap(), guest);
+        }
+    }
+
+    #[test]
+    fn host_paths_never_reach_what_the_microvm_keeps_for_itself() {
+        for path in [
+            "/",
+            "/opt",
+            "/opt/guildbotics",
+            "/opt/guildbotics/home",
+            "/opt/guildbotics/home/work",
+            "/opt/guildbotics/venv/",
+            "/opt//guildbotics/home",
+            "/opt/./guildbotics",
+            "/run",
+            "/run/guildbotics/resolved",
+        ] {
+            assert!(
+                super::guest_path(Path::new(path)).is_err(),
+                "{path} is admitted"
+            );
+        }
+        for path in ["/opt/homebrew", "/opt/guildbotics-other", "/runner"] {
+            assert_eq!(super::guest_path(Path::new(path)).unwrap(), path);
+        }
+    }
+
+    #[test]
+    fn relative_and_network_paths_have_no_guest_path() {
+        for path in [
+            "relative",
+            "",
+            "C:relative",
+            r"\work",
+            r"\\srv\share\x",
+            "//srv/share/x",
+            r"\\?\C:\work",
+            r"\\.\device",
+        ] {
+            assert!(super::guest_path(Path::new(path)).is_err(), "{path}");
+        }
+    }
 }

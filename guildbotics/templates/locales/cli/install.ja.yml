@@ -1,5 +1,5 @@
 ja:
-  home_required: "GuildBotics CLI の導入前に HOME を設定してください。"
+  home_required: "GuildBotics CLI の導入前に HOME（Windows は USERPROFILE）を設定してください。"
   cli: "CLI を %{path} に導入しました。"
   skill: "%{tool} 用のスキルを %{path} に導入しました。"
   kept: "%{tool} 用のスキルは %{path} にあるものを保持しました。"

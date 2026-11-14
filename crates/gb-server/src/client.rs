@@ -11,12 +11,14 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{auth, i18n};
+use crate::{auth_protocol as auth, i18n};
 
 pub mod connect;
+#[cfg(feature = "server")]
 pub mod diagnostics;
 mod git_credentials;
 pub mod member;
+#[cfg(feature = "server")]
 pub mod secrets;
 mod writeback;
 
@@ -100,10 +102,13 @@ impl OwnerClient {
     }
 
     /// Both initial submission and explicit full-history retry may prepare history before admission.
-    fn command_submission(&self, request: &crate::commands::RunRequest) -> reqwest::RequestBuilder {
+    fn command_submission(
+        &self,
+        request: &crate::command_protocol::RunRequest,
+    ) -> reqwest::RequestBuilder {
         self.request(reqwest::Method::POST, "/commands/run")
             .json(request)
-            .timeout(crate::commands::HISTORY_TIMEOUT.saturating_add(TIMEOUT))
+            .timeout(crate::command_protocol::HISTORY_TIMEOUT.saturating_add(TIMEOUT))
     }
 
     pub async fn post(
@@ -167,8 +172,8 @@ pub async fn run_command(
 ) -> anyhow::Result<String> {
     let language = language().await;
     let (owner, data, local) = command_server(language).await?;
-    let home =
-        PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?);
+    let home = gb_base::home::user_home()
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.workspace.home_required", &[])))?;
     run_at(
         spec,
         args,
@@ -228,7 +233,7 @@ async fn run_at(
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.run.invalid_output", &[])))?
         .to_owned();
     let source = gb_base::host_path::normalize(&cwd.unwrap_or(std::env::current_dir()?))?;
-    let registered = gb_environment::device::registered_workspaces(&data).map_err(|reason| {
+    let registered = gb_environment::registered_workspaces(&data).map_err(|reason| {
         anyhow::anyhow!(i18n::t(
             language,
             "cli.run.worktree_refused",
@@ -259,7 +264,7 @@ async fn run_at(
         !name.is_empty(),
         i18n::t(language, "cli.run.empty_command", &[])
     );
-    let mut request = crate::commands::RunRequest {
+    let mut request = crate::command_protocol::RunRequest {
         preflight: true,
         remotes: Default::default(),
         upload: None,
@@ -279,6 +284,7 @@ async fn run_at(
                 .map_err(|e| anyhow::anyhow!(crate::i18n::say(e.sentence(), language)))?
                 .into()
         }),
+        #[cfg(feature = "server")]
         remote_copy: false,
         expected_workspace: Some(workspace_id),
         request_id: Some(id.clone()),
@@ -614,7 +620,11 @@ async fn answer_git_credential(
 /// A single-use link into the screens of the server on this machine's port,
 /// or the sentence saying why there is none.
 pub async fn entry_link() -> Result<String, String> {
-    let port = crate::server::port().map_err(|e| e.to_string())?;
+    entry_link_for("/-/guildbotics/").await
+}
+
+pub async fn entry_link_for(next: &str) -> Result<String, String> {
+    let port = crate::endpoint::port().map_err(|e| e.to_string())?;
     let data = gb_base::home::data().map_err(|e| format!("{e:#}"))?;
     let language = language().await;
     let owner = entry_client(&data, port, language, connect::credential)
@@ -623,7 +633,11 @@ pub async fn entry_link() -> Result<String, String> {
         .ok_or_else(|| i18n::t(language, "cli.server.unreachable", &[]))?;
     let refused = |reason: String| i18n::t(language, "cli.server.refused", &[("reason", &reason)]);
     let answer = owner
-        .post("/session/links", Some(&json!({})), Some(TIMEOUT))
+        .post(
+            "/session/links",
+            Some(&json!({"next": next})),
+            Some(TIMEOUT),
+        )
         .await
         .map_err(|e| refused(e.to_string()))?;
     answer["url"]
@@ -651,13 +665,13 @@ async fn entry_client(
 /// The boolean indicates that workspace selection belongs to this machine.
 async fn cli_server(data: &Path, language: &'static str) -> anyhow::Result<(OwnerClient, bool)> {
     let unavailable = || anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[]));
-    if let Some(running) = crate::server::running(data, language)? {
+    if let Some(running) = crate::endpoint::running(data, language)? {
         let owner = OwnerClient::connect(data, running.port, language)
             .await?
             .ok_or_else(unavailable)?;
         return Ok((owner, true));
     }
-    let client = consent_client(crate::server::port()?, language, connect::credential).await?;
+    let client = consent_client(crate::endpoint::port()?, language, connect::credential).await?;
     Ok((client, false))
 }
 
@@ -723,6 +737,7 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn consent_only_run_writes_back_and_resumes_without_a_workspace() {
         use super::*;
@@ -746,7 +761,7 @@ mod tests {
                 .await
                 .unwrap();
             let port = listener.local_addr().unwrap().port();
-            let auth = Arc::new(auth::ServerAuth::open(hub.path(), port).unwrap());
+            let auth = Arc::new(crate::auth::ServerAuth::open(hub.path(), port).unwrap());
             let token = auth.test_consent();
             let receipt = Arc::new(Mutex::new(String::new()));
             let fail = Arc::new(AtomicBool::new(interrupted));

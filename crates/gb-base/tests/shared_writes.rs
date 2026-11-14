@@ -1,7 +1,4 @@
-use gb_base::{
-    files::{self, FileLock},
-    shared_writes::*,
-};
+use gb_base::{files::FileLock, shared_writes::*};
 use std::{fs, path::Path, time::Duration};
 
 fn writes(root: &Path) -> SharedWrites {
@@ -270,7 +267,7 @@ fn existing_symlink_ancestors_decide_the_lock_scope() {
             .is::<SharedWriteBusyError>()
     );
     assert_eq!(
-        files::dump_shared_json(&serde_json::json!({"z":{"b":1,"a":"名"},"a":0})),
+        gb_base::files::dump_shared_json(&serde_json::json!({"z":{"b":1,"a":"名"},"a":0})),
         "{\n  \"a\": 0,\n  \"z\": {\n    \"a\": \"名\",\n    \"b\": 1\n  }\n}\n"
     );
 }

@@ -24,6 +24,7 @@ fn install(home: &Path, copilot: &Path) {
     );
 }
 
+#[cfg(feature = "hub")]
 #[test]
 fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() {
     let dir = tempfile::tempdir().unwrap();

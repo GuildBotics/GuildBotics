@@ -1,5 +1,5 @@
 # The checks of every push and pull request. GitHub Actions runs only what
-# this runner cannot: macOS Clippy
+# this runner cannot: macOS Clippy and Windows client tests
 # (.github/workflows/ci.yml), and Branvil E2E
 # (.github/workflows/branvil-e2e.yml).
 # The runner supplies the image version, CPUs, memory and network access.
@@ -114,6 +114,7 @@ image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu -- -D warnings",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
@@ -121,6 +122,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 [[jobs]]
 name = "rust-test"
 paths = [
+  ".github/workflows/ci.yml",
   "crates/*/src/**",
   "crates/*/tests/**",
   "crates/*/examples/**",
@@ -145,6 +147,7 @@ image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --workspace --exclude branvil --exclude loopback-auth",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }

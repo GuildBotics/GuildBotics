@@ -18,9 +18,7 @@ const EXECUTABLE: &str = "guildbotics.exe";
 
 pub async fn run() -> anyhow::Result<()> {
     let language = client::language().await;
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    let home = gb_base::home::user_home()
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.install.home_required", &[])))?;
     let root = gb_base::home::machine_root()?;
     let _install = FileLock::hold(&root.join("install.lock"), SHARED_WRITE_TIMEOUT)?;
@@ -36,6 +34,8 @@ pub async fn run() -> anyhow::Result<()> {
     install_binary(&std::env::current_exe()?, &managed)?;
     #[cfg(unix)]
     install_on_path(&home.join(".local/bin/guildbotics"), &managed)?;
+    #[cfg(windows)]
+    windows_path(&bin)?;
     println!(
         "{}",
         i18n::t(
@@ -240,5 +240,98 @@ mod tests {
     fn the_content_hash_is_fnv_1a_64() {
         assert_eq!(content_hash(b""), "cbf29ce484222325");
         assert_eq!(content_hash(b"a"), "af63dc4c8601ec8c");
+    }
+}
+
+/// Preserve the user's existing entries and compare Windows path spellings.
+#[cfg(any(windows, test))]
+fn user_path(current: &str, bin: &str) -> Option<String> {
+    let normalize = |value: &str| {
+        value
+            .trim()
+            .trim_matches('"')
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    if current
+        .split(';')
+        .any(|entry| normalize(entry) == normalize(bin))
+    {
+        None
+    } else if current.is_empty() {
+        Some(bin.into())
+    } else {
+        Some(format!("{};{bin}", current.trim_end_matches(';')))
+    }
+}
+
+#[cfg(windows)]
+fn windows_path(bin: &Path) -> anyhow::Result<()> {
+    use std::process::Command;
+    let read = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::Write([Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))"])
+        .output()?;
+    anyhow::ensure!(
+        read.status.success(),
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+    let current = String::from_utf8(read.stdout)?;
+    if let Some(updated) = user_path(&current, &bin.to_string_lossy()) {
+        let write = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }; $key.SetValue('Path', $env:GUILDBOTICS_INSTALL_PATH, $kind)"])
+            .env("GUILDBOTICS_INSTALL_PATH", updated)
+            .output()?;
+        anyhow::ensure!(
+            write.status.success(),
+            "{}",
+            String::from_utf8_lossy(&write.stderr)
+        );
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn SendMessageTimeoutW(
+                window: isize,
+                message: u32,
+                wparam: usize,
+                lparam: isize,
+                flags: u32,
+                timeout: u32,
+                result: *mut usize,
+            ) -> isize;
+        }
+        let environment: Vec<u16> = "Environment\0".encode_utf16().collect();
+        // SAFETY: the terminated UTF-16 buffer stays alive through this bounded
+        // broadcast. Receivers reread the user's environment for new processes.
+        unsafe {
+            SendMessageTimeoutW(
+                0xffff,
+                0x1a,
+                0,
+                environment.as_ptr() as isize,
+                2,
+                1000,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod path_tests {
+    #[test]
+    fn windows_path_preserves_entries_and_is_idempotent() {
+        let bin = r"C:\Users\Person\.guildbotics\bin";
+        assert_eq!(super::user_path("", bin), Some(bin.into()));
+        assert_eq!(
+            super::user_path(r"%SystemRoot%\bin;D:\Tools;", bin),
+            Some(format!(r"%SystemRoot%\bin;D:\Tools;{bin}"))
+        );
+        assert_eq!(
+            super::user_path(r"D:\Tools;C:/USERS/Person/.guildbotics/bin/", bin),
+            None
+        );
+        assert_eq!(super::user_path(&format!("\"{bin}\""), bin), None);
     }
 }

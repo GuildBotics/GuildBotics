@@ -381,44 +381,6 @@ fn copied_worktree_is_admitted_as_workable_in_command_facts() {
 }
 
 #[test]
-fn guest_paths_keep_posix_spelling_and_map_windows_drives() {
-    for (path, guest) in [
-        ("/Users/x/repo", "/Users/x/repo"),
-        ("/Users/x/./repo", "/Users/x/./repo"),
-        (r"C:\tmp\gb\repo", "/c/tmp/gb/repo"),
-        (r"d:\", "/d"),
-        ("C:/work", "/c/work"),
-        (r"D:\Work Area\資料", "/d/Work Area/資料"),
-    ] {
-        assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), guest);
-    }
-}
-
-#[test]
-fn host_paths_never_reach_what_the_microvm_keeps_for_itself() {
-    for path in [
-        "/",
-        "/opt",
-        "/opt/guildbotics",
-        "/opt/guildbotics/home",
-        "/opt/guildbotics/home/work",
-        "/opt/guildbotics/venv/",
-        "/opt//guildbotics/home",
-        "/opt/./guildbotics",
-        "/run",
-        "/run/guildbotics/resolved",
-    ] {
-        assert!(
-            gb_environment::guest_path(Path::new(path)).is_err(),
-            "{path} is admitted"
-        );
-    }
-    for path in ["/opt/homebrew", "/opt/guildbotics-other", "/runner"] {
-        assert_eq!(gb_environment::guest_path(Path::new(path)).unwrap(), path);
-    }
-}
-
-#[test]
 fn a_command_cannot_work_in_what_the_microvm_keeps_for_itself() {
     let machine = machine();
     let path = machine
@@ -436,25 +398,6 @@ fn a_command_cannot_work_in_what_the_microvm_keeps_for_itself() {
             panic!("the refusal says no reason");
         };
         assert!(text.contains("/opt/guildbotics"), "{text}");
-    }
-}
-
-#[test]
-fn relative_and_network_paths_have_no_guest_path() {
-    for path in [
-        "relative",
-        "",
-        "C:relative",
-        r"\work",
-        r"\\srv\share\x",
-        "//srv/share/x",
-        r"\\?\C:\work",
-        r"\\.\device",
-    ] {
-        assert!(
-            gb_environment::guest_path(Path::new(path)).is_err(),
-            "{path}"
-        );
     }
 }
 

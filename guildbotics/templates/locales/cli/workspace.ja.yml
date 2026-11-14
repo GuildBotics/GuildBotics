@@ -1,5 +1,5 @@
 ja:
-  home_required: "ワークスペースを選択する前に HOME を設定してください。"
+  home_required: "ワークスペースを選択する前に HOME（Windows は USERPROFILE）を設定してください。"
   not_configured: "使用するワークスペースが設定されていません。`guildbotics workspace use <path>` を実行するか、GuildBotics の画面で選択してください。"
   selected: "ワークスペース: %{workspace}\n設定ディレクトリ: %{config_dir}\n設定ディレクトリの有無: %{exists}\n状態ファイル: %{state_file}"
   missing: "ワークスペース: 未設定\n状態ファイル: %{state_file}"

@@ -27,7 +27,7 @@ pub(super) fn credential(port: u16) -> Option<String> {
 
 pub async fn run(open: impl FnOnce(&str)) -> anyhow::Result<()> {
     let language = super::language().await;
-    let port = crate::server::port()?;
+    let port = crate::endpoint::port()?;
     let device = gb_workspace::identity::ensure_device_identity(&gb_base::home::data()?)?;
     let name = client_name(&device.display_name);
     let token = connect_to(port, &name, language, open).await?;
@@ -104,7 +104,7 @@ async fn connect_to(
         let reply: Value = super::checked(call.send().await?).await?.json().await?;
         reply["token"]
             .as_str()
-            .filter(|token| crate::auth::parse_token(token).is_some())
+            .filter(|token| crate::auth_protocol::parse_token(token).is_some())
             .map(str::to_owned)
             .ok_or_else(|| anyhow::anyhow!(text("cli.server.invalid_token")))
     }

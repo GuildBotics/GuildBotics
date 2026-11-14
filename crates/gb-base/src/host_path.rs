@@ -36,7 +36,7 @@ impl std::error::Error for PathProblem {}
 /// Expands a leading `~` using the caller's home directory.
 pub fn expand_home(path: &Path) -> PathBuf {
     match path.strip_prefix("~") {
-        Ok(rest) => match std::env::var_os("HOME") {
+        Ok(rest) => match std::env::var_os(crate::home::USER_HOME_ENV) {
             Some(home) if !home.is_empty() => PathBuf::from(home).join(rest),
             _ => path.to_path_buf(),
         },
@@ -219,7 +219,7 @@ mod tests {
             normalize(Path::new("/x/../y")),
             Err(PathProblem::Invalid(_))
         ));
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let home = PathBuf::from(std::env::var_os(crate::home::USER_HOME_ENV).unwrap());
         assert_eq!(
             normalize(Path::new("~/w")).unwrap(),
             os_alias(home.join("w"))
