@@ -227,14 +227,17 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
     let marker = f
         .data()
         .join("agent_environment/claude/authentication-failed");
-    for failed in [true, false, true, false] {
+    for (language, failed) in ["en", "ja"]
+        .into_iter()
+        .flat_map(|language| [true, false, true, false].map(|failed| (language, failed)))
+    {
         if failed {
             f.write(&marker, "");
         } else {
             std::fs::remove_file(&marker).unwrap();
         }
         let view =
-            crate::environment::status_with(&host, &f.workspace(), "en", f.keys.as_ref(), true)
+            crate::environment::status_with(&host, &f.workspace(), language, f.keys.as_ref(), true)
                 .await
                 .unwrap();
         let tool = view["tools"]
@@ -250,7 +253,9 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
             .iter()
             .filter(|p| p["setting"] == "tool" && p["slot"] == "claude")
             .collect();
-        let a = f.get("/system-alerts").await;
+        let (_, a) = f
+            .call_in(language, "GET", "/system-alerts", Value::Null)
+            .await;
         let tool_alerts: Vec<_> = a["alerts"]
             .as_array()
             .unwrap()
@@ -263,11 +268,13 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
             assert_eq!(tool_problems[0]["reason"], tool["problem"]);
             assert_eq!(tool_alerts[0]["reason"], tool["problem"]);
             assert_eq!(tool_alerts[0]["person_id"], "");
-            assert!(
-                tool["problem"]
-                    .as_str()
-                    .unwrap()
-                    .contains(tool["login_command"].as_str().unwrap())
+            assert_eq!(
+                tool["problem"],
+                crate::i18n::t(
+                    language,
+                    "intelligences.agent_environment.tool.authentication_failed_browser",
+                    &[("tool", "Claude Code")]
+                )
             );
         }
     }
