@@ -272,7 +272,14 @@ fn main() -> ExitCode {
                         String::from_utf8_lossy(&install.stdout),
                         String::from_utf8_lossy(&install.stderr)
                     );
-                    anyhow::ensure!(install.status.success(), "skill installation failed");
+                    anyhow::ensure!(
+                        install.status.success(),
+                        gb_server::i18n::t(
+                            block(async { Ok(gb_server::client::language().await) })?,
+                            "cli.server.update_skills_failed",
+                            &[]
+                        )
+                    );
                     let status = std::process::Command::new(executable)
                         .args(std::env::args_os().skip(1))
                         .status()?;

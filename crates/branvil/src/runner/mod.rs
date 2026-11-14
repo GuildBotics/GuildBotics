@@ -1692,7 +1692,7 @@ esac
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn reuse_skips_source_and_vm_but_digest_changes_and_retry_execute() {
-        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
+        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\n").await;
         let runner = Runner::new(
             Api::new(&s.url, &s.runner_token),
             s.dir.path().join("runner"),
@@ -1726,26 +1726,11 @@ esac
         let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
         assert!(checks[0].succeeded());
         assert!(checks[0].details.is_none());
-        assert_eq!(checks[0].artifact_names, vec!["report"]);
+        assert!(checks[0].artifact_names.is_empty());
         assert_eq!(checks[0].reused_from.as_ref().unwrap().attempt_id, first.id);
         assert_eq!(
             checks[0].reused_from.as_ref().unwrap().basis,
             crate::ci::queue::Basis::Tree
-        );
-        let response = s
-            .http
-            .get(format!(
-                "{}/api/v1/repos/acme%2Fdemo/commits/{sha}/artifacts/report",
-                s.url
-            ))
-            .bearer_auth(&s.owner)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        assert_eq!(
-            response.bytes().await.unwrap().as_ref(),
-            std::fs::read(s.app.ci.artifact_path(&first.id, "report")).unwrap()
         );
         let view: serde_json::Value = s
             .http
@@ -1766,7 +1751,7 @@ esac
             view["reused_from"]["url"],
             format!("{}/acme/demo/-/jobs/{}", s.url, first.id)
         );
-        assert_eq!(view["artifact_names"], serde_json::json!(["report"]));
+        assert_eq!(view["artifact_names"], serde_json::json!([]));
         assert!(view["details"].is_null());
 
         fake.changed_image.store(true, Ordering::SeqCst);
@@ -1803,46 +1788,32 @@ esac
             "{retry_log}"
         );
         assert_eq!(fake.ran.lock().unwrap().len(), 3);
+    }
 
-        // Reusing the result never extends the original files' retention.
-        // Prune every actual source, so an old tree cannot reuse another one.
-        let sources = [first.clone(), changed, retried];
-        s.app
-            .store
-            .write(move |w| {
-                for mut expired in sources {
-                    expired.finished_at =
-                        Some(crate::ci::queue::earlier(&crate::util::now(), 31 * 86_400));
-                    w.put(
-                        crate::store::CI_ATTEMPTS,
-                        &crate::ci::queue::Attempt::key(&expired.id),
-                        &expired,
-                    )?;
-                }
-                Ok(())
-            })
-            .await
-            .unwrap();
-        crate::ci::files::apply_retention(&s.app).await.unwrap();
-        assert!(
-            s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks[0]
-                .artifact_names
-                .is_empty()
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn artifact_jobs_execute_each_commit_and_keep_retention_per_execution() {
+        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
+        let runner = Runner::new(
+            Api::new(&s.url, &s.runner_token),
+            s.dir.path().join("runner"),
+            None,
+            ExecutorConfig::default(),
         );
-        let view: serde_json::Value = s
-            .http
-            .get(format!(
-                "{}/api/v1/repos/acme%2Fdemo/jobs/{}",
-                s.url, reused.id
-            ))
-            .bearer_auth(&s.owner)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(view["artifact_names"], serde_json::json!([]));
+        let fake = Fake::new();
+        let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+        runner.once(&fake).await.unwrap();
+        let first = result_of(&s, &first_sha).await;
+        let sha = empty_main(&s, "same tree").await;
+        runner.once(&fake).await.unwrap();
+        let current = result_of(&s, &sha).await;
+        assert!(current.reused_from.is_none());
+        assert_eq!(fake.ran.lock().unwrap().len(), 2);
+        let log = s.app.ci.log_tail(&current.id, 1 << 20).await.unwrap().0;
+        assert!(log.contains("source fetched"), "{log}");
+        let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
+        assert!(checks[0].succeeded());
+        assert!(checks[0].reused_from.is_none());
+        assert_eq!(checks[0].artifact_names, vec!["report"]);
         let response = s
             .http
             .get(format!(
@@ -1853,12 +1824,31 @@ esac
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), 404);
-        let sha = empty_main(&s, "same tree after retention").await;
-        runner.once(&fake).await.unwrap();
-        let fresh = result_of(&s, &sha).await;
-        assert!(fresh.reused_from.is_none());
-        assert_eq!(fake.ran.lock().unwrap().len(), 4);
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.bytes().await.unwrap().as_ref(),
+            std::fs::read(s.app.ci.artifact_path(&current.id, "report")).unwrap()
+        );
+
+        // Expiring the previous commit's execution cannot expire these artifacts.
+        let id = first.id.clone();
+        s.app
+            .store
+            .write(move |w| {
+                let mut expired = first;
+                expired.finished_at =
+                    Some(crate::ci::queue::earlier(&crate::util::now(), 31 * 86_400));
+                w.put(
+                    crate::store::CI_ATTEMPTS,
+                    &crate::ci::queue::Attempt::key(&expired.id),
+                    &expired,
+                )
+            })
+            .await
+            .unwrap();
+        crate::ci::files::apply_retention(&s.app).await.unwrap();
+        assert!(!s.app.ci.artifact_path(&id, "report").exists());
+        assert!(s.app.ci.artifact_path(&current.id, "report").exists());
         assert_eq!(
             s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks[0].artifact_names,
             vec!["report"]
