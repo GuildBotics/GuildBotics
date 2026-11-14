@@ -451,33 +451,30 @@ impl Server {
                 embedded = service;
             }
         }
-        let guildbotics = async {
-            service.selected().service.stop(false).await;
-            work.close();
-            work.wait().await;
-            // A start the server's work finished after the stop above began after
-            // the stop was asked for, so what it runs is cancelled rather than
-            // waited for; only then is the last selection's transcript finished.
-            service_api.selected().service.stop(true).await;
-            crate::tool_login::drain_private().await;
-            gb_environment::worktree::drain_writebacks().await;
-            gb_environment::snapshot::drain_builds().await;
-            gb_environment::runtime::drain_vms().await;
-        };
-        // CI gives out no more jobs from now on, and its running jobs finish
-        // alongside the work above.
-        let ci = async {
-            if let Some(embedded) = &embedded {
-                tokio::select! {
-                    result = embedded.drain() => result.err(),
-                    () = service_api.cancelled.cancelled() => None,
-                }
-            } else {
-                None
+        service.selected().service.stop(false).await;
+        work.close();
+        work.wait().await;
+        // A start the server's work finished after the stop above began after
+        // the stop was asked for, so what it runs is cancelled rather than
+        // waited for; only then is the last selection's transcript finished.
+        service_api.selected().service.stop(true).await;
+        crate::tool_login::drain_private().await;
+        gb_environment::worktree::drain_writebacks().await;
+        gb_environment::snapshot::drain_builds().await;
+        gb_environment::runtime::drain_vms().await;
+        // CI keeps giving out jobs until GuildBotics and its cleanup finish.
+        // A forced stop, including one requested during that work, skips the
+        // CI wait; cancellation during the CI drain also ends it immediately.
+        if let Some(embedded) = &embedded {
+            tokio::select! {
+                biased;
+                () = service_api.cancelled.cancelled() => {},
+                result = embedded.drain() => {
+                    if let Err(error) = result {
+                        failure = Some(error);
+                    }
+                },
             }
-        };
-        if let ((), Some(error)) = tokio::join!(guildbotics, ci) {
-            failure = Some(error);
         }
         // Interactive member operations were answered throughout the drain.
         service_api.member_work.close();
