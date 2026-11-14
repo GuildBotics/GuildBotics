@@ -328,6 +328,24 @@ impl Ci {
         }
     }
 
+    /// Started checks follow execution time; queued checks follow the same
+    /// current priority, reuse, and admission sequence used by claim.
+    pub async fn order_checks(&self, checks: &mut [Check]) -> AppResult<()> {
+        let positions = self
+            .inner
+            .store
+            .read(|r| {
+                Ok(queue::scheduled(r, false)?
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (a, _))| (a.id, i))
+                    .collect::<BTreeMap<_, _>>())
+            })
+            .await?;
+        checks.sort_by(|a, b| check_order(a, &positions).cmp(&check_order(b, &positions)));
+        Ok(())
+    }
+
     /// The checks of `sha` in `repo`: the latest attempt of every job of the
     /// commit's run, plus an entry for each required check the run does not
     /// have (see `docs/api.md`, "Checks"). Only attempts of the run's current
@@ -385,6 +403,19 @@ impl Ci {
             });
         };
         let mut report = self.run_checks(repo, &run, latest)?;
+        if report
+            .checks
+            .iter()
+            .any(|c| c.status == "queued" && !c.recorded())
+        {
+            let order = self.admission_order(repo, sha, &run.pipeline).await;
+            report.checks.sort_by_key(|c| {
+                order
+                    .iter()
+                    .position(|name| name == &c.name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
         if let Some(priority) = priority {
             for check in &mut report.checks {
                 if check.status == "queued" {
@@ -945,6 +976,25 @@ impl Ci {
     }
 }
 
+fn check_order<'a>(c: &'a Check, positions: &BTreeMap<String, usize>) -> (u8, &'a str, usize) {
+    if let Some(at) = c.started_at.as_deref().or(c.finished_at.as_deref()) {
+        return (0, at, 0);
+    }
+    if c.status != "queued" {
+        return (1, "", 0);
+    }
+    let position = c
+        .attempt_id
+        .as_ref()
+        .and_then(|id| positions.get(id))
+        .copied();
+    (
+        if position.is_some() { 2 } else { 3 },
+        "",
+        position.unwrap_or(usize::MAX),
+    )
+}
+
 /// CI branch names preserve the public branch or identify a hidden gate.
 fn ci_ref(refname: &str) -> Option<(&str, Option<u64>)> {
     if let Some(branch) = refname.strip_prefix("refs/heads/") {
@@ -1118,6 +1168,74 @@ mod tests {
             artifacts: vec![],
             cache: None,
         }
+    }
+
+    #[tokio::test]
+    async fn displayed_checks_follow_execution_time_and_current_claim_order() {
+        let (_d, ci, mut repo) = setup();
+        repo.required_checks.clear();
+        let id = repo.id.clone();
+        ci.inner
+            .store
+            .write(move |w| {
+                queue::register(
+                    w,
+                    Registration {
+                        order: vec!["z".into(), "a".into(), "m".into()],
+                        inputs: Default::default(),
+                        selection: None,
+                        repo: id,
+                        repo_path: "acme/demo".into(),
+                        sha: "sha".into(),
+                        tree: None,
+                        branch: "feature".into(),
+                        protected: false,
+                        network: false,
+                        pipeline: PipelineState::Jobs {
+                            jobs: vec![job("a"), job("m"), job("z")],
+                        },
+                    },
+                    10,
+                    "2026-11-14T00:00:00Z",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let mut checks = ci.head_checks(&repo, "sha").await.unwrap().checks;
+        ci.order_checks(&mut checks).await.unwrap();
+        assert_eq!(
+            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["z", "a", "m"]
+        );
+        let claimed = ci
+            .inner
+            .store
+            .write(|w| queue::claim(w, "runner", 60, "2026-11-14T00:00:01Z"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            checks[0].attempt_id.as_deref(),
+            Some(claimed.attempt.id.as_str())
+        );
+        let mut checks = ci.head_checks(&repo, "sha").await.unwrap().checks;
+        checks.push(Check {
+            name: "older-host-check".into(),
+            status: "completed".into(),
+            started_at: Some("2026-11-14T00:00:00Z".into()),
+            ..Check::default()
+        });
+        checks.push(Check {
+            name: "not-admitted".into(),
+            status: "queued".into(),
+            ..Check::default()
+        });
+        ci.order_checks(&mut checks).await.unwrap();
+        assert_eq!(
+            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["older-host-check", "z", "a", "m", "not-admitted"]
+        );
     }
 
     #[tokio::test]

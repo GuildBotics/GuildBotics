@@ -23,6 +23,24 @@ const row = (repo: string, number: number, second: number) => pull({
 const rows = () => within(screen.getByRole("table", { name: "Pull requests" })).getAllByRole("row").slice(1);
 
 describe("pull request pagination", () => {
+  it("merges repository pages by server readiness and reorders on a CI event", async () => {
+    const ready = { ...row("acme/demo", 1, 1), merge_order: [0, 0, 0] };
+    const review = { ...row("acme/demo", 2, 3), merge_order: [6, 0, 0] };
+    const gating = { ...row("acme/web", 3, 2), merge_order: [2, 0, 0] };
+    let demo = [ready, review];
+    fakeApi({
+      ...shell,
+      "GET /api/v1/repos": page([repository("acme/demo"), repository("acme/web")]),
+      "GET /api/v1/repos/acme/demo/pulls": () => page(demo),
+      "GET /api/v1/repos/acme/web/pulls": page([gating]),
+    });
+    const { client } = renderApp("/acme/-/pulls");
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual([ready, gating, review].map((p) => `${p.repository} ${p.label} ${p.title}`));
+    demo = [{ ...review, merge_order: [0, 0, 0] }, { ...ready, merge_order: [7, 0, 3] }];
+    act(() => applyChange({ kind: "check", path: "acme/demo", id: "new-result" }, client));
+    await waitFor(() => expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual([review, gating, ready].map((p) => `${p.repository} ${p.label} ${p.title}`)));
+  });
   describe.each(["en", "ja"] as const)("filtered empty results (%s)", (language) => {
     it.each(["open", "closed", "all"] as const)("distinguishes unread pages from an exhausted %s list", async (state) => {
       const demo = Array.from({ length: 31 }, (_, i) => ({

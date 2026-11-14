@@ -1,13 +1,17 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import * as api from "../api/endpoints";
-import type { PullRequest } from "../api/types";
+import type { ListedPull } from "../api/types";
 import { keys } from "./keys";
 
 const PAGE_SIZE = 30;
-type Source = { repo: string; items: PullRequest[]; cursor: string | null | undefined };
+type Source = { repo: string; items: ListedPull[]; cursor: string | null | undefined };
 
 /** Same order as each repository's API; repository paths break cross-repo ties. */
-function compare(a: PullRequest, b: PullRequest) {
+function compare(a: ListedPull, b: ListedPull) {
+  for (let i = 0; i < a.merge_order.length; i++) {
+    const difference = a.merge_order[i]! - b.merge_order[i]!;
+    if (difference) return difference;
+  }
   return a.updated_at === b.updated_at
     ? a.repository.localeCompare(b.repository) || b.number - a.number
     : a.updated_at > b.updated_at ? -1 : 1;
@@ -16,7 +20,7 @@ function compare(a: PullRequest, b: PullRequest) {
 /** Merge sorted streams, keeping unused rows for the next workspace page. */
 async function nextPage(sources: Source[], state: "open" | "closed" | "all") {
   const remaining = sources.map((s) => ({ ...s, items: [...s.items] }));
-  const items: PullRequest[] = [];
+  const items: ListedPull[] = [];
   while (items.length < PAGE_SIZE) {
     // An empty source must be refilled before picking the next newest row.
     await Promise.all(remaining.map(async (s) => {

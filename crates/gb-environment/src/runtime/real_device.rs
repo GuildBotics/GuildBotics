@@ -135,6 +135,7 @@ async fn real_device_copy_disk_exceeds_64_mib_and_is_removed_with_the_vm() {
                 &access,
                 vec![],
                 read_only,
+                false,
                 upload,
                 Returned::default(),
             )

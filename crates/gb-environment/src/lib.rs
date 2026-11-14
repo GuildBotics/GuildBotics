@@ -136,6 +136,8 @@ pub struct Host {
 pub struct Command {
     pub files: Option<std::sync::Arc<run_files::Lease>>,
     pub client_copy: bool,
+    /// Consent-authenticated copies use guest names independent of host grants.
+    pub remote_copy: bool,
     pub upload: Option<std::sync::Arc<worktree::transfer::Upload>>,
     pub returned: worktree::transfer::Returned,
     /// The configuration the run reads, once: its file is in it.
@@ -310,7 +312,11 @@ pub fn shape(
         identity_root: normalized(&host.identity_root)?,
     };
     let workspace = &normalized(workspace)?;
-    let cwd = guest_path(&normalized(&command.cwd)?)?;
+    let cwd = if command.remote_copy {
+        guest_path(&command.cwd)?
+    } else {
+        guest_path(&normalized(&command.cwd)?)?
+    };
     // The working directory is the microVM's own, and work happens only
     // there. The command reads the workspace's configuration, as it would on
     // the host; it is told of it only when it inspects it.
@@ -399,6 +405,7 @@ pub fn shape(
             &access,
             mounts,
             command.access.read_only,
+            command.remote_copy,
             command.upload.clone(),
             command.returned.clone(),
         )

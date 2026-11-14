@@ -227,6 +227,18 @@ impl ServerAuth {
         (session.expires_at > now()).then(|| session.csrf.clone())
     }
 
+    pub(crate) fn is_consent(&self, headers: &HeaderMap) -> bool {
+        headers
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split_once(' '))
+            .is_some_and(|(scheme, token)| {
+                scheme.eq_ignore_ascii_case("bearer")
+                    && self.known_token(token, true)
+                    && !self.known_token(token, false)
+            })
+    }
+
     fn known_token(&self, text: &str, allow_apps: bool) -> bool {
         let Some((id, secret)) = parse_token(text) else {
             return false;

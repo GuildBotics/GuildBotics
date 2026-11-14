@@ -419,6 +419,7 @@ mod tests {
         );
         api.identity_root = native.identity_root.clone();
         api.keychain = native.keychain.clone();
+        let consent = api.auth.test_consent();
         let api = Arc::new(api);
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let app = crate::api::router(api.clone());
@@ -432,6 +433,39 @@ mod tests {
                 .body(axum::body::Body::from(data.to_string()))
                 .unwrap()
         };
+        for extra in [
+            json!({}),
+            json!({"cwd":"/host"}),
+            json!({"input_ids":["host-upload"]}),
+        ] {
+            let mut data = json!({"command":"functions/probe", "person":"aiko", "preflight":true,
+                "client_cwd":"/c/Users/me/repo", "expected_workspace":identity.workspace_id});
+            for (key, value) in extra.as_object().unwrap() {
+                data[key] = value.clone();
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/-/guildbotics/api/commands/run")
+                        .header("host", "127.0.0.1:8765")
+                        .header("content-type", "application/json")
+                        .header("authorization", format!("Bearer {consent}"))
+                        .body(axum::body::Body::from(data.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if extra.as_object().unwrap().is_empty() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+            );
+        }
         let mixed = app
             .clone()
             .oneshot(request(

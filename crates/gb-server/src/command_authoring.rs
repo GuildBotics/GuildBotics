@@ -112,6 +112,7 @@ pub(crate) async fn author(
         result: Some(("CommandAuthoringResult", authoring_result)),
     };
     let run = RunRequest {
+        remote_copy: false,
         preflight: false,
         remotes: Default::default(),
         client_cwd: None,

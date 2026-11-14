@@ -11,6 +11,19 @@ const P = "/api/v1/repos/acme/demo/pulls/3";
 const SUCCESS: Check = { name: "test", status: "completed", conclusion: "success" };
 const CHECKS: Checks = { head_sha: HEAD, base_sha: BASE, behind_by: 0, checks: [SUCCESS], checks_expected: true, base_checks: 1 };
 
+it("keeps the server's queue order and reloads it when another PR changes priority", async () => {
+  const queued = (name: string): Check => ({ name, status: "queued", conclusion: null });
+  let checks = [queued("z-first"), queued("a-second")];
+  fakeApi(pullRoutes({ [`GET ${P}/checks`]: () => json(200, { ...CHECKS, checks }) }));
+  const { client } = renderApp("/acme/demo/-/pulls/3");
+  const region = await screen.findByRole("region", { name: "Checks" });
+  const names = () => within(region).getAllByRole("listitem").map((li) => li.querySelector("strong")?.textContent);
+  await waitFor(() => expect(names()).toEqual(["z-first", "a-second"]));
+  checks = [queued("a-second"), queued("z-first")];
+  act(() => applyChange({ kind: "pull", path: "acme/other", id: "12" }, client));
+  await waitFor(() => expect(names()).toEqual(["a-second", "z-first"]));
+});
+
 describe.each(["en", "ja"] as const)("base branch guidance (%s)", (language) => {
   it.each([
     { state: "open", merged: false, draft: false, behind: 1, visible: true },

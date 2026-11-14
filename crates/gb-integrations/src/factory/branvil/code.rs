@@ -51,6 +51,19 @@ impl BranvilService {
     }
 }
 impl CodeHostingService for BranvilService {
+    fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
+        Box::pin(async move {
+            let (repo, key) = self.item(url, "pulls")?;
+            let result = self
+                .member()
+                .await?
+                .pulls_yield_checks(&repo, number(&key)?)
+                .await
+                .map_err(|e| error(e, "pulls_yield_checks"))?;
+            Ok(result.yielded.len())
+        })
+    }
+
     fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;

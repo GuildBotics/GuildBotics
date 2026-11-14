@@ -14,6 +14,61 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
+async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position() {
+    let w = World::new().await;
+    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+    let (status, body) = w
+        .server
+        .patch(
+            &w.repo_path(),
+            &w.owner,
+            json!({"revision": repo["revision"], "required_approvals": 1}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let runner = Runner::new(&w, "ordering-runner").await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["z", "a", "m"]));
+    let p = w.open_pull("feature", json!([])).await;
+    let checks_url = format!("{}/pulls/{}/checks", w.repo_path(), p["number"]);
+    let names = |v: &Value| {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let before = w.server.ok(&checks_url, &w.aiko).await;
+    assert_eq!(names(&before), ["z", "a", "m"]);
+    let first = runner.next_claim().await;
+    assert_eq!(before["checks"][0]["attempt_id"], first["attempt_id"]);
+    assert_eq!(runner.finish(&first, "success").await.0, 200);
+    let (status, retry) = w
+        .server
+        .post(
+            &format!(
+                "{}/jobs/{}/retry",
+                w.repo_path(),
+                first["attempt_id"].as_str().unwrap()
+            ),
+            &w.aiko,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{retry}");
+    let after = w.server.ok(&checks_url, &w.aiko).await;
+    assert_eq!(names(&after), ["a", "m", "z"]);
+    let commit = w
+        .server
+        .ok(&format!("{}/commits/{head}/checks", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(names(&commit), names(&after));
+    let next = runner.next_claim().await;
+    assert_eq!(after["checks"][0]["attempt_id"], next["attempt_id"]);
+}
+
+#[tokio::test]
 async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
@@ -2352,4 +2407,297 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().to_vec(), zip);
+}
+
+#[tokio::test]
+async fn author_yields_only_deferred_running_checks_and_old_finish_stays_obsolete() {
+    for reason in ["review", "failure", "draft"] {
+        let w = World::new().await;
+        let runner = Runner::new(&w, "yield-runner").await;
+        land(
+            &w,
+            "setup",
+            &[(".branvil/ci.toml", &pipeline(&["test", "lint", "wait"]))],
+            None,
+        )
+        .await;
+        runner.drain("success").await;
+        let head = w.push_change("feature", "change.txt", "change");
+        let p = w.open_pull("feature", json!([])).await;
+        let n = p["number"].as_u64().unwrap();
+        let path = format!("{}/pulls/{n}", w.repo_path());
+        let yield_path = format!("{path}/checks/yield");
+        let first = runner.claim().await.unwrap();
+        let running = runner.claim().await.unwrap();
+        assert_eq!(running["sha"], head);
+        // A normal head is untouched, even while its checks are running.
+        assert_eq!(
+            w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
+            json!([])
+        );
+        for token in [&w.ken, &w.owner] {
+            assert_eq!(w.server.post(&yield_path, token, json!({})).await.0, 403);
+        }
+        if reason == "failure" {
+            set_required(&w, &[first["job"]["name"].as_str().unwrap()]).await;
+            assert_eq!(runner.finish(&first, "failure").await.0, 200);
+        } else {
+            assert_eq!(runner.finish(&first, "success").await.0, 200);
+            if reason == "draft" {
+                let current = w.server.ok(&path, &w.aiko).await;
+                assert_eq!(
+                    w.server
+                        .patch(
+                            &path,
+                            &w.aiko,
+                            json!({"revision":current["revision"],"draft":true})
+                        )
+                        .await
+                        .0,
+                    200
+                );
+            } else {
+                let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+                assert_eq!(
+                    w.server
+                        .patch(
+                            &w.repo_path(),
+                            &w.owner,
+                            json!({"revision":repo["revision"],"required_approvals":1})
+                        )
+                        .await
+                        .0,
+                    200
+                );
+                assert_eq!(
+                    w.server
+                        .post(
+                            &format!("{path}/reviews"),
+                            &w.ken,
+                            json!({"verdict":"request_changes","body":"Please fix","commit":head})
+                        )
+                        .await
+                        .0,
+                    201
+                );
+            }
+        }
+        let before = checks(&w, n).await;
+        let queued = before["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["status"] == "queued")
+            .unwrap()
+            .clone();
+        let (st, result) = w.server.post(&yield_path, &w.aiko, json!({})).await;
+        assert_eq!(st, 200, "{result}");
+        assert_eq!(result["head"], head);
+        assert_eq!(result["yielded"].as_array().unwrap().len(), 1);
+        let next = &result["yielded"][0];
+        assert_eq!(next["status"], "queued");
+        assert_eq!(next["attempt"], 2);
+        assert_eq!(next["cancel_requested"], false);
+        let job = running["job"]["name"].as_str().unwrap();
+        let report = checks(&w, n).await;
+        assert_eq!(check(&report, job)["status"], "queued");
+        assert!(check(&report, job)["conclusion"].is_null());
+        assert!(
+            check(&report, job)["details"]
+                .as_str()
+                .unwrap()
+                .contains("Deferred")
+        );
+        assert_eq!(check(&report, queued["name"].as_str().unwrap()), &queued);
+        assert_eq!(
+            w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
+            json!([])
+        );
+        let old = w
+            .server
+            .ok(
+                &format!(
+                    "{}/jobs/{}",
+                    w.repo_path(),
+                    running["attempt_id"].as_str().unwrap()
+                ),
+                &w.aiko,
+            )
+            .await;
+        assert_eq!(old["cancel_requested"], true);
+        assert!(
+            old["details"]
+                .as_str()
+                .unwrap()
+                .starts_with("Yielded: aiko")
+        );
+        let (st, finished) = runner.finish(&running, "failure").await;
+        assert_eq!(st, 200, "{finished}");
+        assert_eq!(finished["conclusion"], "cancelled");
+        assert_eq!(check(&checks(&w, n).await, job)["status"], "queued");
+        if reason == "review" {
+            assert_eq!(
+                w.server
+                    .post(
+                        &format!("{path}/comments"),
+                        &w.aiko,
+                        json!({"body":"Explained"})
+                    )
+                    .await
+                    .0,
+                201
+            );
+            let replacement = runner.claim().await.unwrap();
+            assert_eq!(replacement["attempt_id"], next["id"]);
+            assert_eq!(runner.finish(&replacement, "success").await.0, 200);
+        } else {
+            w.push_change("feature", "change.txt", "next");
+            let view = w
+                .server
+                .ok(
+                    &format!("{}/jobs/{}", w.repo_path(), next["id"].as_str().unwrap()),
+                    &w.aiko,
+                )
+                .await;
+            assert_eq!(view["conclusion"], "cancelled");
+        }
+    }
+}
+
+#[tokio::test]
+async fn yield_noops_for_closed_protected_approved_outdated_and_answered_heads() {
+    for case in [
+        "closed",
+        "protected",
+        "approved",
+        "outdated",
+        "answered",
+        "other_pull",
+        "missing_run",
+    ] {
+        let w = World::new().await;
+        let runner = Runner::new(&w, "yield-noop").await;
+        if case != "missing_run" {
+            land(
+                &w,
+                "setup",
+                &[(".branvil/ci.toml", &pipeline(&["test"]))],
+                None,
+            )
+            .await;
+            runner.drain("success").await;
+        }
+        let head = w.push_change("feature", "change.txt", "change");
+        let p = w.open_pull("feature", json!([])).await;
+        let path = format!("{}/pulls/{}", w.repo_path(), p["number"]);
+        let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+        assert_eq!(
+            w.server
+                .patch(
+                    &w.repo_path(),
+                    &w.owner,
+                    json!({"revision":repo["revision"],"required_approvals":1})
+                )
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            w.server
+                .post(
+                    &format!("{path}/reviews"),
+                    &w.ken,
+                    json!({"verdict":"request_changes","body":"Change","commit":head})
+                )
+                .await
+                .0,
+            201
+        );
+        match case {
+            "closed" => {
+                assert_eq!(
+                    w.server
+                        .post(&format!("{path}/close"), &w.aiko, json!({}))
+                        .await
+                        .0,
+                    200
+                );
+            }
+            "protected" => {
+                let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+                assert_eq!(
+                    w.server
+                        .patch(
+                            &w.repo_path(),
+                            &w.owner,
+                            json!({"revision":repo["revision"],"protected_branches":["feature"]})
+                        )
+                        .await
+                        .0,
+                    200
+                );
+            }
+            "approved" => {
+                assert_eq!(
+                    w.server
+                        .post(
+                            &format!("{path}/reviews"),
+                            &w.ken,
+                            json!({"verdict":"approve","commit":head})
+                        )
+                        .await
+                        .0,
+                    201
+                );
+            }
+            "answered" => {
+                assert_eq!(
+                    w.server
+                        .post(
+                            &format!("{path}/comments"),
+                            &w.aiko,
+                            json!({"body":"Explained"})
+                        )
+                        .await
+                        .0,
+                    201
+                );
+            }
+            "outdated" => {
+                w.push_change("feature", "change.txt", "next");
+            }
+            "other_pull" => {
+                git_as_ok(
+                    &w.work,
+                    "aiko",
+                    &w.aiko,
+                    &["push", "-q", "origin", "HEAD:refs/heads/other"],
+                );
+                w.open_pull("other", json!([])).await;
+            }
+            _ => {}
+        }
+        let running = runner.claim().await;
+        let (st, result) = w
+            .server
+            .post(&format!("{path}/checks/yield"), &w.aiko, json!({}))
+            .await;
+        assert_eq!(st, 200, "{case}: {result}");
+        assert_eq!(result["yielded"], json!([]), "{case}: {result}");
+        if let Some(running) = running {
+            let old = w
+                .server
+                .ok(
+                    &format!(
+                        "{}/jobs/{}",
+                        w.repo_path(),
+                        running["attempt_id"].as_str().unwrap()
+                    ),
+                    &w.aiko,
+                )
+                .await;
+            assert_eq!(old["cancel_requested"], false, "{case}: {old}");
+            assert_eq!(old["status"], "in_progress");
+        }
+    }
 }

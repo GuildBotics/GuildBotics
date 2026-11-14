@@ -365,6 +365,7 @@ pub async fn commit_checks(
     let sha = commit_of(app, &repo, sha).await?.sha;
     let mut checks = app.ci.head_checks(&repo, &sha).await?;
     app.ci.estimate(&repo, &sha, &mut checks.checks).await;
+    app.ci.order_checks(&mut checks.checks).await?;
     Ok(CommitChecksView { checks, sha })
 }
 

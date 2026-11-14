@@ -63,7 +63,7 @@ pub struct AttemptView {
     pub log_bytes: u64,
 }
 
-async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
+pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
     let own = a.clone();
     let (source, details) = app
         .store
@@ -198,6 +198,56 @@ async fn job_retry(
         .await?;
     app.events.publish("check", &repo.path, new.sha.clone());
     Ok(ok(view(&app, &new).await?))
+}
+
+#[derive(Serialize, Debug)]
+pub struct YieldChecksView {
+    pub head: String,
+    pub yielded: Vec<AttemptView>,
+}
+
+pub(crate) async fn yield_pull_checks(
+    app: &Shared,
+    caller: &Caller,
+    path: &str,
+    number: u64,
+) -> AppResult<YieldChecksView> {
+    use crate::domain::pulls;
+    let (repo, _) = pulls::visible(app, caller, path, number).await?;
+    let who = caller.name().to_string();
+    let r = repo.clone();
+    let (head, attempts) = app
+        .locked(&repo.id, move |app| async move {
+            let r2 = r.clone();
+            let p = app
+                .store
+                .read(move |tx| pulls::load_pull(tx, &r2, number))
+                .await?;
+            if util::fold(&who) != util::fold(&p.author) {
+                return Err(AppError::forbidden(
+                    "Only the pull request author may yield checks.",
+                ));
+            }
+            let head = pulls::head_of(&p, &pulls::tips(&app, &r).await?).unwrap_or_default();
+            if p.state != "open" {
+                return Ok((head, Vec::new()));
+            }
+            let sha = head.clone();
+            let attempts = app
+                .store
+                .write(move |w| queue::yield_checks(w, &r.id, &sha, &who, &util::now()))
+                .await?;
+            Ok((head, attempts))
+        })
+        .await?;
+    if !attempts.is_empty() {
+        app.events.publish("check", &repo.path, head.clone());
+    }
+    let mut yielded = Vec::new();
+    for a in attempts {
+        yielded.push(view(app, &a).await?);
+    }
+    Ok(YieldChecksView { head, yielded })
 }
 
 async fn job_cancel(

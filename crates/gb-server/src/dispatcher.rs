@@ -159,6 +159,7 @@ impl Dispatcher {
         invocation.run_id = trace_id.into();
         Ok(Command {
             client_copy: false,
+            remote_copy: false,
             files,
             upload: None,
             returned: Default::default(),

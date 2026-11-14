@@ -1109,51 +1109,63 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
     }
 }
 
-/// Hands the highest-priority queued attempt to `runner` under a new lease.
-pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
+/// The current claim order, without changing any attempt or lease. Claims only
+/// inspect reuse within the best class; displays can request every class.
+pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Option<Reuse>)>> {
     let mut snapshot = super::priority::Snapshot::default();
     let mut best = super::priority::Class::Last;
     let mut candidates = Vec::new();
-    for (_, id) in w.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+    for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
         let id = String::from_utf8_lossy(&id);
         let mut a =
-            get_attempt(w, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-        let class = snapshot.class_of(w, &a)?.class;
-        if class > best {
+            get_attempt(r, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+        let class = snapshot.class_of(r, &a)?.class;
+        if first_only && class > best {
             continue;
         }
-        if class < best {
+        if first_only && class < best {
             best = class;
             candidates.clear();
         }
         // A protected branch may have come to want this commit since admission.
-        let run = get_run(w, &a.repo, &a.sha)?;
+        let run = get_run(r, &a.repo, &a.sha)?;
         if let Some(run) = &run {
             a.cache_scope = run.cache_scope.clone();
         }
         a.inputs = run.and_then(|run| run.inputs.get(&a.job.name).cloned());
-        candidates.push(a);
+        candidates.push((class, a));
     }
     let mut sources = std::collections::BTreeMap::new();
-    let mut selected = None;
-    for (i, a) in candidates.iter().enumerate() {
-        if !a.allow_reuse || a.purpose != Purpose::Check {
-            continue;
-        }
-        let sources = match sources.entry(sources_key(a)) {
-            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(reuse_sources(w, a)?),
+    let mut ordered = Vec::new();
+    for (class, a) in candidates {
+        let reuse = if a.allow_reuse && a.purpose == Purpose::Check {
+            let sources = match sources.entry(sources_key(&a)) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(reuse_sources(r, &a)?)
+                }
+            };
+            reuse_candidate(&a, sources)
+        } else {
+            None
         };
-        if let Some(reuse) = reuse_candidate(a, sources) {
-            selected = Some((i, reuse));
-            break;
+        if first_only && reuse.is_some() {
+            return Ok(vec![(a, reuse)]);
         }
+        ordered.push((class, a, reuse));
     }
-    let (index, reuse) = selected.map_or((0, None), |(i, reuse)| (i, Some(reuse)));
-    if candidates.is_empty() {
+    ordered.sort_by_key(|(class, a, reuse)| (*class, reuse.is_none(), a.seq));
+    Ok(ordered
+        .into_iter()
+        .map(|(_, a, reuse)| (a, reuse))
+        .collect())
+}
+
+/// Hands the highest-priority queued attempt to `runner` under a new lease.
+pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
+    let Some((mut a, reuse)) = scheduled(w, true)?.into_iter().next() else {
         return Ok(None);
-    }
-    let mut a = candidates.remove(index);
+    };
     let old = get_attempt(w, &a.id)?.unwrap();
     let lease = format!("bvl_{}", util::random_secret::<24>());
     a.status = "in_progress".into();
@@ -1572,6 +1584,57 @@ pub fn interrupt_refreshes(w: &Wtx, now: &str) -> AppResult<Vec<(String, String)
     Ok(changed)
 }
 
+/// Requeue the same work at its original position without carrying runner state.
+fn replacement(w: &Wtx, run: &Run, old: &Attempt, now: &str) -> AppResult<Attempt> {
+    let mut next = new_attempt(w, run, &old.job, old.network, now)?;
+    next.seq = old.seq;
+    next.allow_reuse = old.allow_reuse;
+    next.auto_retry = old.auto_retry.clone();
+    next.purpose = old.purpose;
+    next.cache_key = old.cache_key.clone();
+    next.cache_scope = old.cache_scope.clone();
+    Ok(next)
+}
+
+/// Yield current running checks in one transaction; queued work keeps its place.
+pub fn yield_checks(
+    w: &Wtx,
+    repo: &str,
+    sha: &str,
+    who: &str,
+    now: &str,
+) -> AppResult<Vec<Attempt>> {
+    let Some(run) = get_run(w, repo, sha)? else {
+        return Ok(Vec::new());
+    };
+    if super::priority::run_class(w, &run)?.class < super::priority::Class::Deferred {
+        return Ok(Vec::new());
+    }
+    let PipelineState::Jobs { jobs } = &run.pipeline else {
+        return Ok(Vec::new());
+    };
+    let mut yielded = Vec::new();
+    for old in current_attempts(w, repo, sha, jobs)? {
+        if old.purpose != Purpose::Check
+            || old.status != "in_progress"
+            || old.cancel_requested
+            || old.superseded
+        {
+            continue;
+        }
+        let mut stopped = old.clone();
+        stopped.cancel_requested = true;
+        stopped.details = Some(format!(
+            "Yielded: {who} is changing this commit; queued again in its place."
+        ));
+        let next = replacement(w, &run, &old, now)?;
+        put_attempt(w, Some(&old), &stopped)?;
+        put_attempt(w, None, &next)?;
+        yielded.push(next);
+    }
+    Ok(yielded)
+}
+
 /// Concludes the in-progress attempt `old` `cancelled` as interrupted
 /// (`why`); the first interruption of a job that was not cancelled or
 /// superseded is queued again as a new attempt in the place `old` had in the
@@ -1583,14 +1646,8 @@ fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
     // Its definition is the run's: taking another pipeline stops unfinished
     // attempts of definitions it does not have.
     let next = if requeue && let Some(run) = get_run(w, &old.repo, &old.sha)? {
-        let mut next = new_attempt(w, &run, &old.job, old.network, now)?;
-        next.seq = old.seq;
+        let mut next = replacement(w, &run, old, now)?;
         next.after_interrupt = true;
-        next.allow_reuse = old.allow_reuse;
-        next.auto_retry = old.auto_retry.clone();
-        next.purpose = old.purpose;
-        next.cache_key = old.cache_key.clone();
-        next.cache_scope = old.cache_scope.clone();
         Some(next)
     } else if old.after_interrupt {
         prepare_auto_retry(w, old, false, now)?
@@ -2033,6 +2090,66 @@ mod tests {
             timeout_secs: Some(60),
             artifacts: vec![],
             cache: None,
+        }
+    }
+
+    #[test]
+    fn yielded_replacements_keep_queue_position_and_finish_or_expire_without_requeue() {
+        for expire in [false, true] {
+            let (_dir, s) = store();
+            s.write_sync(|w| {
+                register(w, reg("sha", "feature", &["test", "wait"]), 2, T0)?;
+                let old = claim(w, "runner", 60, T0)?.unwrap();
+                let queued = latest_attempts(w, "repo_1", "sha")?
+                    .into_iter()
+                    .find(|a| a.status == "queued")
+                    .unwrap();
+                let yielded = yield_checks(w, "repo_1", "sha", "author", T0)?;
+                assert_eq!(yielded.len(), 1);
+                let next = &yielded[0];
+                assert_eq!(next.seq, old.attempt.seq);
+                assert_eq!(next.number, old.attempt.number + 1);
+                assert!(!next.after_interrupt);
+                assert_eq!(next.network, old.attempt.network);
+                assert_eq!(next.cache_scope, old.attempt.cache_scope);
+                assert_eq!(next.cache_key, old.attempt.cache_key);
+                assert_eq!(next.allow_reuse, old.attempt.allow_reuse);
+                assert_eq!(get_attempt(w, &queued.id)?.unwrap().seq, queued.seq);
+                assert!(yield_checks(w, "repo_1", "sha", "author", T0)?.is_empty());
+                if expire {
+                    super::expire(w, T2)?;
+                } else {
+                    finish(
+                        w,
+                        &old.attempt.id,
+                        &old.lease,
+                        "failure",
+                        None,
+                        ResultInfo::default(),
+                        0,
+                        T1,
+                    )?;
+                }
+                assert_eq!(
+                    get_attempt(w, &old.attempt.id)?
+                        .unwrap()
+                        .conclusion
+                        .as_deref(),
+                    Some("cancelled")
+                );
+                assert_eq!(attempts_of(w, "repo_1", "sha")?.len(), 3);
+                assert_eq!(
+                    latest_attempts(w, "repo_1", "sha")?
+                        .into_iter()
+                        .find(|a| a.job.name == next.job.name)
+                        .unwrap()
+                        .id,
+                    next.id
+                );
+                assert_eq!(claim(w, "runner", 60, T2)?.unwrap().attempt.id, next.id);
+                Ok(())
+            })
+            .unwrap();
         }
     }
 

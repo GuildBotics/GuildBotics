@@ -527,6 +527,15 @@ impl MemberApi {
         let page = self.bound_page(page, &caller, "pulls_commits", (&repo_path, &number))?;
         pulls::commits(&self.api.app, &caller, repo_path, number, page).await
     }
+    pub async fn pulls_yield_checks(
+        &self,
+        repo_path: &str,
+        number: u64,
+    ) -> AppResult<crate::ci::api::YieldChecksView> {
+        let _open = self.api.guard()?;
+        let caller = self.caller().await?;
+        crate::ci::api::yield_pull_checks(&self.api.app, &caller, repo_path, number).await
+    }
     pub async fn pulls_checks(&self, repo_path: &str, number: u64) -> AppResult<pulls::ChecksView> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;

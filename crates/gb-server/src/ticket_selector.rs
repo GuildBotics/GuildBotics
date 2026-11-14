@@ -293,6 +293,24 @@ impl Selector<'_> {
                     )
                     .map_err(|_| DispatchFailure::Journal)?;
             }
+            if task.trigger_reason.as_deref() == Some("pull_request_feedback")
+                && let (Some(code), Some(url)) = (self.code, task.pull_request_url.as_deref())
+            {
+                let fact = match code.yield_pull_request_checks(url).await {
+                    Ok(0) | Err(ServiceError::Unsupported) => None,
+                    Ok(count) => Some((
+                        "checks_yielded",
+                        json!({"target":{"kind":"pull_request","url":url},"count":count}),
+                    )),
+                    Err(error) => Some((
+                        "checks_yield_failed",
+                        json!({"target":{"kind":"pull_request","url":url},"error":error.to_string()}),
+                    )),
+                };
+                if let Some((kind, payload)) = fact {
+                    let _ = self.runner.evidence(trace.id(), kind, payload);
+                }
+            }
             self.runner.run(invocation.clone(), trace).await
         }
         .await;

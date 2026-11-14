@@ -221,6 +221,7 @@ impl Device {
         let path = copy.path().join(path.strip_prefix(&config).unwrap());
         let command = gb_environment::Command {
             client_copy: false,
+            remote_copy: false,
             files: None,
             upload: None,
             returned: Default::default(),
