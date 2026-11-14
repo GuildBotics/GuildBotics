@@ -227,3 +227,20 @@ commands = [
 timeout_secs = 1200
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
 artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/timing.json"] }]
+
+[[jobs]]
+name = "client-windows"
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
+find crates -exec touch -c {} +
+cargo build --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu --release
+mkdir -p client-release
+cp target/x86_64-pc-windows-gnu/release/guildbotics.exe client-release/guildbotics.exe
+sha256sum client-release/guildbotics.exe | cut -d ' ' -f 1 > client-release/sha256
+git rev-parse HEAD > client-release/commit
+''']
+artifacts = [{ name = "client-windows", paths = ["client-release/guildbotics.exe", "client-release/sha256", "client-release/commit"] }]
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }

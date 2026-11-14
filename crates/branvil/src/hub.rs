@@ -135,6 +135,48 @@ fn summarize(repo: &Value, response: &Value) -> anyhow::Result<Value> {
     Ok(json!({"run_registered": registered, "state": state}))
 }
 
+/// Download a named artifact from the locally configured Hub only.
+pub async fn artifact(origin: &str, sha: &str, name: &str) -> anyhow::Result<Vec<u8>> {
+    let config = crate::serve_config()?;
+    let base = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", config.listen));
+    let repo = repository(origin, &base)?;
+    anyhow::ensure!(
+        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid commit SHA"
+    );
+    anyhow::ensure!(
+        name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+        "invalid artifact name"
+    );
+    let token = std::fs::read_to_string(config.layout().owner_token())?;
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?
+        .get(format!(
+            "{base}/api/v1/repos/{}/commits/{sha}/artifacts/{name}",
+            crate::util::encode_segment(&repo)
+        ))
+        .bearer_auth(token.trim())
+        .send()
+        .await
+        .map_err(|e| e.without_url())?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Branvil artifact HTTP {}",
+        response.status()
+    );
+    Ok(response
+        .bytes()
+        .await
+        .map_err(|e| e.without_url())?
+        .to_vec())
+}
+
 /// Read the same scoped webhook as the server, including while it is stopped.
 pub async fn notify(vault: Arc<dyn vault::Vault>, text: &str) -> anyhow::Result<bool> {
     notify_at(vault, &crate::serve_config()?.data_dir, text).await

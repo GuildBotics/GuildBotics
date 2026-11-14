@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.blackbox.environment import EnvironmentSource
-from tests.blackbox.harness import PERSON, _environment, running_stack
+from tests.blackbox.harness import _environment, running_stack
 
 
 def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
@@ -114,20 +114,21 @@ for connect in (
     assert result.returncode == 0, result.stderr
 
 
-def test_product_member_cli_keeps_binary_mismatch_guard(server_stack):
+def test_product_member_cli_accepts_server_from_the_same_commit(server_stack):
     command = shlex.split(os.environ.get("GUILDBOTICS_BLACKBOX_CLI", ""))
     if not command or not os.environ.get("GUILDBOTICS_BLACKBOX_MEMBER_CLI"):
         pytest.skip("Requires the example server's matching member client launcher")
     result = subprocess.run(
-        [*command, "member", "help", "--person", PERSON],
+        [*command, "member", "help"],
         cwd=server_stack.workspace,
         env=server_stack.env,
         capture_output=True,
         text=True,
         timeout=10,
     )
-    assert result.returncode != 0
-    assert "CLI and server versions differ" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "ticket" in result.stdout
+    assert "pr" in result.stdout
 
 
 def test_server_round_trips_secrets_in_its_isolated_vault(server_stack):

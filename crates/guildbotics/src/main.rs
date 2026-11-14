@@ -19,7 +19,7 @@ use tokio::sync::watch;
 const BRANVIL: branvil::Invocation = branvil::Invocation::under(&["branvil"]);
 
 #[derive(Parser)]
-#[command(name = "guildbotics", version, about = "GuildBotics")]
+#[command(name = "guildbotics", version = gb_base::BUILD_VERSION, about = "GuildBotics")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -148,6 +148,13 @@ use environment_cli::EnvironmentCommand;
 #[derive(Subcommand)]
 #[cfg(feature = "hub")]
 enum ServerCommand {
+    #[command(hide = true)]
+    HubClients {
+        #[arg(long)]
+        checkout: std::path::PathBuf,
+        #[arg(long)]
+        sha: String,
+    },
     /// Back up or validate Hub records without starting a server.
     #[command(hide = true)]
     HubData {
@@ -249,7 +256,59 @@ fn main() -> ExitCode {
             }
         }
     }
-    match Cli::parse().command {
+    let command = Cli::parse().command;
+    let credential_input = if matches!(&command, Command::GitCredential { .. }) {
+        match gb_server::client::read_git_credential(std::io::stdin().lock()) {
+            Ok(input) => Some(input),
+            Err(error) => return outcome(Err(error)),
+        }
+    } else {
+        None
+    };
+    let needs_update = matches!(&command, Command::Member { .. } | Command::Run { .. })
+        || matches!(&command, Command::GitCredential { action } if credential_input.as_ref().unwrap().needs_hub(action));
+    if needs_update {
+        match block(gb_server::client::update::prepare()) {
+            Ok(Some(executable)) => {
+                let result = (|| -> anyhow::Result<u8> {
+                    let install = std::process::Command::new(&executable)
+                        .arg("install")
+                        .output()?;
+                    eprint!(
+                        "{}{}",
+                        String::from_utf8_lossy(&install.stdout),
+                        String::from_utf8_lossy(&install.stderr)
+                    );
+                    anyhow::ensure!(
+                        install.status.success(),
+                        gb_server::i18n::t(
+                            block(async { Ok(gb_server::client::language().await) })?,
+                            "cli.server.update_skills_failed",
+                            &[]
+                        )
+                    );
+                    let mut resume = std::process::Command::new(executable);
+                    resume.args(std::env::args_os().skip(1));
+                    let status = if let Some(input) = &credential_input {
+                        resume.stdin(std::process::Stdio::piped());
+                        let mut child = resume.spawn()?;
+                        std::io::Write::write_all(
+                            &mut child.stdin.take().expect("piped stdin"),
+                            input.replay().as_bytes(),
+                        )?;
+                        child.wait()?
+                    } else {
+                        resume.status()?
+                    };
+                    Ok(status.code().unwrap_or(1).try_into().unwrap_or(1))
+                })();
+                return outcome(result);
+            }
+            Ok(None) => (),
+            Err(error) => return outcome(Err(error)),
+        }
+    }
+    match command {
         #[cfg(feature = "hub")]
         Command::GenerateCliReference { check } => outcome(cli_reference::run(check).map(|()| 0)),
         #[cfg(feature = "hub")]
@@ -259,9 +318,13 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Branvil { args } => branvil_main(std::iter::once(OsString::new()).chain(args)),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
-        Command::GitCredential { action } => {
-            outcome(block(gb_server::client::git_credential(&action)).map(|()| 0))
-        }
+        Command::GitCredential { action } => outcome(
+            block(gb_server::client::git_credential_input(
+                &action,
+                credential_input.unwrap(),
+            ))
+            .map(|()| 0),
+        ),
         Command::Install => outcome(block(install_cli::run()).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Workspace { command } => outcome(block(workspace_cli::run(command)).map(|()| 0)),
@@ -277,7 +340,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Diagnostics(command) => outcome(block(diagnostics_cli::run(command)).map(|()| 0)),
         Command::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", gb_base::BUILD_VERSION);
             ExitCode::SUCCESS
         }
         #[cfg(feature = "hub")]
@@ -291,6 +354,10 @@ fn main() -> ExitCode {
             .map(|()| 0),
         ),
         Command::Open { print, branvil } => open(print, branvil),
+        #[cfg(feature = "hub")]
+        Command::Server {
+            command: ServerCommand::HubClients { checkout, sha },
+        } => outcome(block(hub_cli::clients(checkout, sha)).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command:

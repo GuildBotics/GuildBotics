@@ -50,6 +50,7 @@ fn git_credential_ignores_invalid_origins_without_reading_identity_or_keychain()
         "protocol=http\nhost=owner@127.0.0.1:7878\n",
         "protocol=https\nhost=forge.example.invalid/path\n",
         "protocol=http+unsafe\nhost=127.0.0.1:7878\n",
+        "protocol=https\n",
         "host=127.0.0.1:7878\n",
         "host=127.0.0.1:7878\r\n",
     ] {

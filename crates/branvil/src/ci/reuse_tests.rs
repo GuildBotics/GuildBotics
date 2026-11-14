@@ -339,3 +339,27 @@ fn retries_execute_even_with_a_source_of_the_same_paths_contents() {
     })
     .unwrap();
 }
+
+#[test]
+fn artifact_jobs_cannot_reuse_another_commits_embedded_identity() {
+    let (_d, s) = store();
+    let release = |sha: &str| {
+        let mut r = head(sha, "feature", "same-inputs");
+        r.tree = Some("same-tree".into());
+        if let PipelineState::Jobs { jobs } = &mut r.pipeline {
+            jobs[0].artifacts = vec![super::super::pipeline::ArtifactDef {
+                name: "client".into(),
+                paths: vec!["client.exe".into()],
+            }];
+        }
+        r
+    };
+    s.write_sync(|w| {
+        let source = run(w, release("h1"), "success", T0)?;
+        let c = offer(w, release("h2"), T1)?;
+        assert!(c.reuse.is_none());
+        assert!(reuse(w, &c, &source.id, T1).is_err());
+        Ok(())
+    })
+    .unwrap();
+}

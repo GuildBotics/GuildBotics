@@ -9,3 +9,9 @@ pub mod host_path;
 pub mod shared_writes;
 pub mod shell;
 pub mod worktree;
+
+/// Shared by Hub and client builds, independent of target and enabled features.
+pub const BUILD_VERSION: &str = env!("GB_BUILD_VERSION");
+
+#[cfg(test)]
+mod build_identity;

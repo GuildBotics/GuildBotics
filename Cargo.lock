@@ -2234,6 +2234,7 @@ dependencies = [
  "url",
  "uuid",
  "x509-parser",
+ "zip",
 ]
 
 [[package]]

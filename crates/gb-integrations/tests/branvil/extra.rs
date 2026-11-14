@@ -51,7 +51,8 @@ pub(super) async fn reused_and_gates(
             .unwrap();
         let git = Git::new(&root.join(conclusion));
         let remote = c.clone_url(&repo).await.unwrap();
-        git.commit("", ".branvil/ci.toml", PIPELINE);
+        // Artifact jobs must execute for every commit; this fixture exercises reuse.
+        git.commit("", ".branvil/ci.toml", "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n");
         let main = git.commit("", "a.py", "base\n");
         git.push(&remote, &main, "main", "owner", owner_token);
         let head = git.commit(&main, "a.py", "feature\n");
