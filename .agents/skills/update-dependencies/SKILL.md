@@ -197,26 +197,31 @@ A failed read is a failure, never zero alerts: report it, leave the locks
 alone, and go on with the tools. Dismissed alerts are a human decision and are
 not touched.
 
-Each alert names the lock in `manifest_path`, the `package`, the
-`affected_versions` range, and the `patched_version`. A lock can hold several
+Each alert names in `manifest_path` a lock, or a manifest that declares the
+package directly (`pyproject.toml`, `crates/<crate>/Cargo.toml`), and the
+`package`, the `affected_versions` range, and the `patched_version`. An alert on
+a manifest is one fix with the alert of the same advisory on its lock: judge
+and report the two together. A lock can hold several
 versions of one package, so work per locked version: match each alert to the
 versions of its package the lock holds within its `affected_versions`, and
 give each such locked version the highest `patched_version` among the alerts
 that match it as its target. A locked version that no alert matches is left
 alone.
 
-First look at the remote default branch's lock: an alert none of whose
-versions there is within its `affected_versions` is fixed where it ships; the
-code host has not re-evaluated it yet. Otherwise look at the update branch:
-when it already holds every target (an earlier run), this run's PR carries the
+First look at the remote default branch: an alert none of whose locked
+versions there is within its `affected_versions`, and whose package every
+manifest declaring it directly requires at the target or above, is fixed where
+it ships; the code host has not re-evaluated it yet. Otherwise look at the
+update branch: when its locks and manifests already hold every target (an
+earlier run), this run's PR carries the
 fix, and the report says it awaits that PR's merge (and, for a repository that
 follows an upstream host, its publishing there). Otherwise raise each locked
 version to exactly its target:
 
 | `manifest_path` | Raise it with |
 | --- | --- |
-| `uv.lock`, `guildbotics/templates/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
-| `Cargo.lock` | `cargo update -p <package>@<locked_version> --precise <target>` for each affected locked version. If the registry cannot be written, point `CARGO_HOME` to a writable directory. |
+| `uv.lock`, `guildbotics/templates/environment/requirements.txt`, `pyproject.toml` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
+| `Cargo.lock`, `crates/<crate>/Cargo.toml` | `cargo update -p <package>@<locked_version> --precise <target>` for each affected locked version. If the registry cannot be written, point `CARGO_HOME` to a writable directory. For a direct dependency, also raise every requirement of it below the target in each `crates/<crate>/Cargo.toml` (every dependency table, including dev, build and target-specific ones) to `"<target>"`, keeping the entry's other keys, so that the manifest states the fix. A requirement with an operator other than caret (`~`, `=`, `<`, `>`) changes meaning when rewritten: leave the alert open instead. |
 | `package-lock.json` | At the repository root: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target> --workspace <workspace>` (update every workspace that declares it), which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 
 ```bash
@@ -232,7 +237,8 @@ Then read every version of the package the lock now holds (`cargo tree -i <packa
 `npm ls <package> --all`, or the lock entries) and compare each with the one it replaced. An alert is resolved only
 when each locked version it matched is now at or above that version's target
 and in the same major as before
-(for a `0.x` version, the same minor): moving to another major is a human
+(for a `0.x` version, the same minor), and every manifest that declares the
+package directly requires the target or above: moving to another major is a human
 decision, whichever version the tool picked. A command that ran is not a fix:
 uv and npm succeed without changing anything when what requires the package
 does not admit the target, and `npm update` succeeds when it moves
@@ -252,7 +258,8 @@ Leave an alert open and report why when:
   checks fail with it;
 - its `manifest_path` is not one of the above.
 
-To leave a raised package open again, restore the lock, its manifest, and for
+To leave a raised package open again, restore the lock, every manifest this
+run changed for that package, and for
 `uv.lock` the exported `requirements.txt` from the update branch, then raise
 the other alerts of that lock again.
 
@@ -284,7 +291,7 @@ cargo nextest run --locked -p gb-environment --test main -E 'test(/^snapshot::/)
 uv run --no-sync python -m pytest tests/test_environment_requirements.py tests/scripts/test_environment_catalog.py
 ```
 
-When `Cargo.lock` changes, run the workspace checks:
+When `Cargo.lock` or a `Cargo.toml` changes, run the workspace checks:
 
 ```sh
 cargo fmt --all --check
@@ -344,7 +351,7 @@ everything, finish with the reasons and no PR. If the code host is
 unavailable, keep the local changes and report the specific blocker.
 
 The body lists each tool's old, latest and adopted version with official
-sources; each alert resolved (number, package, old and new version, lock),
+sources; each alert resolved (number, package, old and new version, `manifest_path`),
 awaiting this PR's merge or the code host's re-evaluation, or left open with
 its reason; the non-device checks
 and their results; held pins and their reasons; historical observations left
