@@ -198,6 +198,24 @@ fn tool_refusal(row: &Value, label: &str, language: &str) -> String {
 }
 
 fn tool_sentence(row: &Value, label: &str, key: &str, language: &str) -> String {
+    let browser = row["name"]
+        .as_str()
+        .is_some_and(crate::tool_login::browser::supported);
+    let key = if browser
+        && [
+            "credentials_missing",
+            "authentication_failed",
+            "credentials_unavailable",
+            "credentials_corrupt",
+            "refresh_failed",
+            "login_refused",
+        ]
+        .contains(&key)
+    {
+        format!("{key}_browser")
+    } else {
+        key.to_owned()
+    };
     crate::i18n::t(
         language,
         &format!("intelligences.agent_environment.tool.{key}"),
@@ -1026,6 +1044,40 @@ fn ci_result(operation: &Value, path: &std::path::Path) -> anyhow::Result<Option
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browser_login_guidance_is_localized_and_terminal_tools_keep_their_command() {
+        use super::tool_sentence;
+        use serde_json::json;
+        for language in ["en", "ja"] {
+            for key in [
+                "credentials_missing",
+                "authentication_failed",
+                "credentials_unavailable",
+                "credentials_corrupt",
+                "refresh_failed",
+                "login_refused",
+            ] {
+                let browser = tool_sentence(
+                    &json!({"name":"codex", "login_command":"terminal-only"}),
+                    "Codex",
+                    key,
+                    language,
+                );
+                assert!(browser.contains("Codex"));
+                assert!(!browser.contains("terminal-only") && !browser.contains("_browser"));
+                assert!(
+                    tool_sentence(
+                        &json!({"name":"antigravity", "login_command":"terminal-only"}),
+                        "Antigravity",
+                        key,
+                        language
+                    )
+                    .contains("terminal-only")
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn diagnostics_preserves_guest_config_file_and_parse_reason() {
         const CHILD: &str = "GUILDBOTICS_CONFIG_DIAGNOSTICS_CHILD";
@@ -1181,11 +1233,16 @@ mod tests {
     fn tool_guidance_uses_labels_language_and_each_credential_state() {
         let catalog = serde_json::json!([{"name":"claude","label":"Claude Code"}]);
         for (state, saved, failed, key) in [
-            ("missing", false, false, "credentials_missing"),
+            ("missing", false, false, "credentials_missing_browser"),
             ("locked", false, false, "credentials_locked"),
-            ("unavailable", false, false, "credentials_unavailable"),
-            ("corrupt", false, false, "credentials_corrupt"),
-            ("saved", true, true, "authentication_failed"),
+            (
+                "unavailable",
+                false,
+                false,
+                "credentials_unavailable_browser",
+            ),
+            ("corrupt", false, false, "credentials_corrupt_browser"),
+            ("saved", true, true, "authentication_failed_browser"),
         ] {
             for lang in ["ja", "en"] {
                 let mut row = serde_json::json!({"name":"claude","provisioned":true,"credentials":state,"saved":saved,"authentication_failed":failed,"login_command":"/managed/guildbotics environment login claude"});
@@ -1586,7 +1643,14 @@ mod tests {
             );
             row["authentication_failed"] = true.into();
             super::project_tool(&mut row, &catalog, lang);
-            assert!(row["problem"].as_str().unwrap().contains("managed login"));
+            assert_eq!(
+                row["problem"],
+                crate::i18n::t(
+                    lang,
+                    "intelligences.agent_environment.tool.authentication_failed_browser",
+                    &[("tool", "Claude Code")]
+                )
+            );
         }
     }
 

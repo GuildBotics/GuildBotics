@@ -2596,6 +2596,17 @@ async fn execute_private_tty_cancelled(
     interactive: bool,
     cancelled: impl Future<Output = ()> + Send,
 ) -> Result<Ended, Failure> {
+    execute_private_io(sandbox, process, on_output, interactive, None, cancelled).await
+}
+
+async fn execute_private_io(
+    sandbox: &Sandbox,
+    process: &Process<'_>,
+    on_output: impl Fn(&[u8]) + Send + Sync,
+    interactive: bool,
+    mut remote: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    cancelled: impl Future<Output = ()> + Send,
+) -> Result<Ended, Failure> {
     let failure = || Failure::Runtime(Sentence::Text("The private provider process failed".into()));
     let (program, args) = process.argv.split_first().ok_or_else(failure)?;
     let mut handle = sandbox
@@ -2609,7 +2620,7 @@ async fn execute_private_tty_cancelled(
         .await
         .map_err(|_| failure())?;
     let stdin = handle.take_stdin().ok_or_else(failure)?;
-    let mut bridge = if interactive {
+    let mut bridge = if interactive && remote.is_none() {
         Some(InputBridge::start().map_err(|_| failure())?)
     } else {
         None
@@ -2620,7 +2631,9 @@ async fn execute_private_tty_cancelled(
             &mut handle,
             &stdin,
             process.stdin,
-            bridge.as_mut().map(|input| &mut input.receiver),
+            remote
+                .as_mut()
+                .or_else(|| bridge.as_mut().map(|input| &mut input.receiver)),
             on_output,
         ),
     );
@@ -2818,7 +2831,7 @@ pub async fn run_private_session(
         files,
         capture,
         on_output,
-        false,
+        (false, None),
         std::future::pending(),
     )
     .await
@@ -2832,7 +2845,16 @@ pub async fn run_private_session_cancelled(
     on_output: impl Fn(&[u8]) + Send + Sync,
     cancelled: impl Future<Output = ()> + Send,
 ) -> Result<PrivateSession, Failure> {
-    private_session_inner(boot, process, files, capture, on_output, false, cancelled).await
+    private_session_inner(
+        boot,
+        process,
+        files,
+        capture,
+        on_output,
+        (false, None),
+        cancelled,
+    )
+    .await
 }
 
 pub async fn run_private_login(
@@ -2848,8 +2870,30 @@ pub async fn run_private_login(
         files,
         capture,
         on_output,
-        true,
+        (true, None),
         std::future::pending(),
+    )
+    .await
+}
+
+/// A browser-owned login never reads the server process's terminal.
+pub async fn run_private_login_remote(
+    boot: &Boot<'_>,
+    process: &Process<'_>,
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+    capture: &[String],
+    on_output: impl Fn(&[u8]) + Send + Sync,
+    input: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    cancelled: impl Future<Output = ()> + Send,
+) -> Result<PrivateSession, Failure> {
+    private_session_inner(
+        boot,
+        process,
+        files,
+        capture,
+        on_output,
+        (true, Some(input)),
+        cancelled,
     )
     .await
 }
@@ -2860,9 +2904,10 @@ async fn private_session_inner(
     files: &std::collections::BTreeMap<String, Vec<u8>>,
     capture: &[String],
     on_output: impl Fn(&[u8]) + Send + Sync,
-    interactive: bool,
+    dialogue: (bool, Option<tokio::sync::mpsc::Receiver<Vec<u8>>>),
     cancelled: impl Future<Output = ()> + Send,
 ) -> Result<PrivateSession, Failure> {
+    let (interactive, remote_input) = dialogue;
     use base64::{Engine, engine::general_purpose::STANDARD};
     let vm = create_vm(boot, PRIVATE_HOME_MIB).await?;
     let failed = || Failure::Runtime(Sentence::Text("Private credential transfer failed".into()));
@@ -2894,7 +2939,7 @@ async fn private_session_inner(
         return Err(failed());
     }
     let execute = async |vm: &OwnedVm| {
-        execute_private_tty_cancelled(vm, process, on_output, interactive, cancelled).await
+        execute_private_io(vm, process, on_output, interactive, remote_input, cancelled).await
     };
     let capture = async |vm: &OwnedVm| {
         let argv = vec![

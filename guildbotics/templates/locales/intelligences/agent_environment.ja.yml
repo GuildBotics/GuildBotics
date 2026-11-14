@@ -67,6 +67,12 @@ ja:
     build_running: "このワークスペースのエージェント実行環境は別のビルドが実行中です。"
   tool:
     not_provisioned: "%{tool} はまだエージェント実行環境に導入されていません。"
+    credentials_missing_browser: "%{tool} のログインは Hub に保存されていません。設定 → Intelligence → エージェント実行環境からログインしてください。"
+    authentication_failed_browser: "%{tool} の認証に失敗しました。設定 → Intelligence → エージェント実行環境からログインしてください。"
+    credentials_unavailable_browser: "Hub に保存した %{tool} のログインを今は使えません。設定 → Intelligence → エージェント実行環境からログインしてください。"
+    credentials_corrupt_browser: "Hub に保存した %{tool} のログインを開けません。設定 → Intelligence → エージェント実行環境からログインしてください。"
+    refresh_failed_browser: "Hub で %{tool} のログインを更新できませんでした。設定 → Intelligence → エージェント実行環境からログインしてください。"
+    login_refused_browser: "%{tool} が保存したログインを受け付けませんでした。設定 → Intelligence → エージェント実行環境からログインしてください。"
     credentials_missing: "%{tool} の認証情報はこの端末に保存されていません。`%{command}` を実行してください。"
     credentials_saved: "%{tool} の認証情報はこの端末に保存されています。"
     authentication_failed: "%{tool} の認証に失敗しました。`%{command}` で再ログインしてください。"

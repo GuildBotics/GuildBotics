@@ -951,3 +951,43 @@ async fn real_device_copilot_reads_quota_from_its_synthetic_account() {
     assert!(observed.iter().all(|value| value == "Bearer gho_R4"));
     recorder.abort();
 }
+
+/// Attended login contract for each pinned CLI:
+/// 1. Build this checkout's snapshot under GUILDBOTICS_REAL_DEVICE_ROOT.
+/// 2. On a client connected to the Hub, open Settings / Intelligence / Agent
+///    environment. Choose Log in for Codex, Claude, Grok and Copilot in turn.
+/// 3. Open the URL printed by the CLI in the client's browser. For device auth,
+///    enter the displayed device code there. For Claude's paste-code flow,
+///    paste the returned code in the dialog and press Send. Never put codes in
+///    a ticket, screenshot, trace or test artifact.
+/// 4. Confirm saved status, reload the page, then Check again. Close a second
+///    in-progress login and confirm that the prior saved login still works.
+/// 5. Antigravity must offer only the existing terminal command.
+/// This probe exercises the same private remote IO with synthetic prompts;
+/// the steps above verify provider-owned browser pages with an attending owner.
+#[tokio::test]
+#[ignore = "requires an attending owner and a prepared real-device snapshot; follow the steps above"]
+async fn browser_login_private_io_contract() {
+    let device = Device::new();
+    for tool in ["codex", "claude", "grok", "copilot"] {
+        let catalog = device
+            .catalog()
+            .into_iter()
+            .find(|entry| entry["name"] == tool)
+            .unwrap();
+        let (input, receiver) = tokio::sync::mpsc::channel(1);
+        let (output, mut chunks) = tokio::sync::mpsc::channel(64);
+        let run = private_run_io(device.vm.clone(), catalog, Files::new(),
+            vec![PYTHON.into(), "-c".into(),
+                "print('https://example.test/login device-code', flush=True); assert input() == 'synthetic-answer'".into()],
+            true, tokio_util::sync::CancellationToken::new(), Some(LoginIo {input:receiver, output}));
+        let client = async {
+            let chunk = chunks.recv().await.unwrap();
+            assert!(!chunk.is_empty());
+            input.send(b"synthetic-answer\n".to_vec()).await.unwrap();
+            while chunks.recv().await.is_some() {}
+        };
+        let (result, ()) = tokio::join!(run, client);
+        assert!(matches!(result, Ok((0, _, _))), "{tool}");
+    }
+}

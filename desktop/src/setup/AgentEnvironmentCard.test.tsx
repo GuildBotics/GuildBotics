@@ -321,7 +321,9 @@ describe("AgentEnvironmentCard", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("/Users/me/.guildbotics/bin/guildbotics environment login claude"),
+      within(document.getElementById("agent-environment-tool-claude")!).getByRole("button", {
+        name: t("setup.intelligence.environment.login"),
+      }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(t("setup.intelligence.environment.toolNotProvisioned")),
@@ -365,7 +367,7 @@ describe("AgentEnvironmentCard", () => {
   });
 
   it.each(["en", "ja"])(
-    "keeps login and copy available for every credential state in %s",
+    "offers browser login for supported tools and a terminal command for unknown tools in %s",
     async (language) => {
       await i18n.changeLanguage(language);
       const tr = i18n.getFixedT(language);
@@ -389,6 +391,13 @@ describe("AgentEnvironmentCard", () => {
       await screen.findByText(tr("setup.intelligence.environment.toolAuthenticationFailed"));
       for (const tool of data.tools) {
         const row = within(document.getElementById(`agent-environment-tool-${tool.name}`)!);
+        if (["codex", "claude", "grok", "copilot"].includes(tool.name)) {
+          expect(
+            row.getByRole("button", { name: tr("setup.intelligence.environment.login") }),
+          ).toBeInTheDocument();
+          expect(row.queryByText(tool.login_command)).not.toBeInTheDocument();
+          continue;
+        }
         expect(row.getByText(tool.login_command)).toBeInTheDocument();
         await user.click(
           row.getByRole("button", { name: tr("setup.intelligence.environment.copy") }),
@@ -594,7 +603,7 @@ describe("AgentEnvironmentCard", () => {
     Element.prototype.scrollIntoView = scrollIntoView;
     renderCard("agent-environment-tool-claude");
 
-    await screen.findByText("/Users/me/.guildbotics/bin/guildbotics environment login claude");
+    await screen.findByText("Claude Code");
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
     expect(document.getElementById("agent-environment-tool-claude")).not.toBeNull();
   });

@@ -1,4 +1,5 @@
 //! Per-tool sealed credential loans. Only a stand-in crosses into an agent VM.
+pub(crate) mod browser;
 use crate::host_window::{Gateway, TokenSource};
 use gb_config::{
     credential_vault::{self, Files},
@@ -778,10 +779,10 @@ mod tests {
         assert!(!stub.to_string().contains("private"));
         assert!(stub.get("unknown_future_secret").is_none());
     }
-    fn catalog() -> Value {
+    pub(super) fn catalog() -> Value {
         json!({"provision":{"state_root":".tool","auth":"auth.json","persisted":["settings.json","sessions/"],"api_domains":["api.example.test"],"credential_broker":{"access_token":["access"],"expires_at":["expires"],"expires_format":"epoch_ms","format":"test"}}})
     }
-    fn credentials(token: &str) -> Files {
+    pub(super) fn credentials(token: &str) -> Files {
         Files::from([(
             "auth.json".into(),
             serde_json::to_vec(&json!({"access":token,"expires":4102444800000i64})).unwrap(),
@@ -850,7 +851,7 @@ mod tests {
         assert!(!expiring(&files, &catalog()));
         assert!(expiring(&expire(files, &catalog()).unwrap(), &catalog()));
     }
-    struct FakeKeychain;
+    pub(super) struct FakeKeychain;
     impl gb_config::secrets::Keychain for FakeKeychain {
         fn read(&self) -> anyhow::Result<Option<String>> {
             use base64::Engine;
@@ -3119,18 +3120,55 @@ async fn private_run(
     show: bool,
     cancelled: tokio_util::sync::CancellationToken,
 ) -> Result<(i32, Files, Vec<u8>), PrivateError> {
+    private_run_io(vm, catalog, files, argv, show, cancelled, None).await
+}
+
+pub(crate) struct LoginIo {
+    pub input: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    pub output: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+async fn private_run_io(
+    vm: LoginVm,
+    catalog: Value,
+    files: Files,
+    argv: Vec<String>,
+    show: bool,
+    cancelled: tokio_util::sync::CancellationToken,
+    io: Option<LoginIo>,
+) -> Result<(i32, Files, Vec<u8>), PrivateError> {
     let plan = private_plan(&vm, &catalog, files, argv, show)?;
     let runtime_home = vm.data.join("msb");
     let boot = plan.boot(&vm, &runtime_home);
     let process = plan.process();
+    let (input, sender) = match io {
+        Some(io) => (Some(io.input), Some(io.output)),
+        None => (None, None),
+    };
+    let output_cancelled = cancelled.clone();
     let output = move |chunk: &[u8]| {
-        if show {
+        if let Some(sender) = &sender {
+            // Abort on a slow browser rather than dropping a login URL or code.
+            if sender.try_send(chunk.to_vec()).is_err() {
+                output_cancelled.cancel();
+            }
+        } else if show {
             use std::io::Write;
             let _ = std::io::stdout().write_all(chunk);
             let _ = std::io::stdout().flush();
         }
     };
-    let result = if plan.interactive {
+    let result = if let Some(input) = input {
+        gb_environment::runtime::run_private_login_remote(
+            &boot,
+            &process,
+            &plan.injection,
+            &plan.capture,
+            output,
+            input,
+            cancelled.cancelled_owned(),
+        )
+        .await
+    } else if plan.interactive {
         gb_environment::runtime::run_private_login(
             &boot,
             &process,
@@ -3199,6 +3237,27 @@ async fn login_with_cancellation(
     usage: bool,
     cancelled: tokio_util::sync::CancellationToken,
 ) -> Result<Value, String> {
+    login_with_io(
+        host,
+        workspace,
+        tool,
+        usage,
+        cancelled,
+        None,
+        Arc::new(SystemKeychain),
+    )
+    .await
+}
+
+pub(crate) async fn login_with_io(
+    host: &gb_environment::Host,
+    workspace: &Path,
+    tool: &str,
+    usage: bool,
+    cancelled: tokio_util::sync::CancellationToken,
+    io: Option<LoginIo>,
+    keychain: Arc<dyn gb_config::secrets::Keychain>,
+) -> Result<Value, String> {
     if usage && cancelled.is_cancelled() {
         return Err("The usage probe was cancelled.".into());
     }
@@ -3244,10 +3303,9 @@ async fn login_with_cancellation(
         .unwrap_or("en");
     let tool = tool.to_owned();
     let task = spawn_private(private_tasks(), async move {
-        let keychain = SystemKeychain;
         let device = DeviceKey {
             machine_root: vm.data.parent().unwrap_or(&vm.data).into(),
-            keychain: &keychain,
+            keychain: keychain.as_ref(),
         };
         let argv = if usage {
             vec![
@@ -3276,7 +3334,17 @@ async fn login_with_cancellation(
             &tool,
             usage,
             language,
-            |files| private_run(vm.clone(), catalog.clone(), files, argv, !usage, cancelled),
+            |files| {
+                private_run_io(
+                    vm.clone(),
+                    catalog.clone(),
+                    files,
+                    argv,
+                    !usage,
+                    cancelled,
+                    io,
+                )
+            },
         )
         .await
     });

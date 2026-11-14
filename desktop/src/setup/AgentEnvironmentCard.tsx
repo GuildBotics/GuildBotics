@@ -17,6 +17,7 @@ import { useEffect } from "react";
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 
+import { BrowserToolLogin } from "./BrowserToolLogin";
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 
 import {
@@ -488,15 +489,22 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
           </Button>
         )}
       </Group>
-      <Text size="xs" c="dimmed">
-        {t("setup.intelligence.environment.loginHint")}
-      </Text>
+      {["codex", "claude", "grok", "copilot"].includes(tool.name) && (
+        <BrowserToolLogin tool={tool.name} />
+      )}
+      {!["codex", "claude", "grok", "copilot"].includes(tool.name) && (
+        <Text size="xs" c="dimmed">
+          {t("setup.intelligence.environment.loginHint")}
+        </Text>
+      )}
       {tool.usage_supported && (
         <Text size="xs" c="dimmed">
           {t("setup.intelligence.environment.loginRecheckHint")}
         </Text>
       )}
-      <CommandLine command={command} />
+      {!["codex", "claude", "grok", "copilot"].includes(tool.name) && (
+        <CommandLine command={command} />
+      )}
     </Stack>
   );
 }
