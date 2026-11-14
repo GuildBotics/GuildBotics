@@ -2120,7 +2120,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
 }
 
 #[tokio::test]
-async fn consent_tokens_allow_cli_routes_but_not_command_execution_or_settings() {
+async fn consent_tokens_allow_cli_run_and_results_but_not_input_uploads_or_settings() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path());
     let verifier = loopback_auth::random_secret::<48>();
@@ -2169,8 +2169,9 @@ async fn consent_tokens_allow_cli_routes_but_not_command_execution_or_settings()
     for (path, expected) in [
         ("/session/links", StatusCode::CREATED),
         ("/shutdown", StatusCode::UNAUTHORIZED),
-        ("/commands/run", StatusCode::UNAUTHORIZED),
+        ("/commands/input-files", StatusCode::UNAUTHORIZED),
         // Empty payloads reach the CLI handlers and fail validation, not authentication.
+        ("/commands/run", StatusCode::UNPROCESSABLE_ENTITY),
         ("/member/run", StatusCode::UNPROCESSABLE_ENTITY),
         ("/member/plan", StatusCode::UNPROCESSABLE_ENTITY),
         ("/member/git", StatusCode::UNPROCESSABLE_ENTITY),
@@ -2189,6 +2190,7 @@ async fn consent_tokens_allow_cli_routes_but_not_command_execution_or_settings()
     }
     for (path, expected) in [
         ("/health", StatusCode::OK),
+        ("/commands/runs/missing", StatusCode::NOT_FOUND),
         ("/member/redaction-keys", StatusCode::OK),
         ("/config/status", StatusCode::UNAUTHORIZED),
     ] {
