@@ -147,8 +147,6 @@ schedules:
 
 ## How Scheduling Works Internally
 
-When an author starts addressing PR feedback, Branvil returns running CI for a deferred head to its original queue position.
-
 How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `crates/gb-server/src/schedule.rs`):
 
 **Architecture**:
@@ -158,6 +156,8 @@ How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `
    - Checks all `task_schedules` of its member
    - Runs the commands whose schedule matches the current time
    - Runs one `routine_command` in round-robin order, if the patrol interval (default 10 minutes) has elapsed
+
+When the patrol starts an author's PR feedback work for a head in a deferred Branvil class (see the [CI queue](../crates/branvil/docs/ci.md)), Branvil returns running CI for that head to its original queue position.
 
 **Randomization handling**:
 

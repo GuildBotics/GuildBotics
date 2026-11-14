@@ -147,8 +147,6 @@ schedules:
 
 ## スケジューラの内部動作
 
-作者が PR の指摘対応を始めると、その head が後回しの区分なら、Branvil はその head の走っている CI を待ち行列の元の位置に戻す。
-
 スケジューラの動作（`crates/gb-server/src/native_scheduler.rs` および `crates/gb-server/src/schedule.rs` より）:
 
 **アーキテクチャ**:
@@ -158,6 +156,8 @@ schedules:
    - 現在のメンバーの全 `task_schedules` をチェック
    - スケジュールが現在時刻に一致するコマンドを実行
    - 巡回間隔（既定 10 分）が経過していれば、ラウンドロビン順で 1 つの `routine_command` を実行
+
+巡回が作者の PR 指摘対応を始めるとき、その head が Branvil の後回しの区分（[CI の待ち行列](../crates/branvil/docs/ci.md)）なら、Branvil はその head の走っている CI を待ち行列の元の位置に戻します。
 
 **ランダム化の処理**:
 
