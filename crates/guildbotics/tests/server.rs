@@ -1801,6 +1801,56 @@ fn server_stop_uses_the_running_port_and_waits_for_both_servers() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("No GuildBotics server is running."));
 }
 
+async fn hold_workspace_switch(server: &Server, workspace: &Path) -> gb_base::files::FileLock {
+    std::fs::create_dir(workspace).unwrap();
+    let registry = gb_base::files::FileLock::hold(
+        &server.home.join("data/workspaces.lock"),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    // Branvil's router is ready before startup/autostart releases workspace
+    // admission. Retry only that documented conflict until the switch is
+    // admitted and blocked on the registry held by this fixture.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match server
+                .http
+                .post(server.url("/-/guildbotics/api/workspace"))
+                .bearer_auth(server.owner_token())
+                .json(&json!({"workspace_dir": workspace}))
+                .timeout(Duration::from_millis(300))
+                .send()
+                .await
+            {
+                Err(error) => {
+                    assert!(error.is_timeout(), "{error}");
+                    break;
+                }
+                Ok(response) => {
+                    assert_eq!(response.status(), StatusCode::CONFLICT);
+                    let body: Value = response.json().await.unwrap();
+                    assert_eq!(body["code"], "workspace_switch_blocked_by_active_work");
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("startup never released workspace admission");
+    // A conflict confirms that the detached switch still holds admission
+    // while waiting to persist its selection.
+    let reply = server
+        .http
+        .post(server.url("/-/guildbotics/api/scheduler/start"))
+        .bearer_auth(server.owner_token())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), StatusCode::CONFLICT);
+
+    registry
+}
+
 #[tokio::test]
 async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
     for via_api in [true, false] {
@@ -1809,51 +1859,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
         let mut server = Server::start(dir.path());
         let branvil = format!("{}/api/v1/health", server.branvil_url());
         let workspace = dir.path().join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        let registry = gb_base::files::FileLock::hold(
-            &server.home.join("data/workspaces.lock"),
-            Duration::from_secs(1),
-        )
-        .unwrap();
-        // Branvil's router is ready before startup/autostart releases workspace
-        // admission. Retry only that documented conflict until the switch is
-        // admitted and blocked on the registry held by this fixture.
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                match server
-                    .http
-                    .post(server.url("/-/guildbotics/api/workspace"))
-                    .bearer_auth(server.owner_token())
-                    .json(&json!({"workspace_dir": workspace}))
-                    .timeout(Duration::from_millis(300))
-                    .send()
-                    .await
-                {
-                    Err(error) => {
-                        assert!(error.is_timeout(), "{error}");
-                        break;
-                    }
-                    Ok(response) => {
-                        assert_eq!(response.status(), StatusCode::CONFLICT);
-                        let body: Value = response.json().await.unwrap();
-                        assert_eq!(body["code"], "workspace_switch_blocked_by_active_work");
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("startup never released workspace admission");
-        // A conflict confirms that the detached switch still holds admission
-        // while waiting to persist its selection.
-        let reply = server
-            .http
-            .post(server.url("/-/guildbotics/api/scheduler/start"))
-            .bearer_auth(server.owner_token())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(reply.status(), StatusCode::CONFLICT);
+        let registry = hold_workspace_switch(&server, &workspace).await;
 
         if via_api {
             let response = server
@@ -1904,63 +1910,65 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
 
 #[tokio::test]
 async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interrupted() {
-    let dir = tempfile::tempdir().unwrap();
-    let data = set_up_branvil(dir.path(), "127.0.0.1:0");
-    let config = data.join("branvil.toml");
-    let configure = |seconds| {
+    for mode in ["deadline", "finish", "force-ci", "force-work"] {
+        let dir = tempfile::tempdir().unwrap();
+        let data = set_up_branvil(dir.path(), "127.0.0.1:0");
+        let config = data.join("branvil.toml");
+        let configure = |seconds| {
+            std::fs::write(
+                &config,
+                format!("listen = '127.0.0.1:0'\n[ci]\nstop_wait_secs = {seconds}\n"),
+            )
+            .unwrap();
+        };
+        configure(if mode == "deadline" { 10 } else { 30 });
+        let mut server = Server::start(dir.path());
+        let url = server.branvil_url();
+        let owner = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
+        for args in [
+            &["workspace", "create", "acme"][..],
+            &["repo", "create", "acme/demo"],
+            &["member", "create", "fixture-runner", "--kind", "runner"],
+        ] {
+            let mut command = vec!["branvil"];
+            command.extend(args);
+            command.extend(["--url", &url]);
+            assert_ok(&guildbotics(&data, &command));
+        }
+        let token = guildbotics(
+            &data,
+            &[
+                "branvil",
+                "member",
+                "token",
+                "fixture-runner",
+                "--url",
+                &url,
+            ],
+        );
+        assert_ok(&token);
+        let runner = String::from_utf8(token.stdout).unwrap();
+        let work = dir.path().join("work");
+        let home = dir.path().join("git-home");
+        std::fs::create_dir_all(work.join(".branvil")).unwrap();
+        std::fs::create_dir(&home).unwrap();
         std::fs::write(
-            &config,
-            format!("listen = '127.0.0.1:0'\n[ci]\nstop_wait_secs = {seconds}\n"),
-        )
-        .unwrap();
-    };
-    configure(2);
-    let mut server = Server::start(dir.path());
-    let mut url = server.branvil_url();
-    let owner = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
-    for args in [
-        &["workspace", "create", "acme"][..],
-        &["repo", "create", "acme/demo"],
-        &["member", "create", "fixture-runner", "--kind", "runner"],
-    ] {
-        let mut command = vec!["branvil"];
-        command.extend(args);
-        command.extend(["--url", &url]);
-        assert_ok(&guildbotics(&data, &command));
-    }
-    let token = guildbotics(
-        &data,
-        &[
-            "branvil",
-            "member",
-            "token",
-            "fixture-runner",
-            "--url",
-            &url,
-        ],
-    );
-    assert_ok(&token);
-    let runner = String::from_utf8(token.stdout).unwrap();
-    let work = dir.path().join("work");
-    let home = dir.path().join("git-home");
-    std::fs::create_dir_all(work.join(".branvil")).unwrap();
-    std::fs::create_dir(&home).unwrap();
-    std::fs::write(
         work.join(".branvil/ci.toml"),
-        "[[jobs]]\nname = 'fixture'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo fixture']\n",
+        "[[jobs]]\nname = 'fixture'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo fixture']\n[[jobs]]\nname = 'queued'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo queued']\n",
     )
     .unwrap();
-    let remote = format!("{url}/git/acme/demo.git");
-    for args in [
-        &["init", "-q", "-b", "main"][..],
-        &["add", ".branvil/ci.toml"],
-        &["commit", "-qm", "seed CI"],
-        &["push", "-q", &remote, "main"],
-    ] {
-        assert_ok(&git(&work, &home, owner.trim(), args));
-    }
+        let remote = format!("{url}/git/acme/demo.git");
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["add", ".branvil/ci.toml"],
+            &["commit", "-qm", "seed CI"],
+            &["push", "-q", &remote, "main"],
+        ] {
+            assert_ok(&git(&work, &home, owner.trim(), args));
+        }
 
-    for interrupt in [false, true] {
+        let workspace = dir.path().join(format!("workspace-{mode}"));
+        let registry = hold_workspace_switch(&server, &workspace).await;
         let claim = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let response = server
@@ -1981,7 +1989,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
         })
         .await
         .unwrap();
-        assert_eq!(claim["job"]["name"], "fixture");
+        assert!(claim["job"]["name"].is_string());
         let stop = server
             .http
             .post(server.url("/-/guildbotics/api/shutdown"))
@@ -1991,6 +1999,33 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             .await
             .unwrap();
         assert_eq!(stop.status(), StatusCode::ACCEPTED);
+        // While GuildBotics work holds the registry, CI must keep leasing jobs.
+        let queued = server
+            .http
+            .post(format!("{url}/api/v1/runner/claim"))
+            .bearer_auth(runner.trim())
+            .json(&json!({"executor": "test", "executor_state": "ready"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(queued.status(), StatusCode::OK);
+        let queued: Value = queued.json().await.unwrap();
+        if mode == "force-work" {
+            let response = server
+                .http
+                .post(server.url("/-/guildbotics/api/shutdown"))
+                .bearer_auth(server.owner_token())
+                .json(&json!({"force": true}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+        drop(registry);
+        if mode == "force-work" {
+            assert!(server.exit_within(Duration::from_secs(5)).await.success());
+            continue;
+        }
         let saw_wait = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let response = server
@@ -2054,19 +2089,33 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             owner.trim(),
             &["push", "-q", &remote, "main:refs/heads/during-drain"],
         ));
-        if interrupt {
+        let no_claim = server
+            .http
+            .post(format!("{url}/api/v1/runner/claim"))
+            .bearer_auth(runner.trim())
+            .json(&json!({"executor": "test", "executor_state": "ready"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(no_claim.status(), StatusCode::NO_CONTENT);
+        assert!(server.child.try_wait().unwrap().is_none());
+        if mode == "finish" {
+            for leased in [&claim, &queued] {
+                let attempt = leased["attempt_id"].as_str().unwrap();
+                let finished = server.http.post(format!("{url}/api/v1/runner/attempts/{attempt}/finish"))
+                    .bearer_auth(runner.trim())
+                    .json(&json!({"lease": leased["lease"], "conclusion": "success", "details": "fixture"}))
+                    .send().await.unwrap();
+                assert_eq!(finished.status(), StatusCode::OK);
+            }
+        } else if mode == "force-ci" {
             let result = Command::new("kill")
                 .args(["-TERM", &server.child.id().to_string()])
                 .output()
                 .unwrap();
             assert_ok(&result);
         }
-        assert!(server.exit_within(Duration::from_secs(8)).await.success());
-        if !interrupt {
-            configure(30);
-            server = Server::start(dir.path());
-            url = server.branvil_url();
-        }
+        assert!(server.exit_within(Duration::from_secs(15)).await.success());
     }
 }
 

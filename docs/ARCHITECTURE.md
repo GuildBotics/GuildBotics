@@ -1033,8 +1033,11 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
   `prepare_embedded` returns a router and data/shutdown handles without binding;
   its routes return 503 until recovery completes. GuildBotics routes take
   precedence over Branvil's GUI fallback. `guildbotics server stop` drains
-  GuildBotics' work and Branvil's CI jobs together. Branvil gives out no more jobs from the start
-  of the stop. The screens and the CLI stay available meanwhile: the API refuses
+  GuildBotics' work first, including service shutdown, private login, worktree
+  writebacks, snapshot builds, and VM cleanup. Branvil keeps giving out CI jobs
+  throughout that wait. Only then does it stop giving out jobs and wait for
+  running CI jobs, bounded by `ci.stop_wait_secs`. The screens and the CLI stay
+  available meanwhile: the API refuses
   only the routes that would start more work for the stop to wait for (`api::REFUSED_WHILE_STOPPING`:
   runs, the service, environment builds, usage probes, workspace switches) with
   `503 server_stopping`. Interactive member operations are answered until the

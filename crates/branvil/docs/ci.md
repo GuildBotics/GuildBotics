@@ -386,8 +386,10 @@ Stopping the service:
 
 The integrated Hub's [manual update](../../../docs/hub-server.md#手動更新)
 uses `guildbotics server stop`. Branvil keeps serving while GuildBotics
-finishes its work, then waits for its own CI jobs as described below. A
-forced stop or SIGTERM to the combined server skips the CI wait. On an
+finishes its work and cleanup, continuing to give out CI jobs during that
+wait. Only then does it stop giving out jobs and wait for its own running
+CI jobs as described below. A forced stop or SIGTERM to the combined server skips the CI wait, including
+a force request made while GuildBotics is still finishing its work. On an
 orderly stop the combined server logs interrupted jobs and exits
 successfully so launchd leaves it stopped.
 
