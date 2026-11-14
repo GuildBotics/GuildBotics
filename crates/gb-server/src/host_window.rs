@@ -577,6 +577,7 @@ mod tests {
         let copy = Arc::new(gb_environment::Configuration::copy(&host, &workspace).unwrap());
         let command = gb_environment::Command {
             client_copy: false,
+            remote_copy: false,
             files: None,
             upload: None,
             returned: Default::default(),
@@ -715,6 +716,7 @@ mod tests {
         std::fs::write(&project, "[").unwrap();
         let command = gb_environment::Command {
             client_copy: false,
+            remote_copy: false,
             files: None,
             upload: None,
             returned: Default::default(),

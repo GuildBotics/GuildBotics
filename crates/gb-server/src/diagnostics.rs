@@ -325,6 +325,7 @@ async fn run_check(
     launch.cwd = Some(cwd.to_owned());
     launch.failure_capture = Some(capture.clone());
     let request = RunRequest {
+        remote_copy: false,
         preflight: false,
         remotes: Default::default(),
         client_cwd: None,
@@ -984,6 +985,7 @@ pub(crate) async fn troubleshoot(
         workspace,
     );
     let run = RunRequest {
+        remote_copy: false,
         preflight: false,
         remotes: Default::default(),
         client_cwd: None,

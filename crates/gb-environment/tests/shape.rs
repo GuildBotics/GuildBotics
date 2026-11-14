@@ -47,6 +47,7 @@ fn machine() -> Machine {
 fn command(machine: &Machine, path: PathBuf, inspects: Vec<InspectsItem>) -> Command {
     Command {
         client_copy: false,
+        remote_copy: false,
         files: None,
         upload: None,
         returned: Default::default(),
@@ -679,5 +680,32 @@ fn a_private_run_cwd_mounts_only_its_own_directory() {
             .mounts
             .iter()
             .any(|m| m.host.as_ref() == Some(&named(&cwd)))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_copy_keeps_the_client_name_even_when_the_hub_has_a_symlink_there() {
+    let machine = machine();
+    let alias = named(&machine.host.home).join("client-name");
+    std::os::unix::fs::symlink(&machine.workspace, &alias).unwrap();
+    let mut run = command(
+        &machine,
+        machine
+            .host
+            .package
+            .join("templates/commands/functions/probe.py"),
+        vec![],
+    );
+    run.client_copy = true;
+    run.remote_copy = true;
+    run.cwd = alias.clone();
+    let result = shape(&machine.host, &machine.workspace, &run, None).unwrap();
+    assert_eq!(result.cwd, alias.to_str().unwrap());
+    assert!(
+        result
+            .mounts
+            .iter()
+            .any(|mount| mount.guest == alias.to_str().unwrap() && mount.host.is_none())
     );
 }
