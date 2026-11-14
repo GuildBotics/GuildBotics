@@ -295,6 +295,61 @@ pub(super) async fn pending_closed_and_advanced_heads(
     finish_claim(base, runner, &attempt, "success").await;
 }
 
+async fn author_yields_running_checks(
+    root: &Path,
+    owner: &::branvil::api::MemberApi,
+    code: &dyn CodeHostingService,
+    base: &str,
+    owner_token: &str,
+    runner: &str,
+) {
+    let (_, repo, head, pull) = fixture(root, owner, code, owner_token, "yield", &["test"]).await;
+    let attempt = claim_head(base, runner, &head).await;
+    let n = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+    let current = owner.repos_get(&repo).await.unwrap();
+    owner
+        .repos_update(
+            &repo,
+            input(json!({"revision":current.revision,"required_approvals":1})),
+        )
+        .await
+        .unwrap();
+    owner
+        .pulls_review(
+            &repo,
+            n,
+            input(json!({"verdict":"request_changes","commit":head,"body":"Fix before landing"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        code.yield_pull_request_checks(&pull.target.url)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        code.yield_pull_request_checks(&pull.target.url)
+            .await
+            .unwrap(),
+        0
+    );
+    finish_claim(base, runner, &attempt, "failure").await;
+    let ready = code
+        .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap();
+    assert!(
+        ready
+            .checks
+            .iter()
+            .all(|c| c.conclusion.as_deref() != Some("cancelled"))
+    );
+    let replacement = claim_head(base, runner, &head).await;
+    assert_ne!(replacement["attempt_id"], attempt["attempt_id"]);
+    finish_claim(base, runner, &replacement, "success").await;
+}
+
 pub(super) async fn contract(
     root: &Path,
     owner: &::branvil::api::MemberApi,
@@ -303,6 +358,7 @@ pub(super) async fn contract(
     owner_token: &str,
     runner: &str,
 ) {
+    author_yields_running_checks(root, owner, code, base, owner_token, runner).await;
     primary_failure_logs_and_cancelled_fallback(root, owner, code, base, owner_token, runner).await;
     ten_failed_logs_fit_one_page(root, owner, code, base, owner_token, runner).await;
     pending_closed_and_advanced_heads(root, owner, code, base, owner_token, runner).await;

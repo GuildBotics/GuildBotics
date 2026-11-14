@@ -84,8 +84,14 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   without a reusable result, sequence decides. Reuse is assessed after taking
   the run's current cache scope; retries with `allow_reuse = false` execute.
   Class 4a runs only when no class 1–3 attempt waits, and 4b only when no other
-  class waits. This changes order only: it neither cancels nor holds attempts.
-  A deferred/last attempt that has started continues to completion, even if
+  class waits. Priority changes alone neither cancel nor hold attempts.
+  When the author starts addressing PR feedback, running checks of a deferred/last
+  head may be yielded: the running attempt is asked to cancel and a new current
+  attempt is queued at the same position. Queued checks are untouched. This is
+  author-only and does not apply if a protected branch or a higher-priority PR
+  also wants the commit. The old cancellation is not the current check result.
+  A free runner may immediately claim the replacement; a push stops obsolete work.
+  Otherwise, a deferred/last attempt that has started continues to completion, even if
   higher-class work arrives. Under sustained load a failing head's remaining
   jobs may therefore finish only after its author has already pushed a fix.
 

@@ -1555,3 +1555,20 @@ runner's (`[ci.microsandbox] home`).
   ```
 
   (`state` is `following` without problems).
+
+### Yield a PR head's running checks
+
+`POST /api/v1/repos/{repo}/pulls/{number}/checks/yield` takes no body.
+Only the PR author may call it (member session/Bearer); other members, including
+owners, receive `403 forbidden`. Visibility uses the usual repository and PR
+rules (`404` for missing/invisible items).
+
+Returns `{"head":"<sha>","yielded":[<attempt>]}`, using the job attempt view.
+A closed PR, absent run, or run above the deferred class returns an empty list.
+The run's best class across all requesting branches and PRs decides eligibility,
+including drafts and required-check failures. Current running check attempts
+that are neither cancelling nor superseded are cancelled and replaced atomically
+with queued attempts at their original queue positions; queue capacity is not
+rechecked. Queued attempts and cache refreshes are untouched. Cancellation of an
+old attempt does not retry or replace the new current check. Repeated calls only
+affect attempts running at the time of each call. Check events announce changes.

@@ -147,6 +147,8 @@ schedules:
 
 ## スケジューラの内部動作
 
+作者が PR の指摘対応を始めると、その head が後回しの区分なら、Branvil はその head の走っている CI を待ち行列の元の位置に戻す。
+
 スケジューラの動作（`crates/gb-server/src/native_scheduler.rs` および `crates/gb-server/src/schedule.rs` より）:
 
 **アーキテクチャ**:

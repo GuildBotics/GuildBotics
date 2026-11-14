@@ -147,6 +147,8 @@ schedules:
 
 ## How Scheduling Works Internally
 
+When an author starts addressing PR feedback, Branvil returns running CI for a deferred head to its original queue position.
+
 How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `crates/gb-server/src/schedule.rs`):
 
 **Architecture**:

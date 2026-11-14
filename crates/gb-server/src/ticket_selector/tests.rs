@@ -347,7 +347,8 @@ impl Keychain for NoKeys {
 }
 #[derive(Default)]
 struct FakeRunner {
-    calls: Mutex<Vec<WorkflowInvocation>>,
+    calls: Arc<Mutex<Vec<WorkflowInvocation>>>,
+    fail_evidence: bool,
     failure: Mutex<Option<DispatchFailure>>,
     records: Mutex<Vec<RunRecord>>,
     evidence: Mutex<Vec<Value>>,
@@ -387,6 +388,9 @@ impl Runner for FakeRunner {
             .lock()
             .unwrap()
             .push(json!({"type":kind,"payload":payload}));
+        if self.fail_evidence && kind.starts_with("checks_yield") {
+            anyhow::bail!("journal unavailable");
+        }
         Ok(())
     }
     fn record(&self, id: &str) -> anyhow::Result<Option<RunRecord>> {
@@ -1037,6 +1041,10 @@ async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_a
 }
 
 struct CodeFaults {
+    yield_result: Option<Result<usize, ServiceError>>,
+    yield_calls: Mutex<Vec<String>>,
+    runner_calls: Option<Arc<Mutex<Vec<WorkflowInvocation>>>>,
+
     candidates: Option<Vec<Task>>,
     refresh_limit: bool,
     block: Option<(&'static str, tokio_util::sync::CancellationToken)>,
@@ -1051,6 +1059,9 @@ impl CodeFaults {
     fn new(inner: Arc<dyn CodeHostingService>) -> Self {
         Self {
             inner,
+            yield_result: None,
+            yield_calls: Mutex::default(),
+            runner_calls: None,
             candidates: None,
             refresh_limit: false,
             block: None,
@@ -1063,6 +1074,18 @@ impl CodeFaults {
     }
 }
 impl CodeHostingService for CodeFaults {
+    fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
+        Box::pin(async move {
+            if let Some(calls) = &self.runner_calls {
+                assert!(calls.lock().unwrap().is_empty());
+            }
+            self.yield_calls.lock().unwrap().push(url.into());
+            self.yield_result
+                .clone()
+                .unwrap_or(Err(ServiceError::Unsupported))
+        })
+    }
+
     fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         if let Some(links) = &self.link_override {
             return Box::pin(async move { Ok(links.clone()) });
@@ -1248,17 +1271,8 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
         let f = Fixture::new();
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
-        let faults = CodeFaults {
-            candidates: None,
-            refresh_limit: false,
-            block: None,
-            inner: f.code.clone(),
-            draft: Some(error.clone()),
-            fail_comment: false,
-            fail_links: false,
-            link_override: None,
-            quota_error: None,
-        };
+        let mut faults = CodeFaults::new(f.code.clone());
+        faults.draft = Some(error.clone());
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
         selector.hand_over(&pull).await;
@@ -1308,17 +1322,8 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
     let f = Fixture::new();
     let mut pull = f.pull().await;
     pull.trigger_reason = Some(REVIEW_LIMIT.into());
-    let faults = CodeFaults {
-        candidates: None,
-        refresh_limit: false,
-        block: None,
-        inner: f.code.clone(),
-        draft: None,
-        fail_comment: true,
-        fail_links: false,
-        link_override: None,
-        quota_error: None,
-    };
+    let mut faults = CodeFaults::new(f.code.clone());
+    faults.fail_comment = true;
     let mut selector = f.selector("routine");
     selector.code = Some(&faults);
     selector.hand_over(&pull).await;
@@ -1341,17 +1346,8 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         let entered = tokio_util::sync::CancellationToken::new();
-        let faults = CodeFaults {
-            candidates: None,
-            refresh_limit: false,
-            block: Some((phase, entered.clone())),
-            inner: f.code.clone(),
-            draft: None,
-            fail_comment: false,
-            fail_links: false,
-            link_override: None,
-            quota_error: None,
-        };
+        let mut faults = CodeFaults::new(f.code.clone());
+        faults.block = Some((phase, entered.clone()));
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
         let mut run = Box::pin(selector.hand_over(&pull));
@@ -1679,6 +1675,79 @@ async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
             selector.code = Some(f.code.as_ref());
             selector.candidates().await.unwrap();
             assert!(quota.snapshot().is_some());
+        }
+    }
+}
+
+#[tokio::test]
+async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() {
+    for trigger in [
+        "pull_request_feedback",
+        "pull_request_checks",
+        "ready_lane",
+        "pull_request_review",
+        "issue_mention",
+    ] {
+        for resumes in [false, true] {
+            for result in [
+                Ok(2),
+                Ok(0),
+                Err(ServiceError::Unsupported),
+                Err(ServiceError::Unavailable),
+            ] {
+                for fail_evidence in [false, true] {
+                    let mut f = Fixture::new();
+                    f.runner.fail_evidence = fail_evidence;
+                    let mut task = f.pull().await;
+                    task.trigger_reason = Some(trigger.into());
+                    task.resumes = resumes.then(|| AwaitedRun {
+                        run_id: "old".into(),
+                        work_kind: "pull_request".into(),
+                        work_identity: "pull".into(),
+                    });
+                    let mut code = CodeFaults::new(f.code.clone());
+                    code.yield_result = Some(result.clone());
+                    code.runner_calls = Some(f.runner.calls.clone());
+                    let mut selector = f.selector("routine");
+                    selector.code = Some(&code);
+                    let trace = f.trace("routine");
+                    selector
+                        .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
+                        .await
+                        .unwrap();
+                    assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
+                    let feedback = trigger == "pull_request_feedback";
+                    assert_eq!(
+                        code.yield_calls.lock().unwrap().as_slice(),
+                        if feedback {
+                            vec![task.pull_request_url.clone().unwrap()]
+                        } else {
+                            vec![]
+                        }
+                    );
+                    let evidence = f.runner.evidence.lock().unwrap();
+                    let yielded = evidence
+                        .iter()
+                        .filter(|e| e["type"] == "checks_yielded")
+                        .collect::<Vec<_>>();
+                    let failed = evidence
+                        .iter()
+                        .filter(|e| e["type"] == "checks_yield_failed")
+                        .count();
+                    assert_eq!(yielded.len(), usize::from(feedback && result == Ok(2)));
+                    assert_eq!(
+                        failed,
+                        usize::from(feedback && result == Err(ServiceError::Unavailable))
+                    );
+                    if let Some(fact) = yielded.first() {
+                        assert_eq!(fact["payload"]["count"], 2);
+                        assert_eq!(
+                            fact["payload"]["target"]["url"],
+                            task.pull_request_url.as_deref().unwrap()
+                        );
+                    }
+                }
+            }
         }
     }
 }
