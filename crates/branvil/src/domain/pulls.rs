@@ -25,7 +25,6 @@ use crate::util::{self, fold};
 /// Patches are cut at this size (`patch_complete: false`).
 const PATCH_LIMIT: usize = 256 << 10;
 
-#[path = "pull_order.rs"]
 mod ordering;
 
 #[derive(Serialize, Debug, Clone)]
