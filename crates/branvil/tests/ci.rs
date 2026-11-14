@@ -507,11 +507,17 @@ async fn a_head_without_paths_reuse_is_its_own_gate() {
 async fn paths_reuse_gate(reused: bool) {
     let w = World::new().await;
     let runner = Runner::new(&w, "paths-runner").await;
+    // This fixture exercises cross-commit reuse, which applies to jobs without artifacts.
     let pipeline = format!(
         "{}paths=['src/**']\n{}",
         pipeline(&["rust"]),
         pipeline(&["always"])
-    );
+    )
+    .lines()
+    .filter(|line| !line.starts_with("artifacts"))
+    .collect::<Vec<_>>()
+    .join("\n")
+        + "\n";
     land(
         &w,
         "setup",

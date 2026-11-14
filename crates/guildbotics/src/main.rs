@@ -257,10 +257,17 @@ fn main() -> ExitCode {
         }
     }
     let command = Cli::parse().command;
-    if matches!(
-        &command,
-        Command::Member { .. } | Command::Run { .. } | Command::GitCredential { .. }
-    ) {
+    let credential_input = if matches!(&command, Command::GitCredential { .. }) {
+        match gb_server::client::read_git_credential(std::io::stdin().lock()) {
+            Ok(input) => Some(input),
+            Err(error) => return outcome(Err(error)),
+        }
+    } else {
+        None
+    };
+    let needs_update = matches!(&command, Command::Member { .. } | Command::Run { .. })
+        || matches!(&command, Command::GitCredential { action } if credential_input.as_ref().unwrap().needs_hub(action));
+    if needs_update {
         match block(gb_server::client::update::prepare()) {
             Ok(Some(executable)) => {
                 let result = (|| -> anyhow::Result<u8> {
@@ -280,9 +287,19 @@ fn main() -> ExitCode {
                             &[]
                         )
                     );
-                    let status = std::process::Command::new(executable)
-                        .args(std::env::args_os().skip(1))
-                        .status()?;
+                    let mut resume = std::process::Command::new(executable);
+                    resume.args(std::env::args_os().skip(1));
+                    let status = if let Some(input) = &credential_input {
+                        resume.stdin(std::process::Stdio::piped());
+                        let mut child = resume.spawn()?;
+                        std::io::Write::write_all(
+                            &mut child.stdin.take().expect("piped stdin"),
+                            input.replay().as_bytes(),
+                        )?;
+                        child.wait()?
+                    } else {
+                        resume.status()?
+                    };
                     Ok(status.code().unwrap_or(1).try_into().unwrap_or(1))
                 })();
                 return outcome(result);
@@ -301,9 +318,13 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Branvil { args } => branvil_main(std::iter::once(OsString::new()).chain(args)),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
-        Command::GitCredential { action } => {
-            outcome(block(gb_server::client::git_credential(&action)).map(|()| 0))
-        }
+        Command::GitCredential { action } => outcome(
+            block(gb_server::client::git_credential_input(
+                &action,
+                credential_input.unwrap(),
+            ))
+            .map(|()| 0),
+        ),
         Command::Install => outcome(block(install_cli::run()).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Workspace { command } => outcome(block(workspace_cli::run(command)).map(|()| 0)),

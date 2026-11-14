@@ -520,33 +520,22 @@ async fn collect_command(
     }
 }
 
-pub async fn git_credential(action: &str) -> anyhow::Result<()> {
-    let language = language().await;
-    answer_git_credential(
-        action,
-        std::io::stdin().lock(),
-        std::io::stdout().lock(),
-        std::io::stderr().lock(),
-        language,
-        async |origin: String| {
-            git_credentials::credential(&origin, |data| {
-                let device = gb_workspace::identity::ensure_device_identity(data)?;
-                Ok((device.device_id, device.display_name))
-            })
-            .await
-        },
-    )
-    .await
+/// Sanitized Git protocol fields. Passwords and unrelated fields are discarded while reading.
+pub struct GitCredentialInput {
+    origin: String,
 }
-
-async fn answer_git_credential(
-    action: &str,
-    input: impl std::io::BufRead,
-    mut stdout: impl std::io::Write,
-    mut stderr: impl std::io::Write,
-    language: &str,
-    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
-) -> anyhow::Result<()> {
+impl GitCredentialInput {
+    pub fn needs_hub(&self, action: &str) -> bool {
+        action == "get" && !self.origin.is_empty()
+    }
+    pub fn replay(&self) -> String {
+        self.origin
+            .split_once("://")
+            .map(|(protocol, host)| format!("protocol={protocol}\nhost={host}\n\n"))
+            .unwrap_or_else(|| "\n".into())
+    }
+}
+pub fn read_git_credential(input: impl std::io::BufRead) -> anyhow::Result<GitCredentialInput> {
     let mut attributes = std::collections::BTreeMap::new();
     for line in input.split(b'\n') {
         let line = line?;
@@ -561,21 +550,74 @@ async fn answer_git_credential(
             attributes.insert(name.to_owned(), value.to_owned());
         }
     }
-    if action != "get" {
-        return Ok(());
-    }
     let value = |name| attributes.get(name).map(String::as_str).unwrap_or_default();
     let protocol = value("protocol");
     let host = value("host");
     // The protocol fields are untrusted. Do not echo a userinfo or control
     // sequence masquerading as the remote's host.
     let origin = format!("{protocol}://{host}");
-    let safe = !protocol.is_empty()
+    let safe = !host.is_empty()
+        && !protocol.is_empty()
         && protocol.bytes().all(|b| b.is_ascii_alphabetic())
         && host
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b".:_-[]".contains(&b));
-    let origin = if safe { origin.as_str() } else { "" };
+    Ok(GitCredentialInput {
+        origin: if safe { origin } else { String::new() },
+    })
+}
+
+pub async fn git_credential_input(action: &str, input: GitCredentialInput) -> anyhow::Result<()> {
+    let language = language().await;
+    answer_git_credential_input(
+        action,
+        input,
+        std::io::stdout().lock(),
+        std::io::stderr().lock(),
+        language,
+        async |origin: String| {
+            git_credentials::credential(&origin, |data| {
+                let device = gb_workspace::identity::ensure_device_identity(data)?;
+                Ok((device.device_id, device.display_name))
+            })
+            .await
+        },
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn answer_git_credential(
+    action: &str,
+    input: impl std::io::BufRead,
+    stdout: impl std::io::Write,
+    stderr: impl std::io::Write,
+    language: &str,
+    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
+) -> anyhow::Result<()> {
+    answer_git_credential_input(
+        action,
+        read_git_credential(input)?,
+        stdout,
+        stderr,
+        language,
+        lookup,
+    )
+    .await
+}
+
+async fn answer_git_credential_input(
+    action: &str,
+    input: GitCredentialInput,
+    mut stdout: impl std::io::Write,
+    mut stderr: impl std::io::Write,
+    language: &str,
+    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
+) -> anyhow::Result<()> {
+    if action != "get" {
+        return Ok(());
+    }
+    let origin = input.origin;
     match lookup(origin.to_owned()).await {
         Ok(Some(credential)) => {
             stdout.write_all(
@@ -592,7 +634,7 @@ async fn answer_git_credential(
             i18n::t(
                 language,
                 "cli.git_credential.not_served",
-                &[("origin", origin)]
+                &[("origin", &origin)]
             )
         )?,
         Err(error) => {
@@ -738,6 +780,37 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    use super::read_git_credential;
+    #[test]
+    fn credential_preflight_uses_only_valid_get_fields_and_replay_discards_secrets() {
+        for wire in [
+            "host=localhost\n\n",
+            "protocol=https\n\n",
+            "protocol=http\nhost=user@localhost\n\n",
+        ] {
+            let input = read_git_credential(std::io::Cursor::new(wire)).unwrap();
+            assert!(!input.needs_hub("get"));
+            assert_eq!(input.replay(), "\n");
+        }
+        let input = read_git_credential(std::io::Cursor::new(
+            "protocol=http\nhost=localhost:7878\npassword=fixture-secret\npath=repo\n\n",
+        ))
+        .unwrap();
+        assert!(input.needs_hub("get"));
+        for action in ["store", "erase", "unknown"] {
+            assert!(!input.needs_hub(action));
+        }
+        assert_eq!(input.replay(), "protocol=http\nhost=localhost:7878\n\n");
+        let replay = input.replay();
+        let again = read_git_credential(std::io::Cursor::new(&replay)).unwrap();
+        assert_eq!(again.replay(), replay);
+        let crlf = read_git_credential(std::io::Cursor::new(
+            "protocol=http\r\nhost=first\r\nhost=localhost:7878\r\n\r\n",
+        ))
+        .unwrap();
+        assert_eq!(crlf.replay(), replay);
+    }
+
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn consent_only_run_writes_back_and_resumes_without_a_workspace() {
