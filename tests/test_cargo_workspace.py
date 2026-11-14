@@ -205,11 +205,14 @@ def test_only_the_environment_drives_the_microvm_runtime() -> None:
 
 
 def test_the_runtime_crates_and_version_check_are_pinned() -> None:
-    crates = _load("crates/gb-environment/Cargo.toml")["dependencies"]
+    manifest = _load("crates/gb-environment/Cargo.toml")
+    crates = manifest["dependencies"]
     runtime = (ROOT / "crates/gb-environment/src/runtime.rs").read_text("utf-8")
     [checked] = re.findall(r'RUNTIME_VERSION: &str = "([^"]+)"', runtime)
-    assert crates["microsandbox"]["version"] == f"={checked}"
-    assert crates["microsandbox-utils"] == f"={checked}"
+    for name in ("microsandbox", "microsandbox-utils"):
+        assert crates[name]["version"] == f"={checked}"
+        assert crates[name]["optional"] is True
+        assert f"dep:{name}" in manifest["features"]["host"]
 
 
 def _tested_crates(job: dict) -> set[str]:
