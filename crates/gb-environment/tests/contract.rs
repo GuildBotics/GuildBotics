@@ -316,6 +316,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
             &access,
             access.grants.clone(),
             false,
+            false,
             Some(upload.clone()),
             Returned::default(),
         )
@@ -343,6 +344,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
             &access,
             access.grants.clone(),
             true,
+            false,
             None,
             Returned::default(),
         )
@@ -365,6 +367,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
             &readonly_access,
             readonly_access.grants.clone(),
             false,
+            false,
             Some(upload.clone()),
             Returned::default()
         )
@@ -377,6 +380,7 @@ fn client_copies_shadow_only_their_cwd_inside_grants_and_member_clones() {
             &clone,
             &access,
             access.grants.clone(),
+            false,
             false,
             Some(upload),
             Returned::default()

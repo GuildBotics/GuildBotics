@@ -36,6 +36,8 @@ use crate::i18n;
 pub(crate) struct RunRequest {
     #[serde(default)]
     pub(crate) preflight: bool,
+    #[serde(skip)]
+    pub(crate) remote_copy: bool,
     #[serde(default)]
     pub(crate) remotes: std::collections::BTreeMap<String, String>,
     #[serde(default)]
@@ -101,8 +103,19 @@ impl gb_observability::Failure for Ended {
 pub(crate) async fn run(
     State(api): State<Shared>,
     headers: HeaderMap,
-    Body(request): Body<RunRequest>,
+    Body(mut request): Body<RunRequest>,
 ) -> Response {
+    request.remote_copy = api.auth.is_consent(&headers);
+    if request.remote_copy
+        && (request.cwd.is_some() || !request.input_ids.is_empty() || request.client_cwd.is_none())
+    {
+        return ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "command_client_cwd_refused",
+            &headers,
+        )
+        .into_response();
+    }
     // Bound what the client sent, before any history is completed for it.
     if let Some(Err(reason)) = request.upload.as_ref().map(|u| u.validate_sent()) {
         return ApiError::new(
@@ -396,6 +409,7 @@ async fn start(
                 .map_err(|e| internal(&e.to_string(), "OSError"))?;
             cwd.clone()
         }
+        (None, Some(cwd)) if request.remote_copy => cwd.clone(),
         (None, Some(cwd)) if request.preflight || request.client_cwd.is_some() => {
             gb_base::host_path::normalize(cwd).map_err(|e| internal(&e.to_string(), "OSError"))?
         }
@@ -421,7 +435,7 @@ async fn start(
             .reason(configuration.spoken(&problem.to_string()))
             .into_response()
     })?;
-    if request.preflight || request.client_cwd.is_some() {
+    if !request.remote_copy && (request.preflight || request.client_cwd.is_some()) {
         let registered = gb_environment::device::registered_workspaces(&host.data)
             .map_err(|e| internal(&e, "OSError"))?;
         let mut resolved = gb_environment::contract::resolve(
@@ -445,13 +459,13 @@ async fn start(
                 .key("command_client_cwd_refused", vec![])
                 .into_response());
         }
-        if request.preflight {
-            return Ok(Ran {
-                trace_id: String::new(),
-                output: json!({"read_only":access.read_only,"person":person.person_id}).to_string(),
-                result: json!(null),
-            });
-        }
+    }
+    if request.preflight {
+        return Ok(Ran {
+            trace_id: String::new(),
+            output: json!({"read_only":access.read_only,"person":person.person_id}).to_string(),
+            result: json!(null),
+        });
     }
     // A stop that does not wait for the work refuses work not started yet.
     if api.cancelled.is_cancelled() {
@@ -524,6 +538,7 @@ async fn start(
     }
     let command = gb_environment::Command {
         client_copy: request.client_cwd.is_some(),
+        remote_copy: request.remote_copy,
         files,
         upload: request.upload.map(std::sync::Arc::new),
         returned,

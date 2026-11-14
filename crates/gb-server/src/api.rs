@@ -444,14 +444,14 @@ routes!(
     (OwnerSession, post, "/apps/authorizations", authorize_app),
     (Session, get, "/session", session),
     (
-        OwnerSession,
+        OwnerOrConsent,
         post,
         "/commands/run",
         crate::commands::run,
         32 * 1024 * 1024
     ),
     (
-        OwnerSession,
+        OwnerOrConsent,
         get,
         "/commands/runs/{id}",
         crate::commands::result
@@ -1307,6 +1307,8 @@ mod tests {
         let app = router(Arc::new(api));
         let permitted = [
             ("get", "/health"),
+            ("post", "/commands/run"),
+            ("get", "/commands/runs/{id}"),
             ("get", "/member/redaction-keys"),
             ("post", "/member/run"),
             ("post", "/member/plan"),

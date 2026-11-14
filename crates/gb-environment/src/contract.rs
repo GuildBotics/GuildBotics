@@ -925,6 +925,17 @@ pub fn copy_plan(
     crate::worktree::Copy::new(source, guest, excluded, lock)
 }
 
+/// Protect the source on a client that has no workspace or device registry.
+pub fn client_directory(cwd: &Path, home: &Path) -> Result<(), String> {
+    let access = Resolved {
+        grants: vec![],
+        links: vec![],
+        view: serde_json::Value::Null,
+        denied: SENSITIVE.iter().map(|p| home.join(p)).collect(),
+    };
+    validate_client_name(cwd, &access, false)
+}
+
 /// Compare protected and granted names without reading the client filesystem.
 pub fn validate_client_name(cwd: &Path, access: &Resolved, read_only: bool) -> Result<(), String> {
     if !cwd.is_absolute() {
@@ -968,6 +979,7 @@ pub fn received_plan(
     access: &Resolved,
     mut mounts: Vec<Mount>,
     read_only: bool,
+    remote: bool,
     upload: Option<std::sync::Arc<crate::worktree::transfer::Upload>>,
     returned: crate::worktree::transfer::Returned,
 ) -> Result<Plan, String> {
@@ -977,8 +989,18 @@ pub fn received_plan(
             .denied
             .retain(|p| *p != workspace.join(".guildbotics"));
     }
-    validate_client_name(cwd, &client_access, read_only)?;
-    let cwd = gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?;
+    let cwd = if remote {
+        if cwd
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        {
+            return Err("Client working directory must be a normalized guest path".into());
+        }
+        cwd.to_owned()
+    } else {
+        validate_client_name(cwd, &client_access, read_only)?;
+        gb_base::host_path::normalize(cwd).map_err(|e| e.to_string())?
+    };
     let guest = spelled(&cwd)?;
     mounts.retain(|m| m.guest != guest || m.host.is_some());
     // Grants may cover the copy. A private mount shadows only its cwd;
@@ -1559,5 +1581,80 @@ mod frozen_tests {
         std::fs::remove_file(home.join("deny")).unwrap();
         symlink(&home, home.join("deny")).unwrap();
         assert!(resolve(&workspace, &home, &[], false, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod client_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_free_client_protects_every_sensitive_home_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        for sensitive in SENSITIVE {
+            let protected = home.join(sensitive);
+            for cwd in [
+                protected.clone(),
+                protected.join("child"),
+                protected.parent().unwrap().into(),
+            ] {
+                assert!(client_directory(&cwd, &home).is_err(), "{}", cwd.display());
+            }
+        }
+        assert!(client_directory(&home.join("work"), &home).is_ok());
+        assert!(client_directory(&root.path().join("other"), &home).is_ok());
+    }
+
+    #[test]
+    fn remote_copy_uses_guest_names_but_cannot_shadow_server_mounts() {
+        let workspace = Path::new("/hub/workspace");
+        let cwd = Path::new("/c/Users/me/repo");
+        let access = Resolved {
+            grants: vec![],
+            links: vec![],
+            view: serde_json::Value::Null,
+            denied: vec![cwd.into()],
+        };
+        let plan = |cwd: &Path, remote, mounts| {
+            received_plan(
+                workspace,
+                "aiko",
+                cwd,
+                &access,
+                mounts,
+                true,
+                remote,
+                None,
+                Default::default(),
+            )
+        };
+        assert!(plan(cwd, true, vec![]).is_ok());
+        assert!(plan(cwd, false, vec![]).is_err());
+        for cwd in [
+            "relative",
+            "/opt/guildbotics/home",
+            "/c/../opt/guildbotics",
+            "/",
+        ] {
+            assert!(plan(Path::new(cwd), true, vec![]).is_err(), "{cwd}");
+        }
+        assert!(
+            plan(
+                cwd,
+                true,
+                vec![Mount {
+                    guest: "/c/Users".into(),
+                    host: Some("/hub/code".into()),
+                    readonly: true,
+                    quota_mib: None
+                }]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::guest_path(Path::new(r"C:\Users\me\repo")).unwrap(),
+            cwd.to_str().unwrap()
+        );
     }
 }
