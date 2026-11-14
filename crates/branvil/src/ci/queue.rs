@@ -1109,51 +1109,63 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
     }
 }
 
-/// Hands the highest-priority queued attempt to `runner` under a new lease.
-pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
+/// The current claim order, without changing any attempt or lease. Claims only
+/// inspect reuse within the best class; displays can request every class.
+pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Option<Reuse>)>> {
     let mut snapshot = super::priority::Snapshot::default();
     let mut best = super::priority::Class::Last;
     let mut candidates = Vec::new();
-    for (_, id) in w.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+    for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
         let id = String::from_utf8_lossy(&id);
         let mut a =
-            get_attempt(w, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-        let class = snapshot.class_of(w, &a)?.class;
-        if class > best {
+            get_attempt(r, &id)?.ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+        let class = snapshot.class_of(r, &a)?.class;
+        if first_only && class > best {
             continue;
         }
-        if class < best {
+        if first_only && class < best {
             best = class;
             candidates.clear();
         }
         // A protected branch may have come to want this commit since admission.
-        let run = get_run(w, &a.repo, &a.sha)?;
+        let run = get_run(r, &a.repo, &a.sha)?;
         if let Some(run) = &run {
             a.cache_scope = run.cache_scope.clone();
         }
         a.inputs = run.and_then(|run| run.inputs.get(&a.job.name).cloned());
-        candidates.push(a);
+        candidates.push((class, a));
     }
     let mut sources = std::collections::BTreeMap::new();
-    let mut selected = None;
-    for (i, a) in candidates.iter().enumerate() {
-        if !a.allow_reuse || a.purpose != Purpose::Check {
-            continue;
-        }
-        let sources = match sources.entry(sources_key(a)) {
-            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(reuse_sources(w, a)?),
+    let mut ordered = Vec::new();
+    for (class, a) in candidates {
+        let reuse = if a.allow_reuse && a.purpose == Purpose::Check {
+            let sources = match sources.entry(sources_key(&a)) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(reuse_sources(r, &a)?)
+                }
+            };
+            reuse_candidate(&a, sources)
+        } else {
+            None
         };
-        if let Some(reuse) = reuse_candidate(a, sources) {
-            selected = Some((i, reuse));
-            break;
+        if first_only && reuse.is_some() {
+            return Ok(vec![(a, reuse)]);
         }
+        ordered.push((class, a, reuse));
     }
-    let (index, reuse) = selected.map_or((0, None), |(i, reuse)| (i, Some(reuse)));
-    if candidates.is_empty() {
+    ordered.sort_by_key(|(class, a, reuse)| (*class, reuse.is_none(), a.seq));
+    Ok(ordered
+        .into_iter()
+        .map(|(_, a, reuse)| (a, reuse))
+        .collect())
+}
+
+/// Hands the highest-priority queued attempt to `runner` under a new lease.
+pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
+    let Some((mut a, reuse)) = scheduled(w, true)?.into_iter().next() else {
         return Ok(None);
-    }
-    let mut a = candidates.remove(index);
+    };
     let old = get_attempt(w, &a.id)?.unwrap();
     let lease = format!("bvl_{}", util::random_secret::<24>());
     a.status = "in_progress".into();

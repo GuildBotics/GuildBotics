@@ -764,6 +764,18 @@ or last departure, or `null` before it first joins (see "Landing queue").
   are optional exact branch filters. Follow `next_cursor` for older results.
   Cursors locate an update and number, not a snapshot: a PR updated between
   requests may move ahead of the cursor; refresh from the first page to see it.
+  Add `sort=readiness` for the GUI order: merge/following, host checks or
+  publishing, gate checks, landing queue position, head ready to queue,
+  approved with head checks running, review pending, author action needed,
+  draft, then closed/merged. Within a stage (and queue position), CI sorts
+  passing/no checks, pending, unregistered, then failing; ties use the same
+  newest-update/number order as `sort=updated` (the default).
+  Each item then includes `merge_order: [stage, position, ci]`, an ascending
+  lexicographic key for merging pages across repositories. The key is computed
+  before pagination from the current head, base, approvals, unanswered
+  statements, landing state and the checks shown in its CI cell. A cursor is
+  bound to the sort and filters. CI or review changes can move a PR across
+  the cursor; refresh from the first page to see the new order.
 - `GET /api/v1/pulls?involves=me&state=open&draft=false` → items of
   *patrol entry*: the pull request shape plus `"activity"` (below), for every
   open pull request the member authored, is a requested reviewer of, has
@@ -1057,6 +1069,17 @@ Each automatic gate pass can notify the webhook once its next action is
   - an invalid pipeline: a check named `pipeline`, `completed`, `failure`, the
     reason in `details`;
   - a job of a superseded run that never got queued: `completed`, `cancelled`.
+- Checks with execution times appear first, by `started_at` ascending (or
+  `finished_at` for checks completed without starting). Untimed in-progress
+  or completed checks follow. Queued Branvil attempts then follow the runner's
+  current claim order: priority class, reusable results first within the class, then
+  admission sequence. Jobs awaiting admission follow those attempts, in the
+  admission planner's current job order; checks without a local schedule,
+  including upstream placeholders, retain their relative response order.
+  Every response recomputes the order without claiming work. The GUI reloads
+  active check lists on CI, PR, ticket and repository events, and reloads PR lists on
+  CI events too. New jobs, approvals, retries and available results can change
+  this prediction before a runner claims the next job.
 - `details` (optional on every check) explains a conclusion or a state: the
   failing exit code, "Superseded: …", "Interrupted: …", "No CI runner has
   contacted Branvil …", the executor's reason for `startup_failure`.

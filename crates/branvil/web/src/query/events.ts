@@ -25,6 +25,9 @@ function boardCardsWhere(test: (cards: Card[]) => boolean): Predicate {
 const isRepo = (q: Query, repo: string) => keyOf(q)[0] === "repo" && samePath(keyOf(q)[1], repo);
 const isPullList = (q: Query, repo: string) => keyOf(q)[0] === "pull-lists" && (keyOf(q)[1] as string[]).some((p) => samePath(p, repo));
 
+/** A changed priority or reusable result can reorder another commit's queued checks. */
+const isCheckList = (q: Query) => keyOf(q)[0] === "repo" && keyOf(q)[4] === "checks" && ["pull", "commit"].includes(String(keyOf(q)[2]));
+
 /** The pull request number of a repository query (`["repo", repo, "pull", n, ...]`). */
 const pullNumberOf = (q: Query) => (keyOf(q)[2] === "pull" ? String(keyOf(q)[3]) : null);
 
@@ -42,6 +45,9 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
   switch (event.kind) {
     case "ticket":
       return [
+        isCheckList,
+        // Interactive tickets can clear author actions on linked PRs, including other repositories.
+        (q) => keyOf(q)[0] === "pull-lists",
         (q) => isRepo(q, path) && keyOf(q)[2] === "ticket" && (id === "" || keyOf(q)[3] === id),
         // The board of the repository's workspace may show the ticket (or show
         // it again once it is reopened): only the shown cards are refetched.
@@ -51,6 +57,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       return [(q) => keyOf(q)[0] === "board" && samePath(keyOf(q)[1], path)];
     case "pull":
       return [
+        isCheckList,
         (q) => isPullList(q, path),
         // That pull request only (its diff is keyed by the head sha), and the repository's PR list.
         (q) => isRepo(q, path) && (id === "" || pullNumberOf(q) === id) && keyOf(q)[4] !== "files",
@@ -69,6 +76,8 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       ];
     case "check":
       return [
+        isCheckList,
+        (q) => isPullList(q, path),
         (q) => {
           if (!isRepo(q, path)) return false;
           const k = keyOf(q);
@@ -87,6 +96,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       // A push moves branch tips, so the pull requests of the repository are re-read too,
       // and new required checks change every commit's checks; its tickets and commits do not change.
       return [
+        isCheckList,
         (q) => isPullList(q, path),
         (q) => keyOf(q)[0] === "repos",
         (q) => {

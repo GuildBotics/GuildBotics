@@ -673,11 +673,8 @@ async fn pulls_list(State(app): State<Shared>, c: Caller, P(repo): P<String>, q:
         &c,
         &format!("pulls-updated-desc\n{}", util::fold(&repo)),
     )?;
-    let query = pulls::PullQuery {
-        state: q.get("state"),
-        head: q.get("head"),
-        base: q.get("base"),
-    };
+    let query = serde_json::from_value(serde_json::to_value(&q.0).map_err(AppError::internal)?)
+        .map_err(|e| AppError::invalid(e.to_string()))?;
     Ok(ok(pulls::list(&app, &c, &repo, query, page).await?))
 }
 

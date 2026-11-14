@@ -14,6 +14,61 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
+async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position() {
+    let w = World::new().await;
+    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+    let (status, body) = w
+        .server
+        .patch(
+            &w.repo_path(),
+            &w.owner,
+            json!({"revision": repo["revision"], "required_approvals": 1}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let runner = Runner::new(&w, "ordering-runner").await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["z", "a", "m"]));
+    let p = w.open_pull("feature", json!([])).await;
+    let checks_url = format!("{}/pulls/{}/checks", w.repo_path(), p["number"]);
+    let names = |v: &Value| {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let before = w.server.ok(&checks_url, &w.aiko).await;
+    assert_eq!(names(&before), ["z", "a", "m"]);
+    let first = runner.next_claim().await;
+    assert_eq!(before["checks"][0]["attempt_id"], first["attempt_id"]);
+    assert_eq!(runner.finish(&first, "success").await.0, 200);
+    let (status, retry) = w
+        .server
+        .post(
+            &format!(
+                "{}/jobs/{}/retry",
+                w.repo_path(),
+                first["attempt_id"].as_str().unwrap()
+            ),
+            &w.aiko,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{retry}");
+    let after = w.server.ok(&checks_url, &w.aiko).await;
+    assert_eq!(names(&after), ["a", "m", "z"]);
+    let commit = w
+        .server
+        .ok(&format!("{}/commits/{head}/checks", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(names(&commit), names(&after));
+    let next = runner.next_claim().await;
+    assert_eq!(after["checks"][0]["attempt_id"], next["attempt_id"]);
+}
+
+#[tokio::test]
 async fn schema_25_upgrade_starts_without_inputs_and_reindex_rebuilds_them() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
