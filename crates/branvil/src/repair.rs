@@ -1,7 +1,9 @@
-//! The repository's default repair ticket assignee.
+//! Repair tickets and their default assignee.
+mod tickets;
 use crate::error::{AppError, AppResult};
 use crate::model::{Member, MemberKind, Pull, Repo};
 use crate::store::{self, Rd};
+pub use tickets::{failed, open_ticket, passed, sweep};
 
 /// Effective repair assignee and the current automatic candidate.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]

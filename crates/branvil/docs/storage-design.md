@@ -240,3 +240,14 @@ random bytes made at each start: a restart ends the cursors handed out before
   with its account.
 - Backups and restores: `docs/backup-restore.md`. The token hashes in the
   database are not secrets by themselves; `secrets/` is not backed up.
+
+## Repair records (schema 29)
+
+`Ticket.repair` is null for ordinary tickets or `{jobs: [...], reported: sha}` for
+repair tickets. `REPAIR_PENDING` (`repair_pending`) keys are `(repo id, sha)` and
+values contain the repository, SHA and failed jobs (name, optional attempt ID,
+details). `IX_OPEN_REPAIRS` (`ix_open_repairs`) marks `(repo id, ticket number)`
+for open tickets with a repair marker. `model::ticket_index` maintains it and
+`admin reindex` rebuilds it; the oldest entry is the repository's open repair.
+The 28 → 29 upgrade adds `repair: null` to all tickets; the two new tables start
+empty. There is no parallel reader for older schemas.

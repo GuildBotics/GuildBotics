@@ -456,6 +456,7 @@ every ticket is on it, in a lane.
   "repository": "acme/demo",
   "key": "3",
   "title": "Fix login",
+  "repair": false,
   "body": "It fails.",
   "mentions": [],
   "state": "open",
@@ -479,6 +480,14 @@ every ticket is on it, in a lane.
   "revision": 7
 }
 ```
+
+`repair` is true for a system-created repair ticket, on both tickets and board
+cards. Its author is the reserved name `branvil` (displayed with the same anvil
+avatar as system comments). Ordinary tickets have `repair: false`. Repair tickets
+are assigned in `ready` at its front; passing default-branch verification closes
+them as completed and moves them to `done`. A linked PR merge alone does not
+complete a repair ticket.
+
 
 `key` is the ticket's number as a string (it reads `#3`). `state` is `open` or
 `closed`; `state_reason` is `completed`, `not_planned`, or `null`. A ticket has at most one assignee, the agent that works on it

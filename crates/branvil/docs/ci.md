@@ -880,3 +880,16 @@ PR 一覧の見出しは、既定ブランチの確認の状態を表示する�
 状態の正本は `ci::verify::main_state`。HTTP の `GET …/verification` と
 `GET …/verification/commits` もこれを使う。記録の変更後とチェックの更新時には
 `verification` イベントを送り、画面の状態と履歴を読み直す。
+
+## Failed main verification and repair
+
+After automatic retries finish, main verification records each failed job and
+queues a repair in its result transaction. The autoland sweep collects links,
+head-check conclusions or paths skips (or missing records), the verified ancestor
+and commit/PR range, and the last 8 KiB of failed logs. It creates a `branvil`
+ticket at the front of `ready`, assigned to the first PR's agent author or the
+repository's default responder. Only one open repair exists per repository;
+subsequent failures are consumed without another ticket. Evidence tables show at
+most 100 commits. When main passes, all pending failures are discarded and open
+repairs close as completed in `done`, even if no linked PR merged (the comment
+then notes that the failure may be intermittent).

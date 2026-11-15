@@ -252,12 +252,38 @@ impl Ci {
                     }
                     v.finished_at = Some(now.clone());
                     let (id, done) = (repo.id.clone(), v.clone());
-                    self.inner
+                    let closed = self
+                        .inner
                         .store
                         .write(move |w| {
-                            w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &done)
+                            w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &done)?;
+                            let mut closed = Vec::new();
+                            if done.state == "passed" {
+                                closed = w.prefix_keys(
+                                    store::IX_OPEN_REPAIRS,
+                                    &Key::new().s(&id).bytes(),
+                                )?;
+                                crate::repair::passed(w, &id, &done.sha)?;
+                            } else {
+                                crate::repair::failed(w, &id, &done.sha, &done.failed_jobs)?;
+                            }
+                            Ok(closed)
                         })
                         .await?;
+                    for key in closed {
+                        if let Some(parts) = store::decode_key(&key, "su") {
+                            self.inner.events.publish(
+                                "ticket",
+                                &repo.path,
+                                parts[1].u().to_string(),
+                            );
+                        }
+                        self.inner.events.publish(
+                            "board",
+                            crate::domain::tickets::workspace_of(&repo.path),
+                            "",
+                        );
+                    }
                     self.inner.events.publish("verification", &repo.path, "");
                 }
             }
