@@ -39,6 +39,51 @@ def capability_reference_text() -> str:
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 
 
+@pytest.mark.parametrize(
+    ("path", "phrases"),
+    [
+        (
+            REFERENCE_PATH,
+            (
+                "ask its author",
+                "services` / `names",
+                "yourself (the assignee)",
+                "outside the roster",
+                "cannot decide",
+                "--waiting-for",
+            ),
+        ),
+        (
+            FUNCTIONS_DIR / "handle_ticket.en.md",
+            (
+                "ask its author",
+                "services` / `names",
+                "yourself (the assignee)",
+                "outside the roster",
+                "cannot decide",
+                "--waiting-for",
+            ),
+        ),
+        (
+            FUNCTIONS_DIR / "handle_ticket.ja.md",
+            (
+                "まずチケットの作者",
+                "`services` の `names`",
+                "自分自身（担当者）",
+                "名簿外",
+                "自分では決められない",
+                "--waiting-for",
+            ),
+        ),
+    ],
+)
+def test_ticket_questions_address_author_before_owner(path, phrases):
+    text = path.read_text(encoding="utf-8")
+    for phrase in phrases:
+        assert phrase in text
+    assert "ticket_mention" in text
+
+
 def test_chat_judgment_owns_repository_work_criteria():
     from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 

@@ -272,7 +272,7 @@ async fn merge_checked(
     .expect("fixture merge did not become ready");
 }
 async fn ticket_relations(t: &dyn TicketService) {
-    contracts::ticket_contract(t, REPO, "bug").await;
+    contracts::ticket_contract(t, REPO, "bug", "aiko-service").await;
     let parent = create(t, "Parent").await;
     let blocker = create(t, "Blocker").await;
     let child = create(t, "Child").await;

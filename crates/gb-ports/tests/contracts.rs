@@ -191,7 +191,8 @@ fn actor_names_are_distinct_from_member_ids_and_preserve_all_actor_fields() {
     let comment: Comment = serde_json::from_value(example("Comment")).unwrap();
     let review: Review = serde_json::from_value(example("Review")).unwrap();
     let thread: ThreadComment = serde_json::from_value(example("ThreadComment")).unwrap();
-    let authors: [&ActorName; 4] = [
+    let authors: [&ActorName; 5] = [
+        &ticket.author,
         &pull.author,
         &comment.author,
         &review.author,
@@ -225,6 +226,7 @@ fn actor_names_are_distinct_from_member_ids_and_preserve_all_actor_fields() {
         actual,
         std::collections::BTreeSet::from([
             ("tickets", "assignees"),
+            ("tickets", "author"),
             ("ticket_comments", "author"),
             ("pull_requests", "assignees"),
             ("pull_requests", "author"),

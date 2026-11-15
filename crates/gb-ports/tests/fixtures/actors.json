@@ -1,7 +1,8 @@
 {
   "tracker_tickets": [],
   "tickets": [
-    "assignees"
+    "assignees",
+    "author"
   ],
   "ticket_comments": [
     "author"

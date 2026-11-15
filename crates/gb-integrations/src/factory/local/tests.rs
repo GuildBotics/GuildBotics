@@ -44,7 +44,7 @@ fn request(tracker: &str) -> CreateTicket {
 #[tokio::test]
 async fn ticket_shared_contract() {
     let (_d, s) = fixture();
-    contracts::ticket_contract(&s, "acme/team", "bug").await;
+    contracts::ticket_contract(&s, "acme/team", "bug", "local-aiko").await;
 }
 #[tokio::test]
 async fn chat_shared_contract() {
