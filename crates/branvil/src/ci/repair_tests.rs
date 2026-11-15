@@ -59,6 +59,11 @@ async fn assignments_evidence_and_lifecycle() {
         let sha = commits.last().unwrap().clone();
         let failures = vec![
             FailedJob {
+                name: "post".into(),
+                attempt_id: None,
+                details: None,
+            },
+            FailedJob {
                 name: "test".into(),
                 attempt_id: None,
                 details: Some("invalid pipeline @alice".into()),
@@ -96,12 +101,12 @@ async fn assignments_evidence_and_lifecycle() {
             for (i, author) in authors.iter().enumerate() {
                 if let Some(author) = author {
                     let p: Pull = serde_json::from_value(json!({"repo":r2.id,"number":i+1,"title":"change @alice | title","body":"","state":"closed","merged":true,"draft":false,"author":author,"head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"ready_at":null,"created_at":"0","updated_at":"0","closed_at":null,"merged_at":i.to_string(),"merge_sha":cs[i],"merged_head":cs[i],"merged_base":base,"upstream":null,"revision":1})).unwrap();
-                    let jobs: Vec<super::pipeline::JobDef> = ["test", "paths"].iter().map(|name| super::pipeline::JobDef { name: (*name).into(), image: "alpine".into(), commands: vec!["true".into()], paths: vec![], verified_sha: false, timeout_secs: None, artifacts: vec![], cache: None }).collect();
+                    let jobs: Vec<super::pipeline::JobDef> = ["test", "paths", "post"].iter().map(|name| super::pipeline::JobDef { name: (*name).into(), image: "alpine".into(), commands: vec!["true".into()], paths: vec![], verified_sha: false, timeout_secs: None, artifacts: vec![], cache: None }).collect();
                     queue::register(w, queue::Registration {order:vec![],selection:None,repo:r2.id.clone(),repo_path:r2.path.clone(),sha:cs[i].clone(),tree:None,branch:"feature".into(),protected:false,pipeline:queue::PipelineState::Jobs {jobs:jobs.clone()},network:false,inputs:Default::default()}, 100, "now")?;
                     for mut a in queue::current_attempts(w,&r2.id,&cs[i],&jobs)? {
                         let old = a.clone();
                         a.status = "completed".into(); a.conclusion=Some("success".into());
-                        if a.job.name=="paths" {a.path_skip=Some(queue::PathSkip{paths:vec![],bases:vec![]});}
+                        if ["paths","post"].contains(&a.job.name.as_str()) {a.path_skip=Some(queue::PathSkip{reason:if a.job.name=="post" {queue::SkipReason::PostMerge} else {queue::SkipReason::Paths},paths:vec![],bases:vec![]});}
                         model::put_indexed(w,store::CI_ATTEMPTS,&queue::Attempt::key(&a.id),Some(queue::attempt_index(&old)),&a,queue::attempt_index(&a))?;
                     }
                     model::put_indexed(w, store::PULLS, &Pull::key(&r2.id,p.number), None, &p, model::pull_index(&p))?;
@@ -111,9 +116,39 @@ async fn assignments_evidence_and_lifecycle() {
                 let v = Verification { sha: sh.clone(), base: None, state: "failed".into(), started_at: "0".into(), finished_at: None, failed_jobs: fs.clone(), failing_since: Some(sh.clone()), last_verified: Some(Verified { sha: base, at: "0".into() }) };
                 w.put(store::CI_VERIFICATIONS,&Key::new().s(&r2.id).bytes(),&v)?;
             }
+            if let Some(mut p)=w.get::<Pull>(store::PULLS,&Pull::key(&r2.id,1))? {
+                let mut broken=r2.clone(); broken.id="aaa-write".into();
+                w.put(store::REPOS,&Repo::key(&broken.id),&broken)?;
+                p.repo=broken.id.clone();p.author="missing-member".into();p.merge_sha=Some(sh.clone());
+                model::put_indexed(w,store::PULLS,&Pull::key(&p.repo,p.number),None,&p,model::pull_index(&p))?;
+                repair::failed(w,&broken.id,&sh,&[])?;
+            }
+            repair::failed(w,"aaa-missing","bad",&[])?;
+            repair::failed(w,&r2.id,"0000000000000000000000000000000000000000",&[])?;
+            let mut broken=r2.clone(); broken.id="aaa-log".into();
+            w.put(store::REPOS,&Repo::key(&broken.id),&broken)?;
+            repair::failed(w,&broken.id,&sh,&[FailedJob{name:"log".into(),attempt_id:Some("att_00000000000000000000000001".into()),details:None}])?;
             repair::failed(w, &r2.id, &sh, &fs)
         }).await.unwrap();
+        std::fs::create_dir(app.ci.log_path("att_00000000000000000000000001")).unwrap();
         repair::sweep(&app).await.unwrap();
+        app.store
+            .write(|w| {
+                let keys = w.prefix_keys(store::REPAIR_PENDING, &[])?;
+                assert_eq!(
+                    keys.len(),
+                    3 + usize::from(
+                        w.get::<Repo>(store::REPOS, &Repo::key("aaa-write"))?
+                            .is_some()
+                    )
+                );
+                for key in keys {
+                    w.del(store::REPAIR_PENDING, &key)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
         repair::sweep(&app).await.unwrap();
         let id = repo.id.clone();
         let t = app
@@ -155,7 +190,7 @@ async fn assignments_evidence_and_lifecycle() {
         assert_eq!(t.repair.as_ref().unwrap().reported, sha);
         assert_eq!(
             t.repair.as_ref().unwrap().jobs,
-            ["test", "paths", "missing"]
+            ["post", "test", "paths", "missing"]
         );
         assert!(t.body.contains("`````\n"));
         assert!(t.body.contains("```` &#64;alice end"));
@@ -163,9 +198,12 @@ async fn assignments_evidence_and_lifecycle() {
         if t.body.contains("/pulls/") {
             assert!(t.body.contains("success"));
             assert!(t.body.contains("Skipped by paths"));
+            assert!(t.body.contains("Post-merge only"));
         }
         assert!(t.body.contains("invalid pipeline &#64;alice"));
         assert!(t.body.contains("No record"));
+        assert!(t.body.contains("[Job]("));
+        assert!(t.body.contains("[Commit]("));
         if t.body.contains("Not from a pull request of this Branvil") {
             assert!(t.body.contains("| Test |"));
         }

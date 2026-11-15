@@ -1,7 +1,7 @@
-//! 28 → 29: repair ticket markers and durable pending failures.
+//! 29 → 30: repair ticket markers and durable pending failures.
 use crate::config::Layout;
 use crate::store::{self, Rd, Upgraded, Upgrading};
-pub const FROM: u64 = 28;
+pub const FROM: u64 = 29;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {

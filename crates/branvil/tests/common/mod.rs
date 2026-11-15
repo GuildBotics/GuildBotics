@@ -705,7 +705,7 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_28(db: &Path) {
+pub fn as_schema_29(db: &Path) {
     {
         let database = redb::Database::open(db).unwrap();
         let txn = database.begin_write().unwrap();
@@ -720,7 +720,7 @@ pub fn as_schema_28(db: &Path) {
     });
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(28);
+            *v = json!(29);
         }
     });
 }

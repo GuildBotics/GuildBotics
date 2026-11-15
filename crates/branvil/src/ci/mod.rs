@@ -1189,6 +1189,7 @@ mod tests {
             workspace: "ws_1".into(),
             default_branch: "main".into(),
             protected_branches: vec![],
+            post_merge_jobs: Vec::new(),
             required_checks: vec!["test".into()],
             required_approvals: 1,
             auto_land: false,
@@ -1369,6 +1370,7 @@ mod tests {
                     selection,
                 };
                 let selection = queue::JobSelection {
+                    post_merge_jobs: Vec::new(),
                     bases: vec![],
                     skipped_jobs: vec!["test".into()],
                 };

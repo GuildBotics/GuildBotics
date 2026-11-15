@@ -16,7 +16,7 @@ const REPO = {
   clone_url: "",
   url: "",
   protected_branches: [],
-  required_checks: [],
+  post_merge_jobs: [], required_checks: [],
   labels: ["bug", "docs"],
   upstream: null,
   revision: 1,

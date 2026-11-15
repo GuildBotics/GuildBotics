@@ -7,7 +7,7 @@ import { applyChange } from "../query/events";
 import { pull } from "./fixtures";
 
 const page = (items: unknown[], next_cursor: string | null = null) => json(200, { items, next_cursor });
-const repository = (path: string) => ({ path, default_branch: "main", upstream: null, required_checks: [], required_approvals: 0 });
+const repository = (path: string) => ({ path, default_branch: "main", upstream: null, post_merge_jobs: [], required_checks: [], required_approvals: 0 });
 const shell = {
   "GET /api/v1/session": json(200, SESSION),
   "GET /api/v1/workspaces": page([{ name: "acme", lanes: ["new"] }]),

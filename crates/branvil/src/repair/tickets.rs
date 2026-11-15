@@ -152,16 +152,21 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
                     .and_then(|a| a.conclusion))
             })
             .await?;
-        let (link, log) = if let Some(id) = &f.attempt_id {
+        let (label, link, log) = if let Some(id) = &f.attempt_id {
             (
+                "Job",
                 format!("{root}/-/jobs/{id}"),
                 app.ci.log_tail(id, 8192).await?.0,
             )
         } else {
-            (format!("{root}/-/commit/{}", pending.sha), String::new())
+            (
+                "Commit",
+                format!("{root}/-/commit/{}", pending.sha),
+                String::new(),
+            )
         };
         body.push_str(&format!(
-            "\n### {}\n\n[Job / commit]({link}): {}\n",
+            "\n### {}\n\n[{label}]({link}): {}\n",
             text(&f.name),
             text(
                 f.details
@@ -240,8 +245,11 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
                 .iter()
                 .find(|a| a.job.name == f.name)
                 .map_or("No record", |a| {
-                    if a.path_skip.is_some() {
-                        "Skipped by paths"
+                    if let Some(skip) = &a.path_skip {
+                        match skip.reason {
+                            queue::SkipReason::PostMerge => "Post-merge only",
+                            queue::SkipReason::Paths => "Skipped by paths",
+                        }
                     } else {
                         a.conclusion.as_deref().unwrap_or("No conclusion")
                     }
@@ -366,36 +374,43 @@ pub async fn sweep(app: &App) -> AppResult<()> {
         .read(|r| r.prefix_all::<Pending>(store::REPAIR_PENDING, &[]))
         .await?;
     for p in pending {
-        let id = p.repo.clone();
-        let repo = app
-            .store
-            .read(move |r| crate::domain::repo_by_id(r, &id))
-            .await?;
-        let (body, pulls) = evidence(app, &repo, &p).await?;
-        let path = repo.path.clone();
-        let created = app
-            .store
-            .write(move |w| {
-                let key = Key::new().s(&p.repo).s(&p.sha).bytes();
-                // A pass may have removed this failure while evidence was being read.
-                if w.get::<Pending>(store::REPAIR_PENDING, &key)?.is_none() {
-                    return Ok(None);
-                }
-                let created = if open_ticket(w, &p.repo)?.is_none() {
-                    let repo = crate::domain::repo_by_id(w, &p.repo)?;
-                    Some(create(w, &repo, &p, body, &pulls)?.number)
-                } else {
-                    None
-                };
-                w.del(store::REPAIR_PENDING, &key)?;
-                Ok(created)
-            })
-            .await?;
-        if let Some(number) = created {
-            app.events.publish("ticket", &path, number.to_string());
-            app.events
-                .publish("board", tickets::workspace_of(&path), "");
+        if let Err(error) = sweep_pending(app, p.clone()).await {
+            tracing::warn!(repo = %p.repo, sha = %p.sha, "repair ticket: {error}");
         }
+    }
+    Ok(())
+}
+
+async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
+    let id = p.repo.clone();
+    let repo = app
+        .store
+        .read(move |r| crate::domain::repo_by_id(r, &id))
+        .await?;
+    let (body, pulls) = evidence(app, &repo, &p).await?;
+    let path = repo.path.clone();
+    let created = app
+        .store
+        .write(move |w| {
+            let key = Key::new().s(&p.repo).s(&p.sha).bytes();
+            // A pass may have removed this failure while evidence was being read.
+            if w.get::<Pending>(store::REPAIR_PENDING, &key)?.is_none() {
+                return Ok(None);
+            }
+            let created = if open_ticket(w, &p.repo)?.is_none() {
+                let repo = crate::domain::repo_by_id(w, &p.repo)?;
+                Some(create(w, &repo, &p, body, &pulls)?.number)
+            } else {
+                None
+            };
+            w.del(store::REPAIR_PENDING, &key)?;
+            Ok(created)
+        })
+        .await?;
+    if let Some(number) = created {
+        app.events.publish("ticket", &path, number.to_string());
+        app.events
+            .publish("board", tickets::workspace_of(&path), "");
     }
     Ok(())
 }

@@ -18,6 +18,7 @@ pub struct RepoView {
     pub clone_url: String,
     pub url: String,
     pub protected_branches: Vec<String>,
+    pub post_merge_jobs: Vec<String>,
     pub required_checks: Vec<String>,
     pub required_approvals: u64,
     pub auto_land: bool,
@@ -42,6 +43,7 @@ pub async fn repo_view(app: &App, r: &Repo) -> AppResult<RepoView> {
         url: app.repo_url(&r.path),
         protected_branches: r.protected(),
         required_checks: r.required_checks.clone(),
+        post_merge_jobs: r.post_merge_jobs.clone(),
         required_approvals: r.required_approvals,
         auto_land: r.auto_land,
         ci_network: r.ci_network,
@@ -159,6 +161,7 @@ async fn create_locked(
         workspace: workspace.id,
         default_branch,
         protected_branches: Vec::new(),
+        post_merge_jobs: Vec::new(),
         required_checks: Vec::new(),
         required_approvals: 1,
         auto_land: false,
@@ -202,6 +205,7 @@ pub struct RepoPatch {
     pub revision: u64,
     pub default_branch: Option<String>,
     pub required_checks: Option<Vec<String>>,
+    pub post_merge_jobs: Option<Vec<String>>,
     pub required_approvals: Option<u64>,
     pub auto_land: Option<bool>,
     pub protected_branches: Option<Vec<String>>,
@@ -233,7 +237,12 @@ pub async fn update(
             )));
         }
     }
-    for c in patch.required_checks.iter().flatten() {
+    for c in patch
+        .required_checks
+        .iter()
+        .flatten()
+        .chain(patch.post_merge_jobs.iter().flatten())
+    {
         if !util::valid_name(c) {
             return Err(AppError::invalid(format!("{c} is not a valid check name.")));
         }
@@ -305,6 +314,12 @@ async fn update_record(app: &App, id: String, patch: RepoPatch) -> AppResult<Rep
             }
             if let Some(l) = patch.labels {
                 r.labels = l;
+            }
+            if let Some(jobs) = patch.post_merge_jobs {
+                r.post_merge_jobs = jobs;
+            }
+            if let Some(name) = r.required_checks.iter().find(|n| r.post_merge_jobs.contains(n)) {
+                return Err(AppError::invalid(format!("{name} cannot be both required and post-merge only.")));
             }
             r.revision += 1;
             w.put(store::REPOS, &Repo::key(&r.id), &r)?;

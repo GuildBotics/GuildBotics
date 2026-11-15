@@ -810,6 +810,7 @@ mod tests {
                 workspace: "ws_1".into(),
                 default_branch: "main".into(),
                 protected_branches: vec![],
+                post_merge_jobs: Vec::new(),
                 required_checks: vec!["build".into()],
                 required_approvals: 0,
                 auto_land: false,

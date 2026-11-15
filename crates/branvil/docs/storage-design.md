@@ -59,7 +59,7 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `28`). The current
+`meta["schema_version"]` is written on creation (currently `29`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
 publication-resume state. CI runs hold their commit's pipeline and tree;
@@ -71,8 +71,9 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
-snapshots store the opt-in boolean of the same name. The 27 → 28 upgrade adds
-`responder: null` to every repository; all other records stay unchanged.
+snapshots store the opt-in boolean of the same name. The 29 → 30 upgrade preserves existing responders and adds
+`post_merge_jobs: []` to every repository and non-null run selection, and
+`reason: "paths"` to every non-null attempt `path_skip`, preserving other fields.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.
@@ -241,7 +242,7 @@ random bytes made at each start: a restart ends the cursors handed out before
 - Backups and restores: `docs/backup-restore.md`. The token hashes in the
   database are not secrets by themselves; `secrets/` is not backed up.
 
-## Repair records (schema 29)
+## Repair records (schema 30)
 
 `Ticket.repair` is null for ordinary tickets or `{jobs: [...], reported: sha}` for
 repair tickets. `REPAIR_PENDING` (`repair_pending`) keys are `(repo id, sha)` and
@@ -249,5 +250,11 @@ values contain the repository, SHA and failed jobs (name, optional attempt ID,
 details). `IX_OPEN_REPAIRS` (`ix_open_repairs`) marks `(repo id, ticket number)`
 for open tickets with a repair marker. `model::ticket_index` maintains it and
 `admin reindex` rebuilds it; the oldest entry is the repository's open repair.
-The 28 → 29 upgrade adds `repair: null` to all tickets; the two new tables start
+The 29 → 30 upgrade adds `repair: null` to all tickets; the two new tables start
 empty. There is no parallel reader for older schemas.
+
+Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
+(`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
+the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
+`reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
+queue, reuse, retention, and gate semantics.
