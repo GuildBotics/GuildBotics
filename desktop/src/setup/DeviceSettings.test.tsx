@@ -130,3 +130,10 @@ describe("registered workspaces", () => {
     expect(screen.getByText("/work/two")).toBeInTheDocument();
   });
 });
+
+it("downloads the Windows client through the authenticated Hub session", () => {
+  renderSettings();
+  const link = screen.getByRole("link", { name: t("setup.device.clientDownload") });
+  expect(link).toHaveAttribute("href", "/-/guildbotics/api/clients/x86_64-pc-windows-gnu/binary");
+  expect(link).toHaveAttribute("download", "guildbotics.exe");
+});

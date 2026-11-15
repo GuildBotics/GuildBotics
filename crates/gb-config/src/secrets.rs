@@ -107,6 +107,15 @@ pub fn keep_os_credential(service: &str, account: &str, credential: &str) -> any
     write_entry(&entry, credential, cfg!(target_os = "windows")).map_err(system_keychain_error)
 }
 
+/// Delete exactly one named credential without reading its value.
+pub fn delete_os_credential(service: &str, account: &str) -> anyhow::Result<()> {
+    let entry = system_entry(service, account).map_err(system_keychain_error)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(system_keychain_error(error)),
+    }
+}
+
 fn read_entry(entry: &keyring::Entry, windows: bool) -> keyring::Result<String> {
     if windows {
         // get_password decodes UTF-16 on Windows; Python stores raw UTF-8.

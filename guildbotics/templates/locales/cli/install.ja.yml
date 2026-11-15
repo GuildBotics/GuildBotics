@@ -4,3 +4,7 @@ ja:
   skill: "%{tool} 用のスキルを %{path} に導入しました。"
   kept: "%{tool} 用のスキルは %{path} にあるものを保持しました。"
   not_installed: "%{tool} が見つからないため、スキルの導入を見送りました。"
+  shadowed: "managed CLI より先に PATH で見つかる CLI: %{path}"
+  cleanup: "削除する Desktop の写し（一般ファイル、端末 ID、CLI、git と同意トークン、SSH 転送は残します）:"
+  confirm: "一覧の写しだけを消すには DELETE と入力してください。Enter で残します: "
+  cleanup_invalid: "Desktop の片付け対象のパスまたはシークレットの名前空間が不正か、確認時から変わっています。写しを残し、パスを確認してからやり直してください。"

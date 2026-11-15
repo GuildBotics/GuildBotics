@@ -86,6 +86,17 @@ Hubで[GuildBoticsのインストール手順](../README.ja.md#インストー�
 
 メンバーとそのトークンは Branvil で作りません。GuildBotics が作ります。
 
+## Windows クライアントの導入
+
+先に古い GuildBotics Desktop アプリをアンインストールしてください。人のチェックアウトと SSH 転送は残します。
+
+1. 下記の手順に従い `scripts/hub-forward.ps1` で SSH 転送を設定します。
+2. Hub で `guildbotics open --print` を実行し、入口リンクを Windows のブラウザで開きます。
+3. 設定の「このマシン」にある Windows クライアントから `guildbotics.exe` をダウンロードします。画面のセッションで Hub の現在の版を取得できます。
+4. PowerShell で `./guildbotics.exe install` を実行します。`~/.guildbotics/bin` に managed CLI を置き、PATH を設定し、AI ツールごとのスキルの状態を表示します。人の git の credential helper は、このマシンの managed CLI を転送先の Hub の origin に設定します。PATH 反映後は新しい端末を開き、先に見つかる別の CLI の警告があれば解消してください。
+5. クライアント専用ビルドは、登録先の実在する `.guildbotics`、identity root、キーチェーンの項目を一覧にします。`DELETE` と入力した場合だけ消し、Enter または EOF なら残します。一般ファイルとチェックアウト、人の git のトークン（`GuildBotics/branvil-git`）、同意トークン（`guildbotics-server`）、端末 ID、managed CLI、SSH 転送は残します。
+6. `guildbotics connect` を実行し、ブラウザでこのマシンを許可します。スキルの確認・置き直しには `guildbotics install` を使います。編集したスキルは残します。以後の CLI 呼び出しで Hub と同じ版に自動更新されます。
+
 ## Hub 以外のマシンで SSH 転送を設定する
 
 Hub 以外の各マシンで、チェックアウトに同梱されたスクリプトを実行します。必要なのは

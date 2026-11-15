@@ -17,6 +17,8 @@ fn relocated_client_installs_embedded_skills_and_has_only_client_commands() {
             .args(args)
             .current_dir(temp.path())
             .env(gb_base::home::USER_HOME_ENV, &home)
+            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+            .env_remove("XDG_CONFIG_HOME")
             .env_remove("GUILDBOTICS_HOME")
             .env("CODEX_HOME", home.join(".codex"))
             .env_remove("CLAUDE_CONFIG_DIR")
@@ -73,6 +75,15 @@ fn windows_install_uses_userprofile_and_updates_user_path_once() {
     if std::env::var_os("CI").is_none() {
         return;
     }
+    if std::env::var_os("GUILDBOTICS_TEST_INSTALL_CHILD").is_none() {
+        for global in [true, false] {
+            super::install_isolation::preserves_parent_config(
+                "client_only::windows_install_uses_userprofile_and_updates_user_path_once",
+                global,
+            );
+        }
+        return;
+    }
     fn path(value: Option<&str>) -> String {
         let mut command = Command::new("powershell.exe");
         command.args(["-NoProfile", "-NonInteractive", "-Command"]);
@@ -102,6 +113,8 @@ fn windows_install_uses_userprofile_and_updates_user_path_once() {
         let result = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
             .arg("install")
             .env("USERPROFILE", &home)
+            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+            .env_remove("XDG_CONFIG_HOME")
             .env("HOME", temp.path().join("wrong-home"))
             .env_remove("GUILDBOTICS_HOME")
             .env("CODEX_HOME", home.join(".codex"))

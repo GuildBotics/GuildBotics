@@ -557,6 +557,10 @@ export const resources = {
           device: "Registered workspaces",
         },
         device: {
+          clientTitle: "Windows client",
+          clientBody:
+            "Download on the client machine, run guildbotics.exe install, then guildbotics connect. Set up SSH forwarding first.",
+          clientDownload: "Download guildbotics.exe",
           title: "This machine",
           subtitle: "These settings belong to this machine rather than to a workspace.",
           registeredWorkspaces: {
@@ -1666,6 +1670,10 @@ export const resources = {
           device: "登録済みのワークスペース",
         },
         device: {
+          clientTitle: "Windows クライアント",
+          clientBody:
+            "SSH 転送を設定したマシンでダウンロードし、guildbotics.exe install、guildbotics connect の順に実行してください。",
+          clientDownload: "guildbotics.exe をダウンロード",
           title: "このマシン",
           subtitle: "ワークスペースではなく、このマシン自体に属する設定です。",
           registeredWorkspaces: {
