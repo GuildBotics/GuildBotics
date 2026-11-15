@@ -705,22 +705,16 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_29(db: &Path) {
-    {
-        let database = redb::Database::open(db).unwrap();
-        let txn = database.begin_write().unwrap();
-        for name in ["repair_pending", "ix_open_repairs"] {
-            let table: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new(name);
-            txn.delete_table(table).unwrap();
-        }
-        txn.commit().unwrap();
-    }
-    edit_records(db, "tickets", |v| {
-        v.as_object_mut().unwrap().remove("repair");
-    });
+pub fn as_schema_30(db: &Path) {
+    let database = redb::Database::open(db).unwrap();
+    let txn = database.begin_write().unwrap();
+    let moves: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("ticket_moves");
+    assert!(txn.delete_table(moves).unwrap());
+    txn.commit().unwrap();
+    drop(database);
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(29);
+            *v = json!(30);
         }
     });
 }

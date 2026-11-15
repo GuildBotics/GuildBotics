@@ -415,6 +415,52 @@ async fn ticket_deletion_requires_owner_and_refuses_incoming_references() {
 }
 
 #[tokio::test]
+async fn a_ticket_moves_only_without_an_upstream_issue_which_its_new_repository_then_checks() {
+    let (w, _gh) = crate::upstream::followed().await;
+    let s = &w.server;
+    let issue = "https://github.test/octo/demo/issues/7";
+    let (st, v) = s
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let (st, linked) = s
+        .post(
+            &tickets_path(),
+            &w.owner,
+            json!({"title": "Upstream", "upstream_issue": issue}),
+        )
+        .await;
+    assert_eq!(st, 201, "{linked}");
+    let to_other = json!({"repository": "acme/other"});
+    let (st, refusal) = s
+        .put(
+            &format!("{}/repository", path_of(&linked)),
+            &w.owner,
+            to_other.clone(),
+        )
+        .await;
+    assert_eq!(st, 409, "{refusal}");
+    assert_eq!(refusal["error"]["code"], "move_upstream_issue");
+    assert_eq!(s.ok(&path_of(&linked), &w.owner).await, linked);
+    let plain = w.ticket("Plain").await;
+    let (st, v) = s
+        .put(
+            &format!("{}/repository", path_of(&plain)),
+            &w.owner,
+            to_other,
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    // By its old address too, an issue is one of the repository it is in
+    // now, which follows no upstream.
+    let (st, v) = s
+        .patch(&path_of(&plain), &w.owner, json!({"upstream_issue": issue}))
+        .await;
+    assert_eq!(st, 400, "{v}");
+    assert_eq!(v["error"]["code"], "invalid");
+}
+
+#[tokio::test]
 async fn ticket_deletion_refuses_an_upstream_issue_without_changing_it() {
     let (mut w, _gh) = crate::upstream::followed().await;
     let s = &w.server;
@@ -1928,4 +1974,337 @@ async fn a_change_of_a_ticket_reaches_the_views_of_all_its_descendants() {
     })
     .await;
     assert_eq!(found, Ok(true), "{seen}");
+}
+
+#[tokio::test]
+async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_it() {
+    let mut w = World::new().await;
+    let s = &w.server;
+    for (path, labels) in [
+        ("acme/other", json!(["bug", "infra"])),
+        ("beta/x", json!([])),
+    ] {
+        if path == "beta/x" {
+            assert_eq!(
+                s.post("/workspaces", &w.owner, json!({"name": "beta"}))
+                    .await
+                    .0,
+                201
+            );
+        }
+        let (st, v) = s
+            .post("/repos", &w.owner, json!({"path": path, "labels": labels}))
+            .await;
+        assert_eq!(st, 201, "{v}");
+    }
+    let other = format!("/repos/{}/tickets", encode("acme/other"));
+    let (st, first) = s
+        .post(&other, &w.aiko, json!({"title": "Already there"}))
+        .await;
+    assert_eq!(st, 201, "{first}");
+    let parent = w.ticket("Parent").await;
+    let moving = w.ticket("Moving").await;
+    let waiting = w.ticket("Waiting").await;
+    let response = s
+        .http
+        .post(format!("{}/api/v1{}/attachments", s.url, w.repo_path()))
+        .bearer_auth(&w.aiko)
+        .header("content-type", "image/png")
+        .body(b"\x89PNG\r\n\x1a\nrest".to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 201);
+    let image: Value = response.json().await.unwrap();
+    let (st, v) = s
+        .patch(
+            &path_of(&moving),
+            &w.aiko,
+            json!({
+                "body": format!("![image]({})", image["url"].as_str().unwrap()),
+                "add_labels": ["bug", "docs"], "parent": parent["url"]
+            }),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = s
+        .patch(
+            &path_of(&waiting),
+            &w.aiko,
+            json!({"add_blocked_by": [moving["url"]]}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (_, comment) = s
+        .post(
+            &format!("{}/comments", path_of(&moving)),
+            &w.aiko,
+            json!({"body": "@ken look"}),
+        )
+        .await;
+    let (st, _) = s
+        .post(
+            &format!("{}/reactions", path_of(&moving)),
+            &w.ken,
+            json!({"target_id": comment["id"], "reaction": "ack"}),
+        )
+        .await;
+    assert_eq!(st, 200);
+    w.push_change("linking", "l.txt", "l\n");
+    let linking = w
+        .open_pull("linking", json!([{"url": moving["url"], "closes": false}]))
+        .await;
+    w.push_change("closing", "c.txt", "c\n");
+    let closing = w
+        .open_pull("closing", json!([{"url": waiting["url"], "closes": true}]))
+        .await;
+    let to = |path: &str| json!({"repository": path});
+    let move_path = |t: &Value| format!("{}/repository", path_of(t));
+    let revision = s.ok(&path_of(&moving), &w.aiko).await["revision"].clone();
+
+    // Refusals change nothing.
+    for (body, status, code) in [
+        (to(REPO), 400, "invalid"),
+        (to("beta/x"), 400, "invalid"),
+        (to("acme/nope"), 404, "not_found"),
+        (
+            json!({"repository": "acme/other", "revision": 1}),
+            409,
+            "conflict",
+        ),
+    ] {
+        let (st, v) = s.put(&move_path(&moving), &w.aiko, body).await;
+        assert_eq!(
+            (st.as_u16(), v["error"]["code"].as_str()),
+            (status, Some(code)),
+            "{v}"
+        );
+    }
+    let (st, v) = s.put(&move_path(&waiting), &w.aiko, to("acme/other")).await;
+    assert_eq!(
+        (st.as_u16(), v["error"]["code"].as_str()),
+        (409, Some("move_closing_pull")),
+        "{v}"
+    );
+    assert_eq!(s.ok(&path_of(&moving), &w.aiko).await["revision"], revision);
+
+    let (st, moved) = s
+        .put(
+            &move_path(&moving),
+            &w.ken,
+            json!({"repository": "acme/other", "revision": revision}),
+        )
+        .await;
+    assert_eq!(st, 200, "{moved}");
+    let t = &moved["ticket"];
+    let url = format!("{}/acme/other/-/tickets/2", s.url);
+    assert_eq!(t["url"], url.as_str());
+    assert_eq!(
+        (&t["repository"], &t["key"]),
+        (&json!("acme/other"), &json!("2"))
+    );
+    assert_eq!(t["labels"], json!(["bug"]));
+    assert_eq!(moved["removed_labels"], json!(["docs"]));
+    assert_eq!(
+        (&t["title"], &t["lane"]),
+        (&moving["title"], &moving["lane"])
+    );
+    assert_eq!(t["parent"]["url"], parent["url"]);
+    assert_eq!(t["blocks"][0]["url"], waiting["url"]);
+    // The tickets that name it, and the pull request that links it, name its
+    // new place.
+    assert_eq!(
+        s.ok(&path_of(&parent), &w.aiko).await["children"][0]["url"],
+        url.as_str()
+    );
+    assert_eq!(
+        s.ok(&path_of(&waiting), &w.aiko).await["blocked_by"][0]["url"],
+        url.as_str()
+    );
+    let pull = format!("{}/pulls/{}", w.repo_path(), linking["number"]);
+    assert_eq!(
+        s.ok(&pull, &w.aiko).await["tickets"],
+        json!([{"url": url, "closes": false}])
+    );
+    let new_path = format!("{other}/2");
+    assert_eq!(
+        s.ok(&format!("{new_path}/pulls"), &w.aiko).await["items"][0]["label"],
+        format!("!{}", linking["number"])
+    );
+    let comments = s.ok(&format!("{new_path}/comments"), &w.aiko).await;
+    assert_eq!(comments["items"][0]["id"], comment["id"]);
+    assert_eq!(comments["items"][0]["reactions"][0]["reaction"], "ack");
+    // Its image stays where it was uploaded.
+    let attachments = s.ok(&format!("{new_path}/attachments"), &w.aiko).await;
+    assert_eq!(attachments["items"][0]["url"], image["url"]);
+    let mentions = s
+        .ok(&format!("/workspaces/{WS}/tickets?mentions=me"), &w.ken)
+        .await;
+    assert_eq!(mentions["items"][0]["url"], url.as_str());
+    let labelled = s.ok(&format!("{other}?label=bug"), &w.aiko).await;
+    assert_eq!(keys(&labelled["items"]), ["2"]);
+
+    // Its old number leads to it, for reads and writes alike, and is not
+    // given to another ticket.
+    assert_eq!(s.ok(&path_of(&moving), &w.aiko).await["url"], url.as_str());
+    let (st, _) = s
+        .post(
+            &format!("{}/comments", path_of(&moving)),
+            &w.aiko,
+            json!({"body": "by the old address"}),
+        )
+        .await;
+    assert_eq!(st, 201);
+    assert_eq!(
+        s.ok(&format!("{new_path}/comments"), &w.aiko).await["items"][1]["body"],
+        "by the old address"
+    );
+    // References to its old number lead to it too.
+    let (st, rendered) = s
+        .post(
+            &format!("{}/markdown", w.repo_path()),
+            &w.aiko,
+            json!({"source": format!("#2 and {}", moving["url"].as_str().unwrap())}),
+        )
+        .await;
+    assert_eq!(st, 200, "{rendered}");
+    assert_eq!(
+        rendered["markdown"]
+            .as_str()
+            .unwrap()
+            .matches(&format!("href=\"{url}\""))
+            .count(),
+        2,
+        "{rendered}"
+    );
+    // A pull request of the old repository that has not merged no longer
+    // closes it once it moves, even if it is reopened.
+    let closing_path = format!("{}/pulls/{}", w.repo_path(), closing["number"]);
+    let (st, v) = s
+        .post(&format!("{closing_path}/close"), &w.owner, json!({}))
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = s.put(&move_path(&waiting), &w.aiko, to("acme/other")).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        s.ok(&closing_path, &w.aiko).await["tickets"],
+        json!([{"url": v["ticket"]["url"], "closes": false}])
+    );
+    assert_eq!(w.ticket("Next").await["key"], "4");
+    let (st, back) = s
+        .put(&format!("{new_path}/repository"), &w.aiko, to(REPO))
+        .await;
+    assert_eq!(st, 200, "{back}");
+    assert_eq!(back["ticket"]["key"], "5");
+    for old in [path_of(&moving), new_path] {
+        assert_eq!(s.ok(&old, &w.aiko).await["key"], "5", "{old}");
+    }
+    // Short references and URLs of either old number link to its number
+    // now, which differs from each of them.
+    let (st, rendered) = s
+        .post(
+            &format!("/repos/{}/markdown", encode("acme/other")),
+            &w.aiko,
+            json!({"source": format!("acme/demo#2, #2, {url} and {}", moving["url"].as_str().unwrap())}),
+        )
+        .await;
+    assert_eq!(st, 200, "{rendered}");
+    let now = format!("href=\"{}/{REPO}/-/tickets/5\"", s.url);
+    assert_eq!(
+        rendered["markdown"].as_str().unwrap().matches(&now).count(),
+        4,
+        "{rendered}"
+    );
+    w.server.stop();
+    let checked = w.server.cli(&w.owner, &["admin", "check"]);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+#[tokio::test]
+async fn a_move_reaches_the_views_of_all_its_descendants() {
+    let w = World::new().await;
+    let s = &w.server;
+    let (st, v) = s
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let top = w.ticket("Top").await;
+    let middle = w.ticket("Middle").await;
+    let bottom = w.ticket("Bottom").await;
+    for (child, parent) in [(&middle, &top), (&bottom, &middle)] {
+        let (st, v) = s
+            .patch(&path_of(child), &w.aiko, json!({"parent": parent["url"]}))
+            .await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let mut events = s
+        .http
+        .get(format!("{}/api/v1/events", s.url))
+        .bearer_auth(&w.aiko)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(events.status(), 200);
+    let (st, v) = s
+        .put(
+            &format!("{}/repository", path_of(&top)),
+            &w.ken,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
+    let mut seen = String::new();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Ok(Some(chunk)) = events.chunk().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if seen.contains(&bottom_changed) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(found, Ok(true), "{seen}");
+}
+
+#[tokio::test]
+async fn a_repair_ticket_stays_in_the_repository_it_repairs() {
+    let mut w = World::new().await;
+    let (st, v) = w
+        .server
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let repair = w.ticket("Repair main").await;
+    w.server.stop();
+    edit_records(&w.server.data.join("branvil.redb"), "tickets", |t| {
+        t["repair"] = json!({"jobs": ["test"], "reported": "0".repeat(40)});
+    });
+    let reindexed = w.server.cli(&w.owner, &["admin", "reindex"]);
+    assert!(
+        reindexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reindexed.stderr)
+    );
+    w.restart(&[]);
+    let s = &w.server;
+    let (st, v) = s
+        .put(
+            &format!("{}/repository", path_of(&repair)),
+            &w.owner,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    assert_eq!(v["error"]["code"], "move_repair");
+    let kept = s.ok(&path_of(&repair), &w.owner).await;
+    assert_eq!(
+        (&kept["repository"], &kept["key"]),
+        (&json!(REPO), &repair["key"])
+    );
 }

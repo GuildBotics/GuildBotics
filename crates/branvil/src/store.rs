@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 30;
+pub const SCHEMA_VERSION: u64 = 31;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -34,6 +34,9 @@ pub const SESSIONS: Tbl = TableDefinition::new("sessions");
 pub const REPOS: Tbl = TableDefinition::new("repos");
 pub const WORKSPACES: Tbl = TableDefinition::new("workspaces");
 pub const TICKETS: Tbl = TableDefinition::new("tickets");
+/// Where a ticket moved to another repository went: its old (repository id,
+/// number) → its new one, so that its old URL keeps leading to it.
+pub const TICKET_MOVES: Tbl = TableDefinition::new("ticket_moves");
 pub const COMMENTS: Tbl = TableDefinition::new("comments");
 pub const ATTACHMENTS: Tbl = TableDefinition::new("attachments");
 pub const LANDING: Tbl = TableDefinition::new("landing");
@@ -91,6 +94,7 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     REPOS,
     WORKSPACES,
     TICKETS,
+    TICKET_MOVES,
     COMMENTS,
     ATTACHMENTS,
     PULLS,
@@ -814,10 +818,6 @@ impl Upgrading {
                 crate::upgrade::FROM
             ),
         }
-    }
-
-    pub fn read<T>(&self, f: impl FnOnce(&ReadTransaction) -> AppResult<T>) -> anyhow::Result<T> {
-        f(&self.db.begin_read()?).map_err(|e| anyhow::anyhow!("{}", e.message))
     }
 
     /// Writes a copy of the database as it is next to it

@@ -322,7 +322,7 @@ fn targets(
             let Some((repo, item)) = markdown::resolve(r, &own, &reference)? else {
                 continue;
             };
-            let n = reference.number;
+            let n = item.number();
             let target = match item {
                 Item::Ticket(t) => t
                     .upstream_issue

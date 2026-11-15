@@ -265,6 +265,81 @@ describe("ticket view", () => {
     expect(fake.calls("PUT", `${TICKET}/board`).map((c) => c.body)).toEqual([{ lane: "ready" }, { lane: "done" }]);
   });
 
+  describe("repository", () => {
+    const OTHER = { ...REPO, path: "acme/other", labels: ["bug"] };
+    const MOVED = "/api/v1/repos/acme/other/tickets/7";
+    const moved = card("7", "new", { repository: "acme/other", labels: ["bug"], revision: 3 });
+    /** The workspace's repositories, another workspace's, and the moved ticket's reads. */
+    const routes = (extra: Parameters<typeof ticketRoutes>[0]) =>
+      ticketRoutes({
+        "GET /api/v1/repos": json(200, { items: [REPO, OTHER, { ...REPO, path: "beta/x" }], next_cursor: null }),
+        "GET /api/v1/repos/acme/other": json(200, OTHER),
+        [`GET ${MOVED}`]: json(200, moved),
+        [`GET ${MOVED}/comments`]: EMPTY,
+        [`GET ${MOVED}/pulls`]: EMPTY,
+        ...extra,
+      });
+
+    it("moves the ticket to another repository of its workspace once confirmed, and shows it at its new address", async () => {
+      const fake = fakeApi(
+        routes({
+          [`GET ${TICKET}`]: json(200, card("1", "new", { labels: ["bug", "docs"], revision: 2 })),
+          [`PUT ${TICKET}/repository`]: json(200, { ticket: moved, removed_labels: ["docs"] }),
+        }),
+      );
+      const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+      const user = userEvent.setup();
+      renderApp("/acme/demo/-/tickets/1");
+      const select = await screen.findByRole("combobox", { name: "Repository" });
+      expect(select).toHaveValue("acme/demo");
+      await user.click(select);
+      expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["acme/demo", "acme/other"]);
+      await user.click(screen.getByRole("option", { name: "acme/other" }));
+      const en = dictionaries.en;
+      expect(confirm).toHaveBeenCalledWith(
+        `${en["ticket.moveConfirm"].replace("{key}", "#1").replaceAll("{repository}", "acme/other")}\n\n${en["ticket.moveDropsLabels"].replace("{repository}", "acme/other").replace("{labels}", "docs")}`,
+      );
+      // Declined, it stays.
+      expect(fake.calls("PUT", `${TICKET}/repository`)).toEqual([]);
+      expect(select).toHaveValue("acme/demo");
+      await choose(user, "Repository", "acme/other");
+      await waitFor(() => expect(window.location.pathname).toBe("/acme/other/-/tickets/7"));
+      expect(fake.calls("PUT", `${TICKET}/repository`).map((c) => c.body)).toEqual([{ repository: "acme/other", revision: 2 }]);
+      await waitFor(() => expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("acme/other"));
+      confirm.mockRestore();
+    });
+
+    it("shows a ticket opened at the address it moved from at its new address", async () => {
+      fakeApi(routes({ [`GET ${TICKET}`]: json(200, moved) }));
+      renderApp("/acme/demo/-/tickets/1");
+      await waitFor(() => expect(window.location.pathname).toBe("/acme/other/-/tickets/7"));
+      expect(await screen.findByText("#7")).toBeInTheDocument();
+    });
+
+    it.each(["move_upstream_issue", "move_closing_pull", "move_repair"] as const)("says why the ticket is not moved: %s", async (code) => {
+      fakeApi(
+        routes({
+          [`GET ${TICKET}`]: json(200, card("1", "new")),
+          [`PUT ${TICKET}/repository`]: apiError(409, code, "Ticket 1 cannot be moved."),
+        }),
+      );
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const user = userEvent.setup();
+      renderApp("/acme/demo/-/tickets/1");
+      await choose(user, "Repository", "acme/other");
+      expect(await screen.findByText(dictionaries.en[`ticket.${code}`])).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/acme/demo/-/tickets/1");
+      confirm.mockRestore();
+    });
+
+    it("offers no choice in a workspace with one repository", async () => {
+      fakeApi(ticketRoutes({ "GET /api/v1/repos": json(200, { items: [REPO, { ...REPO, path: "beta/x" }], next_cursor: null }), [`GET ${TICKET}`]: json(200, card("1", "new")) }));
+      renderApp("/acme/demo/-/tickets/1");
+      await screen.findByRole("combobox", { name: "Lane" });
+      expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
+    });
+  });
+
   it("edits the title and the body in place, each with the revision it was read at", async () => {
     const fake = fakeApi(
       ticketRoutes({

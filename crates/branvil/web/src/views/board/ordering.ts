@@ -64,14 +64,18 @@ export function rollup(checks: CheckSet): CiRollup {
 export interface CardFilter {
   assignee: string; // "" any, "-" unassigned, otherwise a member name
   label: string; // "" any
+  repository: string; // "" any, otherwise a repository path
   text: string;
 }
 
-export const hasFilter = (f: CardFilter): boolean => !!(f.assignee || f.label || f.text.trim());
+export const NO_FILTER: CardFilter = { assignee: "", label: "", repository: "", text: "" };
+
+export const hasFilter = (f: CardFilter): boolean => !!(f.assignee || f.label || f.repository || f.text.trim());
 
 export function matchesFilter(card: Card, f: CardFilter): boolean {
   if (f.assignee && (card.assignee?.name ?? "-") !== f.assignee) return false;
   if (f.label && !card.labels.includes(f.label)) return false;
+  if (f.repository && card.repository !== f.repository) return false;
   const text = f.text.trim().toLowerCase();
   if (text && !`${ticketRef(card)} ${card.title} ${card.body}`.toLowerCase().includes(text)) return false;
   return true;

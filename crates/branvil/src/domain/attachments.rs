@@ -3,7 +3,9 @@
 //! comments of the repository's tickets refer to them by id
 //! (`IX_ATTACHMENT_REFS`). An attachment belongs to the repository, not to a
 //! ticket, so it can be uploaded before its ticket exists; one no ticket
-//! refers to is deleted `GRACE_SECS` after its upload.
+//! refers to is deleted `GRACE_SECS` after its upload. The tickets of every
+//! repository of its workspace may refer to it: a ticket moved to another
+//! repository keeps its images where they are.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -61,6 +63,15 @@ fn view(repo: &Repo, a: &Attachment) -> AttachmentView {
 
 fn file(app: &App, id: &str) -> std::path::PathBuf {
     app.layout.attachments().join(id)
+}
+
+/// The repositories whose tickets may refer to the attachments of `repo`:
+/// those of its workspace, `repo` first.
+fn neighbours(r: &impl Rd, repo: &Repo) -> AppResult<Vec<Repo>> {
+    let mut all: Vec<Repo> = r.prefix_all(store::REPOS, &[])?;
+    all.retain(|x| x.workspace == repo.workspace);
+    all.sort_by_key(|x| x.id != repo.id);
+    Ok(all)
 }
 
 /// Keeps an image for the repository's tickets, by any member who sees it.
@@ -160,11 +171,12 @@ pub async fn of_ticket(
     let key = key.to_string();
     app.store
         .read(move |r| {
-            let t = tickets::ticket_by_key(r, &repo, &key)?;
+            let (repo, t) = tickets::ticket_by_key(r, &repo, &key)?;
             let target = Target::Ticket {
                 repo: t.repo.clone(),
                 number: t.number,
             };
+            let repos = neighbours(r, &repo)?;
             let mut sources = vec![("body".to_string(), t.body)];
             for c in tickets::comments_of(r, &target)? {
                 sources.push((c.id, c.body));
@@ -174,13 +186,17 @@ pub async fn of_ticket(
                 for id in model::attachment_ids(&text) {
                     if let Some(item) = items.iter_mut().find(|i| i.attachment.id == id) {
                         item.referenced_by.push(source.clone());
-                    } else if let Some(a) =
-                        r.get::<Attachment>(store::ATTACHMENTS, &Attachment::key(&repo.id, &id))?
-                    {
-                        items.push(TicketAttachment {
-                            attachment: view(&repo, &a),
-                            referenced_by: vec![source.clone()],
-                        });
+                    } else {
+                        for owner in &repos {
+                            let key = Attachment::key(&owner.id, &id);
+                            if let Some(a) = r.get::<Attachment>(store::ATTACHMENTS, &key)? {
+                                items.push(TicketAttachment {
+                                    attachment: view(owner, &a),
+                                    referenced_by: vec![source.clone()],
+                                });
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -219,17 +235,26 @@ pub async fn sweep(app: &App) -> AppResult<usize> {
             continue;
         }
         let key = Attachment::key(&a.repo, &a.id);
+        let (repo_id, id) = (a.repo.clone(), a.id.clone());
         // Checked in the transaction that deletes it, so a ticket written
         // meanwhile keeps it.
         let deleted = app
             .store
             .write(move |w| {
-                if present
-                    && !w
-                        .prefix_raw(store::IX_ATTACHMENT_REFS, &key, None, 1)?
-                        .is_empty()
-                {
-                    return Ok(false);
+                if present {
+                    let repos = match w.get::<Repo>(store::REPOS, &Repo::key(&repo_id))? {
+                        Some(repo) => neighbours(w, &repo)?,
+                        None => Vec::new(),
+                    };
+                    for repo in repos {
+                        let refs = Attachment::key(&repo.id, &id);
+                        if !w
+                            .prefix_raw(store::IX_ATTACHMENT_REFS, &refs, None, 1)?
+                            .is_empty()
+                        {
+                            return Ok(false);
+                        }
+                    }
                 }
                 w.del(store::ATTACHMENTS, &key)?;
                 Ok(true)

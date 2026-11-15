@@ -621,6 +621,15 @@ async fn ticket_board(
     ))
 }
 
+async fn ticket_move(
+    State(app): State<Shared>,
+    c: Caller,
+    P((repo, key)): P<(String, String)>,
+    J(input): J<tickets::TicketMove>,
+) -> R {
+    Ok(ok(tickets::move_ticket(&app, &c, &repo, &key, input).await?))
+}
+
 async fn board_cards(State(app): State<Shared>, c: Caller, P(ws): P<String>, q: Q) -> R {
     let page = q.page(&app, &c, &format!("cards\n{}", util::fold(&ws)))?;
     let query = tickets::CardQuery {
@@ -1329,6 +1338,7 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/repos/{repo}/tickets/{number}/reactions", (post, ticket_react, MemberSession), (delete, ticket_unreact, MemberSession)),
     ("/repos/{repo}/tickets/{number}/assignee", (put, assignee_put, MemberSession), (delete, assignee_delete, MemberSession)),
     ("/repos/{repo}/tickets/{number}/board", (put, ticket_board, MemberSession)),
+    ("/repos/{repo}/tickets/{number}/repository", (put, ticket_move, MemberSession)),
     ("/events", (get, events, MemberSession)),
     ("/admin/diagnostics", (get, diagnostics, OwnerSession)),
     ("/admin/backup", (post, crate::backup::http_backup, OwnerSession)),

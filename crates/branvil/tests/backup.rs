@@ -270,14 +270,14 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 29 wrote.
+    // A backup of the previous schema version: what version 30 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_29(&db);
+    as_schema_30(&db);
     let bytes = std::fs::read(&db).unwrap();
     let mut old = manifest.clone();
-    old["schema_version"] = json!(29);
+    old["schema_version"] = json!(30);
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {
             f["bytes"] = json!(bytes.len());
@@ -311,12 +311,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 29 to 30"),
+        text(&out).contains("from schema version 30 to 31"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("tickets start without repair markers"),
+        text(&out).contains("tickets may move between the repositories of a workspace"),
         "{}",
         text(&out)
     );

@@ -585,6 +585,37 @@ workspace.
   ticket is a person's decision). A move into `in_progress` of a blocked
   ticket (`409 blocked`) and the owner's move into `done` of a parent with an
   open child (`409 children_open`) are refused, as under "Ticket shape".
+- `PUT /api/v1/repos/{repo}/tickets/{number}/repository` `{"repository", "revision"?}`
+  moves the ticket to another repository of the same workspace, with that
+  repository's next number, in one transaction. The response is
+  `{"ticket": {...}, "removed_labels": []}`: the moved ticket, and the labels it
+  carried that the new repository does not define, which it no longer carries.
+  Everything else stays, including its lane and rank on the board, its
+  assignee and its relations. Its comments with their ids and reactions move
+  with it; the tickets that name it as their parent or blocker and the pull
+  requests that link it name its new URL, without changing their revisions.
+  Its images stay in the repository they were uploaded to (see "Attachments").
+  A pull request that has not merged and is not of its new repository no
+  longer closes it (a merge closes only the tickets of its own repository,
+  also after a reopen); a merged one keeps what it closed.
+  Its old number is not reused and keeps leading to it: every operation on
+  `/api/v1/repos/{old repo}/tickets/{old number}` and its old URL (as a
+  relation or a pull request's link) acts on the moved ticket and answers with
+  its new `url`, through each move it made. References to its old number or
+  URL in Markdown link to it where it is now, and a published pull request
+  names it there. A relative reference in its own text (`#7`) is read in its
+  new repository. `400 invalid` for its own
+  repository or one of another workspace, `404` for an unknown repository,
+  `409 conflict` for a stale `revision`, `409 move_upstream_issue` while it
+  has an `upstream_issue` (an issue of its repository's upstream host),
+  `409 move_repair` for a repair ticket (it repairs its repository's failing
+  checks), and
+  `409 move_closing_pull` while an open pull request closes it (a merge closes
+  only the tickets of its pull request's repository); a refusal changes
+  nothing. Emits `ticket` events for its old and new place and the tickets
+  related to it, `pull` events for the pull requests that link it, and a
+  `board` event. The GUI offers it in the repository field of the ticket's
+  page.
 
 ### Comments (tickets and pull requests alike)
 
@@ -649,14 +680,17 @@ a client with a token gets it under the base URL.
   changes. An id of another repository is `404 not_found`.
 - `GET /api/v1/repos/{repo}/tickets/{number}/attachments` → items of the
   attachment shape plus `"referenced_by": ["body", "cmt_01JA..."]`: the
-  attachments of the repository that the ticket's body and comments refer
-  to, in the order of their first reference, each with where it is referred
-  to (`body`, or a comment's id), in that order. A reference is the
+  attachments of the workspace's repositories that the ticket's body and
+  comments refer to, in the order of their first reference, each with where it
+  is referred to (`body`, or a comment's id), in that order. A reference is the
   attachment's id anywhere in the text (inside code too); an id of no
-  attachment of the repository is not listed.
+  attachment of those repositories is not listed. Each `url` names the
+  repository the image was uploaded to.
 
 Any member who sees the repository uploads and reads its attachments; a runner
-gets `403 forbidden`. An attachment that no ticket body or ticket comment
+gets `403 forbidden`. The tickets of every repository of the workspace keep an
+attachment, so a ticket moved to another repository keeps its images where
+they are. An attachment that no such ticket body or ticket comment
 refers to is deleted once 24 hours have passed since its upload (checked at
 start and every hour): one referred to stays while a reference does, and its
 last reference going makes it one no ticket refers to. Pull request bodies

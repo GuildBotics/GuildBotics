@@ -285,11 +285,24 @@ pub fn parse_number(key: &str) -> Option<u64> {
     key.parse().ok()
 }
 
-pub fn ticket_by_key(r: &impl Rd, repo: &Repo, key: &str) -> AppResult<Ticket> {
+/// The ticket `key` of `repo` with the repository it is in now: a ticket
+/// moved to another repository is found by its old number too, through each
+/// of its moves. Numbers are never reused, so a move never points back.
+pub fn ticket_by_key(r: &impl Rd, repo: &Repo, key: &str) -> AppResult<(Repo, Ticket)> {
     let not_found = || AppError::not_found(format!("Ticket {key} was not found in {}.", repo.path));
-    let n = parse_number(key).ok_or_else(not_found)?;
-    r.get(store::TICKETS, &Ticket::key(&repo.id, n))?
-        .ok_or_else(not_found)
+    let mut id: TicketId = (repo.id.clone(), parse_number(key).ok_or_else(not_found)?);
+    loop {
+        let at = Ticket::key(&id.0, id.1);
+        if let Some(t) = r.get::<Ticket>(store::TICKETS, &at)? {
+            let repo = if t.repo == repo.id {
+                repo.clone()
+            } else {
+                repo_by_id(r, &t.repo)?
+            };
+            return Ok((repo, t));
+        }
+        id = r.get(store::TICKET_MOVES, &at)?.ok_or_else(not_found)?;
+    }
 }
 
 /// Resolves a ticket URL of this Branvil. `None` when the URL is not ours.
@@ -306,8 +319,7 @@ pub fn resolve_ticket_url(
     };
     Some((|| {
         let repo = repo_by_path(r, repo_path)?;
-        let ticket = ticket_by_key(r, &repo, key)?;
-        Ok((repo, ticket))
+        ticket_by_key(r, &repo, key)
     })())
 }
 
@@ -610,7 +622,7 @@ pub async fn get_ticket(
     let base_url = app.base_url.clone();
     app.store
         .read(move |r| {
-            let t = ticket_by_key(r, &repo, &key)?;
+            let (repo, t) = ticket_by_key(r, &repo, &key)?;
             ticket_view(r, &base_url, &repo, &t)
         })
         .await
@@ -631,7 +643,7 @@ pub async fn delete_ticket(
     let view = app
         .store
         .write(move |w| {
-            let t = ticket_by_key(w, &repo, &key)?;
+            let (repo, t) = ticket_by_key(w, &repo, &key)?;
             let id = id_of(&t);
             let pull_prefix = Key::new().s(&t.repo).u(t.number).bytes();
             for (present, code, reason) in [
@@ -762,18 +774,27 @@ pub async fn update_ticket(
             "state_reason must be completed, not_planned, or null.",
         ));
     }
+    let key = key.to_string();
     let upstream_issue = match &patch.upstream_issue {
-        Some(Some(url)) => Some(Some(app.upstream.check_issue(&repo, url)?)),
+        Some(Some(url)) => {
+            // Of the repository the ticket is in now, which the old address
+            // of a moved ticket does not name.
+            let (repo, key) = (repo.clone(), key.clone());
+            let (now_in, _) = app
+                .store
+                .read(move |r| ticket_by_key(r, &repo, &key))
+                .await?;
+            Some(Some((app.upstream.check_issue(&now_in, url)?, now_in.id)))
+        }
         Some(None) => Some(None),
         None => None,
     };
-    let key = key.to_string();
     let base_url = app.base_url.clone();
     let (result, before, descendants) = app
         .store
         .write(move |w| {
             let repo = repo_by_id(w, &repo.id)?;
-            let old = ticket_by_key(w, &repo, &key)?;
+            let (repo, old) = ticket_by_key(w, &repo, &key)?;
             let before = ticket_view(w, &base_url, &repo, &old)?;
             if let Some(rev) = patch.revision
                 && rev != old.revision
@@ -796,7 +817,15 @@ pub async fn update_ticket(
                 t.interactive = interactive;
             }
             if let Some(issue) = upstream_issue {
-                t.upstream_issue = issue;
+                // Checked against the repository it was in before it moved.
+                if let Some((_, checked)) = &issue
+                    && *checked != repo.id
+                {
+                    return Err(AppError::conflict(format!(
+                        "Ticket {key} moved to another repository meanwhile."
+                    )));
+                }
+                t.upstream_issue = issue.map(|(url, _)| url);
             }
             // Related tickets are of the same workspace, as its board is.
             let related = |url: &str| related_ticket(w, &base_url, &repo, url);
@@ -905,6 +934,192 @@ pub async fn update_ticket(
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
+pub struct TicketMove {
+    /// The path of the repository of the same workspace the ticket goes to.
+    pub repository: String,
+    pub revision: Option<u64>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct TicketMoved {
+    pub ticket: TicketView,
+    /// The labels it carried that the repository it went to does not define:
+    /// it no longer carries them.
+    pub removed_labels: Vec<String>,
+}
+
+/// Moves a ticket to another repository of its workspace, with the next
+/// number there. Its comments, the tickets related to it and the pull
+/// requests that link it follow it, and its old number keeps leading to it
+/// (`ticket_by_key`). It stays where it is on the workspace's board.
+pub async fn move_ticket(
+    app: &App,
+    caller: &Caller,
+    repo_path: &str,
+    key: &str,
+    input: TicketMove,
+) -> AppResult<TicketMoved> {
+    let repo = repos::visible(app, caller, repo_path).await?;
+    let to = repos::visible(app, caller, &input.repository).await?;
+    let key = key.to_string();
+    let base_url = app.base_url.clone();
+    let (moved, before, pull_paths, descendants) = app
+        .store
+        .write(move |w| {
+            let (from, old) = ticket_by_key(w, &repo, &key)?;
+            let to = repo_by_id(w, &to.id)?;
+            if let Some(rev) = input.revision
+                && rev != old.revision
+            {
+                return Err(AppError::conflict(format!(
+                    "Ticket {key} is at revision {}, not {rev}.",
+                    old.revision
+                )));
+            }
+            if to.id == from.id {
+                return Err(AppError::invalid(format!(
+                    "Ticket {key} is already in {}.",
+                    to.path
+                )));
+            }
+            // Its board and its relations are those of the workspace.
+            if to.workspace != from.workspace {
+                return Err(AppError::invalid(format!(
+                    "{} is not a repository of workspace {}.",
+                    to.path,
+                    workspace_of(&from.path)
+                )));
+            }
+            let refuse = |code: &'static str, reason: &str| {
+                Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    code,
+                    format!("Ticket {key} cannot be moved because {reason}."),
+                ))
+            };
+            // The issue is one of the repository's upstream host.
+            if old.upstream_issue.is_some() {
+                return refuse("move_upstream_issue", "it is linked to an upstream issue");
+            }
+            // It repairs the checks of its repository's default branch.
+            if old.repair.is_some() {
+                return refuse("move_repair", "it repairs its repository's failing checks");
+            }
+            let old_id = id_of(&old);
+            let pulls = pulls_linking(w, &old_id)?;
+            // A merge closes only the tickets of the pull request's repository.
+            if pulls.iter().any(|p| {
+                p.state == "open"
+                    && p.tickets
+                        .iter()
+                        .any(|l| l.closes && l.local.as_ref() == Some(&old_id))
+            }) {
+                return refuse("move_closing_pull", "an open pull request closes it");
+            }
+            let before = ticket_view(w, &base_url, &from, &old)?;
+            let number = w.next(&format!("ticket:{}", to.id))?;
+            let new_id: TicketId = (to.id.clone(), number);
+            let (labels, removed_labels) = old
+                .labels
+                .iter()
+                .cloned()
+                .partition(|l| to.labels.contains(l));
+            let mut t = old.clone();
+            t.repo = to.id.clone();
+            t.number = number;
+            t.labels = labels;
+            t.revision += 1;
+            t.updated_at = util::now();
+            w.del(store::TICKETS, &Ticket::key(&old.repo, old.number))?;
+            model::reindex(w, model::ticket_index(&old), Vec::new())?;
+            write_ticket(w, None, &t)?;
+            w.put(
+                store::TICKET_MOVES,
+                &Ticket::key(&old.repo, old.number),
+                &new_id,
+            )?;
+            let (old_target, target) = (ticket_target(&old), ticket_target(&t));
+            for c in comments_of(w, &old_target)? {
+                let (old_key, key) = (old_target.comment_key(c.seq), target.comment_key(c.seq));
+                w.del(store::COMMENTS, &old_key)?;
+                model::reindex(w, model::comment_index(&c, &old_key), Vec::new())?;
+                model::put_indexed(
+                    w,
+                    store::COMMENTS,
+                    &key,
+                    None,
+                    &c,
+                    model::comment_index(&c, &key),
+                )?;
+            }
+            // The tickets that name it as their parent or blocker name it
+            // anew. Their own content stays, and so do their revisions.
+            for kind in ["parent", "blocked_by"] {
+                for id in referrers(w, &old_id, kind)? {
+                    let other = ticket_by_id(w, &id)?;
+                    let mut renamed = other.clone();
+                    for r in renamed.parent.iter_mut().chain(&mut renamed.blocked_by) {
+                        if *r == old_id {
+                            *r = new_id.clone();
+                        }
+                    }
+                    write_ticket(w, Some(&other), &renamed)?;
+                }
+            }
+            let mut pull_paths = Vec::new();
+            for p in pulls {
+                let mut linked = p.clone();
+                for l in &mut linked.tickets {
+                    if l.local.as_ref() == Some(&old_id) {
+                        l.url = ticket_url(&base_url, &to, number);
+                        l.local = Some(new_id.clone());
+                        // A merge closes only the tickets of its pull
+                        // request's repository, even of one reopened later;
+                        // a merged one keeps what it closed.
+                        l.closes &= p.merged || p.repo == to.id;
+                    }
+                }
+                model::put_indexed(
+                    w,
+                    store::PULLS,
+                    &Pull::key(&p.repo, p.number),
+                    Some(model::pull_index(&p)),
+                    &linked,
+                    model::pull_index(&linked),
+                )?;
+                pull_paths.push((repo_by_id(w, &p.repo)?.path, p.number.to_string()));
+            }
+            // Its descendants show it as their interactive ancestor, by its
+            // URL.
+            let descendants = descendants(w, &new_id)?
+                .iter()
+                .map(|d| ticket_ref(w, &base_url, d))
+                .collect::<AppResult<Vec<_>>>()?;
+            Ok((
+                TicketMoved {
+                    ticket: ticket_view(w, &base_url, &to, &t)?,
+                    removed_labels,
+                },
+                before,
+                pull_paths,
+                descendants,
+            ))
+        })
+        .await?;
+    publish_tickets(app, [&before, &moved.ticket]);
+    for d in &descendants {
+        app.events.publish("ticket", &d.repository, d.key.clone());
+    }
+    for (path, number) in pull_paths {
+        app.events.publish("pull", &path, number);
+    }
+    app.events
+        .publish("board", workspace_of(&moved.ticket.repository), "");
+    Ok(moved)
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct NewAssignee {
     pub name: String,
 }
@@ -928,7 +1143,7 @@ pub async fn set_assignee(
                 .map(|n| domain::member_by_name(w, &n))
                 .transpose()?
                 .map(|m| m.name);
-            let old = ticket_by_key(w, &repo, &key)?;
+            let (repo, old) = ticket_by_key(w, &repo, &key)?;
             let mut t = old.clone();
             if t.assignee.as_ref().map(|a| fold(&a.name)) == assignee.as_deref().map(fold) {
                 return Ok((ticket_view(w, &base_url, &repo, &t)?, false));
@@ -1140,7 +1355,7 @@ pub async fn put_on_board(
     let view = app
         .store
         .write(move |w| {
-            let old = ticket_by_key(w, &repo, &key)?;
+            let (repo, old) = ticket_by_key(w, &repo, &key)?;
             if p.lane == "in_progress" && old.lane != "in_progress" && any_open(w, &old.blocked_by)?
             {
                 return Err(AppError::new(
@@ -1250,7 +1465,7 @@ pub async fn list_comments(
     let base_url = app.base_url.clone();
     app.store
         .read(move |r| {
-            let t = ticket_by_key(r, &repo, &key)?;
+            let (repo, t) = ticket_by_key(r, &repo, &key)?;
             let url = ticket_url(&base_url, &repo, t.number);
             let (items, next_cursor) =
                 page.scan(r, store::COMMENTS, &ticket_target(&t).prefix(), |_, v| {
@@ -1276,7 +1491,7 @@ pub async fn add_comment(
     let (view, path, k) = app
         .store
         .write(move |w| {
-            let old = ticket_by_key(w, &repo, &key)?;
+            let (repo, old) = ticket_by_key(w, &repo, &key)?;
             let c = insert_comment(w, &ticket_target(&old), &author, input.body, input.meta)?;
             let mut t = old.clone();
             t.updated_at = c.created_at.clone();
@@ -1310,7 +1525,7 @@ pub async fn change_comment(
     let (view, path, key) = app
         .store
         .write(move |w| {
-            let old = ticket_by_key(w, &repo, &key)?;
+            let (repo, old) = ticket_by_key(w, &repo, &key)?;
             let target = ticket_target(&old);
             let not_found = || AppError::not_found(format!("Comment {id} was not found on {key}."));
             let entry = domain::entry(w, &id, &target.owner())?
@@ -1340,7 +1555,7 @@ pub async fn change_comment(
             let mut t = old.clone();
             t.updated_at = util::now();
             write_ticket(w, Some(&old), &t)?;
-            Ok((view, repo.path, key))
+            Ok((view, repo.path, old.number.to_string()))
         })
         .await?;
     app.events.publish("ticket", &path, key);
@@ -1382,7 +1597,7 @@ pub async fn react(
     let (added, path, key) = app
         .store
         .write(move |w| {
-            let t = ticket_by_key(w, &repo, &key)?;
+            let (repo, t) = ticket_by_key(w, &repo, &key)?;
             let not_found = || {
                 AppError::not_found(format!(
                     "Comment {} was not found on {key}.",
@@ -1400,8 +1615,8 @@ pub async fn react(
                     id: r.id,
                     reaction: r.reaction,
                 }),
-                repo.path.clone(),
-                key,
+                repo.path,
+                t.number.to_string(),
             ))
         })
         .await?;
@@ -1423,6 +1638,17 @@ pub struct LinkedPull {
     pub updated_at: String,
 }
 
+/// The pull requests of this Branvil that link ticket `id`.
+fn pulls_linking(r: &impl Rd, id: &TicketId) -> AppResult<Vec<Pull>> {
+    let mut pulls = Vec::new();
+    for key in r.prefix_keys(store::IX_TICKET_PULLS, &Key::new().s(&id.0).u(id.1).bytes())? {
+        let parts = store::decode_key(&key, "susu")
+            .ok_or_else(|| AppError::internal("bad ticket-pull index"))?;
+        pulls.extend(r.get::<Pull>(store::PULLS, &Pull::key(parts[2].s(), parts[3].u()))?);
+    }
+    Ok(pulls)
+}
+
 /// The pull requests of this Branvil that link a ticket, oldest first.
 pub fn linked_pulls(
     r: &impl Rd,
@@ -1430,14 +1656,8 @@ pub fn linked_pulls(
     t: &Ticket,
     with_closes: bool,
 ) -> AppResult<Vec<LinkedPull>> {
-    let prefix = Key::new().s(&t.repo).u(t.number).bytes();
     let mut pulls: Vec<(String, LinkedPull)> = Vec::new();
-    for key in r.prefix_keys(store::IX_TICKET_PULLS, &prefix)? {
-        let parts = store::decode_key(&key, "susu")
-            .ok_or_else(|| AppError::internal("bad ticket-pull index"))?;
-        let Some(p) = r.get::<Pull>(store::PULLS, &Pull::key(parts[2].s(), parts[3].u()))? else {
-            continue;
-        };
+    for p in pulls_linking(r, &id_of(t))? {
         let repo = repo_by_id(r, &p.repo)?;
         let closes = p
             .tickets
@@ -1472,7 +1692,7 @@ pub async fn ticket_pulls(
     let base_url = app.base_url.clone();
     app.store
         .read(move |r| {
-            let t = ticket_by_key(r, &repo, &key)?;
+            let (_, t) = ticket_by_key(r, &repo, &key)?;
             let all = linked_pulls(r, &base_url, &t, true)?;
             let positioned = all
                 .into_iter()

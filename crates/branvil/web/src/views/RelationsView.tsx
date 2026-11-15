@@ -13,7 +13,7 @@ import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
 import { ownsEscape } from "./ticket/TicketDrawer";
-import { hasFilter, type CardFilter } from "./board/ordering";
+import { hasFilter, NO_FILTER, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
 import type { Addition, PickupTag } from "./relations/RelationCard";
@@ -81,7 +81,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const includeClosed = closedShown === "true";
   const [opened, keepOpened] = useStored(`branvil.relations.open.${workspace}`);
   const open = useMemo(() => openParents(opened), [opened]);
-  const [filter, setFilter] = useState<CardFilter>({ assignee: "", label: "", text: "" });
+  const [filter, setFilter] = useState<CardFilter>(NO_FILTER);
   const filtering = hasFilter(filter);
   const [filteredExpansion, setFilteredExpansion] = useState<{ parents: Map<string, boolean>; fresh?: boolean }>({ parents: new Map() });
   const onFilter = (next: CardFilter) => {
@@ -255,7 +255,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const onCreated = (ticket: Ticket) => {
     // Creation leaves filtering so the new card can be revealed, even if it
     // does not match. All creation paths share this successful callback.
-    onFilter({ assignee: "", label: "", text: "" });
+    onFilter(NO_FILTER);
     const made = ticketRef(ticket);
     const to = adding?.to;
     if (!to) {
@@ -317,6 +317,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
       <CardFilters
         cards={cards}
         people={people}
+        repositories={wsRepos.map((r) => r.path)}
         filter={filter}
         onFilter={onFilter}
         includeClosed={includeClosed}

@@ -184,7 +184,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_29_upgrade_preserves_inputs_and_adds_repair_markers() {
+async fn schema_30_upgrade_preserves_every_record_and_adds_ticket_moves() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -247,24 +247,23 @@ async fn schema_29_upgrade_preserves_inputs_and_adds_repair_markers() {
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let verifications = records(&db, "ci_verifications");
     let attempts = records(&db, "ci_attempts");
-    assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let repos = records(&db, "repos");
+    assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_29(&db);
+    as_schema_30(&db);
     let before = tables(&db);
+    assert!(!before.contains_key("ticket_moves"));
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 29 to 30"), "{output}");
-    assert_eq!(records(&db, "ci_attempts"), attempts);
+    assert!(output.contains("from schema version 30 to 31"), "{output}");
+    // Only the table of ticket moves is new, and empty.
+    assert_eq!(tables(&db).get("ticket_moves"), Some(&Vec::new()));
     assert_eq!(records(&db, "repos"), repos);
+    assert_eq!(repos[0]["responder"], "aiko");
+    assert_eq!(records(&db, "ci_attempts"), attempts);
     assert_eq!(records(&db, "ci_runs"), prior_runs);
     let runs = records(&db, "ci_runs");
-    assert!(
-        records(&db, "tickets")
-            .iter()
-            .all(|r| r.get("repair") == Some(&Value::Null))
-    );
     assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
@@ -278,7 +277,7 @@ async fn schema_29_upgrade_preserves_inputs_and_adds_repair_markers() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-29-")
+                .starts_with("branvil-schema-30-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1043,7 +1042,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_29(&db);
+    as_schema_30(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
