@@ -1,4 +1,4 @@
-import { Badge, Button, Card, Group, Modal, NumberInput, Stack, Switch, Tabs, TagsInput, Text, TextInput } from "@mantine/core";
+import { Badge, Button, Card, Group, Modal, NumberInput, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2, Plus } from "lucide-react";
 import { useState } from "react";
@@ -8,7 +8,7 @@ import type { Repository } from "../../api/types";
 import { CopyButton, ErrorMessage, Loading, Notice, Refusal } from "../../components/common";
 import { PanelHeader } from "../../components/PanelHeader";
 import { useT } from "../../i18n";
-import { useRepos } from "../../query/hooks";
+import { useMembers, useRepos } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { UpstreamTab } from "./UpstreamTab";
 
@@ -128,6 +128,7 @@ type RepoForm = {
   required_approvals: string | number;
   auto_land: boolean;
   ci_network: boolean;
+  responder: string | null;
   labels: string[];
 };
 
@@ -140,11 +141,13 @@ const seed = (r: Repository): RepoForm => ({
   required_approvals: r.required_approvals,
   auto_land: r.auto_land,
   ci_network: r.ci_network,
+  responder: r.responder.chosen ? r.responder.member : null,
   labels: r.labels,
 });
 
 /** A repository's editor: its basics, its upstream, its CI, and its ticket labels, as tabs. */
 function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
+  const members = useMembers();
   const t = useT();
   const client = useQueryClient();
   // The form keeps the revision it was filled from, so a stale save is refused (409).
@@ -222,6 +225,14 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
         </Tabs.Panel>
         <Tabs.Panel value="ci" pt="md">
           <Stack gap="md">
+            <Select
+              label={t("settings.responder")}
+              description={t("settings.responderHelp")}
+              data={[{ value: "", label: t("settings.responderAuto", { name: repo.responder.automatic }) }, ...(members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => ({ value: m.name, label: m.name }))]}
+              value={form.responder ?? ""}
+              onChange={(value) => setForm({ ...form, responder: value || null })}
+              allowDeselect={false}
+            />
             <Switch
               label={t("settings.ciNetwork")}
               description={t("settings.ciNetworkHelp")}

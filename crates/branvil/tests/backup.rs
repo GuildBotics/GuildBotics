@@ -316,7 +316,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("existing CI inputs preserved"),
+        text(&out).contains("repository responders start automatic"),
         "{}",
         text(&out)
     );

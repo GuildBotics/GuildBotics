@@ -708,6 +708,7 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 pub fn as_schema_27(db: &Path) {
     edit_records(db, "repos", |v| {
         v.as_object_mut().unwrap().remove("post_merge_jobs");
+        v.as_object_mut().unwrap().remove("responder");
     });
     edit_records(db, "ci_runs", |v| {
         if let Some(s) = v["selection"].as_object_mut() {

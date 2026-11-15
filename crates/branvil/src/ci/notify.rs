@@ -218,6 +218,7 @@ mod tests {
             required_approvals: 0,
             auto_land: false,
             ci_network: false,
+            responder: None,
             labels: vec![],
             upstream: None,
             revision: 1,

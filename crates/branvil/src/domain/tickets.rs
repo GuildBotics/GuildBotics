@@ -1809,6 +1809,7 @@ mod tests {
             required_approvals: 1,
             auto_land: false,
             ci_network: false,
+            responder: None,
             labels: Vec::new(),
             upstream: None,
             revision: 1,

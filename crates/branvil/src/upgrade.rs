@@ -20,7 +20,10 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
             for (key, bytes) in rows {
                 let mut v: serde_json::Value = serde_json::from_slice(&bytes)?;
                 match i {
-                    0 => v["post_merge_jobs"] = serde_json::json!([]),
+                    0 => {
+                        v["post_merge_jobs"] = serde_json::json!([]);
+                        v["responder"] = serde_json::Value::Null;
+                    }
                     1 if v["selection"].is_object() => {
                         v["selection"]["post_merge_jobs"] = serde_json::json!([]);
                     }

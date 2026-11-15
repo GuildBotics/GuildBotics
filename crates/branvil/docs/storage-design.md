@@ -72,7 +72,7 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
 snapshots store the opt-in boolean of the same name. The 27 → 28 upgrade adds
-`post_merge_jobs: []` to every repository and non-null run selection, and
+`responder: null` and `post_merge_jobs: []` to every repository and non-null run selection, and
 `reason: "paths"` to every non-null attempt `path_skip`, preserving other fields.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
@@ -100,7 +100,7 @@ check did not change stored records or raise the version.
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
 | `sessions` | `(sha256(session id))` | member, CSRF secret, expiry | entry-code exchange (expired rows pruned there); all deleted when the owner's token file is replaced | cookie auth |
 | `workspaces` | `(workspace id)` | name | workspace API | repository creation, cards, closed |
-| `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required checks, required approvals, `auto_land`, `ci_network`, labels, upstream (provider, repository), revision | repo API | everything under a repository |
+| `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required checks, required approvals, `auto_land`, `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
 | `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
 | `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing gate failures | comments, cards, activity |
 | `attachments` | `(repo id, attachment id)` | an image of the repository's tickets: name, media type read from its bytes, size, uploader, time (the bytes are a file) | upload API, the attachment sweep | delivery, a ticket's attachments, the sweep |
