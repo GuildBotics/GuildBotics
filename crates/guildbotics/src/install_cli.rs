@@ -447,6 +447,10 @@ mod shadow_tests {
                     .output()
                     .unwrap();
                 assert!(output.status.success(), "{output:?}");
+                assert!(
+                    String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                    "child test did not execute: {output:?}"
+                );
             }
             return;
         }
