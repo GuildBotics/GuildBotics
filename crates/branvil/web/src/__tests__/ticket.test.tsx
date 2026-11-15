@@ -38,6 +38,13 @@ function ticketRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string
 }
 
 describe("ticket view", () => {
+  it("shows the system avatar for the author of a repair ticket", async () => {
+    fakeApi(ticketRoutes({ [`GET ${TICKET}`]: json(200, card("1", "ready", { author: "branvil", repair: true })) }));
+    renderApp("/acme/demo/-/tickets/1");
+    expect(await screen.findByRole("img", { name: "Branvil" })).toBeInTheDocument();
+    expect(screen.getByText("branvil", { selector: "strong" })).toBeInTheDocument();
+  });
+
   it.each(["en", "ja"] as const)("links and copies comments, scrolling after loading and on fragment/history navigation (%s)", async (language) => {
     const comments = ["cmt_1", "cmt_2"].map((id) => ({ id, author: "comment-agent", body: id, meta: null, created_at: at, url: "", reactions: [] }));
     let answer!: (value: ReturnType<typeof json>) => void;
@@ -309,7 +316,7 @@ describe("ticket view", () => {
       expect(await screen.findByText("#7")).toBeInTheDocument();
     });
 
-    it.each(["move_upstream_issue", "move_closing_pull"] as const)("says why the ticket is not moved: %s", async (code) => {
+    it.each(["move_upstream_issue", "move_closing_pull", "move_repair"] as const)("says why the ticket is not moved: %s", async (code) => {
       fakeApi(
         routes({
           [`GET ${TICKET}`]: json(200, card("1", "new")),

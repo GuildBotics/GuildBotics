@@ -457,6 +457,7 @@ every ticket is on it, in a lane.
   "repository": "acme/demo",
   "key": "3",
   "title": "Fix login",
+  "repair": false,
   "body": "It fails.",
   "mentions": [],
   "state": "open",
@@ -480,6 +481,14 @@ every ticket is on it, in a lane.
   "revision": 7
 }
 ```
+
+`repair` is true for a system-created repair ticket, on both tickets and board
+cards. Its author is the reserved name `branvil` (displayed with the same anvil
+avatar as system comments). Ordinary tickets have `repair: false`. Repair tickets
+are assigned in `ready` at its front; passing default-branch verification closes
+them as completed and moves them to `done`. A linked PR merge alone does not
+complete a repair ticket.
+
 
 `key` is the ticket's number as a string (it reads `#3`). `state` is `open` or
 `closed`; `state_reason` is `completed`, `not_planned`, or `null`. A ticket has at most one assignee, the agent that works on it
@@ -598,7 +607,9 @@ workspace.
   new repository. `400 invalid` for its own
   repository or one of another workspace, `404` for an unknown repository,
   `409 conflict` for a stale `revision`, `409 move_upstream_issue` while it
-  has an `upstream_issue` (an issue of its repository's upstream host), and
+  has an `upstream_issue` (an issue of its repository's upstream host),
+  `409 move_repair` for a repair ticket (it repairs its repository's failing
+  checks), and
   `409 move_closing_pull` while an open pull request closes it (a merge closes
   only the tickets of its pull request's repository); a refusal changes
   nothing. Emits `ticket` events for its old and new place and the tickets

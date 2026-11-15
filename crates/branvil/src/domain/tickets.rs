@@ -22,6 +22,7 @@ use crate::util::{self, fold};
 
 #[derive(Serialize, Debug, Clone)]
 pub struct TicketView {
+    pub repair: bool,
     pub url: String,
     pub repository: String,
     pub key: String,
@@ -241,6 +242,7 @@ pub fn ticket_view(r: &impl Rd, base_url: &str, repo: &Repo, t: &Ticket) -> AppR
     };
     let id = id_of(t);
     Ok(TicketView {
+        repair: t.repair.is_some(),
         url: ticket_url(base_url, repo, t.number),
         repository: repo.path.clone(),
         key: t.number.to_string(),
@@ -321,7 +323,7 @@ pub fn resolve_ticket_url(
     })())
 }
 
-fn write_ticket(w: &Wtx, old: Option<&Ticket>, new: &Ticket) -> AppResult<()> {
+pub(crate) fn write_ticket(w: &Wtx, old: Option<&Ticket>, new: &Ticket) -> AppResult<()> {
     model::put_indexed(
         w,
         store::TICKETS,
@@ -438,6 +440,7 @@ pub async fn create_ticket(
                     assigned_at: now.clone(),
                 });
             let t = Ticket {
+                repair: None,
                 repo: repo.id.clone(),
                 workspace: repo.workspace.clone(),
                 number,
@@ -998,6 +1001,10 @@ pub async fn move_ticket(
             if old.upstream_issue.is_some() {
                 return refuse("move_upstream_issue", "it is linked to an upstream issue");
             }
+            // It repairs the checks of its repository's default branch.
+            if old.repair.is_some() {
+                return refuse("move_repair", "it repairs its repository's failing checks");
+            }
             let old_id = id_of(&old);
             let pulls = pulls_linking(w, &old_id)?;
             // A merge closes only the tickets of the pull request's repository.
@@ -1300,6 +1307,17 @@ fn rank_in(
             rank::between(last.as_ref().map(|l| l.1.as_str()), None)
         }
     })
+}
+
+/// Rank before the first card, reading only that card.
+pub(crate) fn rank_first(r: &impl Rd, board: &str, lane: &str) -> AppResult<String> {
+    let prefix = Key::new()
+        .s(board)
+        .u(model::lane_index(lane).unwrap())
+        .bytes();
+    let first = r.prefix_raw(store::IX_CARDS, &prefix, None, 1)?;
+    let rank = first.first().map(|(key, _)| card_rank(key)).transpose()?;
+    Ok(rank::between(None, rank.as_deref()))
 }
 
 /// Moves a ticket to a lane of its workspace's board (see `rank_in`).
@@ -1984,7 +2002,7 @@ pub fn close_by_merge(w: &Wtx, ticket: &TicketId, at: &str) -> AppResult<bool> {
     let Some(old) = w.get::<Ticket>(store::TICKETS, &Ticket::key(&ticket.0, ticket.1))? else {
         return Ok(true);
     };
-    if has_open_children(w, ticket)? {
+    if old.repair.is_some() || has_open_children(w, ticket)? {
         return Ok(false);
     }
     let mut t = if old.lane == "done" {
@@ -2048,6 +2066,7 @@ mod tests {
 
     fn ticket(n: u64) -> Ticket {
         Ticket {
+            repair: None,
             repo: "repo_1".into(),
             workspace: BOARD.into(),
             number: n,
@@ -2106,6 +2125,23 @@ mod tests {
                 .map(|k| store::decode_key(k, "sussu").unwrap()[4].u())
                 .collect()
         }
+    }
+
+    #[test]
+    fn first_rank_precedes_existing_cards_without_reordering_them() {
+        let f = fixture();
+        for n in 1..=3 {
+            f.put(n, "ready", None, None).unwrap();
+        }
+        f.store
+            .write_sync(|w| {
+                let mut t = ticket(4);
+                t.lane = "ready".into();
+                t.rank = rank_first(w, BOARD, "ready")?;
+                write_ticket(w, None, &t)
+            })
+            .unwrap();
+        assert_eq!(f.lane("ready"), [4, 1, 2, 3]);
     }
 
     #[test]

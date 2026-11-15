@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 30;
+pub const SCHEMA_VERSION: u64 = 31;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -47,6 +47,8 @@ pub const INLINE: Tbl = TableDefinition::new("inline_comments");
 pub const REFS: Tbl = TableDefinition::new("ref_snapshots");
 pub const JOURNAL: Tbl = TableDefinition::new("ref_journal");
 pub const IDEMPOTENCY: Tbl = TableDefinition::new("idempotency");
+pub const REPAIR_PENDING: Tbl = TableDefinition::new("repair_pending");
+pub const IX_OPEN_REPAIRS: Tbl = TableDefinition::new("ix_open_repairs");
 pub const CI_VERIFICATIONS: Tbl = TableDefinition::new("ci_verifications");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
@@ -104,6 +106,7 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     JOURNAL,
     IDEMPOTENCY,
     CI_VERIFICATIONS,
+    REPAIR_PENDING,
     CI_RUNS,
     CI_ATTEMPTS,
 ];
@@ -112,6 +115,7 @@ pub const INDEX_TABLES: &[Tbl] = &[
     IX_MEMBER_TOKENS,
     IX_PATHS,
     IX_CARDS,
+    IX_OPEN_REPAIRS,
     IX_TICKET_LABELS,
     IX_TICKET_MENTIONS,
     IX_CLOSED_TICKETS,

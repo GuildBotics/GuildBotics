@@ -8,7 +8,7 @@ import { useT } from "../../i18n";
 import { useRepos } from "../../query/hooks";
 
 /** Why the service refuses to move a ticket, each with its own message. */
-const REFUSALS = ["move_upstream_issue", "move_closing_pull", "conflict"] as const;
+const REFUSALS = ["move_upstream_issue", "move_closing_pull", "move_repair", "conflict"] as const;
 
 /**
  * The repository a ticket is in, among those of its workspace (shown when it

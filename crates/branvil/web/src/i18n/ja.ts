@@ -548,6 +548,7 @@ export const ja: Record<MessageKey, string> = {
   "ticket.moveDropsLabels": "{repository} で定義されていないラベルは外れます: {labels}",
   "ticket.move_upstream_issue": "upstream の issue とつながっているチケットは移せません。そのリンクを外してから移してください。",
   "ticket.move_closing_pull": "開いているプルリクエストがこのチケットを閉じます。マージは同じリポジトリのチケットしか閉じないので、そのリンクを外すかマージしてから移してください。",
+  "ticket.move_repair": "修復チケットは、このリポジトリの既定ブランチの失敗を直すためのものなので、移せません。",
   "board.add": "チケットを追加",
   "board.addToLane": "{lane} にチケットを追加",
   "board.addSubmit": "追加",

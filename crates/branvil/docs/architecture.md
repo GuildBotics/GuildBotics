@@ -779,3 +779,19 @@ Desktop) set their look through `style` attributes), `X-Content-Type-Options: no
 The Hub runs on Apple Silicon macOS. CI runs on Linux. Both use POSIX
 `sh` for hooks and keep the data directory's `secrets/` permissions on Unix.
 See [CI prerequisites](ci.md#host-prerequisites).
+
+## Verification repair tickets
+
+Final default-branch verification failures enqueue `REPAIR_PENDING` in the same
+transaction as the verification result. Autoland sweeps on startup, every minute,
+and on verification events. Outside write transactions it resolves the last
+verified ancestor, first-parent commits, merged PRs, current head CI and 8 KiB log
+tails. Inside a write transaction it rechecks the pending record and open-repair
+index, creates at most one open ticket per repository, then consumes the record.
+The first PR in oldest-first commit order supplies its agent author; an owner's PR
+or no matching PR uses the repository responder (explicit choice, latest merged
+agent author, first agent, then owner). The ticket explains the choice without
+mentioning members. A successful verification atomically clears all pending
+failures and closes all open repair tickets with a system comment naming any
+linked merged PRs. Closing links alone leave repair tickets open until verification
+passes. Ordinary ticket creation and board ordering keep their existing behavior.

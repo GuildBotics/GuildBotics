@@ -81,7 +81,9 @@ impl Dirty {
     fn add(&mut self, notice: Notice) {
         match notice {
             Notice::Reset => self.all = true,
-            Notice::Change(c) if ["pull", "check", "repo", "upstream"].contains(&c.kind) => {
+            Notice::Change(c)
+                if ["pull", "check", "repo", "upstream", "verification"].contains(&c.kind) =>
+            {
                 self.paths.insert(c.path);
             }
             Notice::Change(_) => {}
@@ -130,6 +132,9 @@ async fn sweep(app: &App, dirty: &Dirty) {
     };
     if let Err(e) = crate::ci::notify::sweep(app).await {
         tracing::warn!("CI notifications: {e}");
+    }
+    if let Err(e) = crate::repair::sweep(app).await {
+        tracing::warn!("repair tickets: {e}");
     }
     // There is one webhook: once a send to it fails, this sweep sends no more.
     let mut webhook_ok = true;
@@ -372,3 +377,18 @@ async fn webhook_delete(State(app): State<Shared>, c: Caller) -> AppResult<Respo
 loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/admin/webhook", (get, webhook_get, OwnerSession), (put, webhook_put, OwnerSession), (delete, webhook_delete, OwnerSession)),
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn verification_marks_its_repository_dirty() {
+        let mut dirty = Dirty::default();
+        dirty.add(Notice::Change(crate::events::Change {
+            kind: "verification",
+            path: "acme/demo".into(),
+            id: "".into(),
+        }));
+        assert!(dirty.paths.contains("acme/demo"));
+    }
+}

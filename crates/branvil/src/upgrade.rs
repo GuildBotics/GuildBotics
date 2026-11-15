@@ -1,11 +1,11 @@
-//! 29 → 30: `ticket_moves`, where each ticket moved to another repository
+//! 30 → 31: `ticket_moves`, where each ticket moved to another repository
 //! went. The table starts empty and no record changes, yet a build of
-//! version 29 must not open the database: it would not follow the moves, and
+//! version 30 must not open the database: it would not follow the moves, and
 //! its attachment sweep, which counts the references of the uploading
 //! repository's tickets only, would delete the images of moved tickets.
 use crate::config::Layout;
 use crate::store::{self, Upgraded, Upgrading};
-pub const FROM: u64 = 29;
+pub const FROM: u64 = 30;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {

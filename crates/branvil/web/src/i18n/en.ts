@@ -546,6 +546,7 @@ export const en = {
   "ticket.moveDropsLabels": "Labels {repository} does not define are removed: {labels}",
   "ticket.move_upstream_issue": "A ticket linked to an upstream issue cannot be moved. Remove the link before moving it.",
   "ticket.move_closing_pull": "An open pull request closes this ticket. A merge closes only tickets of its own repository, so remove that link or merge it before moving the ticket.",
+  "ticket.move_repair": "A repair ticket fixes the failing checks of its own repository, so it cannot be moved.",
   "board.add": "Add ticket",
   "board.addToLane": "Add a ticket to {lane}",
   "board.addSubmit": "Add",

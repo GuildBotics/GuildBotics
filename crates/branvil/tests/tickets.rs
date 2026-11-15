@@ -2271,3 +2271,40 @@ async fn a_move_reaches_the_views_of_all_its_descendants() {
     .await;
     assert_eq!(found, Ok(true), "{seen}");
 }
+
+#[tokio::test]
+async fn a_repair_ticket_stays_in_the_repository_it_repairs() {
+    let mut w = World::new().await;
+    let (st, v) = w
+        .server
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let repair = w.ticket("Repair main").await;
+    w.server.stop();
+    edit_records(&w.server.data.join("branvil.redb"), "tickets", |t| {
+        t["repair"] = json!({"jobs": ["test"], "reported": "0".repeat(40)});
+    });
+    let reindexed = w.server.cli(&w.owner, &["admin", "reindex"]);
+    assert!(
+        reindexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reindexed.stderr)
+    );
+    w.restart(&[]);
+    let s = &w.server;
+    let (st, v) = s
+        .put(
+            &format!("{}/repository", path_of(&repair)),
+            &w.owner,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    assert_eq!(v["error"]["code"], "move_repair");
+    let kept = s.ok(&path_of(&repair), &w.owner).await;
+    assert_eq!(
+        (&kept["repository"], &kept["key"]),
+        (&json!(REPO), &repair["key"])
+    );
+}
