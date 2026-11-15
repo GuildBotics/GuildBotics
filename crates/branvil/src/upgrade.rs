@@ -1,7 +1,7 @@
-//! 27 → 28: repository post-merge jobs and service skip reasons.
+//! 28 → 29: repository post-merge jobs and service skip reasons.
 use crate::config::Layout;
 use crate::store::{self, Rd, Upgraded, Upgrading};
-pub const FROM: u64 = 27;
+pub const FROM: u64 = 28;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -22,7 +22,6 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
                 match i {
                     0 => {
                         v["post_merge_jobs"] = serde_json::json!([]);
-                        v["responder"] = serde_json::Value::Null;
                     }
                     1 if v["selection"].is_object() => {
                         v["selection"]["post_merge_jobs"] = serde_json::json!([]);

@@ -705,10 +705,9 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_27(db: &Path) {
+pub fn as_schema_28(db: &Path) {
     edit_records(db, "repos", |v| {
         v.as_object_mut().unwrap().remove("post_merge_jobs");
-        v.as_object_mut().unwrap().remove("responder");
     });
     edit_records(db, "ci_runs", |v| {
         if let Some(s) = v["selection"].as_object_mut() {
@@ -722,7 +721,7 @@ pub fn as_schema_27(db: &Path) {
     });
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(27);
+            *v = json!(28);
         }
     });
 }
