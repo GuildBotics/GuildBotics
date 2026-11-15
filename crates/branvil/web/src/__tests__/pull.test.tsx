@@ -827,8 +827,8 @@ describe("pull request review", () => {
   });
 
   it.each([
-    { repository: { ...UPSTREAM_REPOSITORY, auto_land: true }, says: "This repository publishes it to GitHub by itself after it reaches the front of the queue and passes the gate." },
-    { repository: { ...UPSTREAM_REPOSITORY, upstream: null, auto_land: true }, says: "This repository merges it by itself once it passes the gate at the front of the queue." },
+    { repository: { ...UPSTREAM_REPOSITORY, auto_land: true }, says: "This repository publishes it to GitHub automatically when its head checks, approvals and other landing conditions are met." },
+    { repository: { ...UPSTREAM_REPOSITORY, upstream: null, auto_land: true }, says: "This repository merges it automatically when its head checks, approvals and other landing conditions are met." },
   ])("says that a repository landing automatically acts by itself: $says", async ({ repository, says }) => {
     fakeApi(
       pullRoutes({

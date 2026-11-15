@@ -94,6 +94,15 @@ describe("change events", () => {
     expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
   });
 
+  it("refreshes ticket-linked landing decisions across repositories and ancestors", () => {
+    const c = new QueryClient();
+    c.setQueryData(keys.pull("acme/demo", 3), { tickets: [{ url: "http://localhost/acme/tickets/-/tickets/1" }] });
+    c.setQueryData(keys.pull("beta/demo", 4), { tickets: [{ url: "http://localhost/beta/tickets/-/tickets/2" }] });
+    c.setQueryData(keys.pull("acme/demo", 5), { tickets: [] });
+    // A ticket event can name an ancestor, which is not part of the PR cache.
+    expect(stale(c, { kind: "ticket", path: "acme/tickets", id: "99" })).toEqual([k(keys.pull("acme/demo",3)), k(keys.pull("beta/demo",4))]);
+  });
+
   it("refreshes landing decisions for pulls sharing the checked head", () => {
     const c = new QueryClient();
     c.setQueryData(keys.pull("acme/demo", 3), { head_sha: "head" });

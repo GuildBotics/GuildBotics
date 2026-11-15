@@ -46,7 +46,10 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
     case "ticket":
       return [
         isCheckList,
-        // Interactive tickets can clear author actions on linked PRs, including other repositories.
+        // Ticket ancestry is not cached with a PR, and interactive ancestors
+        // can clear author actions across repositories. Refresh linked PRs.
+        (q) => keyOf(q)[0] === "repo" && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+          ((q.state.data as PullRequest | undefined)?.tickets?.length ?? 0) > 0,
         (q) => keyOf(q)[0] === "pull-lists",
         (q) => isRepo(q, path) && keyOf(q)[2] === "ticket" && (id === "" || keyOf(q)[3] === id),
         // The board of the repository's workspace may show the ticket (or show
