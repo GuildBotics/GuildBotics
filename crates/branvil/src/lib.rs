@@ -28,6 +28,7 @@ mod model;
 mod rank;
 mod references;
 mod refs;
+pub mod repair;
 mod runner;
 mod smart_http;
 mod store;

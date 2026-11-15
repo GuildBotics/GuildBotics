@@ -22,14 +22,20 @@ pub struct RepoView {
     pub required_approvals: u64,
     pub auto_land: bool,
     pub ci_network: bool,
+    pub responder: crate::model::Reader,
     pub labels: Vec<String>,
     /// The upstream it follows and publishes to, with what the last poll found.
     pub upstream: Option<crate::upstream::UpstreamView>,
     pub revision: u64,
 }
 
-pub fn repo_view(app: &App, r: &Repo) -> RepoView {
-    RepoView {
+pub async fn repo_view(app: &App, r: &Repo) -> AppResult<RepoView> {
+    let repo = r.clone();
+    let responder = app
+        .store
+        .read(move |rd| crate::repair::responder(rd, &repo))
+        .await?;
+    Ok(RepoView {
         path: r.path.clone(),
         default_branch: r.default_branch.clone(),
         clone_url: app.clone_url(&r.path),
@@ -39,10 +45,11 @@ pub fn repo_view(app: &App, r: &Repo) -> RepoView {
         required_approvals: r.required_approvals,
         auto_land: r.auto_land,
         ci_network: r.ci_network,
+        responder,
         labels: r.labels.clone(),
         upstream: crate::upstream::upstream_view(app, r),
         revision: r.revision,
-    }
+    })
 }
 
 fn check_labels(labels: &[String]) -> AppResult<()> {
@@ -65,16 +72,16 @@ pub async fn visible(app: &App, caller: &Caller, path: &str) -> AppResult<Repo> 
 }
 
 pub async fn get(app: &App, caller: &Caller, path: &str) -> AppResult<RepoView> {
-    Ok(repo_view(app, &visible(app, caller, path).await?))
+    repo_view(app, &visible(app, caller, path).await?).await
 }
 
 pub async fn list(app: &App, caller: &Caller, page: PageReq) -> AppResult<Page<RepoView>> {
     caller.require_agent_or_owner()?;
     let repos: Vec<Repo> = app.store.read(|r| r.prefix_all(store::REPOS, &[])).await?;
-    let mut all: Vec<(Vec<u8>, RepoView)> = repos
-        .iter()
-        .map(|r| (util::fold(&r.path).into_bytes(), repo_view(app, r)))
-        .collect();
+    let mut all = Vec::new();
+    for r in &repos {
+        all.push((util::fold(&r.path).into_bytes(), repo_view(app, r).await?));
+    }
     all.sort_by(|a, b| a.0.cmp(&b.0));
     let (items, next_cursor) = page.slice(all);
     Ok(Page { items, next_cursor })
@@ -111,7 +118,7 @@ pub async fn create(app: &App, caller: &Caller, input: NewRepo) -> AppResult<Rep
         })
         .await?;
     app.events.publish("repo", &repo.path, "");
-    Ok(repo_view(app, &repo))
+    repo_view(app, &repo).await
 }
 
 async fn create_locked(
@@ -156,6 +163,7 @@ async fn create_locked(
         required_approvals: 1,
         auto_land: false,
         ci_network: false,
+        responder: None,
         labels,
         upstream: None,
         revision: 1,
@@ -198,6 +206,8 @@ pub struct RepoPatch {
     pub auto_land: Option<bool>,
     pub protected_branches: Option<Vec<String>>,
     pub ci_network: Option<bool>,
+    #[serde(default, deserialize_with = "crate::domain::double_option")]
+    pub responder: Option<Option<String>>,
     pub labels: Option<Vec<String>>,
 }
 
@@ -244,7 +254,7 @@ pub async fn update(
         })
         .await?;
     app.events.publish("repo", &updated.path, "");
-    Ok(repo_view(app, &updated))
+    repo_view(app, &updated).await
 }
 
 async fn update_record(app: &App, id: String, patch: RepoPatch) -> AppResult<Repo> {
@@ -267,6 +277,16 @@ async fn update_record(app: &App, id: String, patch: RepoPatch) -> AppResult<Rep
                     )));
                 }
                 r.default_branch = b;
+            }
+            if let Some(name) = patch.responder {
+                r.responder = name.map(|name| {
+                    let member: model::Member = w.get(store::MEMBERS, &model::Member::key(&name))?
+                        .ok_or_else(|| AppError::invalid("Responder must be an existing agent."))?;
+                    if member.kind != model::MemberKind::Agent {
+                        return Err(AppError::invalid("Responder must be an agent."));
+                    }
+                    Ok(member.name)
+                }).transpose()?;
             }
             if let Some(c) = patch.required_checks {
                 r.required_checks = c;

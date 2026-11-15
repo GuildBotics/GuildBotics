@@ -98,6 +98,7 @@ export interface RepoPatch {
   required_approvals?: number;
   auto_land?: boolean;
   ci_network?: boolean;
+  responder?: string | null;
   protected_branches?: string[];
   labels?: string[];
 }

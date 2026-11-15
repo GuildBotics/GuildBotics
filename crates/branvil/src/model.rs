@@ -128,6 +128,7 @@ pub struct Repo {
     /// Its pull requests land by themselves once they can (`autoland`).
     pub auto_land: bool,
     pub ci_network: bool,
+    pub responder: Option<String>,
     /// The labels its tickets may carry.
     pub labels: Vec<String>,
     /// The code host its default branch follows and its pull requests are
