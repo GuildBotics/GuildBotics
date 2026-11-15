@@ -99,7 +99,7 @@ describe("relations", () => {
   it("opens a ticket in a drawer over the figure, at the figure's URL", async () => {
     fakeApi(
       routes(undefined, {
-        "GET /api/v1/repos/acme/demo": json(200, { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], labels: [], upstream: null, revision: 1 }),
+        "GET /api/v1/repos/acme/demo": json(200, { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], labels: [], upstream: null, revision: 1 }),
         "GET /api/v1/repos/acme/demo/tickets/5": json(200, CARDS[4]),
         "GET /api/v1/repos/acme/demo/tickets/5/comments": json(200, { items: [], next_cursor: null }),
         "GET /api/v1/repos/acme/demo/tickets/5/pulls": json(200, { items: [], next_cursor: null }),
@@ -599,7 +599,7 @@ describe("relations", () => {
 describe("relations: order and new tickets", () => {
   // #6 and #8 are new and not related, so in the frame of new tickets; #7 (ready) is not related either.
   const OTHERS: Card[] = [...CARDS, card("6", "new"), card("8", "new"), card("7", "ready")];
-  const REPO = { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], labels: [], upstream: null, revision: 1 };
+  const REPO = { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], labels: [], upstream: null, revision: 1 };
   const withRepo = (extra: Routes = {}) => routes({ open: OTHERS }, { "GET /api/v1/repos": json(200, { items: [REPO], next_cursor: null }), ...extra });
 
   /** Lays a 260×100 box at the top of the viewport under each anchor (jsdom does no layout). */

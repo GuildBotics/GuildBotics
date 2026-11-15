@@ -344,6 +344,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "url": "http://127.0.0.1:7878/acme/demo",
   "protected_branches": ["main"],
   "required_checks": ["test"],
+  "post_merge_jobs": [],
   "required_approvals": 1,
   "auto_land": false,
   "ci_network": false,
@@ -363,7 +364,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "required_approvals"?, "auto_land"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -1149,7 +1150,7 @@ Each automatic gate pass can notify the webhook once its next action is
   completed) is `success`, `failure`, `cancelled`, `timed_out`, `skipped`, or
   `startup_failure` (no runner or no usable executor; the details say which).
   A service path selection also produces completed `skipped` checks, with
-  `path_skip: {"paths":["src/**"],"bases":[{"pull":3,"base":"main","base_sha":"<full sha>","merge_base":"<full sha>"}]}`.
+  `path_skip: {"reason":"paths","paths":["src/**"],"bases":[{"pull":3,"base":"main","base_sha":"<full sha>","merge_base":"<full sha>"}]}`.
   This field is omitted on other checks. Each base is the snapshot used to
   decide that none of the job's paths changed. `details` and the attempt's
   log explain the decision. Only these service skips satisfy required head
@@ -1691,3 +1692,11 @@ The `verification` change event has the repository `path` and an empty `id`.
 It is published after a verification record transaction, and when its checks
 change (including automatic retries). Clients refetch verification and history.
 The existing commit and pull request checks responses are unchanged.
+
+Repository `post_merge_jobs` lists job names to execute only in gates and protected-branch
+verification. It defaults to `[]` and has the same name validation as `required_checks`.
+An owner PATCH is atomic: if the resulting lists overlap, it returns 400 without
+changing the record, including when only one list is supplied. Other callers get 403.
+Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are completed
+`skipped` checks, cannot supply reusable results or duration estimates, and are
+executed by manual retry and protected registration.

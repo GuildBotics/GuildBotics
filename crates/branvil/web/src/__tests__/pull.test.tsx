@@ -218,7 +218,7 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       clone_url: "",
       url: "",
       protected_branches: ["main"],
-      required_checks: ["test"],
+      post_merge_jobs: [], required_checks: ["test"],
       required_approvals: 0,
       revision: 1,
     }),
@@ -581,7 +581,7 @@ describe("pull request review", () => {
     clone_url: "",
     url: "",
     protected_branches: ["main"],
-    required_checks: ["test"],
+    post_merge_jobs: [], required_checks: ["test"],
     required_approvals: 0,
     auto_land: false,
     labels: [],
@@ -633,7 +633,7 @@ describe("pull request review", () => {
     it.each(["en", "ja"] as const)(`${action}: is enabled when no checks are required (%s)`, async (language) => {
       fakeApi(pullRoutes({
         ...routes,
-        "GET /api/v1/repos/acme/demo": json(200, { ...repository, required_checks: [] }),
+        "GET /api/v1/repos/acme/demo": json(200, { ...repository, post_merge_jobs: [], required_checks: [] }),
       }));
       renderApp("/acme/demo/-/pulls/3", language);
       // The default check fixture fails, but is optional in this repository.
@@ -655,7 +655,7 @@ describe("pull request review", () => {
     it.each(unsuccessful)(`${action}: blocks $label`, async ({ checks, head_sha }) => {
       const fake = fakeApi(pullRoutes({
         ...routes,
-        "GET /api/v1/repos/acme/demo": json(200, { ...repository, required_checks: ["test", "lint"] }),
+        "GET /api/v1/repos/acme/demo": json(200, { ...repository, post_merge_jobs: [], required_checks: ["test", "lint"] }),
         [`GET ${P}/checks`]: json(200, { ...CHECKS, head_sha: head_sha ?? HEAD, checks: [...checks, { ...SUCCESS, name: "lint" }] }),
       }));
       const user = userEvent.setup();
@@ -688,7 +688,7 @@ describe("pull request review", () => {
     it(`${action}: enables on success after a check event and ignores optional failures`, async () => {
       fakeApi(pullRoutes({
         ...routes,
-        "GET /api/v1/repos/acme/demo": json(200, { ...repository, required_checks: ["test", "lint"] }),
+        "GET /api/v1/repos/acme/demo": json(200, { ...repository, post_merge_jobs: [], required_checks: ["test", "lint"] }),
         [`GET ${P}/checks`]: [
           json(200, { ...CHECKS, checks: [] }),
           json(200, { ...CHECKS, checks: [SUCCESS, { ...SUCCESS, name: "lint" }, { ...SUCCESS, name: "optional", conclusion: "failure" }] }),

@@ -62,6 +62,7 @@ export interface Repository {
   url: string;
   protected_branches: string[];
   required_checks: string[];
+  post_merge_jobs: string[];
   /** The approvals a merge or a publish needs; 0 needs none. */
   required_approvals: number;
   /** Its pull requests land by themselves (merged, or published to the upstream) once they can. */
@@ -420,6 +421,7 @@ export interface ReusedFrom {
 }
 
 export interface PathSkip {
+  reason: "paths" | "post_merge";
   paths: string[];
   bases: { pull: number; base: string; base_sha: string; merge_base: string | null }[];
 }
