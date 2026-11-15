@@ -863,3 +863,16 @@ the notice.
 Final-failure delivery remains once per run; recovery delivery is once per
 successful automatic retry. Neither is repeated on ordinary restart; a crash
 between delivery and recording may repeat either notice.
+
+
+### 確認の状態を見る
+
+PR 一覧の見出しは、既定ブランチの確認の状態を表示する。確認済み、確認中、
+失敗、確認待ち、コミットなしを区別し、複数のリポジトリでは状態ごとの数を出す。
+引き出しでは確認済みから first-parent で進んだ数、現在の確認のコミットとチェック、
+確認済み・確認中・失敗の印を付けたコミットの履歴をページで読める。
+自動の流し直しは「確認中（再試行 k/3）」と表示する。
+
+状態の正本は `ci::verify::main_state`。HTTP の `GET …/verification` と
+`GET …/verification/commits` もこれを使う。記録の変更後とチェックの更新時には
+`verification` イベントを送り、画面の状態と履歴を読み直す。

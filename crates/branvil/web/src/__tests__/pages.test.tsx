@@ -273,7 +273,8 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/repos": page([repo("acme/demo")]),
       "GET /api/v1/repos/acme/demo": json(200, { ...repo("acme/demo"), default_branch: "trunk" }),
-      "GET /api/v1/repos/acme/demo/branches/trunk": json(200, { name: "trunk", sha: tip }),
+      "GET /api/v1/repos/acme/demo/verification": json(200, { branch: "trunk", tip, state: "verifying", ahead: 1, latest_verified: null, current: { sha: tip, retry: { number: 0, max: 3 } }, failing_since: null }),
+      "GET /api/v1/repos/acme/demo/verification/commits": page([]),
       [`GET /api/v1/repos/acme/demo/commits/${tip}/checks`]: json(200, {
         sha: tip,
         checks: [{ name: "test", status: "in_progress", conclusion: null, attempt_id: "att_2", attempt: 1 }],
@@ -289,7 +290,7 @@ describe("pages", () => {
     expect(within(checks).getByTitle(tip).closest("a")).toHaveAttribute("href", `/acme/demo/-/commits/${tip}`);
     expect(within(checks).getByRole("button", { name: "Open check test" })).toBeInTheDocument();
     expect(await screen.findByText("No open pull requests.")).toBeInTheDocument();
-    expect(fake.calls("GET", "/api/v1/repos/acme/demo/branches/trunk")).toHaveLength(1);
+    expect(fake.calls("GET", "/api/v1/repos/acme/demo/verification")).toHaveLength(1);
   });
 
   it("says so on a repository's page when its default branch has no commit yet", async () => {
@@ -297,6 +298,7 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/repos": page([repo("acme/demo")]),
       "GET /api/v1/repos/acme/demo": json(200, repo("acme/demo")),
+      "GET /api/v1/repos/acme/demo/verification": json(200, { branch: "main", tip: null, state: "empty", ahead: null, latest_verified: null, current: null, failing_since: null }),
       "GET /api/v1/repos/acme/demo/pulls": page([]),
     });
     renderApp("/acme/demo");
@@ -310,13 +312,14 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/repos": page([repo("acme/demo")]),
       "GET /api/v1/repos/acme/demo": json(200, repo("acme/demo")),
-      "GET /api/v1/repos/acme/demo/branches/main": json(200, { name: "main", sha: tip }),
+      "GET /api/v1/repos/acme/demo/verification": json(200, { branch: "main", tip, state: "verified", ahead: 0, latest_verified: { sha: tip, verified_at: "2026-11-15" }, current: null, failing_since: null }),
+      "GET /api/v1/repos/acme/demo/verification/commits": page([]),
       [`GET /api/v1/repos/acme/demo/commits/${tip}/checks`]: json(200, { sha: tip, checks: [], checks_expected: false }),
       "GET /api/v1/repos/acme/demo/pulls": page([]),
     });
     renderApp("/acme/-/pulls");
     const list = await screen.findByRole("table", { name: "Pull requests" });
-    await waitFor(() => expect(fake.calls("GET", `/api/v1/repos/acme/demo/commits/${tip}/checks`)).toHaveLength(1));
+    await waitFor(() => expect(fake.calls("GET", "/api/v1/repos/acme/demo/verification")).toHaveLength(1));
     const summary = screen.getByRole("button", { name: /Default branch CI/, expanded: false });
     expect(summary.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(summary.closest(".mantine-Card-root")).toBeNull();

@@ -196,6 +196,7 @@ async fn job_retry(
                 .await
         })
         .await?;
+    app.events.publish("verification", &repo.path, "");
     app.events.publish("check", &repo.path, new.sha.clone());
     Ok(ok(view(&app, &new).await?))
 }

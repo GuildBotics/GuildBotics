@@ -42,6 +42,125 @@ pub fn running(r: &impl Rd, repo: &str, sha: &str) -> AppResult<bool> {
     Ok(get(r, repo)?.is_some_and(|v| v.state == "running" && v.sha == sha))
 }
 
+#[derive(Debug, Serialize)]
+pub struct Retry {
+    pub number: u64,
+    pub max: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Current {
+    pub sha: String,
+    pub base: Option<String>,
+    pub state: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub failed_jobs: Vec<FailedJob>,
+    pub retry: Retry,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LatestVerified {
+    pub sha: String,
+    pub verified_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MainState {
+    pub branch: String,
+    pub tip: Option<String>,
+    pub state: &'static str,
+    pub ahead: Option<u64>,
+    pub latest_verified: Option<LatestVerified>,
+    pub current: Option<Current>,
+    pub failing_since: Option<String>,
+}
+
+/// Shared view for HTTP and internal consumers. The repository lock keeps refs
+/// and the verification record in the same observation.
+pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainState> {
+    let dir = app.git.repo_dir(&repo.path);
+    let tip = app
+        .git
+        .branch_tips(&dir)
+        .await?
+        .get(&repo.default_branch)
+        .cloned();
+    let id = repo.id.clone();
+    let (record, number) = app
+        .store
+        .read(move |r| {
+            let record = get(r, &id)?;
+            let mut number = 0;
+            if let Some(v) = &record {
+                number = queue::attempts_of(r, &id, &v.sha)?
+                    .iter()
+                    .filter(|a| a.purpose == queue::Purpose::Check)
+                    .filter_map(|a| a.auto_retry.as_ref().map(|r| r.number))
+                    .max()
+                    .unwrap_or(0);
+            }
+            Ok((record, number))
+        })
+        .await?;
+    let latest_verified = record
+        .as_ref()
+        .and_then(|v| v.last_verified.as_ref())
+        .map(|v| LatestVerified {
+            sha: v.sha.clone(),
+            verified_at: v.at.clone(),
+        });
+    let ahead = if let Some(tip) = &tip {
+        let range = latest_verified
+            .as_ref()
+            .map_or_else(|| tip.clone(), |v| format!("{}..{tip}", v.sha));
+        Some(
+            app.git
+                .run_ok(
+                    Some(&dir),
+                    &["rev-list", "--first-parent", "--count", &range, "--"],
+                )
+                .await?
+                .parse()
+                .map_err(crate::error::AppError::internal)?,
+        )
+    } else {
+        None
+    };
+    let state = if tip.is_none() {
+        "empty"
+    } else if record.as_ref().is_some_and(|v| v.state == "running") {
+        "verifying"
+    } else if record.as_ref().is_some_and(|v| v.state == "failed") {
+        "failing"
+    } else if ahead == Some(0) {
+        "verified"
+    } else {
+        "pending"
+    };
+    let failing_since = record.as_ref().and_then(|v| v.failing_since.clone());
+    Ok(MainState {
+        branch: repo.default_branch.clone(),
+        tip,
+        state,
+        ahead,
+        latest_verified,
+        current: record.map(|record| Current {
+            sha: record.sha,
+            base: record.base,
+            state: record.state,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+            failed_jobs: record.failed_jobs,
+            retry: Retry {
+                number,
+                max: queue::MAX_AUTO_RETRIES,
+            },
+        }),
+        failing_since,
+    })
+}
+
 impl Ci {
     /// The caller holds the repository lock. Persist intent before registering work.
     pub(super) async fn advance_verification(
@@ -139,6 +258,7 @@ impl Ci {
                             w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &done)
                         })
                         .await?;
+                    self.inner.events.publish("verification", &repo.path, "");
                 }
             }
         }
@@ -179,6 +299,7 @@ impl Ci {
                 .store
                 .write(move |w| w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v))
                 .await?;
+            self.inner.events.publish("verification", &repo.path, "");
             let reg = self
                 .registration(repo, &repo.default_branch, &sha, false)
                 .await?;
@@ -209,6 +330,7 @@ pub fn start(app: crate::app::Shared) {
                     .filter(|r| path.as_ref().is_none_or(|p| p == &r.path))
                 {
                     let id = repo.id.clone();
+                    let repo_path = repo.path.clone();
                     if let Err(e) = app
                         .locked(&id, move |app| async move {
                             app.ci.advance_verification(&repo, false).await
@@ -217,8 +339,105 @@ pub fn start(app: crate::app::Shared) {
                     {
                         tracing::error!("CI verification failed: {e}");
                     }
+                    app.events.publish("verification", &repo_path, "");
                 }
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::tests::{app, commit_all, setup};
+
+    #[tokio::test]
+    async fn main_state_precedence_distance_and_nulls() {
+        let (temp, ci, repo) = setup();
+        let app = app(&temp, &ci);
+        let dir = app.git.repo_dir(&repo.path);
+        app.git.init_bare(&dir, "main").await.unwrap();
+        let empty = main_state(&app, &repo).await.unwrap();
+        assert_eq!(empty.state, "empty");
+        assert!(
+            empty.tip.is_none()
+                && empty.ahead.is_none()
+                && empty.current.is_none()
+                && empty.latest_verified.is_none()
+        );
+        let work = temp.path().join("work");
+        app.git
+            .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+            .await
+            .unwrap();
+        let mut shas = vec![];
+        for i in 0..4 {
+            shas.push(commit_all(&app.git, &work, &format!("commit {i}")).await);
+        }
+        app.git
+            .run_ok(
+                None,
+                &[
+                    "-C",
+                    work.to_str().unwrap(),
+                    "push",
+                    "-q",
+                    dir.to_str().unwrap(),
+                    "HEAD:refs/heads/main",
+                ],
+            )
+            .await
+            .unwrap();
+        let pending = main_state(&app, &repo).await.unwrap();
+        assert_eq!(pending.state, "pending");
+        assert_eq!(pending.ahead, Some(4));
+        assert!(pending.latest_verified.is_none());
+        for (status, verified, expected, ahead) in [
+            ("running", None, "verifying", 4),
+            ("failed", None, "failing", 4),
+            ("passed", Some(0), "pending", 3),
+            ("passed", Some(3), "verified", 0),
+        ] {
+            let record = Verification {
+                sha: shas[0].clone(),
+                base: None,
+                state: status.into(),
+                started_at: "start".into(),
+                finished_at: None,
+                failed_jobs: vec![],
+                failing_since: None,
+                last_verified: verified.map(|i| Verified {
+                    sha: shas[i].clone(),
+                    at: "verified-time".into(),
+                }),
+            };
+            let id = repo.id.clone();
+            app.store
+                .write(move |w| w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &record))
+                .await
+                .unwrap();
+            let state = main_state(&app, &repo).await.unwrap();
+            assert_eq!(state.state, expected);
+            assert_eq!(state.ahead, Some(ahead));
+            assert_eq!(
+                state.latest_verified.as_ref().map(|v| v.sha.as_str()),
+                verified.map(|i| shas[i].as_str())
+            );
+            assert_eq!(state.current.as_ref().unwrap().retry.number, 0);
+            assert_eq!(state.current.unwrap().retry.max, 3);
+        }
+        use futures_util::StreamExt;
+        let mut events = Box::pin(app.events.subscribe());
+        app.ci.advance_verification(&repo, false).await.unwrap();
+        let notice = tokio::time::timeout(std::time::Duration::from_secs(1), events.next())
+            .await
+            .unwrap()
+            .unwrap();
+        let crate::events::Notice::Change(change) = notice else {
+            panic!("expected change")
+        };
+        assert_eq!(change.kind, "verification");
+        assert_eq!(change.path, repo.path);
+        assert_eq!(main_state(&app, &repo).await.unwrap().state, "verifying");
+    }
 }

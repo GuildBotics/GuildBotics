@@ -3,6 +3,15 @@
 import type { MessageKey } from "./en";
 
 export const ja: Record<MessageKey, string> = {
+  "verification.verified": "確認済み",
+  "verification.verifying": "確認中",
+  "verification.pending": "確認待ち",
+  "verification.failing": "失敗",
+  "verification.failed": "失敗",
+  "verification.retry": "確認中（再試行 {number}/{max}）",
+  "verification.ahead": "確認済みから {count} 本進んでいる",
+  "verification.noVerified": "確認済みのコミットはまだない",
+  "verification.more": "続きを読む",
   "pull.conflicts": "衝突したファイル：{files}",
   "markdown.ticket": "チケット",
   "markdown.pull": "プルリクエスト",
