@@ -432,6 +432,24 @@ mod path_tests {
 mod shadow_tests {
     #[test]
     fn first_executable_on_path_is_reported_only_when_it_shadows_managed() {
+        #[cfg(windows)]
+        if std::env::var_os("GUILDBOTICS_SHADOW_TEST_CHILD").is_none() {
+            // Control PATHEXT in child processes without mutating the test runner.
+            for extensions in [".COM;.EXE;.BAT;.CMD", ".com;.exe;.bat;.cmd"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "install_cli::shadow_tests::first_executable_on_path_is_reported_only_when_it_shadows_managed",
+                        "--nocapture",
+                    ])
+                    .env("GUILDBOTICS_SHADOW_TEST_CHILD", "1")
+                    .env("PATHEXT", extensions)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+            }
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let old = temp.path().join("old");
         let bin = temp.path().join("bin");
@@ -447,9 +465,10 @@ mod shadow_tests {
         }
         let managed = bin.join(super::EXECUTABLE).canonicalize().unwrap();
         let path = std::env::join_paths([&old, &bin]).unwrap();
+        // PATHEXT may spell the same Windows file with an uppercase extension.
         assert_eq!(
-            super::shadowing(Some(&path), &managed),
-            Some(old.join(super::EXECUTABLE))
+            super::shadowing(Some(&path), &managed).map(|path| path.canonicalize().unwrap()),
+            Some(old.join(super::EXECUTABLE).canonicalize().unwrap())
         );
         let path = std::env::join_paths([&bin, &old]).unwrap();
         assert_eq!(super::shadowing(Some(&path), &managed), None);
