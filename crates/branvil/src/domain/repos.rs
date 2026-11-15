@@ -497,3 +497,127 @@ pub async fn create_workspace(
         })
         .await
 }
+
+pub async fn verification(
+    app: &App,
+    caller: &Caller,
+    path: &str,
+) -> AppResult<crate::ci::verify::MainState> {
+    let repo = visible(app, caller, path).await?;
+    let id = repo.id.clone();
+    app.locked(&id, move |app| async move {
+        crate::ci::verify::main_state(&app, &repo).await
+    })
+    .await
+}
+
+#[derive(Serialize, Debug)]
+pub struct VerificationCommit {
+    pub sha: String,
+    pub title: String,
+    pub author: String,
+    pub authored_at: String,
+    pub mark: Option<&'static str>,
+}
+
+pub async fn verification_commits(
+    app: &App,
+    caller: &Caller,
+    path: &str,
+    page: PageReq,
+) -> AppResult<Page<VerificationCommit>> {
+    let repo = visible(app, caller, path).await?;
+    let id = repo.id.clone();
+    app.locked(&id, move |app| async move {
+        let state = crate::ci::verify::main_state(&app, &repo).await?;
+        let Some(tip) = state.tip else {
+            return Ok(Page {
+                items: vec![],
+                next_cursor: None,
+            });
+        };
+        let dir = app.git.repo_dir(&repo.path);
+        let refs = app.git.all_refs(&dir).await?;
+        // SHA positions keep pagination stable if main advances between pages.
+        let after = page
+            .after
+            .as_ref()
+            .map(|v| String::from_utf8_lossy(v).into_owned());
+        if after.as_ref().is_some_and(|s| !util::is_sha(s)) {
+            return Err(AppError::invalid_cursor());
+        }
+        let start = after.as_ref().map_or(tip, |sha| format!("{sha}^"));
+        let max_count = format!("--max-count={}", page.limit + 1);
+        let args = [
+            "log",
+            &max_count,
+            "--first-parent",
+            "--format=%H%x00%s%x00%an%x00%aI",
+            &start,
+            "--",
+        ];
+        // A root used as a cursor has no parent.
+        let text = if let Some(sha) = &after {
+            if app
+                .git
+                .commit_info(&dir, sha)
+                .await?
+                .is_none_or(|c| c.3.is_empty())
+            {
+                String::new()
+            } else {
+                app.git.run_ok(Some(&dir), &args).await?
+            }
+        } else {
+            app.git.run_ok(Some(&dir), &args).await?
+        };
+        let mut items = Vec::new();
+        let mut more = false;
+        for line in text.lines() {
+            if items.len() == page.limit {
+                more = true;
+                break;
+            }
+            let fields: Vec<_> = line.splitn(4, '\0').collect();
+            if fields.len() != 4 {
+                return Err(AppError::internal("Invalid Git log record"));
+            }
+            let sha = fields[0];
+            let mark = if refs
+                .get(&format!("refs/branvil/verified/{sha}"))
+                .is_some_and(|v| v == sha)
+            {
+                Some("verified")
+            } else if state
+                .current
+                .as_ref()
+                .is_some_and(|v| v.sha == sha && v.state == "running")
+            {
+                Some("verifying")
+            } else if state.failing_since.as_deref() == Some(sha)
+                || state
+                    .current
+                    .as_ref()
+                    .is_some_and(|v| v.sha == sha && v.state == "failed")
+            {
+                Some("failed")
+            } else {
+                None
+            };
+            items.push(VerificationCommit {
+                sha: sha.into(),
+                title: fields[1].into(),
+                author: fields[2].into(),
+                authored_at: util::parse_time(fields[3])?,
+                mark,
+            });
+        }
+        let next_cursor = if more {
+            items.last().map(|c| page.cursor(c.sha.as_bytes()))
+        } else {
+            None
+        };
+        Ok(Page { items, next_cursor })
+    })
+    .await
+}

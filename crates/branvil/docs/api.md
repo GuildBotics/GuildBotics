@@ -1601,3 +1601,43 @@ with queued attempts at their original queue positions; queue capacity is not
 rechecked. Queued attempts and cache refreshes are untouched. Cancellation of an
 old attempt does not retry or replace the new current check. Repeated calls only
 affect attempts running at the time of each call. Check events announce changes.
+
+
+### Default branch verification
+
+`GET /api/v1/repos/{repo}/verification` accepts an owner or member token or a
+session. It returns `branch`, `tip`, `state`, `ahead`, `latest_verified`,
+`current`, and `failing_since`. Internal consumers use `ci::verify::main_state`.
+`tip` and `ahead` are null without the branch. `latest_verified` is null until
+verification first succeeds, then contains `sha` and `verified_at`. `current`
+is null without a record; otherwise it contains `sha`, `base`, `state`,
+`started_at`, `finished_at`, `failed_jobs`, and `retry: {number, max: 3}`.
+The retry number is the maximum automatic retry number among the run's
+job attempts, including queued retries (zero before any retry).
+
+The first applicable row determines `state`:
+
+| State | Condition |
+| --- | --- |
+| `empty` | Default branch absent |
+| `verifying` | Current record running |
+| `failing` | Current record failed |
+| `verified` | `ahead` is zero |
+| `pending` | Otherwise |
+
+`ahead` counts first-parent commits in `latest_verified.sha..tip`, or the whole
+first-parent history of tip when no commit has been verified.
+
+`GET /api/v1/repos/{repo}/verification/commits` has the same authentication.
+It returns a cursor page (30 items by default), newest first on the default
+branch's first-parent history. Each item has `sha`, `title`, `author`,
+`authored_at`, and `mark`. The mark is `verified` for a verified ref, otherwise
+`verifying` for the running verification commit, otherwise `failed` for the
+failed verification commit or `failing_since`, otherwise null. Cursors use the
+existing signed, caller- and collection-bound protocol. Pagination continues
+from the last commit's first parent even if the branch advances.
+
+The `verification` change event has the repository `path` and an empty `id`.
+It is published after a verification record transaction, and when its checks
+change (including automatic retries). Clients refetch verification and history.
+The existing commit and pull request checks responses are unchanged.

@@ -1,6 +1,15 @@
 // English messages. `ja.ts` must have exactly the same keys.
 
 export const en = {
+  "verification.verified": "verified",
+  "verification.verifying": "verifying",
+  "verification.pending": "awaiting verification",
+  "verification.failing": "failed",
+  "verification.failed": "failed",
+  "verification.retry": "verifying (retry {number}/{max})",
+  "verification.ahead": "{count} commits ahead of verification",
+  "verification.noVerified": "No verified commit yet",
+  "verification.more": "Load more commits",
   "pull.conflicts": "Conflicting files: {files}",
   "markdown.ticket": "Ticket",
   "markdown.pull": "Pull request",

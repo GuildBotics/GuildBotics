@@ -586,6 +586,21 @@ impl MemberApi {
         let caller = self.caller().await?;
         repos::branch(&self.api.app, &caller, path, branch).await
     }
+    pub async fn repos_verification(&self, path: &str) -> AppResult<crate::ci::verify::MainState> {
+        let _open = self.api.guard()?;
+        let caller = self.caller().await?;
+        repos::verification(&self.api.app, &caller, path).await
+    }
+    pub async fn repos_verification_commits(
+        &self,
+        path: &str,
+        page: PageReq,
+    ) -> AppResult<Page<repos::VerificationCommit>> {
+        let _open = self.api.guard()?;
+        let caller = self.caller().await?;
+        let page = self.bound_page(page, &caller, "repos_verification_commits", path)?;
+        repos::verification_commits(&self.api.app, &caller, path, page).await
+    }
     pub async fn repos_commit(&self, path: &str, sha: &str) -> AppResult<repos::CommitView> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;

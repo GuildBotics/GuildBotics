@@ -2733,3 +2733,123 @@ async fn yield_noops_for_closed_protected_approved_outdated_and_answered_heads()
         }
     }
 }
+
+#[tokio::test]
+async fn verification_api_auth_first_parent_and_cursor_pages() {
+    let w = World::new().await;
+    let path = "acme/history";
+    assert_eq!(
+        w.server
+            .post(
+                "/repos",
+                &w.owner,
+                json!({"path": path, "default_branch": "main", "labels": []})
+            )
+            .await
+            .0,
+        201
+    );
+    let url = format!("/repos/{}/verification", encode(path));
+    let empty = w.server.ok(&url, &w.owner).await;
+    assert_eq!(empty["state"], "empty");
+    for key in ["tip", "ahead", "latest_verified", "current"] {
+        assert!(empty[key].is_null());
+    }
+    assert_eq!(w.server.get(&url, "").await.0, 401);
+    assert_eq!(w.server.get(&format!("{url}/commits"), "").await.0, 401);
+    let work = w.dir.path().join("history");
+    std::fs::create_dir(&work).unwrap();
+    git_ok(&work, &["init", "-q", "-b", "main"]);
+    let runner = Runner::new(&w, "verification-reader").await;
+    std::fs::create_dir(work.join(".branvil")).unwrap();
+    std::fs::write(work.join(".branvil/ci.toml"), pipeline(&["verify"])).unwrap();
+    git_ok(&work, &["add", ".branvil/ci.toml"]);
+    for i in 0..32 {
+        git_ok(
+            &work,
+            &["commit", "--allow-empty", "-qm", &format!("main {i}")],
+        );
+    }
+    git_ok(&work, &["checkout", "-qb", "side"]);
+    git_ok(&work, &["commit", "--allow-empty", "-qm", "side only"]);
+    git_ok(&work, &["checkout", "-q", "main"]);
+    git_ok(&work, &["merge", "--no-ff", "-qm", "merge side", "side"]);
+    git_as_ok(
+        &work,
+        "alice",
+        &w.owner,
+        &["push", "-q", &w.server.remote(path), "main"],
+    );
+    let running = w.server.ok(&url, &w.owner).await;
+    assert_eq!(running["state"], "verifying");
+    assert_eq!(running["ahead"], 33);
+    assert!(running["latest_verified"].is_null());
+    assert_eq!(running["current"]["retry"]["number"], 0);
+    assert_eq!(
+        w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],
+        "verifying"
+    );
+    let mut last = Value::Null;
+    for n in 0..=3 {
+        let c = runner.next_claim().await;
+        assert_eq!(runner.finish(&c, "failure").await.0, 200);
+        eventually("retry projection", || async {
+            let v = w.server.ok(&url, &w.owner).await;
+            if n < 3 {
+                v["current"]["retry"]["number"] == n + 1
+            } else {
+                v["state"] == "failing"
+            }
+        })
+        .await;
+        last = c;
+    }
+    let failed = w.server.ok(&url, &w.owner).await;
+    assert_eq!(failed["failing_since"], failed["tip"]);
+    assert_eq!(
+        w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],
+        "failed"
+    );
+    let retry_url = format!(
+        "/repos/{}/jobs/{}/retry",
+        encode(path),
+        last["attempt_id"].as_str().unwrap()
+    );
+    assert_eq!(w.server.post(&retry_url, &w.owner, json!({})).await.0, 200);
+    assert_eq!(w.server.ok(&url, &w.owner).await["state"], "verifying");
+    let retry = runner.next_claim().await;
+    assert_eq!(runner.finish(&retry, "success").await.0, 200);
+    eventually("verification finishes", || async {
+        w.server.ok(&url, &w.owner).await["state"] == "verified"
+    })
+    .await;
+    let state = w.server.ok(&url, &w.aiko).await;
+    assert_eq!(state["ahead"], 0);
+    assert_eq!(state["tip"], state["latest_verified"]["sha"]);
+    assert_eq!(state["current"]["retry"], json!({"number": 3, "max": 3}));
+    let first = w.server.ok(&format!("{url}/commits"), &w.owner).await;
+    assert_eq!(first["items"].as_array().unwrap().len(), 30);
+    assert_eq!(first["items"][0]["title"], "merge side");
+    assert_eq!(first["items"][0]["mark"], "verified");
+    assert_eq!(first["items"][1]["title"], "main 31");
+    assert!(first["items"][1]["mark"].is_null());
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let second = w
+        .server
+        .ok(
+            &format!("{url}/commits?cursor={}", encode(cursor)),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(second["items"].as_array().unwrap().len(), 3);
+    assert_eq!(second["items"][0]["title"], "main 2");
+    assert_eq!(second["items"][2]["title"], "main 0");
+    assert!(second["next_cursor"].is_null());
+    assert_eq!(
+        w.server
+            .get(&format!("{url}/commits?cursor={}", encode(cursor)), &w.aiko)
+            .await
+            .0,
+        400
+    );
+}

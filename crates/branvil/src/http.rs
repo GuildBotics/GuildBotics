@@ -861,6 +861,18 @@ async fn pull_files(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum,
     Ok(ok(pulls::files(&app, &c, &repo, number(&n)?, page).await?))
 }
 
+async fn verification(State(app): State<Shared>, c: Caller, P(repo): P<String>) -> R {
+    Ok(ok(repos::verification(&app, &c, &repo).await?))
+}
+async fn verification_commits(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
+    let page = q.page(
+        &app,
+        &c,
+        &format!("verification-commits\n{}", util::fold(&repo)),
+    )?;
+    Ok(ok(repos::verification_commits(&app, &c, &repo, page).await?))
+}
+
 async fn pull_commits(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
     let page = q.page(&app, &c, &format!("commits\n{}\n{n}", util::fold(&repo)))?;
     Ok(ok(pulls::commits(&app, &c, &repo, number(&n)?, page).await?))
@@ -1280,6 +1292,8 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/repos", (get, repos_list, MemberSession), (post, repos_create, OwnerSession)),
     ("/repos/{repo}", (get, repo_get, MemberSession), (patch, repo_patch, OwnerSession)),
     ("/repos/{repo}/markdown", (post, markdown_render, MemberSession)),
+    ("/repos/{repo}/verification", (get, verification, MemberSession)),
+    ("/repos/{repo}/verification/commits", (get, verification_commits, MemberSession)),
     ("/repos/{repo}/branches/{branch}", (get, branch_get, MemberSession)),
     ("/repos/{repo}/compare", (get, compare, MemberSession)),
     ("/repos/{repo}/commits/{sha}", (get, commit_get, MemberSession)),

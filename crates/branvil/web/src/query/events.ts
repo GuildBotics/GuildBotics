@@ -74,6 +74,8 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           ),
         ),
       ];
+    case "verification":
+      return [(q) => isRepo(q, path) && keyOf(q)[2] === "verification"];
     case "check":
       return [
         isCheckList,

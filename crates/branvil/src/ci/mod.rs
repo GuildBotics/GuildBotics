@@ -2432,9 +2432,26 @@ mod tests {
                         .await
                         .unwrap()
                         .unwrap();
+                    let state = verify::main_state(&app, &repo).await.unwrap();
+                    assert_eq!(
+                        state.latest_verified.is_some(),
+                        conclusion == "success" && kind == "recovered"
+                    );
                     if conclusion == "success" {
                         break;
                     }
+                    assert_eq!(
+                        state.current.unwrap().retry.number,
+                        (n + 1).min(queue::MAX_AUTO_RETRIES)
+                    );
+                    assert_eq!(
+                        state.state,
+                        if n < queue::MAX_AUTO_RETRIES {
+                            "verifying"
+                        } else {
+                            "failing"
+                        }
+                    );
                     assert_eq!(
                         v.state,
                         if n < queue::MAX_AUTO_RETRIES {
