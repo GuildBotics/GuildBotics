@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Card, TicketRef } from "../api/types";
 import { buildGraph, type Graph, type GraphNode, type Level } from "../views/relations/graph";
-import type { CardFilter } from "../views/board/ordering";
+import { NO_FILTER, type CardFilter } from "../views/board/ordering";
 import { card } from "./fixtures";
 
 interface Spec {
@@ -46,7 +46,7 @@ const at = (level: Level, column: number, row: number) => level[column]![row] as
 const lines = (g: Graph) => g.edges.map((e) => `${short(e.from)}${e.dashed ? "..>" : ">"}${short(e.to)}`);
 
 describe("relations graph", () => {
-  const textFilter = (text: string): CardFilter => ({ text, assignee: "", label: "" });
+  const textFilter = (text: string): CardFilter => ({ ...NO_FILTER, text });
 
   it("filters before layout, opens all ancestors of matches, and removes unrelated branches and dependencies", () => {
     const cards = board({ P: {}, Q: { parent: "P" }, R: { parent: "Q", blockedBy: ["B"] }, S: { parent: "P" }, B: {}, X: { blockedBy: ["R"] } });
@@ -63,11 +63,11 @@ describe("relations graph", () => {
   });
 
   it.each([
-    { assignee: "agent-one", label: "", text: "" },
-    { assignee: "", label: "bug", text: "" },
-    { assignee: "", label: "", text: "  NEEDLE  " },
-    { assignee: "", label: "", text: "acme/demo#R" },
-    { assignee: "agent-one", label: "bug", text: "needle" },
+    { ...NO_FILTER, assignee: "agent-one" },
+    { ...NO_FILTER, label: "bug" },
+    { ...NO_FILTER, text: "  NEEDLE  " },
+    { ...NO_FILTER, text: "acme/demo#R" },
+    { ...NO_FILTER, assignee: "agent-one", label: "bug", text: "needle" },
   ])("uses the board's filter semantics to find descendants: %j", (filter) => {
     const cards = board({ P: {}, Q: { parent: "P" }, R: { parent: "Q" }, S: { parent: "P" } });
     Object.assign(cards.find((c) => c.key === "R")!, { assignee: { name: "agent-one", assigned_at: "2026-10-14T10:00:00Z" }, labels: ["bug"], body: "Needle in the body" } satisfies Partial<Card>);

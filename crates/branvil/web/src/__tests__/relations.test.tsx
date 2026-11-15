@@ -516,6 +516,28 @@ describe("relations", () => {
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 
+  it("filters by repository when the workspace has more than one", async () => {
+    const user = userEvent.setup();
+    const repos = ["acme/demo", "acme/other", "beta/x"].map((path) => ({ path, labels: [] }));
+    fakeApi(routes({ open: [...CARDS, card("9", "ready", { repository: "acme/other" })] }, { "GET /api/v1/repos": json(200, { items: repos, next_cursor: null }) }));
+    await shown();
+    const filters = screen.getByRole("search");
+    await user.click(within(filters).getByRole("combobox", { name: "Repository" }));
+    // Only the repositories of the workspace are offered.
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Repository: Any", "acme/demo", "acme/other"]);
+    await user.click(screen.getByRole("option", { name: "acme/other" }));
+    expect(screen.getAllByRole("article")).toEqual([screen.getByRole("article", { name: /^acme\/other#9 / })]);
+    await choose(user, "Repository", "acme/demo", filters);
+    expect(screen.queryByRole("article", { name: /^acme\/other#9 / })).not.toBeInTheDocument();
+    expect(article("5")).toBeInTheDocument();
+  });
+
+  it("offers no repository filter for a workspace with one repository", async () => {
+    fakeApi(routes(undefined, { "GET /api/v1/repos": json(200, { items: [{ path: "acme/demo", labels: [] }], next_cursor: null }) }));
+    await shown();
+    expect(within(screen.getByRole("search")).queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
+  });
+
   it("shows a failure to read the closed tickets it needs, offers to retry, and relates nothing until they are read", async () => {
     const user = userEvent.setup();
     // #8's parent #7 is closed: the closed tickets are needed, and their first reads fail.

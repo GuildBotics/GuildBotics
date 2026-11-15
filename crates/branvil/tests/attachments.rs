@@ -252,6 +252,7 @@ async fn attachments_no_ticket_refers_to_are_deleted_after_their_grace() {
         "deleted.png",
         "loose.png",
         "fresh.png",
+        "moved.png",
     ] {
         let (_, a) = upload(s, &w.aiko, name, "image/png", png(16)).await;
         urls.push(a["url"].as_str().unwrap().to_string());
@@ -285,8 +286,28 @@ async fn attachments_no_ticket_refers_to_are_deleted_after_their_grace() {
         )
         .await;
     assert_eq!(st, StatusCode::NO_CONTENT);
+    // A ticket moved to another repository of the workspace keeps its image.
+    let (st, _) = s
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, StatusCode::CREATED);
+    let (_, moved) = s
+        .post(
+            &tickets,
+            &w.aiko,
+            json!({"title": "M", "body": format!("![m]({})", urls[5])}),
+        )
+        .await;
+    let (st, v) = s
+        .put(
+            &format!("{tickets}/{}/repository", moved["key"].as_str().unwrap()),
+            &w.aiko,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
     w.server.stop();
-    // Age every upload but the last past the grace, and leave a file that
+    // Age every upload but the fresh one past the grace, and leave a file that
     // has had no record for as long, and a new one.
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
@@ -342,6 +363,11 @@ async fn attachments_no_ticket_refers_to_are_deleted_after_their_grace() {
         "nothing refers to it"
     );
     assert_eq!(status(4).await.status(), StatusCode::OK, "within its grace");
+    assert_eq!(
+        status(5).await.status(),
+        StatusCode::OK,
+        "a moved ticket refers to it"
+    );
     assert!(dir.join("atc_young").exists());
     w.server.stop();
     let mut kept: Vec<String> = records(&db, "attachments")
@@ -349,7 +375,7 @@ async fn attachments_no_ticket_refers_to_are_deleted_after_their_grace() {
         .map(|a| a["name"].as_str().unwrap().to_string())
         .collect();
     kept.sort();
-    assert_eq!(kept, ["body.png", "comment.png", "fresh.png"]);
+    assert_eq!(kept, ["body.png", "comment.png", "fresh.png", "moved.png"]);
     for gone in &urls[2..4] {
         assert!(!dir.join(gone.rsplit('/').next().unwrap()).exists());
     }

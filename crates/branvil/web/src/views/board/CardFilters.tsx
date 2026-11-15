@@ -12,12 +12,13 @@ const NOBODY = "-";
 
 /**
  * The filters over a workspace's cards (its board, the relations of its
- * tickets): text, assignee, label, and whether closed tickets are shown;
- * `status` follows them.
+ * tickets): text, assignee, label, repository (when the workspace has more
+ * than one), and whether closed tickets are shown; `status` follows them.
  */
 export function CardFilters({
   cards,
   people,
+  repositories,
   filter,
   onFilter,
   includeClosed,
@@ -26,6 +27,8 @@ export function CardFilters({
 }: {
   cards: Card[];
   people: Person[];
+  /** The workspace's repositories. */
+  repositories: string[];
   filter: CardFilter;
   onFilter: (filter: CardFilter) => void;
   includeClosed: boolean;
@@ -68,6 +71,16 @@ export function CardFilters({
         allowDeselect={false}
         data={[{ value: ANY, label: `${t("board.filterLabel")}: ${t("board.any")}` }, ...labels.map((l) => ({ value: l, label: l }))]}
       />
+      {repositories.length > 1 && (
+        <Select
+          aria-label={t("board.repository")}
+          w={200}
+          value={filter.repository || ANY}
+          onChange={(v) => onFilter({ ...filter, repository: !v || v === ANY ? "" : v })}
+          allowDeselect={false}
+          data={[{ value: ANY, label: `${t("board.repository")}: ${t("board.any")}` }, ...repositories.map((r) => ({ value: r, label: r }))]}
+        />
+      )}
       <Checkbox label={t("board.includeClosed")} checked={includeClosed} onChange={(e) => onIncludeClosed(e.currentTarget.checked)} />
       <Text size="xs" c="dimmed" aria-live="polite" role="status" className="board-status">
         {status}

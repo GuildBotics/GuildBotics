@@ -1,7 +1,7 @@
 import { ActionIcon, Anchor, Button, Card, Chip, Group, Menu, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Pencil } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { isApiError } from "../api/client";
 import * as api from "../api/endpoints";
 import { LANES, type Lane, type Reaction, type Ticket, type TicketRef } from "../api/types";
@@ -13,10 +13,12 @@ import { AssigneePicker } from "../components/PeoplePicker";
 import { useT } from "../i18n";
 import { useMemberKinds, useRepo, useTicket, useTicketComments, useTicketPulls, usePeople } from "../query/hooks";
 import { keys } from "../query/keys";
-import { ServiceLink } from "../router/Router";
+import { navigate, ServiceLink } from "../router/Router";
+import { href } from "../router/routes";
 import { labelOf, Relations, relationRefusal } from "./ticket/Relations";
+import { RepositoryField } from "./ticket/RepositoryField";
 import { TicketComment } from "./ticket/TicketComment";
-import { TicketLink } from "./ticket/TicketLink";
+import { TicketLink, TicketOpener } from "./ticket/TicketLink";
 
 /** A ticket: its page, or, in a `drawer` over a page, whose URL it does not take: then it offers its own to copy. */
 export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKey: string; drawer?: boolean }) {
@@ -67,6 +69,18 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
     },
   });
 
+  // A ticket moved to another repository is shown where it is now: its old
+  // address leads to it, and so does a move made here.
+  const opener = useContext(TicketOpener);
+  const relocate = useCallback(
+    (at: Ticket) => (drawer && opener ? opener(at.repository, at.key) : navigate(href.ticket(at.repository, at.key), { replace: true })),
+    [drawer, opener],
+  );
+  const moved = ticket.data && (ticket.data.repository !== repo || ticket.data.key !== ticketKey) ? ticket.data : null;
+  useEffect(() => {
+    if (moved) relocate(moved);
+  }, [moved, relocate]);
+
   if (ticket.isPending) return <Loading />;
   if (ticket.isError) return <ErrorMessage error={ticket.error} />;
   const tk = ticket.data;
@@ -86,7 +100,7 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
           <>
             <StateBadge tone={tk.state === "open" ? "success" : "neutral"}>{t(tk.state === "open" ? "ticket.open" : "ticket.closed")}</StateBadge>
             {tk.state_reason && <Text span size="sm" c="dimmed">{t(`ticket.reason.${tk.state_reason}`)}</Text>}
-            <span>{repo}</span>
+            <span>{tk.repository}</span>
           </>
         }
         right={
@@ -149,6 +163,7 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
         <aside className="detail-side">
           <Card p="md">
             <Stack gap="md">
+              <RepositoryField ticket={tk} onMoved={relocate} />
               <Select
                 label={t("ticket.lane")}
                 value={tk.lane}

@@ -172,6 +172,9 @@ export const tickets = {
   assign: (repo: string, key: string, name: string) =>
     request<Ticket>("PUT", `${ticketPath(repo, key)}/assignee`, { body: { name } }),
   unassign: (repo: string, key: string) => request<Ticket>("DELETE", `${ticketPath(repo, key)}/assignee`),
+  /** Moves the ticket to another repository of its workspace, under that repository's next number; its old URL keeps leading to it. */
+  move: (repo: string, key: string, body: { repository: string; revision?: number }) =>
+    request<{ ticket: Ticket; removed_labels: string[] }>("PUT", `${ticketPath(repo, key)}/repository`, { body }),
   /** Moves the ticket to a lane of its workspace's board; `before`/`after` name a card of the lane by its `ticketRef`. */
   place: (repo: string, key: string, body: { lane: Lane; before?: string; after?: string }) =>
     request<unknown>("PUT", `${ticketPath(repo, key)}/board`, { body }),

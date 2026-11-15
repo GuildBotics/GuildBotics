@@ -34,6 +34,9 @@ pub const SESSIONS: Tbl = TableDefinition::new("sessions");
 pub const REPOS: Tbl = TableDefinition::new("repos");
 pub const WORKSPACES: Tbl = TableDefinition::new("workspaces");
 pub const TICKETS: Tbl = TableDefinition::new("tickets");
+/// Where a ticket moved to another repository went: its old (repository id,
+/// number) → its new one, so that its old URL keeps leading to it.
+pub const TICKET_MOVES: Tbl = TableDefinition::new("ticket_moves");
 pub const COMMENTS: Tbl = TableDefinition::new("comments");
 pub const ATTACHMENTS: Tbl = TableDefinition::new("attachments");
 pub const LANDING: Tbl = TableDefinition::new("landing");
@@ -89,6 +92,7 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     REPOS,
     WORKSPACES,
     TICKETS,
+    TICKET_MOVES,
     COMMENTS,
     ATTACHMENTS,
     PULLS,

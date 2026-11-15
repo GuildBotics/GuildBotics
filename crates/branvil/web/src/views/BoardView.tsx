@@ -18,6 +18,7 @@ import {
   isNoop,
   matchesFilter,
   neighbors,
+  NO_FILTER,
   resolveDropIndex,
   type CardFilter,
 } from "./board/ordering";
@@ -38,7 +39,7 @@ export function BoardView({ workspace }: { workspace: string }) {
   const includeClosed = closedShown === "true";
   const state = includeClosed ? "all" : "open";
   const cardsQuery = useCards(workspace, state);
-  const [filter, setFilter] = useState<CardFilter>({ assignee: "", label: "", text: "" });
+  const [filter, setFilter] = useState<CardFilter>(NO_FILTER);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ lane: Lane; raw: number } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -127,6 +128,7 @@ export function BoardView({ workspace }: { workspace: string }) {
       <CardFilters
         cards={cards}
         people={people}
+        repositories={wsRepos.map((r) => r.path)}
         filter={filter}
         onFilter={setFilter}
         includeClosed={includeClosed}
