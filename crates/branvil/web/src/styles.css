@@ -812,19 +812,46 @@ pre {
   min-width: 0;
 }
 
-/* A card's tag: its number, or why it is skipped. */
-.pickup-tag.next {
+/* A card's lane and its number in its assignee's pickup order, joined into one control. */
+.lane-pickup {
+  display: inline-flex;
+}
+
+.lane-pickup > .card-control:first-child {
+  border-bottom-right-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.lane-pickup > .pickup-tag {
+  border-bottom-left-radius: 0;
+  border-top-left-radius: 0;
+  margin-left: -1px;
+}
+
+/* Hovered or focused, a part's border shows whole above its neighbour's. */
+.lane-pickup > .card-control:hover,
+.lane-pickup > .card-control:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+/* The number, and "!" when it will not start as things are. */
+.pickup-tag {
   background: var(--color-brand-bg-subtle);
   border-color: var(--color-brand-border-subtle);
   color: light-dark(var(--literal-teal-800), #ffffff);
   font-weight: 600;
+  gap: 4px;
 }
 
-.pickup-tag.stuck {
+.pickup-warn {
   background: var(--color-warning-bg);
-  border-color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-radius: 4px;
   color: var(--color-warning-text);
   font-weight: 700;
+  line-height: 1.2;
+  padding: 0 4px;
 }
 
 .pickup-tag[aria-expanded="true"] {
@@ -896,23 +923,22 @@ pre {
   border-style: dashed;
 }
 
-.pickup-state {
-  color: var(--color-text-subtle);
-  font-size: 12px;
-  grid-column: 1 / -1;
-}
-
-.pickup-state.next {
+.pickup-number {
   color: light-dark(var(--literal-teal-800), #ffffff);
   font-weight: 700;
   grid-column: 1;
-  grid-row: 1 / span 3;
+  grid-row: 1 / span 4;
   min-width: 1.5em;
   text-align: right;
 }
 
-.pickup-state.stuck {
+.pickup-row > :not(.pickup-number) {
+  grid-column: 2;
+}
+
+.pickup-stuck {
   color: var(--color-warning-text);
+  font-size: 12px;
 }
 
 .pickup-ticket {
@@ -927,10 +953,6 @@ pre {
 .pickup-hidden {
   color: var(--color-text-muted);
   font-size: 12px;
-}
-
-.pickup-row:not(.next) > :not(.pickup-state) {
-  grid-column: 1 / -1;
 }
 
 /* ---- lists (as GuildBotics' .trace-list) ---- */

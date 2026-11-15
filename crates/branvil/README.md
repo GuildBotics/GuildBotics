@@ -141,43 +141,36 @@ task flow. Switching workspaces keeps the task flow, pull requests, or settings
 page, and keeps the board only when its sidebar link is shown. Switching from
 a ticket or another page opens the task flow.
 
-In the owner's session, the task flow tags each open ready ticket assigned to
-an agent with its place in that agent's **pickup order**: the order in which
-GuildBotics' provider takes up the agent's ready tickets. The agent looks at
-them from the top of the Ready lane (the board's order, one per workspace,
-whatever their parents or repositories) and takes the first it can. The
-order is counted before the filters, and each ticket's state is the first
-that applies:
+In the owner's session, the task flow numbers the tickets each agent is to
+start, in the order the owner sets: the **pickup order**. GuildBotics' provider
+takes an agent's ready tickets from the top of the Ready lane (the board's
+order, one per workspace, whatever their parents or repositories), so the
+numbers are that order: each open ready ticket assigned to an agent, except
+interactive ones (left to a person), is numbered from 1 per agent, counted
+before the filters. Tickets in progress are already started and the system
+runs them, so they are outside this order, as are new, done, closed, and
+unassigned tickets and those of people. A number with **!** will not start as
+things are: a ticket it waits for (following what that waits for in turn) is
+open and is in New, has no assignee, or is in Done but still open (an agent
+moving it to Done does not close it), and nobody will move it on.
 
-- **Interactive** (its own switch or an ancestor's): no tag; the agent leaves it.
-- **Will not start (`!`)**: it has no assignee, or a ticket it waits for
-  (following what that waits for in turn) is open and is in New, has no
-  assignee, or is in Done but still open (an agent moving it to Done does not
-  close it). It stays skipped until a person changes that.
-- **Waiting**: a ticket it waits for is open. Being picked up does not end the
-  wait; closing does, and the ticket is then taken where it stands.
-- **Awaiting reply**: the last comment since its assignment is its assignee's own.
-  As for the agent, a comment that mentions only other members does not count
-  as an answer.
-- Otherwise a number: 1 is the next ticket the agent takes.
-
-Tickets of people, and new, in-progress, done, or closed tickets are not tagged.
-Clicking a tag opens the pickup order beside the figure, which narrows instead
-of being covered, at that card's row; the chooser above it switches to another
-agent's order or to the ready tickets without an assignee. Pointing at or
-focusing a row marks its card (or the closed parent it is in) in the figure,
-clicking it scrolls there, and a row the filters hide says so. The same tag,
-Escape, or the panel's close button closes it. Dragging a row, or Space, the
-arrow keys, and Space again on a focused row (Escape cancels), reorders the
-agent's tickets: the order and tags update while it moves, and on drop each
-moved ticket is put just before the next row's ticket (after the previous one
-when dropped last). Open ready tickets of the same agent that the moved one
-waits for (following what those wait for) and that would stay after it move
-along, in their order, just before it; other agents' tickets and tickets in
-progress do not move. If a moved ticket or the drop's neighbour left the Ready
-lane meanwhile, the drop writes nothing. Writes stop at a refusal, and **Undo**
-puts what was written back, against the board as it is then: a moved ticket
-that has left the Ready lane since stays where it is.
+Clicking a number opens the pickup order beside the figure, which narrows
+instead of being covered, at that card's row; the chooser above it switches to
+another agent. A row shows the number, why it will not start (if so), the
+ticket, and its parent. Pointing at or focusing a row marks its card (or the
+closed parent it is in) in the figure, clicking it scrolls there, and a row the
+filters hide says so. The same number, Escape, or the panel's close button
+closes it. Dragging a row, or Space, the arrow keys, and Space again on a
+focused row (Escape cancels), reorders the agent's tickets: the numbers update
+while it moves, and on drop each moved ticket is put just before the next
+row's ticket (after the previous one when dropped last). The agent's numbered
+tickets that the moved one waits for (following what those wait for) and that
+would stay after it move along, in their order, just before it, so it can
+start where it was put; other agents' tickets and tickets in progress do not
+move. If a moved ticket or the drop's neighbour left the Ready lane meanwhile,
+the drop writes nothing. Writes stop at a refusal, and **Undo** puts what was
+written back, against the board as it is then: a moved ticket that has left the
+Ready lane since stays where it is.
 
 What a member may do follows from its kind. The owner may do everything. An
 agent reads everything and works in every repository: tickets, comments,

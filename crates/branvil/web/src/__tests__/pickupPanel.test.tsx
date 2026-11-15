@@ -1,21 +1,21 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { Card, Comment, TicketRef } from "../api/types";
+import type { Card, TicketRef } from "../api/types";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { card } from "./fixtures";
 
 const WORKSPACE = { name: "acme", lanes: ["new", "ready", "in_progress", "done"] };
 const AIKO = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
-const MEMBERS = { items: [{ name: "owner", display_name: "Owner", kind: "owner", accounts: [], reviewers: [] }, AIKO], next_cursor: null };
+const KENJI = { ...AIKO, name: "kenji", display_name: "Kenji" };
+const MEMBERS = { items: [{ name: "owner", display_name: "Owner", kind: "owner", accounts: [], reviewers: [] }, AIKO, KENJI], next_cursor: null };
 
 const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
 const aiko = { assignee: { name: "aiko", assigned_at: "2026-11-01T00:00:00Z" } };
-const comment = (author: string, created_at: string, mentions: string[] = []): Comment => ({ id: created_at, author, body: "", mentions, meta: null, created_at, reactions: [], url: "" });
 
 /**
- * Aiko's ready tickets, in board order: #1, #2 (in the closed parent #7, waiting for an answer),
- * #3 (waits for #4), #4, #6 (waits for the new #9); #5 is ready without an assignee.
+ * Aiko's ready tickets, in board order: #1, #2 (in the closed parent #7), #3 (waits for #4), #4,
+ * #6 (waits for the new #9, so it will not start); #5 is ready without an assignee, #8 is Kenji's.
  */
 const P = card("7", "in_progress", aiko);
 const N = card("9", "new");
@@ -30,9 +30,9 @@ const CARDS: Card[] = [
   C4,
   card("5", "ready"),
   C6,
+  card("8", "ready", { assignee: { name: "kenji", assigned_at: "2026-11-01T00:00:00Z" } }),
   { ...P, children: [ref(C2)] },
 ];
-const COMMENTS: Record<string, Comment[]> = { "2": [comment("owner", "2026-11-02T00:00:00Z"), comment("aiko", "2026-11-03T00:00:00Z")] };
 
 type Routes = Parameters<typeof fakeApi>[0];
 
@@ -44,11 +44,7 @@ function routes(extra: Routes = {}, session = SESSION): Routes {
     "GET /api/v1/members": json(200, MEMBERS),
     "GET /api/v1/admin/diagnostics": json(200, {}),
     "GET /api/v1/repos": json(200, { items: [], next_cursor: null }),
-    "GET /api/v1/workspaces/acme/board/cards": (req) => {
-      const ready = req.search.includes("lane=ready");
-      const items = ready ? CARDS.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: COMMENTS[c.key] ?? [] })) : CARDS;
-      return json(200, { items, next_cursor: null });
-    },
+    "GET /api/v1/workspaces/acme/board/cards": json(200, { items: CARDS, next_cursor: null }),
     ...extra,
   };
 }
@@ -84,28 +80,34 @@ async function opened(user: ReturnType<typeof userEvent.setup>, key = "1", extra
 }
 
 describe("pickup order", () => {
-  it("tags the owner's ready cards with their number or why they are skipped", async () => {
+  it("numbers each agent's ready cards in the order the owner set, marking one that will not start", async () => {
     await shown();
     expect(tagOf("1")).toHaveTextContent(/^1$/);
     expect(tagOf("1")).toHaveAccessibleName("Number 1 in aiko's pickup order — click to open the pickup order");
-    expect(tagOf("3")).toHaveTextContent("Waiting");
-    expect(tagOf("3")).toHaveAccessibleName("Skipped until acme/demo#4 closes — click to open the pickup order");
-    expect(tagOf("4")).toHaveTextContent(/^2$/);
-    // Will not start: no assignee, or waiting for a new ticket.
-    expect(tagOf("5")).toHaveTextContent(/^!$/);
-    expect(tagOf("5")).toHaveClass("stuck");
-    expect(tagOf("6")).toHaveAccessibleName("Will not start as things are: acme/demo#9 is in New — click to open the pickup order");
-    // Neither new nor in progress tickets are tagged.
+    // Joined to the card's lane: the number is its place among that lane's tickets.
+    const lane = within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ });
+    expect(lane.nextElementSibling).toBe(tagOf("1"));
+    expect(lane.parentElement).toHaveClass("lane-pickup");
+    // Waiting for #4, still open, #3 keeps its place: when it starts is the system's.
+    expect(tagOf("3")).toHaveTextContent(/^3$/);
+    expect(tagOf("4")).toHaveTextContent(/^4$/);
+    expect(tagOf("6")).toHaveTextContent(/^5!$/);
+    expect(tagOf("6")).toHaveClass("stuck");
+    expect(tagOf("6")).toHaveAccessibleName(
+      "Number 5 in aiko's pickup order. Will not start as things are: acme/demo#9 is in New — click to open the pickup order",
+    );
+    expect(tagOf("8")).toHaveTextContent(/^1$/);
+    // Neither unassigned, new, nor in progress tickets are numbered.
+    expect(tagOf("5")).not.toBeInTheDocument();
     expect(tagOf("9")).not.toBeInTheDocument();
     expect(tagOf("7")).not.toBeInTheDocument();
   });
 
   it("shows no tags outside the owner's session", async () => {
-    const fake = fakeApi(routes({}, { ...SESSION, me: AIKO }));
+    fakeApi(routes({}, { ...SESSION, me: AIKO }));
     renderApp("/acme");
     await screen.findByRole("article", { name: /^acme\/demo#1 / });
     expect(document.querySelector(".pickup-tag")).toBeNull();
-    expect(fake.calls("GET", "/api/v1/workspaces/acme/board/cards").some((r) => r.search.includes("lane=ready"))).toBe(false);
   });
 
   it("opens beside the figure at the clicked card's row, and closes by the tag, Escape, or its button", async () => {
@@ -119,12 +121,11 @@ describe("pickup order", () => {
     expect(rowOf("4")).toHaveAttribute("aria-current", "true");
     expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
     expect(within(aside).getByRole("combobox", { name: "Assignee" })).toHaveValue("aiko");
-    // The rows say their state; the panel says nothing of work in progress or pull requests.
-    expect(rowOf("3")).toHaveTextContent("Waiting: until acme/demo#4 closes");
-    expect(rowOf("6")).toHaveTextContent("Won't start: acme/demo#9 is in New");
-    expect(rowOf("2")).toHaveTextContent("Awaiting reply");
+    // A row: its number, why it will not start (if so), the ticket, and its parent; nothing of work in progress.
+    expect(rowOf("3")).toHaveTextContent(/^3acme\/demo#3 Title of 3$/);
+    expect(rowOf("6")).toHaveTextContent("5Won't start: acme/demo#9 is in New");
     expect(rowOf("2")).toHaveTextContent("Parent: acme/demo#7");
-    expect(aside).not.toHaveTextContent(/in progress|pull request/i);
+    expect(aside).not.toHaveTextContent(/in progress|pull request|waiting|reply/i);
     // The figure stays usable beside it.
     expect(within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ })).toBeEnabled();
 
@@ -138,14 +139,14 @@ describe("pickup order", () => {
     expect(panel()).not.toBeInTheDocument();
   });
 
-  it("lists the tickets without an assignee under their own entry", async () => {
+  it("switches to another agent's order", async () => {
     const user = userEvent.setup();
-    await opened(user, "5");
+    await opened(user);
     const select = within(panel() as HTMLElement).getByRole("combobox", { name: "Assignee" });
-    expect(select).toHaveValue("");
-    expect(within(screen.getByRole("list", { name: "Pickup order of No assignee" })).getByRole("listitem")).toHaveTextContent("Won't start: acme/demo#5 has no assignee");
-    await user.selectOptions(select, "aiko");
-    expect(rowKeys()).toHaveLength(5);
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["aiko", "kenji"]);
+    await user.selectOptions(select, "kenji");
+    const rows = within(screen.getByRole("list", { name: "Pickup order of kenji" })).getAllByRole("listitem");
+    expect(rows.map((li) => li.textContent)).toEqual(["1acme/demo#8 Title of 8"]);
   });
 
   it("marks a row's card in the figure, or the closed parent it is in, and says when the filters hide it", async () => {
@@ -165,8 +166,8 @@ describe("pickup order", () => {
     await waitFor(() => expect(screen.queryByRole("article", { name: /^acme\/demo#1 / })).not.toBeInTheDocument());
     expect(rowOf("1")).toHaveTextContent("Hidden by the filters");
     expect(rowOf("4")).not.toHaveTextContent("Hidden by the filters");
-    // Numbered before the filters: #4 is still second.
-    expect(tagOf("4")).toHaveTextContent(/^2$/);
+    // Numbered before the filters: #4 is still fourth.
+    expect(tagOf("4")).toHaveTextContent(/^4$/);
   });
 
   it("puts a dragged row before another, bringing what it waits for along, and undoes it", async () => {
@@ -250,9 +251,10 @@ describe("pickup order", () => {
     for (const key of ["1", "6"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
     fireEvent.dragStart(rowOf("1"), { dataTransfer: dataTransfer() });
     dragAt("dragover", rowOf("6"), 35);
-    // Shown before it is written: #4 is first now.
+    // Shown before it is written: the numbers follow.
     expect(rowKeys()).toEqual(["acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6", "acme/demo#1"]);
-    expect(tagOf("4")).toHaveTextContent(/^1$/);
+    expect(tagOf("4")).toHaveTextContent(/^3$/);
+    expect(tagOf("1")).toHaveTextContent(/^5$/);
     dragAt("drop", rowOf("6"), 35);
     await screen.findByText("Changed the pickup order: acme/demo#1.");
     expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/1/board").map((r) => r.body)).toEqual([{ lane: "ready", after: "acme/demo#6" }]);
@@ -281,7 +283,7 @@ describe("pickup order", () => {
     expect(tagOf("1")).toHaveTextContent(/^2$/);
     await user.click(screen.getByRole("button", { name: "Close the pickup order" }));
     expect(tagOf("1")).toHaveTextContent(/^1$/);
-    expect(tagOf("4")).toHaveTextContent(/^2$/);
+    expect(tagOf("4")).toHaveTextContent(/^4$/);
     // Reopened, it starts from the order as it is.
     await user.click(tagOf("1") as HTMLElement);
     expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);

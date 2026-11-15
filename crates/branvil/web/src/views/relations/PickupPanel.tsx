@@ -6,7 +6,7 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { ticketRef, type Card } from "../../api/types";
 import { type Translate, useT } from "../../i18n";
-import { arrange, stepped, type PickupRow, type PickupState } from "./pickup";
+import { arrange, stepped, type PickupRow, type Stuck } from "./pickup";
 
 /** A row being moved: the order it started from, where it would go, and the Ready lane then (for the undo). */
 interface Moving {
@@ -29,25 +29,9 @@ export interface Drop {
   lane: string[];
 }
 
-/** What a row's state says: its number, or why it is skipped. */
-export function stateText(state: PickupState, t: Translate): string {
-  switch (state.kind) {
-    case "next":
-      return String(state.n);
-    case "waiting":
-      return t("pickup.waiting", { tickets: state.on.join(", ") });
-    case "answering":
-      return t("pickup.answering");
-    case "interactive":
-      return t("pickup.interactive");
-    case "stuck":
-      return t("pickup.stuck", { reason: reasonText(state, t) });
-  }
-}
-
-/** Why a ticket will not start: each ticket and what keeps it. */
-export const reasonText = (state: Extract<PickupState, { kind: "stuck" }>, t: Translate) =>
-  state.reasons.map((r) => t(`pickup.why.${r.why}`, { ticket: r.ticket })).join(t("pickup.and"));
+/** Why a ticket will not start: each ticket it waits for and what keeps that one. */
+export const reasonText = (stuck: readonly Stuck[], t: Translate) =>
+  stuck.map((r) => t(`pickup.why.${r.why}`, { ticket: r.ticket })).join(t("pickup.and"));
 
 export function PickupPanel({
   assignees,
@@ -227,7 +211,6 @@ export function PickupPanel({
                 }}
                 className={[
                   "pickup-row",
-                  row.state.kind,
                   row.ref === current && "current",
                   moving?.moved === row.ref && "moving",
                 ]
@@ -250,7 +233,8 @@ export function PickupPanel({
                 onDragOver={onDragOver(row.ref)}
                 onDragEnd={() => movingRef.current && cancel()}
               >
-                <span className={`pickup-state ${row.state.kind}`}>{stateText(row.state, t)}</span>
+                <span className="pickup-number">{row.n}</span>
+                {row.stuck.length > 0 && <span className="pickup-stuck">{t("pickup.stuck", { reason: reasonText(row.stuck, t) })}</span>}
                 <span className="pickup-ticket">
                   <span className="key">{row.ref}</span> {row.card.title}
                 </span>

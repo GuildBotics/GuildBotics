@@ -70,7 +70,7 @@ async function shown() {
 
 /** Opens #1, showing #2 and #3 in its frame. */
 async function openParent(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(within(article("1")).getByRole("button", { name: "Open child tickets" }));
+  await user.click(within(article("1")).getByRole("button", { expanded: false }));
   await screen.findByRole("article", { name: /^acme\/demo#2 / });
 }
 
@@ -89,12 +89,7 @@ describe("relations", () => {
     expect(edge("4", "1")).toHaveClass("dashed");
     // A dotted line has no "×": which child's dependency it is, is not one.
     expect(within(edge("4", "1") as unknown as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
-    // The figure's cards come without comments; only the owner's pickup order reads the ready ones' comments.
-    const reads = fake.calls("GET", "/api/v1/workspaces/acme/board/cards").map((r) => new URLSearchParams(r.search));
-    const figure = reads.filter((q) => !q.has("lane"));
-    expect(figure.length).toBeGreaterThan(0);
-    expect(figure.every((q) => q.get("state") === "open" && q.get("comments") === "none")).toBe(true);
-    expect(reads.filter((q) => q.has("lane")).map((q) => [q.get("lane"), q.get("state"), q.get("comments")])).toEqual([["ready", "open", "all"]]);
+    expect(fake.calls("GET", "/api/v1/workspaces/acme/board/cards").every((r) => r.search.includes("state=open") && r.search.includes("comments=none"))).toBe(true);
 
     // #5 has no relation but is not new: a card of its own in the figure. #1 and #4 are related, so not among the new tickets.
     expect(article("5")).toBeInTheDocument();

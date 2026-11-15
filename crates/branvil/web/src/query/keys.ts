@@ -30,5 +30,4 @@ export const keys = {
   /** A workspace with its board. */
   board: (workspace: string) => ["board", workspace] as const,
   cards: (workspace: string, state: "open" | "all") => ["board", workspace, "cards", state] as const,
-  readyCards: (workspace: string) => ["board", workspace, "cards", "ready"] as const,
 };

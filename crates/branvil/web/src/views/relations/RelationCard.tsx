@@ -9,13 +9,13 @@ import { CardView, ChildrenToggle, CopyUrlItem, DeleteCardItem, InteractiveItem,
 /** A ticket made from a card's menu: its parent, a child of it, or the next one, which waits for it. */
 export type Addition = "parent" | "child" | "next";
 
-/** A card's tag of its place in its assignee's pickup order: a number, or why it is skipped. */
+/** A card's tag of its number in its assignee's pickup order. */
 export interface PickupTag {
-  text: string;
+  n: number;
+  /** It will not start as things are: a ticket it waits for, nobody moves on. */
+  stuck: boolean;
   /** What it means, and that a click opens the pickup order. */
   label: string;
-  /** "stuck": it will not start as things are. */
-  tone: "next" | "skipped" | "stuck";
   /** Its pickup order is open at this card. */
   open: boolean;
   /** Whose pickup order it is in. */
@@ -75,12 +75,13 @@ export const RelationCard = memo(function RelationCard({
       // A parent has the colour of the header it becomes once opened, also while none of its children is shown.
       className={[card.children.length > 0 && "parent", dim && "dim", highlighted && "highlighted"].filter(Boolean).join(" ")}
       lane={
-        <>
-          <LaneButton card={card} lanes={lanes} onLane={onLane} disabled={busy} />
-          {tag && (
+        tag ? (
+          // The lane and its number read as one: the number is the card's place among that lane's tickets.
+          <span className="lane-pickup">
+            <LaneButton card={card} lanes={lanes} onLane={onLane} disabled={busy} />
             <button
               type="button"
-              className={`card-control pickup-tag ${tag.tone}`}
+              className={`card-control pickup-tag${tag.stuck ? " stuck" : ""}`}
               title={tag.label}
               aria-label={tag.label}
               aria-expanded={tag.open}
@@ -88,10 +89,17 @@ export const RelationCard = memo(function RelationCard({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => onTag(ref, tag.assignee)}
             >
-              {tag.text}
+              {tag.n}
+              {tag.stuck && (
+                <span className="pickup-warn" aria-hidden>
+                  !
+                </span>
+              )}
             </button>
-          )}
-        </>
+          </span>
+        ) : (
+          <LaneButton card={card} lanes={lanes} onLane={onLane} disabled={busy} />
+        )
       }
       lead={open === undefined ? undefined : <ChildrenToggle open={open} onToggle={() => onToggle(ref, !open)} />}
     >

@@ -123,8 +123,6 @@ export interface Comment {
   id: string;
   author: string;
   body: string;
-  /** The members the body mentions (`@name`), as the service resolved them when it was written. */
-  mentions: string[];
   meta: Record<string, unknown> | null;
   created_at: string;
   reactions: ReactionEntry[];

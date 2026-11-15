@@ -1,48 +1,42 @@
 import { describe, expect, it } from "vitest";
-import type { Card, Comment, TicketRef } from "../api/types";
-import { arrange, NOBODY, pickupOrders, placements, reordered, restoring, stepped, type PickupRow } from "../views/relations/pickup";
+import type { Card, TicketRef } from "../api/types";
+import { arrange, pickupOrders, placements, reordered, restoring, stepped, type PickupRow } from "../views/relations/pickup";
 import { card } from "./fixtures";
 
 const AGENTS = new Set(["aiko", "kenji"]);
 const isAgent = (name: string) => AGENTS.has(name);
 
 const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
-const ASSIGNED_AT = "2026-11-01T00:00:00Z";
-const by = (name: string) => ({ assignee: { name, assigned_at: ASSIGNED_AT } });
-const comment = (author: string, created_at: string, mentions: string[] = []): Comment => ({ id: created_at, author, body: "", mentions, meta: null, created_at, reactions: [], url: "" });
+const by = (name: string) => ({ assignee: { name, assigned_at: "2026-11-01T00:00:00Z" } });
 
-/** A row's state in short: its number, or what keeps it. */
-function said(row: PickupRow): string {
-  const s = row.state;
-  if (s.kind === "next") return String(s.n);
-  if (s.kind === "waiting") return `waits ${s.on.join(",")}`;
-  if (s.kind === "stuck") return `stuck ${s.reasons.map((r) => `${r.ticket}:${r.why}`).join(",")}`;
-  return s.kind;
-}
-
-const orderOf = (cards: Card[], assignee = "aiko", comments = new Map<string, Comment[]>()) =>
-  Object.fromEntries((pickupOrders(cards, isAgent, comments).get(assignee) ?? []).map((r) => [r.card.key, said(r)]));
+/** A row in short: its key and number, and what keeps it from starting. */
+const said = (row: PickupRow) => [row.card.key, row.n, ...row.stuck.map((r) => `${r.ticket}:${r.why}`)];
+const orderOf = (cards: Card[], assignee = "aiko") => (pickupOrders(cards, isAgent).get(assignee) ?? []).map(said);
 
 describe("pickup order", () => {
-  it("numbers ready tickets without dependencies in board order", () => {
+  it("numbers an agent's ready tickets in board order, as the owner set them", () => {
     const cards = [card("3", "ready", by("aiko")), card("1", "ready", by("aiko")), card("2", "ready", by("aiko"))];
-    const rows = pickupOrders(cards, isAgent, new Map()).get("aiko") ?? [];
-    expect(rows.map((r) => [r.card.key, said(r)])).toEqual([
-      ["3", "1"],
-      ["1", "2"],
-      ["2", "3"],
+    expect(orderOf(cards)).toEqual([
+      ["3", 1],
+      ["1", 2],
+      ["2", 3],
     ]);
   });
 
-  it("skips a ticket while what it waits for is open, and numbers it in place once that is closed", () => {
+  it("numbers a ticket waiting for an open one in its place: what it waits for decides only when it starts", () => {
     const a = card("A", "ready", by("aiko"));
     const b = card("B", "ready", { ...by("aiko"), blocked_by: [ref(a)] });
     const c = card("C", "ready", by("aiko"));
-    expect(orderOf([a, b, c])).toEqual({ A: "1", B: "waits acme/demo#A", C: "2" });
-    const closed = { ...a, state: "closed" as const };
-    expect(orderOf([closed, { ...b, blocked_by: [ref(closed)] }, c])).toEqual({ B: "1", C: "2" });
-    // Picked up (in progress) but open: still waited for.
-    expect(orderOf([{ ...a, lane: "in_progress" }, b, c])).toEqual({ B: "waits acme/demo#A", C: "1" });
+    expect(orderOf([a, b, c])).toEqual([
+      ["A", 1],
+      ["B", 2],
+      ["C", 3],
+    ]);
+    // Started, A leaves the order: the tickets not yet started are numbered.
+    expect(orderOf([{ ...a, lane: "in_progress" }, b, c])).toEqual([
+      ["B", 1],
+      ["C", 2],
+    ]);
   });
 
   it("puts an agent's tickets of other parents and other repositories into one order", () => {
@@ -53,94 +47,55 @@ describe("pickup order", () => {
       card("9", "ready", { ...by("aiko"), repository: "acme/other" }),
       card("2", "ready", { ...by("aiko"), parent: ref(q) }),
     ];
-    const rows = pickupOrders(cards, isAgent, new Map()).get("aiko") ?? [];
-    expect(rows.map((r) => [r.ref, said(r)])).toEqual([
-      ["acme/demo#1", "1"],
-      ["acme/other#9", "2"],
-      ["acme/demo#2", "3"],
+    expect((pickupOrders(cards, isAgent).get("aiko") ?? []).map((r) => [r.ref, r.n])).toEqual([
+      ["acme/demo#1", 1],
+      ["acme/other#9", 2],
+      ["acme/demo#2", 3],
     ]);
   });
 
-  it("waits for tickets of other members, in progress, or of people", () => {
-    const other = card("O", "ready", by("kenji"));
-    const working = card("W", "in_progress", by("aiko"));
-    const human = card("H", "ready", by("owner"));
-    const cards = [other, working, human, card("1", "ready", { ...by("aiko"), blocked_by: [ref(other), ref(working), ref(human)] })];
-    expect(orderOf(cards)).toEqual({ "1": "waits acme/demo#O,acme/demo#W,acme/demo#H" });
-    // A person's tickets are in no order.
-    expect(pickupOrders(cards, isAgent, new Map()).has("owner")).toBe(false);
-  });
-
-  it("says a ticket will not start when what it waits for, even further on, nobody will move", () => {
+  it("marks a ticket that will not start when what it waits for, even further on, nobody will move", () => {
     const fresh = card("N", "new", by("aiko"));
     const nobody = card("U", "in_progress");
     const done = card("D", "done", by("aiko"));
+    const working = card("W", "in_progress", by("kenji"));
     const waitsFresh = card("1", "ready", { ...by("aiko"), blocked_by: [ref(fresh)] });
     const cards = [
       fresh,
       nobody,
       done,
+      working,
       waitsFresh,
       card("2", "ready", { ...by("aiko"), blocked_by: [ref(nobody)] }),
       card("3", "ready", { ...by("aiko"), blocked_by: [ref(done)] }),
       // Waits for one that waits for a new ticket.
       card("4", "ready", { ...by("aiko"), blocked_by: [ref(waitsFresh)] }),
-      card("5", "ready", by("aiko")),
+      // Another member works on what it waits for: it will start.
+      card("5", "ready", { ...by("aiko"), blocked_by: [ref(working)] }),
     ];
-    expect(orderOf(cards)).toEqual({
-      "1": "stuck acme/demo#N:new",
-      "2": "stuck acme/demo#U:unassigned",
-      "3": "stuck acme/demo#D:done_open",
-      "4": "stuck acme/demo#N:new",
-      "5": "1",
-    });
+    expect(orderOf(cards)).toEqual([
+      ["1", 1, "acme/demo#N:new"],
+      ["2", 2, "acme/demo#U:unassigned"],
+      ["3", 3, "acme/demo#D:done_open"],
+      ["4", 4, "acme/demo#N:new"],
+      ["5", 5],
+    ]);
   });
 
-  it("lists the ready tickets without an assignee as not starting", () => {
-    const cards = [card("1", "ready"), card("2", "ready", by("aiko"))];
-    expect(orderOf(cards, NOBODY)).toEqual({ "1": "stuck acme/demo#1:unassigned" });
-    expect(orderOf(cards)).toEqual({ "2": "1" });
-  });
-
-  it("skips a ticket whose last comment since the assignment is its assignee's, until someone answers", () => {
-    const cards = [card("1", "ready", by("aiko")), card("2", "ready", by("aiko"))];
-    const asked = new Map([["acme/demo#1", [comment("owner", "2026-11-02T00:00:00Z"), comment("aiko", "2026-11-03T00:00:00Z")]]]);
-    expect(orderOf(cards, "aiko", asked)).toEqual({ "1": "answering", "2": "1" });
-    const answered = new Map([["acme/demo#1", [comment("aiko", "2026-11-03T00:00:00Z"), comment("owner", "2026-11-04T00:00:00Z")]]]);
-    expect(orderOf(cards, "aiko", answered)).toEqual({ "1": "1", "2": "2" });
-    // The assignee's comment from before the assignment does not count.
-    const before = new Map([["acme/demo#1", [comment("aiko", "2026-10-01T00:00:00Z")]]]);
-    expect(orderOf(cards, "aiko", before)).toEqual({ "1": "1", "2": "2" });
-    // Another agent's comment is someone else's question: the assignee takes the ticket up.
-    const other = new Map([["acme/demo#1", [comment("Kenji", "2026-11-03T00:00:00Z")]]]);
-    expect(orderOf(cards, "aiko", other)).toEqual({ "1": "1", "2": "2" });
-    const folded = new Map([["acme/demo#1", [comment("Aiko", "2026-11-03T00:00:00Z")]]]);
-    expect(orderOf(cards, "aiko", folded)).toEqual({ "1": "answering", "2": "1" });
-  });
-
-  it("counts, as the patrol does, only the comments meant for the assignee when it looks for an answer", () => {
-    const cards = [card("1", "ready", by("aiko")), card("2", "ready", by("aiko"))];
-    const asked = comment("aiko", "2026-11-03T00:00:00Z");
-    const after = (...mentions: string[]) => new Map([["acme/demo#1", [asked, comment("owner", "2026-11-04T00:00:00Z", mentions)]]]);
-    // Said to someone else only: still no answer for aiko.
-    expect(orderOf(cards, "aiko", after("kenji"))).toEqual({ "1": "answering", "2": "1" });
-    // Said to aiko (whatever the case of the name), or to everyone with no mention: an answer.
-    expect(orderOf(cards, "aiko", after("kenji", "Aiko"))).toEqual({ "1": "1", "2": "2" });
-    expect(orderOf(cards, "aiko", after())).toEqual({ "1": "1", "2": "2" });
-    // Aiko's own comment counts whoever it mentions.
-    const own = new Map([["acme/demo#1", [comment("owner", "2026-11-02T00:00:00Z"), comment("aiko", "2026-11-03T00:00:00Z", ["kenji"])]]]);
-    expect(orderOf(cards, "aiko", own)).toEqual({ "1": "answering", "2": "1" });
-  });
-
-  it("numbers neither interactive tickets (their own or an ancestor's) nor those of people", () => {
+  it("leaves out interactive tickets (their own or an ancestor's), unassigned ones, those of people, and those not ready", () => {
     const p = card("P", "in_progress", { interactive: true });
     const cards = [
       card("1", "ready", { ...by("aiko"), interactive: true }),
       card("2", "ready", { ...by("aiko"), parent: ref(p), interactive_ancestor: ref(p) }),
       card("3", "ready", by("owner")),
-      card("4", "ready", by("aiko")),
+      card("4", "ready"),
+      card("5", "new", by("aiko")),
+      card("6", "ready", { ...by("aiko"), state: "closed" }),
+      card("7", "ready", by("aiko")),
     ];
-    expect(orderOf(cards)).toEqual({ "1": "interactive", "2": "interactive", "4": "1" });
+    const orders = pickupOrders(cards, isAgent);
+    expect([...orders.keys()]).toEqual(["aiko"]);
+    expect(orderOf(cards)).toEqual([["7", 1]]);
   });
 });
 
@@ -233,10 +188,11 @@ describe("reordering the pickup order", () => {
     expect(restoring(lane, refs("A", "B"), new Set(refs("X", "A", "Y", "C", "Z")))).toEqual([{ ref: "acme/demo#A", at: { before: "acme/demo#Y" } }]);
   });
 
-  it("shows a drag before it is written: the agent's ready tickets swap places among themselves", () => {
+  it("shows a drag before it is written: the agent's numbered tickets swap places among themselves", () => {
     const other = card("O", "ready", by("kenji"));
-    const shown = reordered([a, other, b, c, card("W", "in_progress", by("aiko"))], "aiko", refs("C", "A"));
-    expect(shown.map((x) => x.key)).toEqual(["C", "O", "A", "B", "W"]);
-    expect((pickupOrders(shown, isAgent, new Map()).get("aiko") ?? []).map((r) => r.card.key)).toEqual(["C", "A", "B"]);
+    const talk = card("T", "ready", { ...by("aiko"), interactive: true });
+    const shown = reordered([a, other, talk, b, c, card("W", "in_progress", by("aiko"))], "aiko", refs("C", "A"));
+    expect(shown.map((x) => x.key)).toEqual(["C", "O", "T", "A", "B", "W"]);
+    expect((pickupOrders(shown, isAgent).get("aiko") ?? []).map((r) => r.card.key)).toEqual(["C", "A", "B"]);
   });
 });

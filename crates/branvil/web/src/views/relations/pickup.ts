@@ -1,35 +1,27 @@
-// The order in which agents take up their ready tickets, and the board writes
-// that reorder it (unit tested).
+// The order in which the owner has agents start their ready tickets, and the
+// board writes that reorder it (unit tested).
 //
-// An agent looks at its ready tickets from the top of the Ready lane (its rank)
-// and takes the first it can: GuildBotics' Branvil provider
-// (`crates/gb-integrations/src/factory/branvil/patrol.rs`, `select_card`, and
-// `crates/gb-integrations/src/selection.rs`, `select_ticket`).
+// An agent takes up its ready tickets from the top of the Ready lane (its
+// rank): GuildBotics' Branvil provider
+// (`crates/gb-integrations/src/factory/branvil/patrol.rs`, `ticket_candidates`).
+// The owner sets that order; when a ticket that is not yet started then waits
+// for one another member is working on, the system decides when it starts.
 
-import { ticketRef, type Card, type Comment } from "../../api/types";
+import { ticketRef, type Card } from "../../api/types";
 
-/** Why a ticket will not start as things are: which ticket, and what keeps it. */
+/** Why a ticket will not start as things are: a ticket it waits for, and what keeps that one. */
 export interface Stuck {
   ticket: string;
   why: "new" | "unassigned" | "done_open";
 }
 
-/** Where a ready ticket stands in its assignee's order: the first that applies, top down. */
-export type PickupState =
-  | { kind: "interactive" }
-  | { kind: "stuck"; reasons: Stuck[] }
-  | { kind: "waiting"; on: string[] }
-  | { kind: "answering" }
-  | { kind: "next"; n: number };
-
+/** A ticket of an agent's pickup order: its number (from 1, in board order), and what keeps it from ever starting. */
 export interface PickupRow {
   ref: string;
   card: Card;
-  state: PickupState;
+  n: number;
+  stuck: Stuck[];
 }
-
-/** The assignee of the tickets without one. */
-export const NOBODY = "";
 
 /** Where a ticket is put in its lane: just before or after another ticket. */
 export type Place = { before: string } | { after: string };
@@ -52,7 +44,7 @@ function waitedFor(start: string, byRef: ReadonlyMap<string, Card>): string[] {
   return [...seen];
 }
 
-/** What keeps a ticket from ever starting: a ticket nobody will move on. */
+/** What keeps a ticket from ever closing: nobody will move on it. */
 function stuckOf(card: Card): Stuck["why"] | null {
   if (card.state !== "open") return null;
   if (card.lane === "new") return "new";
@@ -62,75 +54,39 @@ function stuckOf(card: Card): Stuck["why"] | null {
   return null;
 }
 
-/**
- * Whether the last comment since the assignment is the assignee's own: it waits
- * for an answer. As the patrol, it counts only the comments meant for the
- * assignee: those that mention nobody, mention the assignee, or are its own (a
- * comment addressed to someone else is not an answer).
- */
-function answering(card: Card, comments: readonly Comment[]): boolean {
-  const me = card.assignee?.name.toLowerCase();
-  const mine = (name: string) => name.toLowerCase() === me;
-  const since = Date.parse(card.assignee?.assigned_at ?? "");
-  const last = comments
-    .filter((c) => c.mentions.length === 0 || c.mentions.some(mine) || mine(c.author))
-    .filter((c) => Number.isNaN(since) || !(Date.parse(c.created_at) < since))
-    .at(-1);
-  return last !== undefined && mine(last.author);
-}
+/** An agent's tickets in its pickup order: open, ready, and not left to a person (interactive). */
+const ordered = (card: Card, assignee: string) =>
+  card.state === "open" && card.lane === "ready" && card.assignee?.name === assignee && !card.interactive && !card.interactive_ancestor;
 
 /**
- * The pickup order of each agent (and of the ready tickets without an
- * assignee, under `NOBODY`): its open ready tickets in board order, each with
- * its state, the ones it can take numbered from 1. `cards` are the board's,
- * before any filter, in board order; `comments` are the ready tickets', by ref.
+ * The pickup order of each agent: its open ready tickets that are not
+ * interactive, in board order, numbered from 1. `cards` are the board's,
+ * before any filter, in board order.
  */
-export function pickupOrders(
-  cards: readonly Card[],
-  isAgent: (name: string) => boolean,
-  comments: ReadonlyMap<string, readonly Comment[]>,
-): Map<string, PickupRow[]> {
+export function pickupOrders(cards: readonly Card[], isAgent: (name: string) => boolean): Map<string, PickupRow[]> {
   const byRef = new Map(cards.map((c) => [ticketRef(c), c]));
   const orders = new Map<string, PickupRow[]>();
   for (const card of cards) {
-    if (card.state !== "open" || card.lane !== "ready") continue;
-    const assignee = card.assignee?.name ?? NOBODY;
-    if (assignee !== NOBODY && !isAgent(assignee)) continue;
+    const assignee = card.assignee?.name;
+    if (!assignee || !isAgent(assignee) || !ordered(card, assignee)) continue;
     const ref = ticketRef(card);
     const rows = orders.get(assignee) ?? [];
     orders.set(assignee, rows);
-    rows.push({ ref, card, state: stateOf(card, ref, byRef, comments.get(ref) ?? [], rows) });
+    const stuck = waitedFor(ref, byRef).flatMap((b) => {
+      const blocker = byRef.get(b);
+      const why = blocker && stuckOf(blocker);
+      return why ? [{ ticket: b, why }] : [];
+    });
+    rows.push({ ref, card, n: rows.length + 1, stuck });
   }
   return orders;
-}
-
-function stateOf(
-  card: Card,
-  ref: string,
-  byRef: ReadonlyMap<string, Card>,
-  comments: readonly Comment[],
-  above: readonly PickupRow[],
-): PickupState {
-  if (card.interactive || card.interactive_ancestor) return { kind: "interactive" };
-  const reasons: Stuck[] = [];
-  if (!card.assignee) reasons.push({ ticket: ref, why: "unassigned" });
-  for (const b of waitedFor(ref, byRef)) {
-    const blocker = byRef.get(b);
-    const why = blocker && stuckOf(blocker);
-    if (why) reasons.push({ ticket: b, why });
-  }
-  if (reasons.length > 0) return { kind: "stuck", reasons };
-  const on = openBlockers(card);
-  if (on.length > 0) return { kind: "waiting", on };
-  if (answering(card, comments)) return { kind: "answering" };
-  return { kind: "next", n: above.filter((r) => r.state.kind === "next").length + 1 };
 }
 
 /**
  * `order` with `moved` put just before `before` (null: last). The tickets of
  * `order` it waits for (following what those wait for) that would stay after
  * it come along, in their order, just before it: left behind, they would keep
- * it skipped. `group` is what moved, in its new order.
+ * it from starting where it was put. `group` is what moved, in its new order.
  */
 export function arrange(
   order: readonly string[],
@@ -207,20 +163,20 @@ export function placements(
  * is: putting it back would undo its start.
  */
 export function restoring(lane: readonly string[], moved: readonly string[], ready: ReadonlySet<string>): { ref: string; at?: Place }[] {
-  const ordered = moved.filter((r) => ready.has(r)).toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
-  return ordered.map((ref) => {
+  const back = moved.filter((r) => ready.has(r)).toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
+  return back.map((ref) => {
     const next = lane.slice(lane.indexOf(ref) + 1).find((r) => ready.has(r));
     return next ? { ref, at: { before: next } } : { ref };
   });
 }
 
 /**
- * The board's cards with an agent's ready tickets in `order` (a drag shown
+ * The board's cards with an agent's pickup order in `order` (a drag shown
  * before it is written): its tickets swap places among themselves, every other
  * card stays. Tickets `order` does not name keep their order after it.
  */
 export function reordered(cards: readonly Card[], assignee: string, order: readonly string[]): Card[] {
-  const mine = (c: Card) => c.state === "open" && c.lane === "ready" && (c.assignee?.name ?? NOBODY) === assignee;
+  const mine = (c: Card) => ordered(c, assignee);
   const own = cards.filter(mine);
   const byRef = new Map(own.map((c) => [ticketRef(c), c]));
   const named = order.flatMap((r) => byRef.get(r) ?? []);

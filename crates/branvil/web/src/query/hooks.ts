@@ -134,10 +134,6 @@ export const useBoard = (workspace: string) =>
 export const useCards = (workspace: string, state: "open" | "all", enabled = true) =>
   useQuery({ queryKey: keys.cards(workspace, state), queryFn: () => api.workspaces.cards(workspace, state), enabled });
 
-/** The open ready cards with their comments (the board's leave them out). */
-export const useReadyCards = (workspace: string, enabled: boolean) =>
-  useQuery({ queryKey: keys.readyCards(workspace), queryFn: () => api.workspaces.readyCards(workspace), enabled });
-
 export const usePull = (repo: string, number: number) =>
   useQuery({ queryKey: keys.pull(repo, number), queryFn: () => api.pulls.get(repo, number) });
 

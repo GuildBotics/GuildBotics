@@ -7,7 +7,7 @@ import { ticketRef, type Card, type Lane, type Ticket } from "../api/types";
 import { ErrorMessage, Loading, Refusal } from "../components/common";
 import { PageHeader } from "../components/PageHeader";
 import { type Translate, useT } from "../i18n";
-import { useBoard, useCards, useMembers, usePeople, useReadyCards, useSession } from "../query/hooks";
+import { useBoard, useCards, useMembers, usePeople, useSession } from "../query/hooks";
 import { useStored } from "../storage";
 import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
@@ -18,7 +18,7 @@ import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
 import type { Addition, PickupTag } from "./relations/RelationCard";
 import { buildGraph, type Level } from "./relations/graph";
-import { NOBODY, pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
+import { pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
 import { PickupPanel, reasonText, type Drop } from "./relations/PickupPanel";
 
 /** A relation written: what it changes, what the notice then says, and what undoes it. */
@@ -44,22 +44,11 @@ function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
   return t(as === "child" ? "relations.newChildOf" : "relations.newNextOf", { key });
 }
 
-/** A card's tag of its place in its assignee's pickup order; none for an interactive ticket. */
-function tagOf(row: PickupRow, assignee: string, open: boolean, t: Translate): PickupTag | undefined {
-  const s = row.state;
-  const tag = (text: string, state: string, tone: PickupTag["tone"]): PickupTag => ({ text, label: t("pickup.hint", { state }), tone, open, assignee });
-  switch (s.kind) {
-    case "interactive":
-      return undefined;
-    case "next":
-      return tag(String(s.n), t("pickup.tagNext", { name: assignee, n: String(s.n) }), "next");
-    case "waiting":
-      return tag(t("pickup.tagWaiting"), t("pickup.skippedUntil", { tickets: s.on.join(", ") }), "skipped");
-    case "answering":
-      return tag(t("pickup.tagAnswering"), t("pickup.skippedAnswering"), "skipped");
-    case "stuck":
-      return tag("!", t("pickup.wontStart", { reason: reasonText(s, t) }), "stuck");
-  }
+/** A card's tag of its number in its assignee's pickup order, and whether it will not start as things are. */
+function tagOf(row: PickupRow, assignee: string, open: boolean, t: Translate): PickupTag {
+  const place = t("pickup.tagNext", { name: assignee, n: String(row.n) });
+  const state = row.stuck.length > 0 ? `${place}${t("pickup.sentence")}${t("pickup.wontStart", { reason: reasonText(row.stuck, t) })}` : place;
+  return { n: row.n, stuck: row.stuck.length > 0, label: t("pickup.hint", { state }), open, assignee };
 }
 
 /** The pickup order panel: whose order it shows, and the card whose tag opened it. */
@@ -130,13 +119,11 @@ export function RelationsView({ workspace }: { workspace: string }) {
 
   // The owner's pickup orders: only the owner reads members' kinds, and decides what comes first.
   const owner = useSession().data?.me.kind === "owner";
-  const ready = useReadyCards(workspace, owner);
   const members = useMembers();
   const isAgent = useMemo(() => {
     const agents = new Set((members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => m.name.toLowerCase()));
     return (name: string) => agents.has(name.toLowerCase());
   }, [members.data]);
-  const comments = useMemo(() => new Map((ready.data?.items ?? []).map((c) => [ticketRef(c), c.comments])), [ready.data]);
   const [panel, setPanel] = useState<Panel | null>(null);
   /** A row being moved, shown before it is written (and until the cards are read again after). */
   const [preview, setPreview] = useState<{ assignee: string; order: string[] } | null>(null);
@@ -146,16 +133,15 @@ export function RelationsView({ workspace }: { workspace: string }) {
   // Before the filters: a number must not change with what is shown.
   const orders = useMemo(
     () =>
-      owner && ready.data && members.data ? pickupOrders(preview ? reordered(cards, preview.assignee, preview.order) : cards, isAgent, comments) : null,
-    [owner, ready.data, members.data, preview, cards, isAgent, comments],
+      owner && members.data ? pickupOrders(preview ? reordered(cards, preview.assignee, preview.order) : cards, isAgent) : null,
+    [owner, members.data, preview, cards, isAgent],
   );
   const tags = useMemo(() => {
     if (!orders) return null;
     const tagged = new Map<string, PickupTag>();
     for (const [who, rows] of orders) {
       for (const row of rows) {
-        const tag = tagOf(row, who, pointedAt === row.ref, t);
-        if (tag) tagged.set(row.ref, tag);
+        tagged.set(row.ref, tagOf(row, who, pointedAt === row.ref, t));
       }
     }
     return tagged;
@@ -367,7 +353,6 @@ export function RelationsView({ workspace }: { workspace: string }) {
           </Button>
         </Group>
       )}
-      {owner && ready.isError && <ErrorMessage error={ready.error} />}
       {owner && members.isError && <ErrorMessage error={members.error} />}
       {!shown ? (
         !required.isError && <Loading />
@@ -400,9 +385,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
           <PickupPanel
             // A move belongs to the rows it started among.
             key={`${panel.assignee}\n${panel.current}`}
-            assignees={[...new Set([...orders.keys(), panel.assignee])]
-              .toSorted((a, b) => Number(a === NOBODY) - Number(b === NOBODY))
-              .map((value) => ({ value, label: value === NOBODY ? t("pickup.unassigned") : value }))}
+            assignees={[...new Set([...orders.keys(), panel.assignee])].map((value) => ({ value, label: value }))}
             assignee={panel.assignee}
             rows={orders.get(panel.assignee) ?? []}
             current={panel.current}
