@@ -11,10 +11,10 @@ fn error(language: &str, reason: impl std::fmt::Display) -> anyhow::Error {
     ))
 }
 
-pub async fn checks(
+pub async fn verified(
     repo: Option<String>,
     checkout: Option<PathBuf>,
-    sha: String,
+    since: String,
 ) -> anyhow::Result<()> {
     let language = gb_server::client::language().await;
     let origin = checkout
@@ -30,7 +30,7 @@ pub async fn checks(
         })
         .transpose()
         .map_err(|e| error(language, e))?;
-    let result = branvil::hub::checks(repo.as_deref(), origin.as_deref(), &sha)
+    let result = branvil::hub::verified(repo.as_deref(), origin.as_deref(), &since)
         .await
         .map_err(|e| error(language, e))?;
     println!("{result}");

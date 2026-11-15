@@ -165,9 +165,9 @@ enum ServerCommand {
         #[arg(long)]
         to: Option<std::path::PathBuf>,
     },
-    /// Read commit checks on the local Hub; credentials are read only from disk
+    /// Read verified commits on the local Hub; credentials are read only from disk
     #[command(hide = true)]
-    HubChecks {
+    HubVerified {
         #[arg(
             long,
             conflicts_with = "checkout",
@@ -177,7 +177,7 @@ enum ServerCommand {
         #[arg(long)]
         checkout: Option<std::path::PathBuf>,
         #[arg(long)]
-        sha: String,
+        since: String,
     },
     /// Send stdin to the identity store's webhook, even with the server stopped
     #[command(hide = true)]
@@ -361,12 +361,12 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Server {
             command:
-                ServerCommand::HubChecks {
+                ServerCommand::HubVerified {
                     repo,
                     checkout,
-                    sha,
+                    since,
                 },
-        } => outcome(block(hub_cli::checks(repo, checkout, sha)).map(|()| 0)),
+        } => outcome(block(hub_cli::verified(repo, checkout, since)).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubNotify,

@@ -374,6 +374,18 @@ impl Hub {
         Ok(())
     }
 
+    fn schema_version(&mut self, sha: &str) -> anyhow::Result<u64> {
+        let text = self.git(&["show", &format!("{sha}:crates/branvil/src/store.rs")])?;
+        text.lines()
+            .find_map(|line| {
+                line.strip_prefix("pub const SCHEMA_VERSION: u64 = ")
+                    .and_then(|value| value.strip_suffix(';'))
+            })
+            .ok_or_else(|| anyhow::anyhow!("Storage schema version missing"))?
+            .parse()
+            .map_err(Into::into)
+    }
+
     fn tick(&mut self) {
         let mut sha = self
             .state
@@ -437,10 +449,18 @@ impl Hub {
         self.clear_blocker("recovery");
         self.restore_service()?;
         self.git(&["fetch", "origin", "main"])?;
-        *sha = self.git(&["rev-parse", "--verify", "FETCH_HEAD^{commit}"])?;
+        let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}"])?;
+        let repo = self.checkout.to_string_lossy().into_owned();
+        let history = self.cli(&[
+            "server",
+            "hub-verified",
+            "--checkout",
+            &repo,
+            "--since",
+            &head,
+        ])?;
         let current = self.current.clone();
         let source = self.run(&current, &["server", "hub-probe", "--source"], None, None)?;
-        self.clear_blocker("preflight");
         // Repair missing distribution of the running build, including manual updates.
         if let Some(commit) = Path::new(&source).file_name().and_then(|v| v.to_str()) {
             let checkout = self.checkout.to_string_lossy().into_owned();
@@ -453,12 +473,60 @@ impl Hub {
                 commit,
             ]);
         }
-        if Path::new(&source)
-            .file_name()
-            .is_some_and(|name| name == sha.as_str())
-        {
+        self.clear_blocker("preflight");
+        let checkout = quote(&repo);
+        *stage = "checkout";
+        if history["since_on_main"].as_bool() != Some(true) {
+            self.blocker(
+                &head,
+                stage,
+                "Checkout cannot fast-forward to the verified commit",
+                &format!("restore {checkout} to a checkout on origin/main"),
+                None,
+                0,
+            );
             return Ok(());
         }
+        self.clear_blocker(stage);
+        let verified = history["verified"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Invalid verified history"))?;
+        if verified.is_empty() {
+            self.clear_blocker("migration");
+            return Ok(());
+        }
+        *stage = "migration";
+        let running = Path::new(&source)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid running build source"))?;
+        let version = self.schema_version(running)?;
+        let mut candidate = None;
+        for commit in verified {
+            let commit = commit
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid verified SHA"))?;
+            anyhow::ensure!(
+                commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+                "Invalid verified SHA"
+            );
+            let target_version = self.schema_version(commit)?;
+            if candidate.is_none() && target_version <= version.saturating_add(1) {
+                candidate = Some(commit.to_owned());
+            }
+        }
+        let Some(candidate) = candidate else {
+            self.blocker(
+                &head,
+                stage,
+                "No verified commit raises the storage format by one step",
+                "wait for a compatible verified commit or update manually",
+                None,
+                0,
+            );
+            return Ok(());
+        };
+        *sha = candidate;
         let result = self
             .state
             .get("result")
@@ -492,36 +560,6 @@ impl Hub {
                 &format!("commit or remove the changes in {checkout}"),
                 None,
             );
-            return Ok(());
-        }
-        if self
-            .git(&["merge-base", "--is-ancestor", "HEAD", sha])
-            .is_err()
-        {
-            self.notify(
-                sha,
-                "checkout",
-                "Checkout cannot fast-forward to main",
-                &format!("restore {checkout} to a checkout on origin/main"),
-                None,
-            );
-            return Ok(());
-        }
-        *stage = "checks";
-        let repo = self.checkout.to_string_lossy().into_owned();
-        let checks = self.cli(&["server", "hub-checks", "--checkout", &repo, "--sha", sha])?;
-        self.clear_blocker(stage);
-        if checks["state"] == "failure" {
-            self.notify(
-                sha,
-                stage,
-                "Required checks failed",
-                "inspect or rerun the checks",
-                None,
-            );
-            return Ok(());
-        }
-        if checks["state"] != "success" {
             return Ok(());
         }
         *stage = "clients";
@@ -621,7 +659,7 @@ impl Hub {
                     detail.push_str(" Interrupted update remains; recovery required.");
                 }
                 let next = format!(
-                    "inspect the Hub log; run {} recover if needed; a new commit is required for automatic retry",
+                    "inspect the Hub log; run {} recover if needed; a newer verified commit is required for automatic retry",
                     self.hub_server()
                 );
                 self.notify(sha, stage, &detail, &next, None);
