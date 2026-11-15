@@ -62,12 +62,21 @@ function stuckOf(card: Card): Stuck["why"] | null {
   return null;
 }
 
-/** Whether the last comment since the assignment is the assignee's own: it waits for an answer. */
+/**
+ * Whether the last comment since the assignment is the assignee's own: it waits
+ * for an answer. As the patrol, it counts only the comments meant for the
+ * assignee: those that mention nobody, mention the assignee, or are its own (a
+ * comment addressed to someone else is not an answer).
+ */
 function answering(card: Card, comments: readonly Comment[]): boolean {
+  const me = card.assignee?.name.toLowerCase();
+  const mine = (name: string) => name.toLowerCase() === me;
   const since = Date.parse(card.assignee?.assigned_at ?? "");
-  const after = comments.filter((c) => Number.isNaN(since) || !(Date.parse(c.created_at) < since));
-  const last = after.at(-1);
-  return last !== undefined && last.author.toLowerCase() === card.assignee?.name.toLowerCase();
+  const last = comments
+    .filter((c) => c.mentions.length === 0 || c.mentions.some(mine) || mine(c.author))
+    .filter((c) => Number.isNaN(since) || !(Date.parse(c.created_at) < since))
+    .at(-1);
+  return last !== undefined && mine(last.author);
 }
 
 /**
@@ -192,11 +201,13 @@ export function placements(
  * The board writes that put `moved` back where they stood in `lane` (the
  * Ready lane's tickets when they were moved), bottom up: each just before the
  * ticket that followed it, or the next after that one still in the lane
- * (`ready`), or last. A moved ticket that followed is put back first, so it
- * stands where it did when the one above it is put before it.
+ * (`ready`, the open Ready tickets when it is undone), or last. A moved ticket
+ * that followed is put back first, so it stands where it did when the one
+ * above it is put before it. One that has left the lane since stays where it
+ * is: putting it back would undo its start.
  */
 export function restoring(lane: readonly string[], moved: readonly string[], ready: ReadonlySet<string>): { ref: string; at?: Place }[] {
-  const ordered = moved.toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
+  const ordered = moved.filter((r) => ready.has(r)).toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
   return ordered.map((ref) => {
     const next = lane.slice(lane.indexOf(ref) + 1).find((r) => ready.has(r));
     return next ? { ref, at: { before: next } } : { ref };

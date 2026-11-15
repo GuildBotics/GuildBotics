@@ -9,7 +9,7 @@ const isAgent = (name: string) => AGENTS.has(name);
 const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
 const ASSIGNED_AT = "2026-11-01T00:00:00Z";
 const by = (name: string) => ({ assignee: { name, assigned_at: ASSIGNED_AT } });
-const comment = (author: string, created_at: string): Comment => ({ id: created_at, author, body: "", meta: null, created_at, reactions: [], url: "" });
+const comment = (author: string, created_at: string, mentions: string[] = []): Comment => ({ id: created_at, author, body: "", mentions, meta: null, created_at, reactions: [], url: "" });
 
 /** A row's state in short: its number, or what keeps it. */
 function said(row: PickupRow): string {
@@ -118,6 +118,20 @@ describe("pickup order", () => {
     expect(orderOf(cards, "aiko", folded)).toEqual({ "1": "answering", "2": "1" });
   });
 
+  it("counts, as the patrol does, only the comments meant for the assignee when it looks for an answer", () => {
+    const cards = [card("1", "ready", by("aiko")), card("2", "ready", by("aiko"))];
+    const asked = comment("aiko", "2026-11-03T00:00:00Z");
+    const after = (...mentions: string[]) => new Map([["acme/demo#1", [asked, comment("owner", "2026-11-04T00:00:00Z", mentions)]]]);
+    // Said to someone else only: still no answer for aiko.
+    expect(orderOf(cards, "aiko", after("kenji"))).toEqual({ "1": "answering", "2": "1" });
+    // Said to aiko (whatever the case of the name), or to everyone with no mention: an answer.
+    expect(orderOf(cards, "aiko", after("kenji", "Aiko"))).toEqual({ "1": "1", "2": "2" });
+    expect(orderOf(cards, "aiko", after())).toEqual({ "1": "1", "2": "2" });
+    // Aiko's own comment counts whoever it mentions.
+    const own = new Map([["acme/demo#1", [comment("owner", "2026-11-02T00:00:00Z"), comment("aiko", "2026-11-03T00:00:00Z", ["kenji"])]]]);
+    expect(orderOf(cards, "aiko", own)).toEqual({ "1": "answering", "2": "1" });
+  });
+
   it("numbers neither interactive tickets (their own or an ancestor's) nor those of people", () => {
     const p = card("P", "in_progress", { interactive: true });
     const cards = [
@@ -215,6 +229,8 @@ describe("reordering the pickup order", () => {
       { ref: "acme/demo#C" },
       { ref: "acme/demo#B", at: { before: "acme/demo#C" } },
     ]);
+    // B was started meanwhile: it stays where it is, and A goes before Y.
+    expect(restoring(lane, refs("A", "B"), new Set(refs("X", "A", "Y", "C", "Z")))).toEqual([{ ref: "acme/demo#A", at: { before: "acme/demo#Y" } }]);
   });
 
   it("shows a drag before it is written: the agent's ready tickets swap places among themselves", () => {

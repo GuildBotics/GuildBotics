@@ -157,6 +157,8 @@ that applies:
 - **Waiting**: a ticket it waits for is open. Being picked up does not end the
   wait; closing does, and the ticket is then taken where it stands.
 - **Awaiting reply**: the last comment since its assignment is its assignee's own.
+  As for the agent, a comment that mentions only other members does not count
+  as an answer.
 - Otherwise a number: 1 is the next ticket the agent takes.
 
 Tickets of people, and new, in-progress, done, or closed tickets are not tagged.
@@ -172,9 +174,10 @@ moved ticket is put just before the next row's ticket (after the previous one
 when dropped last). Open ready tickets of the same agent that the moved one
 waits for (following what those wait for) and that would stay after it move
 along, in their order, just before it; other agents' tickets and tickets in
-progress do not move. Writes stop at a refusal, and **Undo** puts what was
-written back. If a moved ticket or the drop's neighbour left the Ready lane
-meanwhile, nothing is written.
+progress do not move. If a moved ticket or the drop's neighbour left the Ready
+lane meanwhile, the drop writes nothing. Writes stop at a refusal, and **Undo**
+puts what was written back, against the board as it is then: a moved ticket
+that has left the Ready lane since stays where it is.
 
 What a member may do follows from its kind. The owner may do everything. An
 agent reads everything and works in every repository: tickets, comments,

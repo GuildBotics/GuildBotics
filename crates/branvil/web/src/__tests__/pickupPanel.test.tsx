@@ -11,7 +11,7 @@ const MEMBERS = { items: [{ name: "owner", display_name: "Owner", kind: "owner",
 
 const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
 const aiko = { assignee: { name: "aiko", assigned_at: "2026-11-01T00:00:00Z" } };
-const comment = (author: string, created_at: string): Comment => ({ id: created_at, author, body: "", meta: null, created_at, reactions: [], url: "" });
+const comment = (author: string, created_at: string, mentions: string[] = []): Comment => ({ id: created_at, author, body: "", mentions, meta: null, created_at, reactions: [], url: "" });
 
 /**
  * Aiko's ready tickets, in board order: #1, #2 (in the closed parent #7, waiting for an answer),
@@ -190,6 +190,58 @@ describe("pickup order", () => {
       ["4", { lane: "ready", before: "acme/demo#5" }],
       ["3", { lane: "ready", before: "acme/demo#4" }],
     ]);
+  });
+
+  it("undoes against the board as it is when Undo is clicked", async () => {
+    const user = userEvent.setup();
+    // Once written, #5 (what followed #4) and #3 (moved) are started before Undo is clicked.
+    let written = false;
+    const started = CARDS.map((c) => (c.key === "5" || c.key === "3" ? { ...c, lane: "in_progress" as const } : c));
+    const put = () => {
+      written = true;
+      return json(200, {});
+    };
+    const fake = await opened(user, "1", {
+      "PUT /api/v1/repos/acme/demo/tickets/4/board": put,
+      "PUT /api/v1/repos/acme/demo/tickets/3/board": put,
+      "GET /api/v1/workspaces/acme/board/cards": (req) => {
+        const board = written ? started : CARDS;
+        return json(200, { items: req.search.includes("lane=ready") ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] })) : board, next_cursor: null });
+      },
+    });
+    dragRow("3", "1");
+    await screen.findByText("Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.");
+    await waitFor(() => expect(tagOf("3")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await screen.findByText("Undone.");
+    // #4 goes before #6, the next still in Ready; #3, started, stays in progress.
+    expect(fake.requests.filter((r) => r.method === "PUT").slice(2).map((r) => [r.path.split("/")[7], r.body])).toEqual([["4", { lane: "ready", before: "acme/demo#6" }]]);
+  });
+
+  it("says there is nothing to put back when every moved ticket has left Ready", async () => {
+    const user = userEvent.setup();
+    let written = false;
+    const started = CARDS.map((c) => (c.key === "1" ? { ...c, lane: "in_progress" as const } : c));
+    const fake = await opened(user, "1", {
+      "PUT /api/v1/repos/acme/demo/tickets/1/board": () => {
+        written = true;
+        return json(200, {});
+      },
+      "GET /api/v1/workspaces/acme/board/cards": (req) => {
+        const board = written ? started : CARDS;
+        return json(200, { items: req.search.includes("lane=ready") ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] })) : board, next_cursor: null });
+      },
+    });
+    for (const key of ["1", "6"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
+    fireEvent.dragStart(rowOf("1"), { dataTransfer: dataTransfer() });
+    dragAt("dragover", rowOf("6"), 35);
+    dragAt("drop", rowOf("6"), 35);
+    await screen.findByText("Changed the pickup order: acme/demo#1.");
+    await waitFor(() => expect(tagOf("1")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByText("The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.")).toBeInTheDocument();
+    expect(fake.requests.filter((r) => r.method === "PUT")).toHaveLength(1);
   });
 
   it("puts a row dropped below the last after the last row only", async () => {

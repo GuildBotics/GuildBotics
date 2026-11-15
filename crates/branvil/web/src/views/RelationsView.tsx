@@ -26,13 +26,16 @@ interface Write {
   /** Written in order. */
   changes: Change[];
   done: string;
-  undo?: Change[];
+  undo?: Undo;
   /** The ticket to bring into view once written (a new one), whether or not the change is made. */
   reveal?: string;
 }
 
+/** What undoes a change: the changes, made against the board as it is when Undo is clicked (it may have changed since). */
+type Undo = (cards: readonly Card[]) => Change[];
+
 /** What the page says after a change: the board's notice with an undo, or a refusal of the service as the ticket page shows it. */
-type Said = (Notice & { undo?: Change[] }) | { tone: "error"; error: unknown };
+type Said = (Notice & { undo?: Undo }) | { tone: "error"; error: unknown };
 
 /** What a new ticket made from a card's menu is made as. */
 function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
@@ -212,13 +215,19 @@ export function RelationsView({ workspace }: { workspace: string }) {
       const plan = placements(order, group, readyNow);
       if ("stale" in plan) return { tone: "info", text: t("pickup.stale", { key: plan.stale }) };
       const done: string[] = [];
-      const undo = (): Change[] | undefined =>
-        done.length === 0
-          ? undefined
-          : restoring(lane, done, readyNow).flatMap(({ ref, at }) => {
-              const c = byRef.get(ref);
-              return c ? [{ repo: c.repository, key: c.key, lane: "ready" as const, at }] : [];
-            });
+      // Put back against the board as it is then: a ticket may have left the Ready lane meanwhile.
+      const undo = (): Undo | undefined => {
+        const moved = [...done];
+        if (moved.length === 0) return undefined;
+        return (now) => {
+          const nowByRef = new Map(now.map((c) => [ticketRef(c), c]));
+          const ready = new Set(now.filter((c) => c.state === "open" && c.lane === "ready").map(ticketRef));
+          return restoring(lane, moved, ready).map(({ ref, at }) => {
+            const c = nowByRef.get(ref) as Card;
+            return { repo: c.repository, key: c.key, lane: "ready" as const, at };
+          });
+        };
+      };
       for (const { ref, at } of plan.writes) {
         const c = byRef.get(ref) as Card;
         try {
@@ -244,7 +253,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
 
   const { mutate: write } = relate;
   const { mutate: place } = move;
-  const onEdit = useCallback((edit: Edit) => write({ changes: edit.changes, done: t(edit.message, edit.params), undo: edit.inverse }), [write, t]);
+  const onEdit = useCallback((edit: Edit) => write({ changes: edit.changes, done: t(edit.message, edit.params), undo: () => edit.inverse }), [write, t]);
   const onLane = useCallback((card: Card, lane: Lane) => place({ card, lane }), [place]);
   const onPlace = useCallback((card: Card, at: { before: string } | { after: string }) => place({ card, lane: card.lane, at }), [place]);
   const onAdd = useCallback((to: Card, as: Addition) => setAdding({ to, as }), []);
@@ -336,8 +345,13 @@ export function RelationsView({ workspace }: { workspace: string }) {
             <Button
               size="compact-sm"
               variant="default"
-              disabled={relate.isPending || reorder.isPending}
-              onClick={() => notice.undo && write({ changes: notice.undo, done: t("relations.undone") })}
+              // Not while the cards are read again: Undo is made against the board as it is.
+              disabled={relate.isPending || reorder.isPending || required.isFetching}
+              onClick={() => {
+                const changes = notice.undo?.(cards) ?? [];
+                if (changes.length > 0) write({ changes, done: t("relations.undone") });
+                else setNotice({ tone: "info", text: t("pickup.undoGone") });
+              }}
             >
               {t("relations.undo")}
             </Button>

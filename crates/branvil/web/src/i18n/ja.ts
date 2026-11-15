@@ -507,6 +507,7 @@ export const ja: Record<MessageKey, string> = {
   "pickup.reordered": "{key} の着手の順を変えました。",
   "pickup.reorderedWith": "{key} の着手の順を変えました。待っている {tickets} もその前へ動かしました。",
   "pickup.stale": "{key} がその間に着手可のレーンを離れたため、順を変えませんでした。",
+  "pickup.undoGone": "動かしたチケットはその間にすべて着手可のレーンを離れたため、戻すものはありません。",
   "board.assignee": "{key} の担当者: {name} — クリックで変更",
   "workspace.label": "ワークスペース",
   "workspace.new": "新しいワークスペース",

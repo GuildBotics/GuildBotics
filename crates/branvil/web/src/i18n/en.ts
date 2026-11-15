@@ -505,6 +505,7 @@ export const en = {
   "pickup.reordered": "Changed the pickup order: {key}.",
   "pickup.reorderedWith": "Changed the pickup order: {key}, with {tickets} it waits for moved before it.",
   "pickup.stale": "{key} left the Ready lane meanwhile, so the order was not changed.",
+  "pickup.undoGone": "The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.",
   "board.assignee": "Assignee of {key}: {name} — click to change",
   "workspace.label": "Workspace",
   "workspace.new": "New workspace",
