@@ -11,6 +11,220 @@ use crate::{
 };
 use serde_json::json;
 
+async fn failure_fixture() -> (
+    tempfile::TempDir,
+    crate::app::Shared,
+    Repo,
+    std::path::PathBuf,
+    String,
+) {
+    let (temp, ci, repo) = setup();
+    let app = app(&temp, &ci);
+    let dir = app.git.repo_dir(&repo.path);
+    app.git.init_bare(&dir, "main").await.unwrap();
+    let work = temp.path().join("work");
+    app.git
+        .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+        .await
+        .unwrap();
+    let base = commit_all(&app.git, &work, "base").await;
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await
+        .unwrap();
+    let (r2, sha) = (repo.clone(), base.clone());
+    app.store
+        .write(move |w| {
+            w.put(store::REPOS, &Repo::key(&r2.id), &r2)?;
+            let m = Member {
+                name: "owner".into(),
+                display_name: "Owner".into(),
+                kind: MemberKind::Owner,
+                accounts: vec![],
+                reviewers: vec![],
+                created_at: "0".into(),
+                avatar: None,
+            };
+            w.put(store::MEMBERS, &Member::key("owner"), &m)?;
+        let peer: Ticket = serde_json::from_value(json!({
+            "repo":r2.id, "workspace":r2.workspace, "number":2, "title":"Existing ready card", "body":"", "mentions":[],
+            "state":"open", "author":"owner", "labels":[], "interactive":false, "lane":"ready", "rank":"0|a",
+            "blocked_by":[], "created_at":"0", "updated_at":"0", "revision":1
+        })).unwrap();
+        crate::domain::tickets::write_ticket(w, None, &peer)?;
+            repair::failed(w, &r2.id, &sha, &[test_failure()])
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    let id = repo.id.clone();
+    app.store
+        .read(move |r| {
+            let repair = repair::open_ticket(r, &id)?.unwrap();
+            let peer = r
+                .get::<Ticket>(store::TICKETS, &Ticket::key(&id, 2))?
+                .unwrap();
+            assert!(
+                repair.rank < peer.rank,
+                "new repair must precede existing ready card"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    (temp, app, repo, work, base)
+}
+
+fn test_failure() -> FailedJob {
+    FailedJob {
+        name: "test".into(),
+        attempt_id: None,
+        details: None,
+    }
+}
+
+#[tokio::test]
+async fn failure_returns_to_ready_front_and_preserves_active_positions() {
+    let (_temp, app, repo, _work, base) = failure_fixture().await;
+    for lane in ["new", "done", "ready", "in_progress"] {
+        let (id, sha) = (repo.id.clone(), base.clone());
+        let (rank, other_rank) = app
+            .store
+            .write(move |w| {
+                let old = repair::open_ticket(w, &id)?.unwrap();
+                let mut other = old.clone();
+                let previous = w.get::<Ticket>(store::TICKETS, &Ticket::key(&id, 2))?;
+                other.number = 2;
+                other.repair = None;
+                other.lane = "ready".into();
+                other.rank = crate::domain::tickets::rank_first(w, &old.workspace, "ready")?;
+                crate::domain::tickets::write_ticket(w, previous.as_ref(), &other)?;
+                let t = crate::domain::tickets::place(w, &old, lane, None, None)?;
+                crate::domain::tickets::write_ticket(w, Some(&old), &t)?;
+                repair::failed(w, &id, &sha, &[test_failure()])?;
+                Ok((t.rank, other.rank))
+            })
+            .await
+            .unwrap();
+        repair::sweep(&app).await.unwrap();
+        let id = repo.id.clone();
+        app.store
+            .read(move |r| {
+                let t = repair::open_ticket(r, &id)?.unwrap();
+                if matches!(lane, "new" | "done") {
+                    assert_eq!(t.lane, "ready");
+                    assert!(
+                        t.rank < other_rank,
+                        "{lane}: repair must precede existing ready card"
+                    );
+                } else {
+                    assert_eq!(t.lane, lane);
+                    assert_eq!(t.rank, rank);
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn merged_repair_is_reported_only_after_inclusion_and_only_once() {
+    let (_temp, app, repo, work, base) = failure_fixture().await;
+    let before = commit_all(&app.git, &work, "before merge").await;
+    let merged = commit_all(&app.git, &work, "repair merge").await;
+    let after = commit_all(&app.git, &work, "after merge").await;
+    let dir = app.git.repo_dir(&repo.path);
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await
+        .unwrap();
+    let (id, merge_sha) = (repo.id.clone(), merged.clone());
+    app.store
+        .write(move |w| {
+            let mut p = super::tests::open_pull(&id, 1, "fix", "main");
+            p.state = "closed".into();
+            p.merged = true;
+            p.merge_sha = Some(merge_sha);
+            p.tickets.push(model::TicketLink {
+                url: "ticket".into(),
+                local: Some((id.clone(), 1)),
+                closes: true,
+            });
+            model::put_indexed(
+                w,
+                store::PULLS,
+                &Pull::key(&id, 1),
+                None,
+                &p,
+                model::pull_index(&p),
+            )?;
+            let old = repair::open_ticket(w, &id)?.unwrap();
+            let t = crate::domain::tickets::place(w, &old, "done", None, None)?;
+            crate::domain::tickets::write_ticket(w, Some(&old), &t)
+        })
+        .await
+        .unwrap();
+    for (sha, count, reported, lane) in [
+        (before, 0, base, "done"),
+        (merged.clone(), 1, merged.clone(), "ready"),
+        (after, 1, merged, "ready"),
+    ] {
+        let id = repo.id.clone();
+        app.store
+            .write(move |w| repair::failed(w, &id, &sha, &[test_failure()]))
+            .await
+            .unwrap();
+        repair::sweep(&app).await.unwrap();
+        repair::sweep(&app).await.unwrap();
+        let id = repo.id.clone();
+        app.store
+            .read(move |r| {
+                let t = repair::open_ticket(r, &id)?.unwrap();
+                assert_eq!(t.lane, lane);
+                assert_eq!(t.repair.unwrap().reported, reported);
+                let comments = crate::domain::tickets::comments_of(
+                    r,
+                    &model::Target::Ticket {
+                        repo: id,
+                        number: 1,
+                    },
+                )?;
+                assert_eq!(comments.len(), count);
+                if count > 0 {
+                    assert!(
+                        comments[0]
+                            .body
+                            .contains("Still failing after !1 (linked here) was merged: test")
+                    );
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn repeated_failures_and_repair_head_selection() {
     let (temp, ci, mut repo) = setup();

@@ -469,7 +469,11 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                     None
                 } else {
                     let mut t = if matches!(old.lane.as_str(), "new" | "done") {
-                        tickets::place(w, &old, "ready", None, None)?
+                        Ticket {
+                            lane: "ready".into(),
+                            rank: tickets::rank_first(w, &old.workspace, "ready")?,
+                            ..old.clone()
+                        }
                     } else {
                         old.clone()
                     };
