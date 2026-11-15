@@ -2326,6 +2326,13 @@ pub fn mark_merged(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::domain::members::{NewMember, insert_member};
+    use crate::domain::repos::{self, NewRepo, NewWorkspace};
+    use crate::model::MemberKind;
+    use std::time::Duration;
+
     #[test]
     fn local_merge_conflicts_are_rejected_before_any_writes() {
         let error = super::local_merge_sha(crate::git::MergeCommit::Conflicts {
@@ -2336,13 +2343,6 @@ mod tests {
         assert_eq!(error.code, "merge_conflict");
         assert!(error.message.contains("a.txt, b.txt"));
     }
-
-    use super::*;
-    use crate::config::Config;
-    use crate::domain::members::{NewMember, insert_member};
-    use crate::domain::repos::{self, NewRepo, NewWorkspace};
-    use crate::model::MemberKind;
-    use std::time::Duration;
 
     async fn fixture() -> (tempfile::TempDir, crate::app::Shared, Caller, Repo, Pull) {
         let temp = tempfile::tempdir().unwrap();

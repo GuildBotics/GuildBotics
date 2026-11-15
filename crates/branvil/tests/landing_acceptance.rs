@@ -330,7 +330,19 @@ async fn a_failed_gate_reports_its_jobs_and_main_adopts_its_successful_run_with_
     let retry = runner.next_claim().await;
     assert_eq!(retry["attempt_id"], result["id"]);
     assert_eq!(retry["sha"], gate);
-    assert_eq!(runner.post(&retry, "finish", json!({"lease": retry["lease"], "conclusion": "success", "image_digest": DIGEST, "cache_key": "a".repeat(64)})).await.0, 200);
+    let (st, result) = runner
+        .post(
+            &retry,
+            "finish",
+            json!({
+                "lease": retry["lease"],
+                "conclusion": "success",
+                "image_digest": DIGEST,
+                "cache_key": "a".repeat(64)
+            }),
+        )
+        .await;
+    assert_eq!(st, 200, "{result}");
     w.acknowledge(3).await;
     let passed = landing(&w, 3, "passed").await;
     assert_eq!(passed["landing"]["gate"], gate);
