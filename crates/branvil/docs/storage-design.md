@@ -51,6 +51,14 @@ closure returns `Ok` and aborts otherwise.
 
 ## Schema version
 
+Raise the version by at most one between successive verified commits. While a
+schema raise is still unverified, add further format changes to that same
+step's upgrade instead of raising the version again. The `schema-raise` CI job
+compares the checkout with `BRANVIL_VERIFIED_SHA` and also requires `upgrade.rs`
+to remain unchanged when the version stays at the verified version. It skips
+the comparison when no verified commit exists, it is not an ancestor of the
+checkout, or it predates the guard script.
+
 `meta["schema_version"]` is written on creation (currently `27`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
