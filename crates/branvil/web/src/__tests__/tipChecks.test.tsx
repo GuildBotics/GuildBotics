@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { I18nProvider } from "../i18n";
@@ -26,7 +26,7 @@ function show(paths: string[], repo: string | null = null, language: "en" | "ja"
   </I18nProvider></QueryClientProvider></MantineProvider>);
   return client;
 }
-const history = { items: [{ sha: SHA, title: "new", author: "Test", authored_at: "2026-11-15", mark: "verifying" }, { sha: OLD, title: "old", author: "Test", authored_at: "2026-11-14", mark: "verified" }], next_cursor: "next" };
+const history = { items: [{ sha: SHA, title: "new", author: "Test", authored_at: "2026-11-15T11:02:59+09:00", mark: "verifying" }, { sha: OLD, title: "old", author: "Test", authored_at: "2026-11-14T22:15:00Z", mark: "verified" }], next_cursor: "next" };
 
 describe("default branch verification", () => {
   it.each([ ["verified", "確認済み", "success"], ["verifying", "確認中（再試行 1/3）", "warning"], ["pending", "確認待ち", "warning"], ["failing", "失敗", "danger"], ["empty", "コミットなし", "color-bg-hover"] ] as const)("shows %s with its tone", async (name, label, color) => {
@@ -78,4 +78,41 @@ describe("default branch verification", () => {
     await waitFor(() => expect(toggle).toHaveTextContent("could not load 1"));
     expect(toggle).not.toHaveTextContent("verified 1");
   });
+  it.each(["en", "ja"] as const)("formats every history timestamp in %s", async (language) => {
+    fakeApi({
+      "GET /api/v1/repos/acme/demo/verification": json(200, state()),
+      "GET /api/v1/repos/acme/demo/verification/commits": json(200, { ...history, next_cursor: null }),
+    });
+    show(["acme/demo"], "acme/demo", language);
+    await userEvent.setup().click(screen.getByRole("button"));
+    await screen.findByText("new");
+    for (const commit of history.items) {
+      const time = screen.getByTitle(commit.authored_at);
+      expect(time.tagName).toBe("TIME");
+      expect(time).toHaveAttribute("datetime", commit.authored_at);
+      expect(time).toHaveTextContent(new Date(commit.authored_at).toLocaleString(language));
+      expect(time).not.toHaveTextContent(commit.authored_at);
+    }
+  });
+
+  it.each(["verified", "verifying", "pending", "failing", "empty"] as const)("shows one %s badge per repository and no redundant empty explanation", async (name) => {
+    const value = { ...state(name), latest_verified: null };
+    fakeApi({
+      "GET /api/v1/repos/acme/demo/verification": json(200, value),
+      "GET /api/v1/repos/acme/demo/verification/commits": json(200, { items: [], next_cursor: null }),
+      [`GET /api/v1/repos/acme/demo/commits/${OLD}/checks`]: json(200, { sha: OLD, checks: [], checks_expected: false }),
+    });
+    show(["acme/demo"], null, "ja");
+    await waitFor(() => expect(screen.getByRole("button")).not.toHaveTextContent("読み込み"));
+    await userEvent.setup().click(screen.getByRole("button"));
+    const dialog = within(await screen.findByRole("dialog"));
+    const labels = { verified: "確認済み", verifying: "確認中（再試行 1/3）", pending: "確認待ち", failing: "失敗", empty: "コミットなし" };
+    await waitFor(() => expect(dialog.getAllByText(labels[name], { exact: true })).toHaveLength(1));
+    expect(dialog.getByRole("link", { name: /acme\/demo/ })).toBeInTheDocument();
+    if (name === "empty") {
+      expect(dialog.getByText("main にはまだコミットがありません。")).toBeInTheDocument();
+      expect(dialog.queryByText("確認済みのコミットはまだない")).not.toBeInTheDocument();
+    }
+  });
+
 });

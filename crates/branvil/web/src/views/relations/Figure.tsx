@@ -9,7 +9,7 @@ import { ChildrenToggle } from "../board/CardView";
 import { matchesFilter, type CardFilter } from "../board/ordering";
 import { linkEdit, parentEdit, unlinkEdit, type Edit } from "./edits";
 import { hasRelations, type Graph, type GraphEdge, type Level } from "./graph";
-import { RelationCard, type Addition } from "./RelationCard";
+import { RelationCard, type Addition, type PickupTag } from "./RelationCard";
 
 /** How long a gap the card could not go into stays marked after the drag: the dragged card hid it. */
 const REFUSAL_MS = 4000;
@@ -56,11 +56,40 @@ interface Props {
   onRevealed: () => void;
   freshOpen: boolean;
   onFreshOpen: (open: boolean) => void;
+  /** The cards' places in their assignees' pickup orders (the owner's only). */
+  tags: ReadonlyMap<string, PickupTag> | null;
+  onTag: (ref: string, assignee: string) => void;
+  /** The ticket a row of the pickup order points at: its card, or the closed parent it is in, is marked. */
+  highlight: string | null;
+  /** A ticket to scroll to (a new object each time), as `highlight` finds it; the frames stay as they are. */
+  point: { ref: string } | null;
 }
 
 const edgeKey = (e: GraphEdge) => `${e.from}>${e.to}`;
 
-export function Figure({ graph, cards, lanes, people, loadChecks, filter, moving, editable, onToggle, onLane, onPlace, onEdit, onAdd, reveal, onRevealed, freshOpen, onFreshOpen }: Props) {
+export function Figure({
+  graph,
+  cards,
+  lanes,
+  people,
+  loadChecks,
+  filter,
+  moving,
+  editable,
+  onToggle,
+  onLane,
+  onPlace,
+  onEdit,
+  onAdd,
+  reveal,
+  onRevealed,
+  freshOpen,
+  onFreshOpen,
+  tags,
+  onTag,
+  highlight,
+  point,
+}: Props) {
   const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -71,6 +100,40 @@ export function Figure({ graph, cards, lanes, people, loadChecks, filter, moving
   const [dragging, setDragging] = useState<Card | null>(null);
   const [target, setTarget] = useState<Aim | null>(null);
   const byRef = useMemo(() => new Map(cards.map((c) => [ticketRef(c), c])), [cards]);
+  // Where a ticket is in the figure: its card, or the closed parent it is in; null when the filter hides it.
+  const standIn = useMemo(() => {
+    const drawn = new Set<string>();
+    const walk = (l: Level) => {
+      for (const n of l.flat()) {
+        if ("fresh" in n) for (const c of freshOpen ? n.fresh : []) drawn.add(ticketRef(c));
+        else {
+          drawn.add(n.ref);
+          if (n.inner) walk(n.inner);
+        }
+      }
+    };
+    walk(graph.level);
+    return (ref: string): string | null => {
+      if (!graph.shown.has(ref)) return null;
+      let at: string | undefined = ref;
+      while (at && !drawn.has(at)) {
+        const parent: Card["parent"] | undefined = byRef.get(at)?.parent;
+        at = parent ? ticketRef(parent) : undefined;
+      }
+      return at ?? null;
+    };
+  }, [graph, freshOpen, byRef]);
+  const lit = highlight ? standIn(highlight) : null;
+
+  // Only a new request scrolls: the figure changing under a row does not.
+  const pointedRef = useRef<{ ref: string } | null>(null);
+  useEffect(() => {
+    if (point === pointedRef.current) return;
+    pointedRef.current = point;
+    const ref = point && standIn(point.ref);
+    const el = ref ? [...(contentRef.current?.querySelectorAll("[data-ticket]") ?? [])].find((e) => e.getAttribute("data-ticket") === ref) : undefined;
+    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  }, [point, standIn]);
 
   // A ticket asked for is scrolled to once the figure shows it, and its card glows for a moment;
   // the frame of new tickets is opened when it is among them.
@@ -221,6 +284,9 @@ export function Figure({ graph, cards, lanes, people, loadChecks, filter, moving
       loadChecks={loadChecks}
       open={isOpen}
       dim={!matchesFilter(card, filter)}
+      tag={tags?.get(ticketRef(card))}
+      highlighted={lit === ticketRef(card)}
+      onTag={onTag}
       onToggle={onToggle}
       onLane={onLane}
       onLinkStart={onLinkStart}

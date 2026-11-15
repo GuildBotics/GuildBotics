@@ -155,6 +155,12 @@ GuildBotics stays valid. Two services on the same base URL cannot both listen.
 
 ## Upgrading
 
+Successive verified commits may raise the schema version by at most one, so
+each verified build remains reachable with a single upgrade. While a schema
+raise is still unverified, add further format changes to that same step's
+upgrade. The `schema-raise` CI job checks this against `BRANVIL_VERIFIED_SHA`
+and rejects changes to `upgrade.rs` at an unchanged verified version.
+
 A build that changes the stored format raises the schema version
 (`docs/storage-design.md`) and carries the upgrade from the version before
 it, and no other. `guildbotics branvil serve` and `guildbotics branvil admin check|reindex` refuse a

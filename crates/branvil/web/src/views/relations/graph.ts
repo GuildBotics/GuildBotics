@@ -40,6 +40,8 @@ export interface GraphEdge {
 export interface Graph {
   level: Level;
   edges: GraphEdge[];
+  /** The tickets the filter leaves in the figure, also those inside a closed parent. */
+  shown: ReadonlySet<string>;
 }
 
 /** Whether a ticket has a parent, a child, or a dependency, shown or not: only one without is new. */
@@ -141,7 +143,7 @@ export function buildGraph(board: Card[], options: {
     return level;
   };
 
-  return { level: levelOf(shown.filter((c) => !parentOf(c))), edges: [...edges.values()] };
+  return { level: levelOf(shown.filter((c) => !parentOf(c))), edges: [...edges.values()], shown: new Set(byRef.keys()) };
 }
 
 function append<T>(map: Map<string, T[]>, key: string, value: T) {

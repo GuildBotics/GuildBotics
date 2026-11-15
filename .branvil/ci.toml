@@ -55,6 +55,15 @@ uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox --ignore=tests/
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
 
+# Read BRANVIL_VERIFIED_SHA to keep successive verified builds one schema step apart.
+[[jobs]]
+name = "schema-raise"
+image = "guildbotics/agent-environment:dev"
+verified_sha = true
+paths = ["crates/branvil/src/store.rs", "crates/branvil/src/upgrade.rs", "scripts/check-schema-raise.py"]
+commands = ["python3 scripts/check-schema-raise.py"]
+timeout_secs = 300
+
 [[jobs]]
 name = "markdown-links"
 image = "guildbotics/agent-environment:dev"

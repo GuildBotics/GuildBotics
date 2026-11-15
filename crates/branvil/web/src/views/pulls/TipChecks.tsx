@@ -4,7 +4,7 @@ import { GitBranch } from "lucide-react";
 import { useState } from "react";
 import * as api from "../../api/endpoints";
 import type { Check, VerificationState } from "../../api/types";
-import { ErrorMessage, Loading, Sha, StateBadge, type Tone } from "../../components/common";
+import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
 import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
@@ -38,7 +38,7 @@ function RepositoryTipChecks({ tip }: { tip: Tip }) {
     <Stack gap="sm">
       <Group><StateBadge tone={TONE[tip.status]}>{verificationLabel(t, tip)}</StateBadge></Group>
       {data.state === "empty" && <Text size="sm" c="dimmed">{t("repo.noTip", { branch: data.branch })}</Text>}
-      {data.state !== "verified" && <Text size="sm">{data.latest_verified ? t("verification.ahead", { count: data.ahead ?? 0 }) : t("verification.noVerified")}</Text>}
+      {data.state !== "verified" && data.state !== "empty" && <Text size="sm">{data.latest_verified ? t("verification.ahead", { count: data.ahead ?? 0 }) : t("verification.noVerified")}</Text>}
       {data.current && ["verifying", "failing"].includes(data.state) && <CommitChecksCard repo={tip.path} sha={data.current.sha} title={t("repo.tipChecks", { branch: data.branch })} embedded onOpen={(c) => setCheck(drawerTarget(c))} />}
       {data.tip && <VerificationHistory repo={tip.path} />}
       <CheckDrawer repo={tip.path} check={check} onClose={() => setCheck(null)} />
@@ -55,7 +55,7 @@ function VerificationHistory({ repo }: { repo: string }) {
     {query.isPending && <Loading />}
     {query.data?.pages.flatMap((page) => page.items).map((commit) => <Group key={commit.sha}>
       <Sha repo={repo} value={commit.sha} /><Text size="sm">{commit.title}</Text>
-      <Text size="xs" c="dimmed">{commit.author} · {commit.authored_at}</Text>
+      <Text size="xs" c="dimmed">{commit.author} · <Time value={commit.authored_at} /></Text>
       {commit.mark && <StateBadge tone={commit.mark === "verified" ? "success" : commit.mark === "failed" ? "danger" : "warning"}>{t(`verification.${commit.mark}`)}</StateBadge>}
     </Group>)}
     {query.hasNextPage && <Button loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{t("verification.more")}</Button>}
@@ -73,7 +73,6 @@ function WorkspaceTipChecks({ workspace, tips }: { workspace: string; tips: Tip[
               <Group gap="sm">
                 <Text span size="sm">{row.path}</Text>{" "}
                 <Text span size="sm" c="dimmed">{row.branch ?? "—"}</Text>{" "}
-                <StateBadge tone={TONE[row.status]}>{verificationLabel(t, row)}</StateBadge>
               </Group>
             </Link>
             {row.sha && <Sha repo={row.path} value={row.sha} />}
