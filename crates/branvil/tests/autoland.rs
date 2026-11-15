@@ -369,7 +369,7 @@ async fn a_head_behind_its_base_lands_through_a_gate_without_changing_its_head()
     let p = pull(&w, n).await;
     assert_eq!(p["head_sha"], head);
     assert_ne!(p["merge_sha"], head);
-    assert_eq!(p["landing"]["gate"], p["merge_sha"]);
+    assert_ne!(p["landing"]["gate"], p["merge_sha"]);
     git_as_ok(&w.work, "alice", &w.owner, &["fetch", "-q", "origin"]);
     assert_eq!(
         git_ok(&w.work, &["rev-parse", "origin/main^1"]).trim(),

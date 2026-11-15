@@ -1,6 +1,6 @@
 //! The landing contract across host polling, reviews, and CI adoption.
 
-use crate::ci::{Runner, pipeline, sync_main};
+use crate::ci::{DIGEST, Runner, pipeline, sync_main};
 use crate::common::*;
 use crate::upstream::{GH, commit_on_github, followed, publish, refresh, with_aiko_account};
 use serde_json::{Value, json};
@@ -330,44 +330,39 @@ async fn a_failed_gate_reports_its_jobs_and_main_adopts_its_successful_run_with_
     let retry = runner.next_claim().await;
     assert_eq!(retry["attempt_id"], result["id"]);
     assert_eq!(retry["sha"], gate);
-    assert_eq!(runner.finish(&retry, "success").await.0, 200);
+    assert_eq!(runner.post(&retry, "finish", json!({"lease": retry["lease"], "conclusion": "success", "image_digest": DIGEST, "cache_key": "a".repeat(64)})).await.0, 200);
     w.acknowledge(3).await;
     let passed = landing(&w, 3, "passed").await;
     assert_eq!(passed["landing"]["gate"], gate);
     let merged = merge(&w, 3).await;
-    assert_eq!(merged["merge_sha"], gate);
+    let sha = merged["merge_sha"].as_str().unwrap();
+    assert_ne!(sha, gate);
+    assert_eq!(merged["head_sha"], head);
     let bare = w.server.data.join("repos/acme/demo.git");
-    assert_eq!(git_ok(&bare, &["rev-parse", "main"]), gate);
-    // Only the cache-writing job reruns as protected. The no-cache job's
-    // original gate attempt remains the same; deleting the hidden gate ref
-    // cannot supersede the run that main now owns.
-    let protected = runner.next_claim().await;
-    assert_eq!(protected["sha"], gate);
-    assert_eq!(protected["job"]["name"], "build");
-    assert_eq!(protected["cache_scope"], "protected");
-    assert_eq!(protected["attempt"], retry["attempt"].as_u64().unwrap() + 1);
-    assert!(runner.claim().await.is_none());
-    assert_eq!(runner.finish(&protected, "success").await.0, 200);
-    let checks = w
-        .server
-        .ok(
-            &format!("{}/commits/{gate}/checks", w.repo_path()),
-            &w.owner,
-        )
-        .await;
-    let lint_check = checks["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|check| check["name"] == "lint")
-        .unwrap();
-    assert_eq!(lint_check["attempt_id"], lint["attempt_id"]);
-    assert_eq!(lint_check["conclusion"], "success");
-    let build_check = checks["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|check| check["name"] == "build")
-        .unwrap();
-    assert_eq!(build_check["attempt_id"], protected["attempt_id"]);
+    assert_eq!(git_ok(&bare, &["rev-parse", "main"]), sha);
+    // Main gets its own protected run, reusing successful gate executions by tree.
+    for _ in 0..2 {
+        let job = runner.next_claim().await;
+        assert_eq!(job["sha"], sha);
+        assert_eq!(job["cache_scope"], "protected");
+        let source = if job["job"]["name"] == "build" {
+            &retry
+        } else {
+            &lint
+        };
+        assert_eq!(job["reuse"]["attempt_id"], source["attempt_id"]);
+        let (st, result) = runner
+            .post(
+                &job,
+                "finish",
+                json!({
+                    "lease":job["lease"], "conclusion":"success", "image_digest":DIGEST,
+                    "reused_from":source["attempt_id"]
+                }),
+            )
+            .await;
+        assert_eq!(st, 200, "{result}");
+        assert_eq!(result["reused_from"]["sha"], gate);
+        assert_eq!(result["reused_from"]["attempt_id"], source["attempt_id"]);
+    }
 }

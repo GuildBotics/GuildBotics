@@ -85,9 +85,9 @@ pub struct Output {
     pub truncated: bool,
 }
 
-/// The commit tested before a pull request lands, or the paths preventing it.
+/// A merge result, or the paths preventing it.
 #[derive(Debug, PartialEq)]
-pub enum GateCommit {
+pub enum MergeCommit {
     Ready { sha: String, tree: String },
     Conflicts { files: Vec<String> },
 }
@@ -514,20 +514,20 @@ impl Git {
     /// When allowed by the caller, a head containing the base needs no new commit. Otherwise,
     /// creates the merge result with base first in its parent list. Identity
     /// is explicit because service Git inherits no author configuration.
-    pub async fn gate_commit(
+    pub async fn merge_commit(
         &self,
         dir: &Path,
         base: &str,
         head: &str,
-        number: u64,
+        message: &str,
         reuse_head: bool,
-    ) -> AppResult<GateCommit> {
+    ) -> AppResult<MergeCommit> {
         let contains_base = self.is_ancestor(dir, base, head).await?;
         if contains_base && reuse_head {
             let tree = self
                 .run_ok(Some(dir), &["rev-parse", &format!("{head}^{{tree}}")])
                 .await?;
-            return Ok(GateCommit::Ready {
+            return Ok(MergeCommit::Ready {
                 sha: head.to_string(),
                 tree,
             });
@@ -538,22 +538,13 @@ impl Git {
         } else {
             match self.merge_tree(dir, base, head).await? {
                 Ok(tree) => tree,
-                Err(files) => return Ok(GateCommit::Conflicts { files }),
+                Err(files) => return Ok(MergeCommit::Conflicts { files }),
             }
         };
         let out = self
             .run_env(
                 Some(dir),
-                &[
-                    "commit-tree",
-                    &tree,
-                    "-p",
-                    base,
-                    "-p",
-                    head,
-                    "-m",
-                    &format!("Branvil landing gate !{number}"),
-                ],
+                &["commit-tree", &tree, "-p", base, "-p", head, "-m", message],
                 &[
                     ("GIT_AUTHOR_NAME", "Branvil"),
                     ("GIT_AUTHOR_EMAIL", "branvil@localhost"),
@@ -568,7 +559,7 @@ impl Git {
                 out.stderr.trim()
             )));
         }
-        Ok(GateCommit::Ready {
+        Ok(MergeCommit::Ready {
             sha: out.text().trim().to_string(),
             tree,
         })
@@ -1052,7 +1043,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gate_commits_preserve_heads_merge_parents_and_report_conflict_paths() {
+    async fn merge_commits_preserve_heads_merge_parents_and_report_conflict_paths() {
         let temp = tempfile::tempdir().unwrap();
         let layout = Layout::new(&temp.path().join("service"));
         layout.create().unwrap();
@@ -1064,16 +1055,16 @@ mod tests {
         let initial = commit_file(&git, &work, "conflicted file\n.txt", "initial\n").await;
         let dir = work.join(".git");
         let head = commit_file(&git, &work, "feature.txt", "feature\n").await;
-        let GateCommit::Ready { sha, .. } = git
-            .gate_commit(&dir, &initial, &head, 7, true)
+        let MergeCommit::Ready { sha, .. } = git
+            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7", true)
             .await
             .unwrap()
         else {
             panic!("fast-forward head conflicts");
         };
         assert_eq!(sha, head, "an up-to-date head creates no commit");
-        let GateCommit::Ready { sha: forced, tree } = git
-            .gate_commit(&dir, &initial, &head, 7, false)
+        let MergeCommit::Ready { sha: forced, tree } = git
+            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7", false)
             .await
             .unwrap()
         else {
@@ -1100,8 +1091,10 @@ mod tests {
         .await
         .unwrap();
         let base = commit_file(&git, &work, "main.txt", "main\n").await;
-        let GateCommit::Ready { sha, tree } =
-            git.gate_commit(&dir, &base, &head, 7, true).await.unwrap()
+        let MergeCommit::Ready { sha, tree } = git
+            .merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+            .await
+            .unwrap()
         else {
             panic!("independent changes conflict");
         };
@@ -1142,11 +1135,49 @@ mod tests {
         .await
         .unwrap();
         let head = commit_file(&git, &work, "conflicted file\n.txt", "head\n").await;
+        let commits_before = git
+            .run_ok(
+                Some(&dir),
+                &[
+                    "cat-file",
+                    "--batch-all-objects",
+                    "--batch-check=%(objecttype)",
+                ],
+            )
+            .await
+            .unwrap()
+            .lines()
+            .filter(|kind| *kind == "commit")
+            .count();
         assert_eq!(
-            git.gate_commit(&dir, &base, &head, 7, true).await.unwrap(),
-            GateCommit::Conflicts {
+            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+                .await
+                .unwrap(),
+            MergeCommit::Conflicts {
                 files: vec!["conflicted file\n.txt".into()]
             }
+        );
+        assert_eq!(
+            git.run_ok(
+                Some(&dir),
+                &[
+                    "cat-file",
+                    "--batch-all-objects",
+                    "--batch-check=%(objecttype)"
+                ]
+            )
+            .await
+            .unwrap()
+            .lines()
+            .filter(|kind| *kind == "commit")
+            .count(),
+            commits_before
+        );
+        assert_eq!(
+            git.run_ok(Some(&dir), &["rev-parse", "main"])
+                .await
+                .unwrap(),
+            head
         );
     }
 
@@ -1183,7 +1214,11 @@ mod tests {
             vec!["a.txt"]
         );
         assert!(git.merge_tree(&dir, &base, &head).await.is_err());
-        assert!(git.gate_commit(&dir, &base, &head, 7, true).await.is_err());
+        assert!(
+            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+                .await
+                .is_err()
+        );
     }
 
     #[test]

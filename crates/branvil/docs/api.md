@@ -877,8 +877,11 @@ or last departure, or `null` before it first joins (see "Landing queue").
   A draft, a closed pull request, or a head that adds nothing to the base is
   `409 not_mergeable` too. A repository with an upstream merges there:
   `409 not_mergeable`, publish instead.
-  On success the base branch fast-forwards to the gate commit (`merge_sha`),
-  the pull request keeps its original reviewed `head_sha`, it is closed as merged,
+  On success the base branch advances to head if head contains base, or to a
+  new Branvil commit with parents `[base, head]` and message
+  `Merge !<number>: <title>` otherwise (`merge_sha`). Merge conflicts are
+  `409 merge_conflict`, listing the conflicting files; nothing is written.
+  In either case the pull request keeps its original reviewed `head_sha`, it is closed as merged,
   and the tickets it `closes` are closed (`completed`) and moved to `done`.
   Its head branch is deleted only while still at the original reviewed head,
   unless it is protected or an open pull request has it as its head or base.
@@ -1036,7 +1039,7 @@ not authorize automatic replacement of the host branch.
 ### Landing automatically
 
 A repository with `auto_land` lands its first passed entry once the owner's
-merge or publish would succeed: without an upstream it merges to the gate,
+merge or publish would succeed: without an upstream it creates the local merge result described above,
 with one it publishes the original head as its author. Branvil advances queues
 after changes to pull requests, reviews, refs, CI attempts, settings, upstreams,
 or member host accounts, at start, and every minute. Drafts stay out of queues.

@@ -480,7 +480,9 @@ combined changes without changing the reviewed head or invalidating approvals.
 The queue states are `waiting`, `gating`, `passed`, and `left`. Required gate
 checks passing changes the first to `passed`; it keeps its place until merged
 or removed. With an upstream, this includes the time spent waiting for GitHub's
-merge. A local merge fast-forwards the base to the gate commit. Publishing
+merge. A local merge advances base to head when head contains base, otherwise to a
+new Branvil merge commit with parents `[base, head]`. Main verification checks
+the new default-branch commit and may reuse successful executions of the same tree. Publishing
 sends the original head, and later pushes to a published head are sent as before.
 
 - A failed required gate job, merge conflict, stopped publication, or failed

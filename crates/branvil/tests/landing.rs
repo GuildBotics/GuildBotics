@@ -436,7 +436,7 @@ async fn retry_requires_cancelled_siblings_and_retains_the_gate_while_waiting_ag
 }
 
 #[tokio::test]
-async fn one_gate_per_base_and_a_stale_head_merges_the_gate_without_changing_its_reviewed_head() {
+async fn one_gate_per_base_and_a_stale_head_gets_its_own_merge_commit() {
     let w = World::new().await;
     let first = w.push_change("first", "first.txt", "first\n");
     w.open_pull("first", json!([])).await;
@@ -479,6 +479,7 @@ async fn one_gate_per_base_and_a_stale_head_merges_the_gate_without_changing_its
         )
         .await;
     assert_eq!(st, 200, "{merged}");
+    assert_eq!(merged["merge_sha"], first);
     let passed = landing(&w, 2, "passed").await;
     let gate = passed["landing"]["gate"].as_str().unwrap();
     assert_ne!(gate, second);
@@ -495,11 +496,28 @@ async fn one_gate_per_base_and_a_stale_head_merges_the_gate_without_changing_its
         )
         .await;
     assert_eq!(st, 200, "{merged}");
-    assert_eq!(merged["merge_sha"], gate);
+    let sha = merged["merge_sha"].as_str().unwrap();
+    assert_ne!(sha, gate);
+    assert_eq!(
+        git_ok(&bare, &["show", "-s", "--format=%P", sha]),
+        format!("{first} {second}")
+    );
+    assert_eq!(
+        git_ok(&bare, &["rev-parse", &format!("{sha}^{{tree}}")]),
+        git_ok(&bare, &["rev-parse", &format!("{gate}^{{tree}}")])
+    );
+    assert_eq!(
+        git_ok(&bare, &["show", "-s", "--format=%s", sha]),
+        "Merge !2: PR second"
+    );
+    assert_eq!(
+        git_ok(&bare, &["show", "-s", "--format=%an <%ae>%n%cn <%ce>", sha]),
+        "Branvil <branvil@localhost>\nBranvil <branvil@localhost>"
+    );
     assert_eq!(merged["head_sha"], second);
     assert_eq!(merged["landing"]["state"], "left");
     assert_eq!(merged["landing"]["reason"]["code"], "merged");
-    assert_eq!(git_ok(&bare, &["rev-parse", "main"]), gate);
+    assert_eq!(git_ok(&bare, &["rev-parse", "main"]), sha);
     assert!(
         !git(&bare, &["show-ref", "--verify", "refs/heads/second"])
             .status
