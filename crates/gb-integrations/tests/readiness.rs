@@ -144,3 +144,18 @@ fn primary_failures_and_download_budgets() {
     assert_eq!(effective_tail_bytes(10, MAX_PAGE_BYTES + 1), Ok(1));
     assert!(effective_tail_bytes(10, 0).is_err());
 }
+
+#[test]
+fn service_post_merge_skip_is_ready_with_other_successful_checks() {
+    let mut input = log_input("");
+    input["freshness"] = json!({"base_sha":"base", "current_base_sha":"base", "behind_by":0, "requires_up_to_date":true});
+    input["failed_logs"] = json!([]);
+    input["checks_expected"] = json!(true);
+    input["checks"] = json!([
+        {"name":"slow","status":"completed","conclusion":"skipped","details_url":"","details":"post-merge only (repository setting)"},
+        {"name":"fast","status":"completed","conclusion":"success","details_url":""}
+    ]);
+    let result = run(&input).unwrap();
+    assert_eq!(result.readiness, ReadinessReadiness::Ready);
+    assert!(result.completion_blockers.is_empty());
+}

@@ -876,3 +876,20 @@ PR 一覧の見出しは、既定ブランチの確認の状態を表示する�
 状態の正本は `ci::verify::main_state`。HTTP の `GET …/verification` と
 `GET …/verification/commits` もこれを使う。記録の変更後とチェックの更新時には
 `verification` イベントを送り、画面の状態と履歴を読み直す。
+
+### Post-merge only jobs
+
+The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
+default). These jobs do not run on ordinary branches or PR heads, even before a PR
+opens, without a merge base, or when the pipeline changes. Gates and protected
+branches execute them. A head with service skips cannot itself serve as a gate;
+the gate creates a `[base, head]` commit and executes the skipped jobs there.
+Manual retries also execute them and their skips cannot supply reusable results.
+
+The owner controls this in repository settings rather than `.branvil/ci.toml` so a
+PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
+Selection records include the setting; reconciliation reselects open heads when
+it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
+running jobs finish and manual retries remain executable. Removing a name restores
+normal path selection and queues a real attempt when it is selected again.
+The log for this decision is `[branvil] skipped: post-merge only (repository setting)`.

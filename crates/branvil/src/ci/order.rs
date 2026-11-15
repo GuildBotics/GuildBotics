@@ -442,6 +442,7 @@ mod tests {
                 h.previous = Some((false, vec![a.clone()]));
                 assert_eq!(h.order(&jobs), ["a", "b", "c", "d"], "reused success is C");
                 a.path_skip = Some(queue::PathSkip {
+                    reason: queue::SkipReason::Paths,
                     paths: Vec::new(),
                     bases: Vec::new(),
                 });

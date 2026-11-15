@@ -14,6 +14,7 @@ fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
             default_branch: "main".into(),
             protected_branches: vec!["release".into()],
             required_checks: required.iter().map(|s| s.to_string()).collect(),
+            post_merge_jobs: Vec::new(),
             required_approvals: approvals,
             auto_land: false,
             ci_network: false,

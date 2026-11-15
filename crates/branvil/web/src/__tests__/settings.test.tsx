@@ -19,7 +19,7 @@ const REPO = {
   clone_url: "http://127.0.0.1:7878/git/acme/demo.git",
   url: "",
   protected_branches: ["main"],
-  required_checks: [],
+  post_merge_jobs: [], required_checks: [],
   required_approvals: 1,
   auto_land: false,
   ci_network: false,
@@ -156,11 +156,26 @@ describe("settings", () => {
     expect(fake.calls("POST", "/api/v1/repos")[0]?.body).toEqual({ path: "acme/demo", default_branch: "main", labels: ["bug", "ui"] });
   });
 
+  it("shows the server's reason when post-merge jobs overlap required checks", async () => {
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/repos": page([REPO]),
+      "PATCH /api/v1/repos/acme/demo": json(400, { error: { code: "invalid", message: "slow cannot be both required and post-merge only." } }),
+    });
+    const user = userEvent.setup();
+    renderApp("/-/settings");
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("tab", { name: "CI" }));
+    await addPills(user, "Post-merge only jobs", ["slow"]);
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0] as HTMLElement);
+    expect((await screen.findAllByText("slow cannot be both required and post-merge only.")).length).toBeGreaterThan(0);
+  });
+
   it("saves a repository's branches, CI and approvals, and labels with the revision the form was filled from", async () => {
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([REPO]),
-      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, required_checks: ["test", "lint"], ci_network: true, revision: 5 }),
+      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, post_merge_jobs: [], required_checks: ["test", "lint"], ci_network: true, revision: 5 }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings");
@@ -176,6 +191,7 @@ describe("settings", () => {
     expect(screen.getByText(/public destinations only, never the Branvil machine or private networks/)).toBeInTheDocument();
     await user.click(network);
     await addPills(user, "Required checks", ["test", "lint"]);
+    await addPills(user, "Post-merge only jobs", ["slow"]);
     const approvals = screen.getByRole("textbox", { name: "Required approvals" });
     expect(approvals).toHaveValue("1");
     expect(screen.getByText(/must have approved the current head before a merge \(a later comment keeps an approval\); 0 needs none/)).toBeInTheDocument();
@@ -189,7 +205,7 @@ describe("settings", () => {
       revision: 4,
       default_branch: "main",
       protected_branches: ["main"],
-      required_checks: ["test", "lint"],
+      post_merge_jobs: ["slow"], required_checks: ["test", "lint"],
       required_approvals: 2,
       auto_land: false,
       ci_network: true,

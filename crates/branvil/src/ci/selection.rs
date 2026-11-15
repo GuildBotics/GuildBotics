@@ -54,11 +54,13 @@ impl Ci {
             })
             .collect();
         bases.sort_by_key(|b| b.pull);
-        if bases.is_empty() {
-            return Ok(None);
-        }
+
         if let Some(run) = &previous
             && run.pipeline == *pipeline
+            && run
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.post_merge_jobs == repo.post_merge_jobs)
             && let Some(selection) = &run.selection
             && selection.bases.len() == bases.len()
             && selection
@@ -80,7 +82,7 @@ impl Ci {
         mut bases: Vec<SelectionBase>,
     ) -> AppResult<JobSelection> {
         let dir = self.inner.git.repo_dir(&repo.path);
-        let mut all = false;
+        let mut all = bases.is_empty();
         for base in &mut bases {
             if base.base_sha.is_empty() {
                 all = true;
@@ -134,7 +136,13 @@ impl Ci {
                 }
             }
         }
+        for job in jobs {
+            if repo.post_merge_jobs.contains(&job.name) && !skipped_jobs.contains(&job.name) {
+                skipped_jobs.push(job.name.clone());
+            }
+        }
         Ok(JobSelection {
+            post_merge_jobs: repo.post_merge_jobs.clone(),
             bases,
             skipped_jobs,
         })
@@ -247,6 +255,75 @@ fn pathspecs(paths: &[String]) -> Vec<String> {
 mod tests {
     use super::super::tests::{commit_all, inputs_pipeline, raw_digest};
     use super::*;
+
+    #[tokio::test]
+    async fn post_merge_setting_invalidates_selection_without_pr_bases_and_all_jobs_bypasses_it() {
+        let (_temp, ci, mut repo) = super::super::tests::setup();
+        ci.inner
+            .git
+            .init_bare(&ci.inner.git.repo_dir(&repo.path), "main")
+            .await
+            .unwrap();
+        let pipeline = PipelineState::Jobs {
+            jobs: super::super::pipeline::parse(&inputs_pipeline("'src/**'")).unwrap(),
+        };
+        repo.post_merge_jobs = vec!["test".into()];
+        let selection = ci
+            .select_jobs(&repo, "head", &pipeline, false)
+            .await
+            .unwrap();
+        assert_eq!(selection.as_ref().unwrap().skipped_jobs, ["test"]);
+        let reg = queue::Registration {
+            order: vec![],
+            selection,
+            repo: repo.id.clone(),
+            repo_path: repo.path.clone(),
+            sha: "head".into(),
+            tree: None,
+            branch: "feature".into(),
+            protected: false,
+            pipeline: pipeline.clone(),
+            network: false,
+            inputs: BTreeMap::new(),
+        };
+        ci.inner
+            .store
+            .write(move |w| queue::register(w, reg, 10, "now"))
+            .await
+            .unwrap();
+        repo.post_merge_jobs = vec!["lint".into()];
+        let selection = ci
+            .select_jobs(&repo, "head", &pipeline, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.skipped_jobs, ["lint"]);
+        assert_eq!(selection.post_merge_jobs, repo.post_merge_jobs);
+        assert!(
+            ci.select_jobs(&repo, "head", &pipeline, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let PipelineState::Jobs { jobs } = &pipeline else {
+            unreachable!()
+        };
+        let selection = ci
+            .select_bases(
+                &repo,
+                "head",
+                jobs,
+                vec![SelectionBase {
+                    pull: 1,
+                    base: "missing".into(),
+                    base_sha: String::new(),
+                    merge_base: None,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(selection.skipped_jobs, ["lint"]);
+    }
 
     #[tokio::test]
     async fn inputs_digest_exactly_the_files_matching_paths() {

@@ -705,29 +705,23 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_26(db: &Path) {
-    for table in ["ci_runs", "ci_attempts"] {
-        edit_records(db, table, |v| {
-            v.as_object_mut().unwrap().remove("verified_sha");
-            if let Some(jobs) = v["pipeline"]["jobs"].as_array_mut() {
-                for j in jobs {
-                    j.as_object_mut().unwrap().remove("verified_sha");
-                }
-            }
-            if let Some(job) = v.get_mut("job") {
-                job.as_object_mut().unwrap().remove("verified_sha");
-            }
-        });
-    }
-    let database = redb::Database::open(db).unwrap();
-    let txn = database.begin_write().unwrap();
-    let index: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("ci_verifications");
-    txn.delete_table(index).unwrap();
-    txn.commit().unwrap();
-    drop(database);
+pub fn as_schema_27(db: &Path) {
+    edit_records(db, "repos", |v| {
+        v.as_object_mut().unwrap().remove("post_merge_jobs");
+    });
+    edit_records(db, "ci_runs", |v| {
+        if let Some(s) = v["selection"].as_object_mut() {
+            s.remove("post_merge_jobs");
+        }
+    });
+    edit_records(db, "ci_attempts", |v| {
+        if let Some(s) = v["path_skip"].as_object_mut() {
+            s.remove("reason");
+        }
+    });
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(26);
+            *v = json!(27);
         }
     });
 }

@@ -14,6 +14,120 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
+async fn post_merge_settings_validate_the_result_atomically_and_require_owner() {
+    let w = World::new().await;
+    let before = w.server.ok(&w.repo_path(), &w.owner).await;
+    assert_eq!(before["post_merge_jobs"], json!([]));
+    for actor in [&w.aiko, &w.owner] {
+        let (code, _) = w.server.patch(&w.repo_path(), actor,
+            json!({"revision":before["revision"],"post_merge_jobs":["slow"],"required_checks":["slow"]})).await;
+        assert_eq!(code, if actor == &w.owner { 400 } else { 403 });
+        assert_eq!(w.server.ok(&w.repo_path(), &w.owner).await, before);
+    }
+    for field in ["post_merge_jobs", "required_checks"] {
+        let other = if field == "post_merge_jobs" {
+            "required_checks"
+        } else {
+            "post_merge_jobs"
+        };
+        let current = w.server.ok(&w.repo_path(), &w.owner).await;
+        let (code, saved) = w
+            .server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision":current["revision"],field:["slow"],other:[]}),
+            )
+            .await;
+        assert_eq!(code, 200, "{saved}");
+        let (code, _) = w
+            .server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision":saved["revision"],other:["slow"]}),
+            )
+            .await;
+        assert_eq!(code, 400);
+        assert_eq!(w.server.ok(&w.repo_path(), &w.owner).await, saved);
+    }
+    let current = w.server.ok(&w.repo_path(), &w.owner).await;
+    assert_eq!(
+        w.server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision":current["revision"],"post_merge_jobs":["bad name"]})
+            )
+            .await
+            .0,
+        400
+    );
+}
+
+#[tokio::test]
+async fn post_merge_jobs_skip_even_before_pr_and_pipeline_changes_but_execute_in_gate() {
+    let w = World::new().await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let runner = Runner::new(&w, "post-merge-runner").await;
+    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+    assert_eq!(
+        w.server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision":repo["revision"],"post_merge_jobs":["slow"]})
+            )
+            .await
+            .0,
+        200
+    );
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["slow", "fast"]));
+    let commit_checks = w
+        .server
+        .ok(
+            &format!("{}/commits/{head}/checks", w.repo_path()),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(commit_checks["run_registered"], false);
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let fast = runner.next_claim().await;
+    assert_eq!(fast["job"]["name"], "fast");
+    runner.finish(&fast, "success").await;
+    let report = checks(&w, n).await;
+    let slow = check(&report, "slow");
+    assert_eq!(slow["conclusion"], "skipped");
+    assert_eq!(slow["path_skip"]["reason"], "post_merge");
+    let log = w
+        .server
+        .ok(
+            &format!(
+                "{}/jobs/{}/log",
+                w.repo_path(),
+                slow["attempt_id"].as_str().unwrap()
+            ),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(
+        log["log"],
+        "[branvil] skipped: post-merge only (repository setting)\n"
+    );
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let c = runner.next_claim().await;
+        assert_ne!(c["sha"], head);
+        assert!(!(c["job"]["name"] == "slow" && c["reuse"].is_object()));
+        seen.push(c["job"]["name"].as_str().unwrap().to_owned());
+        runner.finish(&c, "success").await;
+    }
+    seen.sort();
+    assert_eq!(seen, ["fast", "slow"]);
+}
+
+#[tokio::test]
 async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position() {
     let w = World::new().await;
     let repo = w.server.ok(&w.repo_path(), &w.owner).await;
@@ -69,7 +183,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
+async fn schema_27_upgrade_preserves_inputs_selections_and_verification() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -94,6 +208,8 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
         };
         assert_eq!(runner.finish(c, conclusion).await.0, 200);
     }
+    w.push_change("docs-upgrade", "notes.md", "documentation");
+    w.open_pull("docs-upgrade", json!([])).await;
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
@@ -120,18 +236,36 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let mut attempts = records(&db, "ci_attempts");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
-    as_schema_26(&db);
+    let verifications = records(&db, "ci_verifications");
+    as_schema_27(&db);
     let before = tables(&db);
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 26 to 27"), "{output}");
+    assert!(output.contains("from schema version 27 to 28"), "{output}");
     for a in &mut attempts {
         a["verified_sha"] = Value::Null;
     }
     assert_eq!(records(&db, "ci_attempts"), attempts);
     let runs = records(&db, "ci_runs");
-    assert!(records(&db, "ci_verifications").is_empty());
+    assert!(
+        records(&db, "repos")
+            .iter()
+            .all(|r| r["post_merge_jobs"] == json!([]))
+    );
+    assert!(
+        runs.iter()
+            .filter(|r| r["selection"].is_object())
+            .all(|r| r["selection"]["post_merge_jobs"] == json!([]))
+    );
+    assert!(attempts.iter().any(|a| a["path_skip"].is_object()));
+    assert!(
+        records(&db, "ci_attempts")
+            .iter()
+            .filter(|a| a["path_skip"].is_object())
+            .all(|a| a["path_skip"]["reason"] == "paths")
+    );
+    assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
     assert!(run["failure_notified_at"].is_null());
@@ -144,7 +278,7 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-26-")
+                .starts_with("branvil-schema-27-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -903,7 +1037,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_26(&db);
+    as_schema_27(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])

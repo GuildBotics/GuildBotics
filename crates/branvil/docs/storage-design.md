@@ -59,7 +59,7 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `27`). The current
+`meta["schema_version"]` is written on creation (currently `28`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
 publication-resume state. CI runs hold their commit's pipeline and tree;
@@ -71,9 +71,9 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
-snapshots store the opt-in boolean of the same name. The 26 → 27 upgrade starts
-the verification table empty and these inputs undeclared, preserving existing
-runs, attempts, and their input digests.
+snapshots store the opt-in boolean of the same name. The 27 → 28 upgrade adds
+`post_merge_jobs: []` to every repository and non-null run selection, and
+`reason: "paths"` to every non-null attempt `path_skip`, preserving other fields.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.
@@ -241,3 +241,9 @@ random bytes made at each start: a restart ends the cursors handed out before
   with its account.
 - Backups and restores: `docs/backup-restore.md`. The token hashes in the
   database are not secrets by themselves; `secrets/` is not backed up.
+
+Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
+(`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
+the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
+`reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
+queue, reuse, retention, and gate semantics.

@@ -33,12 +33,13 @@ const ROLLUP_TONE: Record<CiRollup, Tone> = { passing: "success", failing: "dang
 
 export function CheckStatusBadge({ status, conclusion, path_skip }: Pick<Check, "status" | "conclusion" | "path_skip">) {
   const t = useT();
-  const label = status === "completed" && conclusion === "skipped" && path_skip ? t("ci.pathsSkipped") : status === "completed" && conclusion ? t(`ci.conclusion.${conclusion}`) : t(`ci.status.${status}`);
+  const label = status === "completed" && conclusion === "skipped" && path_skip ? t(path_skip.reason === "post_merge" ? "ci.postMergeSkipped" : "ci.pathsSkipped") : status === "completed" && conclusion ? t(`ci.conclusion.${conclusion}`) : t(`ci.status.${status}`);
   return <StateBadge tone={toneOf({ status, conclusion })}>{label}</StateBadge>;
 }
 
 function PathSkipReason({ repo, skip }: { repo: string; skip: PathSkip }) {
   const t = useT();
+  if (skip.reason === "post_merge") return <Text size="xs" c="dimmed">{t("settings.postMergeJobsHelp")}</Text>;
   return <Stack gap={2}>
     <Text size="xs" c="dimmed">{t("ci.pathsReason", { paths: skip.paths.join(", ") })}</Text>
     {skip.bases.map((b) => <Text key={b.pull} size="xs" c="dimmed">

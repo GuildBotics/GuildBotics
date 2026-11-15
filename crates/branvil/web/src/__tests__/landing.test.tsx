@@ -10,7 +10,7 @@ import { BASE, HEAD, landing, pull } from "./fixtures";
 const P = "/api/v1/repos/acme/demo/pulls/3";
 const REPO: Repository = {
   path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: ["main"],
-  required_checks: ["test"], required_approvals: 1, auto_land: false, ci_network: false, labels: [], revision: 1,
+  post_merge_jobs: [], required_checks: ["test"], required_approvals: 1, auto_land: false, ci_network: false, labels: [], revision: 1,
   upstream: { provider: "github", host: "GitHub", repository: "example/demo", url: "https://github.com/example/demo", reader: { member: "agent", chosen: false }, following: { tip: BASE, checked_at: null, followed_at: null, error: null, stopped: null } },
 };
 const PREVIEW = { host: "GitHub", repository: "example/demo", head: "topic", base: "main", title: "Change", body: "", account: "agent", login: "agent-bot" };
@@ -153,7 +153,7 @@ describe.each(["en", "ja"] as const)("queue path (%s)", (lang) => {
   });
   it("names only what the head still needs to join the queue", async () => {
     fakeApi(routes(null, {
-      "GET /api/v1/repos/acme/demo":json(200,{...REPO,required_checks:["ok","fail","run","absent"]}),
+      "GET /api/v1/repos/acme/demo":json(200,{...REPO,post_merge_jobs: [], required_checks:["ok","fail","run","absent"]}),
       [`GET ${P}`]: json(200, pull({ landing: null, approvals: 0, draft: true })),
       [`GET ${P}/checks`]:json(200,{head_sha:HEAD,checks:[{name:"ok",status:"completed",conclusion:"success"},{name:"fail",status:"completed",conclusion:"failure"},{name:"run",status:"queued"}]}),
     }));
@@ -264,7 +264,7 @@ describe.each(["en", "ja"] as const)("queue path (%s)", (lang) => {
   });
   it("shows the gate's progress on the pull request page", async () => {
     fakeApi(routes(entry("gate", { state: "gating" }), {
-      "GET /api/v1/repos/acme/demo": json(200, { ...REPO, required_checks: ["test", "lint", "build"] }),
+      "GET /api/v1/repos/acme/demo": json(200, { ...REPO, post_merge_jobs: [], required_checks: ["test", "lint", "build"] }),
       [`GET ${P}/checks`]: json(200, { head_sha: HEAD, checks: [{ name: "gate/test", status: "completed", conclusion: "failure" }, { name: "gate/lint", status: "in_progress" }] }),
     }));
     renderApp("/acme/demo/-/pulls/3", lang);
@@ -334,7 +334,7 @@ describe.each(["en", "ja"] as const)("queue path (%s)", (lang) => {
 
 for (const host of [false, true]) {
   it.each([true, false])(`accepts only a service path skip for ${host ? "publication" : "merge"} (service=%s)`, async (service) => {
-    const path_skip = service ? {paths:["src/**"], bases:[{pull:3,base:"main",base_sha:BASE,merge_base:BASE}]} : null;
+    const path_skip = service ? {reason: "paths" as const, paths:["src/**"], bases:[{pull:3,base:"main",base_sha:BASE,merge_base:BASE}]} : null;
     fakeApi(routes(landing({state:"passed",first:{...landing().first!, next:host ? "owner_publish" : "owner_merge"}}), {
       "GET /api/v1/repos/acme/demo": json(200, {...REPO,upstream:host ? REPO.upstream : null}),
       [`GET ${P}/checks`]: json(200,{head_sha:HEAD,base_sha:BASE,checks:[{name:"test",status:"completed",conclusion:"skipped",path_skip}],checks_expected:true}),

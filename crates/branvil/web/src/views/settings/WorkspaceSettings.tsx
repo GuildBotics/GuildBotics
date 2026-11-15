@@ -123,6 +123,7 @@ type RepoForm = {
   default_branch: string;
   protected_branches: string[];
   required_checks: string[];
+  post_merge_jobs: string[];
   /** `""` while the field is empty, which cannot be saved. */
   required_approvals: string | number;
   auto_land: boolean;
@@ -135,6 +136,7 @@ const seed = (r: Repository): RepoForm => ({
   default_branch: r.default_branch,
   protected_branches: r.protected_branches,
   required_checks: r.required_checks,
+  post_merge_jobs: r.post_merge_jobs,
   required_approvals: r.required_approvals,
   auto_land: r.auto_land,
   ci_network: r.ci_network,
@@ -231,6 +233,14 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
               description={t(repo.upstream ? "settings.requiredHelpUpstream" : "settings.requiredHelp")}
               value={form.required_checks}
               onChange={(v) => setForm({ ...form, required_checks: v })}
+              placeholder={t("settings.addCheck")}
+              clearable
+            />
+            <TagsInput
+              label={t("settings.postMergeJobs")}
+              description={t("settings.postMergeJobsHelp")}
+              value={form.post_merge_jobs}
+              onChange={(v) => setForm({ ...form, post_merge_jobs: v })}
               placeholder={t("settings.addCheck")}
               clearable
             />
