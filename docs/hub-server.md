@@ -22,6 +22,10 @@ Apple Developmentの証明書の有効期限は1年です。期限が切れる�
 
 ## インストール
 
+Hubのチェックアウトは、開発用のチェックアウトとは別にcloneします。linked worktreeにすると、gitのデータ、設定、hookを開発用のチェックアウトと共有し、開発側での削除、設定やhookの変更、worktreeの整理が自動更新に及びます。
+
+`install` と後述の `auto-install` は、開発用のvenvなどを有効にしていないシェル（VS Codeのターミナルではなくターミナル.appなど）で実行します。そのシェルの `PATH` がLaunchAgentに記録されます。
+
 ```sh
 export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
