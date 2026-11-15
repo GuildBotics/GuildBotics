@@ -685,6 +685,11 @@ from the header is new, one added from a card's menu as its parent, child, or
 next ticket ready (that menu also makes the ticket interactive or not, and
 copies the ticket's URL and says that it copied), and either is scrolled to
 once shown;
+in the owner's session, each open ready ticket of an agent tagged with its
+place in the agent's pickup order, counted before the filters (`pickup.ts`),
+and a tag opening that order beside the figure, which narrows for it, where
+its rows mark their cards in the figure and are reordered by dragging or with
+the keyboard (`PickupPanel.tsx`);
 `web/src/views/relations/`), a ticket (body and comments, with comments editable
 and permanently deletable by their author or the owner after confirmation; its lane, labels,
 upstream issue, relations to other tickets, and assignee; from the board and

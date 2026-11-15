@@ -4,8 +4,8 @@ import type { TicketPatch } from "../../api/endpoints";
 import { ticketRef, type Card, type Lane, type Ticket } from "../../api/types";
 import type { MessageKey } from "../../i18n/en";
 
-/** A ticket's update, or its move to the end of a lane of its board. */
-export type Change = { repo: string; key: string } & ({ patch: TicketPatch } | { lane: Lane });
+/** A ticket's update, or its move in a lane of its board: just before or after a ticket of it (`at`), or to its end. */
+export type Change = { repo: string; key: string } & ({ patch: TicketPatch } | { lane: Lane; at?: { before: string } | { after: string } });
 
 export type EditMessage = Extract<
   MessageKey,

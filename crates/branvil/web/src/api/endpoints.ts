@@ -181,6 +181,9 @@ export const workspaces = {
   /** The board's cards without their comments (the board does not show them); `state` defaults to open. */
   cards: (workspace: string, state: "open" | "all") =>
     getAll<Card>(`/workspaces/${enc(workspace)}/board/cards`, { state, comments: "none" }),
+  /** The open cards of the Ready lane with their comments: whether an agent waits for an answer. */
+  readyCards: (workspace: string) =>
+    getAll<Card>(`/workspaces/${enc(workspace)}/board/cards`, { lane: "ready", state: "open", comments: "all" }),
 };
 
 // Pull requests --------------------------------------------------------------

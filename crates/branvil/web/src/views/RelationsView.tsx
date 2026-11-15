@@ -7,16 +7,19 @@ import { ticketRef, type Card, type Lane, type Ticket } from "../api/types";
 import { ErrorMessage, Loading, Refusal } from "../components/common";
 import { PageHeader } from "../components/PageHeader";
 import { type Translate, useT } from "../i18n";
-import { useBoard, useCards, usePeople } from "../query/hooks";
+import { useBoard, useCards, useMembers, usePeople, useReadyCards, useSession } from "../query/hooks";
 import { useStored } from "../storage";
 import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
+import { ownsEscape } from "./ticket/TicketDrawer";
 import { hasFilter, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
-import type { Addition } from "./relations/RelationCard";
+import type { Addition, PickupTag } from "./relations/RelationCard";
 import { buildGraph, type Level } from "./relations/graph";
+import { NOBODY, pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
+import { PickupPanel, reasonText, type Drop } from "./relations/PickupPanel";
 
 /** A relation written: what it changes, what the notice then says, and what undoes it. */
 interface Write {
@@ -37,6 +40,30 @@ function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
   if (as === "parent") return to.parent ? t("relations.newParentBetween", { key, parent: ticketRef(to.parent) }) : t("relations.newParentOf", { key });
   return t(as === "child" ? "relations.newChildOf" : "relations.newNextOf", { key });
 }
+
+/** A card's tag of its place in its assignee's pickup order; none for an interactive ticket. */
+function tagOf(row: PickupRow, assignee: string, open: boolean, t: Translate): PickupTag | undefined {
+  const s = row.state;
+  const tag = (text: string, state: string, tone: PickupTag["tone"]): PickupTag => ({ text, label: t("pickup.hint", { state }), tone, open, assignee });
+  switch (s.kind) {
+    case "interactive":
+      return undefined;
+    case "next":
+      return tag(String(s.n), t("pickup.tagNext", { name: assignee, n: String(s.n) }), "next");
+    case "waiting":
+      return tag(t("pickup.tagWaiting"), t("pickup.skippedUntil", { tickets: s.on.join(", ") }), "skipped");
+    case "answering":
+      return tag(t("pickup.tagAnswering"), t("pickup.skippedAnswering"), "skipped");
+    case "stuck":
+      return tag("!", t("pickup.wontStart", { reason: reasonText(s, t) }), "stuck");
+  }
+}
+
+/** The pickup order panel: whose order it shows, and the card whose tag opened it. */
+type Panel = { assignee: string; current: string | null };
+
+/** A reorder of the pickup order to write, with the board's cards it was dropped on. */
+type Reorder = Drop & { cards: Card[] };
 
 /** The parents a viewer opened, as kept in the browser (a JSON array of refs). */
 function openParents(stored: string | null): Set<string> {
@@ -98,10 +125,64 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const ciUrls = useMemo(() => ciUrlsOf(cardsOf(graph.level)), [graph]);
   const refresh = () => client.invalidateQueries({ queryKey: ["board"] });
 
+  // The owner's pickup orders: only the owner reads members' kinds, and decides what comes first.
+  const owner = useSession().data?.me.kind === "owner";
+  const ready = useReadyCards(workspace, owner);
+  const members = useMembers();
+  const isAgent = useMemo(() => {
+    const agents = new Set((members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => m.name.toLowerCase()));
+    return (name: string) => agents.has(name.toLowerCase());
+  }, [members.data]);
+  const comments = useMemo(() => new Map((ready.data?.items ?? []).map((c) => [ticketRef(c), c.comments])), [ready.data]);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  /** A row being moved, shown before it is written (and until the cards are read again after). */
+  const [preview, setPreview] = useState<{ assignee: string; order: string[] } | null>(null);
+  const pointedAt = panel?.current ?? null;
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [point, setPoint] = useState<{ ref: string } | null>(null);
+  // Before the filters: a number must not change with what is shown.
+  const orders = useMemo(
+    () =>
+      owner && ready.data && members.data ? pickupOrders(preview ? reordered(cards, preview.assignee, preview.order) : cards, isAgent, comments) : null,
+    [owner, ready.data, members.data, preview, cards, isAgent, comments],
+  );
+  const tags = useMemo(() => {
+    if (!orders) return null;
+    const tagged = new Map<string, PickupTag>();
+    for (const [who, rows] of orders) {
+      for (const row of rows) {
+        const tag = tagOf(row, who, pointedAt === row.ref, t);
+        if (tag) tagged.set(row.ref, tag);
+      }
+    }
+    return tagged;
+  }, [orders, pointedAt, t]);
+  // Every change of what the panel shows ends a move shown before it is written: its rows are gone.
+  const showPanel = useCallback((next: Panel | null | ((prev: Panel | null) => Panel | null)) => {
+    setPanel(next);
+    setHighlight(null);
+    setPreview(null);
+  }, []);
+  const closePanel = useCallback(() => showPanel(null), [showPanel]);
+  const onTag = useCallback(
+    (ref: string, assignee: string) => showPanel((prev) => (prev?.current === ref ? null : { assignee, current: ref })),
+    [showPanel],
+  );
+  useEffect(() => {
+    if (!panel) return;
+    // Not an Escape that belongs elsewhere: a field typed in, an open dropdown, a drawer or modal.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || ownsEscape(e.target as HTMLElement)) return;
+      if (!document.querySelector('[role="dialog"]')) closePanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panel, closePanel]);
+
   // The figure changes once the service has the change: a refusal leaves it as it was.
   const relate = useMutation({
     mutationFn: async ({ changes }: Write) => {
-      for (const c of changes) await ("patch" in c ? api.tickets.update(c.repo, c.key, c.patch) : api.tickets.place(c.repo, c.key, { lane: c.lane }));
+      for (const c of changes) await ("patch" in c ? api.tickets.update(c.repo, c.key, c.patch) : api.tickets.place(c.repo, c.key, { lane: c.lane, ...c.at }));
     },
     onMutate: () => setNotice(null),
     onSuccess: (_ticket, { done, undo }) => setNotice({ tone: "info", text: done, undo }),
@@ -121,6 +202,44 @@ export function RelationsView({ workspace }: { workspace: string }) {
     onSuccess: (_ticket, { card, lane }) => setNotice({ tone: "info", text: t("board.moved", { key: ticketRef(card), lane: t(`lane.${lane}`) }) }),
     onError: (err, { card }) => setNotice(moveRefusal(err, card, t)),
     onSettled: () => void refresh(),
+  });
+
+  // Written in turn; a refusal stops it, and what was written can be undone.
+  const reorder = useMutation({
+    mutationFn: async ({ moved, order, group, lane, cards: latest }: Reorder): Promise<Said> => {
+      const byRef = new Map(latest.map((c) => [ticketRef(c), c]));
+      const readyNow = new Set(latest.filter((c) => c.state === "open" && c.lane === "ready").map(ticketRef));
+      const plan = placements(order, group, readyNow);
+      if ("stale" in plan) return { tone: "info", text: t("pickup.stale", { key: plan.stale }) };
+      const done: string[] = [];
+      const undo = (): Change[] | undefined =>
+        done.length === 0
+          ? undefined
+          : restoring(lane, done, readyNow).flatMap(({ ref, at }) => {
+              const c = byRef.get(ref);
+              return c ? [{ repo: c.repository, key: c.key, lane: "ready" as const, at }] : [];
+            });
+      for (const { ref, at } of plan.writes) {
+        const c = byRef.get(ref) as Card;
+        try {
+          await api.tickets.place(c.repository, c.key, { lane: "ready", ...at });
+        } catch (err) {
+          return { ...moveRefusal(err, c, t), undo: undo() };
+        }
+        done.push(ref);
+      }
+      const others = group.filter((r) => r !== moved);
+      const text = others.length > 0 ? t("pickup.reorderedWith", { key: moved, tickets: others.join(", ") }) : t("pickup.reordered", { key: moved });
+      return { tone: "info", text, undo: undo() };
+    },
+    onMutate: () => setNotice(null),
+    onSuccess: (said) => setNotice(said),
+    onError: (error) => setNotice({ tone: "error", error }),
+    // The order shown while it is written stays until the cards are read again with it.
+    onSettled: async () => {
+      await refresh();
+      setPreview(null);
+    },
   });
 
   const { mutate: write } = relate;
@@ -210,15 +329,14 @@ export function RelationsView({ workspace }: { workspace: string }) {
         status={required.isFetching && shown && t("common.refreshing")}
       />
       {notice && "error" in notice && <ErrorMessage error={notice.error} />}
-      {notice && "text" in notice && notice.tone === "error" && <Refusal>{notice.text}</Refusal>}
-      {notice && "text" in notice && notice.tone === "info" && (
-        <Group gap="sm" role="status">
-          <Text size="sm">{notice.text}</Text>
+      {notice && "text" in notice && (
+        <Group gap="sm" role={notice.tone === "info" ? "status" : undefined}>
+          {notice.tone === "error" ? <Refusal>{notice.text}</Refusal> : <Text size="sm">{notice.text}</Text>}
           {notice.undo && (
             <Button
               size="compact-sm"
               variant="default"
-              disabled={relate.isPending}
+              disabled={relate.isPending || reorder.isPending}
               onClick={() => notice.undo && write({ changes: notice.undo, done: t("relations.undone") })}
             >
               {t("relations.undo")}
@@ -235,9 +353,12 @@ export function RelationsView({ workspace }: { workspace: string }) {
           </Button>
         </Group>
       )}
+      {owner && ready.isError && <ErrorMessage error={ready.error} />}
+      {owner && members.isError && <ErrorMessage error={members.error} />}
       {!shown ? (
         !required.isError && <Loading />
       ) : (
+        <div className="relations-body">
         <Figure
           graph={graph}
           cards={cards}
@@ -246,7 +367,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
           loadChecks={ciUrls}
           filter={filter}
           moving={move.isPending && move.variables ? ticketRef(move.variables.card) : null}
-          editable={complete && !relate.isPending}
+          editable={complete && !relate.isPending && !reorder.isPending}
           onToggle={onToggle}
           onLane={onLane}
           onPlace={onPlace}
@@ -256,7 +377,36 @@ export function RelationsView({ workspace }: { workspace: string }) {
           onRevealed={onRevealed}
           freshOpen={filtering ? (filteredExpansion.fresh ?? true) : freshOpen}
           onFreshOpen={onFreshOpen}
+          tags={tags}
+          onTag={onTag}
+          highlight={highlight}
+          point={point}
         />
+        {panel && orders && (
+          <PickupPanel
+            // A move belongs to the rows it started among.
+            key={`${panel.assignee}\n${panel.current}`}
+            assignees={[...new Set([...orders.keys(), panel.assignee])]
+              .toSorted((a, b) => Number(a === NOBODY) - Number(b === NOBODY))
+              .map((value) => ({ value, label: value === NOBODY ? t("pickup.unassigned") : value }))}
+            assignee={panel.assignee}
+            rows={orders.get(panel.assignee) ?? []}
+            current={panel.current}
+            cards={cards}
+            hidden={(ref) => !graph.shown.has(ref)}
+            disabled={!complete || relate.isPending || reorder.isPending || move.isPending}
+            onAssignee={(assignee) => showPanel({ assignee, current: null })}
+            onClose={closePanel}
+            onHighlight={setHighlight}
+            onPoint={(ref) => setPoint({ ref })}
+            onPreview={(order) => setPreview(order && { assignee: panel.assignee, order })}
+            onDrop={(drop) => {
+              setPreview({ assignee: panel.assignee, order: drop.order });
+              reorder.mutate({ ...drop, cards });
+            }}
+          />
+        )}
+        </div>
       )}
       <NewTicketModal
         workspace={workspace}
