@@ -59,10 +59,10 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `31`). The current
-format includes persistent landing queues, each merged pull request's original
-reviewed head distinct from its merge commit, and per-gate notification and
-publication-resume state. CI runs hold their commit's pipeline and tree;
+`meta["schema_version"]` is written on creation (currently `32`). The current
+format includes per-pull landing conditions, each merged pull request's original
+reviewed head distinct from its merge commit, and per-head notification and
+automatic failure state. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
 requested them, whether a required failure awaits notification, and its
 successful webhook delivery time.
@@ -71,11 +71,11 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
-snapshots store the opt-in boolean of the same name. The 30 → 31 upgrade adds
-the empty `ticket_moves` table; all records stay unchanged. A version-30 build
-must still refuse the database: it would not follow the moves, and its
-attachment sweep, counting only the uploading repository's tickets, would
-delete the images of moved tickets.
+snapshots store the opt-in boolean of the same name. The 31 → 32 upgrade
+removes gate refs, gate CI branch ownership and landing counters, replaces
+landing rows, and computes conflicts for every saved pair. Only stale pairs
+may tolerate unavailable objects; a failed current-pair check aborts upgrade.
+Told conflict/host problems and successful per-head notice delivery are retained.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.
@@ -97,7 +97,7 @@ check did not change stored records or raise the version.
 | Table | Key | Value | Written by | Read by |
 | --- | --- | --- | --- | --- |
 | `meta` | `(name)` | schema version; `unchecked` while an upgrade has not passed `guildbotics branvil admin check` (absent otherwise) | open, upgrade, `admin check` | open, `serve`, `admin upgrade` |
-| `counters` | `(name)` | `u64` | ticket numbers `ticket:<repo>`, PR numbers `pull:<repo>`, `entry` sequence, per-repository landing order `landing:<repo>` | allocation in the same txn as the insert |
+| `counters` | `(name)` | `u64` | ticket numbers `ticket:<repo>`, PR numbers `pull:<repo>`, `entry` sequence | allocation in the same txn as the insert |
 | `members` | `(fold(name))` | member, kind (`owner`, `agent`, `runner`), accounts on upstream hosts (provider, login; the token is a file), reviewers of the pull requests it opens | owner API, `init`, automatic runner | auth, kind checks, upstream |
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
 | `sessions` | `(sha256(session id))` | member, CSRF secret, expiry | entry-code exchange (expired rows pruned there); all deleted when the owner's token file is replaced | cookie auth |
@@ -105,37 +105,42 @@ check did not change stored records or raise the version.
 | `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required checks, required approvals, `auto_land`, `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
 | `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
 | `ticket_moves` | `(repo id, n)` of a ticket moved to another repository | the `(repo id, n)` it moved to | ticket move | ticket lookups by number or URL, which follow each move (numbers are never reused, so the chain ends) |
-| `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing gate failures | comments, cards, activity |
+| `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing conflicts and failed host checks | comments, cards, activity |
 | `attachments` | `(repo id, attachment id)` | an image of the tickets of the repository's workspace (a moved ticket keeps the ones of its old repository): name, media type read from its bytes, size, uploader, time (the bytes are a file) | upload API, the attachment sweep | delivery, a ticket's attachments, the sweep |
 | `pulls` | `(repo id, n)` | pull request record (links, reviewers, reviewed_by, draft, state, original merged head and base, merge commit, and once published: the host's pull request, what was last sent to it, the host's checks of the pushed head and whether it may still add some, whether Branvil published it) | PR API, merge, publish, the upstream poller, push recording (`updated_at`) | PR reads, patrol, the upstream poller |
-| `landing` | `(repo id, n)` | base branch, admission time/order, state/time, gate SHA and its base/head inputs, departure reason with jobs/files, notification intent/time, stopped-publication resume intent | landing reconciliation, merge, owner resume/publish, webhook acknowledgment | queue and PR views, gate checks, merge/publish preconditions, CI gate ownership, webhook |
+| `landing` | `(repo id, n)` | checked head/base SHA, conflicts, told problems, notified_at, automatic error | sweep, merge/publish, webhook acknowledgment | PR conditions, next action, patrol |
 | `reviews` | `(repo id, n, seq)` | review with reactions | review API | reviews, activity |
 | `threads` | `(repo id, n, root seq)` | path, line, side, commit, resolved | inline-comment API | threads |
 | `inline_comments` | `(repo id, n, root seq, seq)` | thread comment with reactions | inline/reply API | thread comments (contiguous per thread) |
 | `ref_snapshots` | `(repo id, refname)` | last recorded object | `refs::record_refs` | push recording, startup rescan |
 | `ref_journal` | `(journal id)` | repo, ref, expected old/new, operation | merge (before `update-ref`) | completion, startup recovery |
 | `idempotency` | `(fold(member), key)` | request hash, status, response body, time | API middleware | API middleware |
-| `ci_runs` | `(repo id, sha)` | branches or current gates that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, pending failure notice, failure delivery time, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
+| `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, pending failure notice, failure delivery time, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
 | `ci_attempts` | `(attempt id)` | job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
 
 Each comment, review, and inline comment is its own record, so adding one never
 rewrites a history; a reaction rewrites only its target entry.
 
-Each pull request has at most one `landing` row. A repository-prefix scan sorts
-active rows by their stored `sequence` and groups them by base; departed rows
-remain available for the failure reason, gate checks, and retries. Rejoining
-replaces the row with a new admission time and sequence. Advancing base alone
-keeps active rows' order and admission times; the first rebuilds its gate in
-place. These writes leave `Pull.revision` and `Pull.updated_at` unchanged. Gate failures and conflicts
-write their reserved-author `branvil` comment in the transaction that records
-the departure. The next ref update removes the gate ref; ref recording and CI
-reconciliation supersede work and repair interrupted registration. A failed
-gate remains reachable through `refs/branvil/failed-gate/<number>` while the
-open pull request retains those gate inputs for retry. A requeued retry keeps
-that ref until its normal gate ref or head branch takes over; closing the pull
-request or changing the inputs removes it. Startup repairs both namespaces from their
-owning entries.
+Landing conditions are computed for each open pull request independently by
+`landing::blockers`: `draft`, `already_in_base` (including an empty head),
+`conflict` (with `files`), `publish_requirements`, `head_checks`, `approvals`,
+`unanswered`, and `host_failed` (with `jobs`). A stale recorded head/base pair
+adds `checking` until the sweep refreshes it. A behind head can land without
+merging the base into it when it does not conflict. Required checks accept
+service path skips. No gate commits or landing queues are created.
 
+Merge and publish re-evaluate the conditions on the current head and base under
+the repository lock; blockers return `409 not_mergeable` with their codes and
+messages. Local merges create the merge commit using the local merge policy;
+publishing sends the original reviewed head. Integration of independently
+landed changes is checked by main verification after merging.
+
+The record retains `repo`, `number`, `head_sha`, `base_sha`, `conflicts`,
+`told`, `notified_at`, and `error`. A new head clears told problems, notification
+time and automatic error. Closing or merging deletes the record. The sweep
+refreshes conflict files when either tip changes and comments as `branvil`
+once per head for conflicts and once per failed host job. These comments have
+no `meta` and await the author's answer. All consumers use the same blockers.
 
 ## Derived indexes
 
@@ -197,14 +202,13 @@ random bytes made at each start: a restart ends the cursors handed out before
 | review / inline comment | insert + PR activity + involvement; the head was read from Git just before, and the write is linearized at that read |
 | reaction | read-modify-write of the target entry, after checking the entry belongs to the item |
 | merge (DB side) | PR merged/closed with original reviewed head and merge commit, landing entry left, closed-at index, `closes` tickets closed and moved to `done`, journal entry removed |
-| landing transition | queue entry and, for a gate failure or conflict, its service comment; does not update PR activity |
-| stopped-publication resume | create a landing entry if absent and record resume intent; original upstream refusal remains until the owner publishes again |
-| publication result | upstream record and clearing the landing entry's resume intent |
-| gate notification acknowledgment | `notified_at` only if the entry is still the same passed gate and state time |
+| landing transition | landing record and any conflict or failed host-check comment; does not update PR activity |
+| publication result | upstream record |
+| landing notification acknowledgment | `notified_at` only if the entry is still the same head |
 | push recording | ref snapshot diff, `updated_at` of open PRs whose head moved |
 | upstream poll of a pull request | what was sent and read, and a close or reopen the host made; a merge on the host is applied with the merge's own effects (above) in the same transaction |
-| CI registration (after push recording, same repository lock; the pipeline was read from Git before) | run created or the branch/gate added to it, queue bound check, every job's attempt queued (or the run marked waiting) |
-| CI supersession | the branch/gate removed from the old commit's run; when none is left, its queued attempts cancelled and running ones marked cancel-requested |
+| CI registration (after push recording, same repository lock; the pipeline was read from Git before) | run created or the branch added to it, queue bound check, every job's attempt queued (or the run marked waiting) |
+| CI supersession | the branch removed from the old commit's run; when none is left, its queued attempts cancelled and running ones marked cancel-requested |
 | claim | oldest pending attempt → in progress, new lease hash and expiry, pending entry removed, active entry added |
 | heartbeat / finish / artifact record | lease checked (current and unexpired) and the attempt updated in the same transaction; `409` writes nothing |
 | lease sweep | each expired attempt concluded as interrupted and, the first time, its re-queued successor inserted |
@@ -260,4 +264,4 @@ Repository records (`repos`) include `post_merge_jobs` (job names). Run selectio
 (`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
 the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
 `reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
-queue, reuse, retention, and gate semantics.
+queue, reuse, retention, and landing semantics.

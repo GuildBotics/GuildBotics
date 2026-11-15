@@ -81,17 +81,6 @@ async fn publish(
     Ok(ok(ops::publish(&app, &c, &repo, number(&n)?, input).await?))
 }
 
-async fn resume_landing(
-    State(app): State<Shared>,
-    c: Caller,
-    P((repo, n)): P<(String, String)>,
-    J(input): J<MergeInput>,
-) -> R {
-    Ok(ok(
-        ops::resume_landing(&app, &c, &repo, number(&n)?, input).await?
-    ))
-}
-
 async fn alerts(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
     let state = match q.0.get("state").map(String::as_str) {
         None | Some("open") => AlertState::Open,
@@ -117,6 +106,5 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/upstream/dependency-alerts", (get, alerts, MemberSession)),
     ("/repos/{repo}/upstream/dependency-alerts/{id}", (get, alert, MemberSession)),
     ("/repos/{repo}/pulls/{number}/publish", (get, preview, MemberSession), (post, publish, OwnerSession)),
-    ("/repos/{repo}/pulls/{number}/landing/resume", (post, resume_landing, OwnerSession)),
     ("/members/{name}/accounts/{provider}", (put, account_put, OwnerSession), (delete, account_delete, OwnerSession)),
 );

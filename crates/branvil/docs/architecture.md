@@ -53,9 +53,9 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (`[ci] runner = "auto"`) |
 | `runner/` | `guildbotics branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
 | `upstream/` | the upstream code host: the provider boundary (`host.rs`, `github.rs`), members' accounts, following the default branch, publishing pull requests, carrying changes both ways, the host's check runs (see below) |
-| `landing.rs` | persistent queues per repository/base, admission and departure, gate commits, gate checks, and failure comments |
+| `landing.rs` | per-pull landing conditions, pair checks and conflict/host failure comments |
 | `webhook.rs` | bounded webhook delivery shared by the service and offline CLI; never exposes the URL in errors |
-| `autoland.rs` | the task that advances every repository's landing queues, automatically merges or publishes with `auto_land`, and tells the webhook when automatic landing gates pass; independently sweeps CI failure notifications (`ci/notify.rs`) |
+| `autoland.rs` | the task that checks every open PR, automatically merges or publishes with `auto_land`, and tells the webhook when host checks pass; independently sweeps CI failure notifications (`ci/notify.rs`) |
 | `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `guildbotics branvil restore` (`docs/backup-restore.md`) |
 | `events.rs` | bounded broadcast for SSE and the landing task |
 | `http.rs` | router, Host/Origin guard, security headers, idempotency middleware, extractors, SSE, GUI files |
@@ -125,7 +125,7 @@ are atomic together.
 
 1. **One boundary per repository, and operations that run to their end.**
    `App::locked(repo id, op)` takes the repository's async mutex for every ref
-   change Branvil makes (merge, gates, the default branch's `HEAD`) and every
+   change Branvil makes (merge, the default branch's `HEAD`) and every
    recording of ref changes (post-receive, startup rescan), and runs `op` in a
    task of its own. Waiting for the lock is
    cancellable; once it is held, `op` runs to its end even when its caller
@@ -156,13 +156,13 @@ are atomic together.
      published.
 3. **Merges** (`domain::pulls::merge_pull`, the owner's or the landing
    task's), under the repository lock:
-   re-read the PR and tips; check expected head/base, the passed current gate
+   re-read the PR and tips; check expected head/base, landing conditions
    at the front of the queue, required checks, and required approvals (`check_landable`, which publishing shares;
    it counts the review states of `review_states`, the one place they are
    decided, which the pull request's view carries too); point the hidden ref of the merged head at it (`keep_merged`,
    below); write a `ref_journal` entry `{ref, old, new, op}`; run
-   `git update-ref refs/heads/<base> <gate> <old>` (Git refuses if the base
-   moved; when Git fails, the ref tells what happened: at `<gate>` the merge
+   `git update-ref refs/heads/<base> <merge_sha> <old>` (Git refuses if the base
+   moved; when Git fails, the ref tells what happened: at `<merge_sha>` the merge
    goes on, anywhere else nothing was written and the entry is deleted); then
    one transaction applies the merge (`apply_journal`: PR merged,
    `closes` tickets closed and moved to `done`) and deletes the journal entry;
@@ -173,7 +173,7 @@ are atomic together.
    does not run, its unfinished jobs are superseded with the head.
    - **The head of a merged pull request** (here or on the upstream host) is
      the reviewed head (`merged_head`, or `upstream.pushed` when merged on the
-     host). `merge_sha` is the commit placed on the base: the gate for a local
+     host). `merge_sha` is the commit placed on the base: the merge result for a local
      merge, or the host's merge commit. The reviewed head may differ from it.
      Before the merge is recorded, the hidden `refs/branvil/merged/<number>` is
      pointed at the reviewed head, so every merged pull request has it: a squash or a rebase on the host leaves it on no
@@ -188,9 +188,7 @@ are atomic together.
    pending journal entry is compared with the actual ref. At `new`, the
    operation's database side is applied (idempotently); at `old`, it is
    dropped; anywhere else it is dropped with an error log. Then every
-   repository is rescanned, and missing gate refs are restored from their queue
-   records before any request, including a backup, can run. Thus gate objects
-   remain reachable in backups after an interrupted gate creation. Pushes accepted while the service was down or
+   repository is rescanned. Pushes accepted while the service was down or
    between Git and the database are recorded.
 
 `BRANVIL_FAILPOINT=merge_before_update_ref|merge_after_update_ref|post_receive_before_record`
@@ -224,14 +222,13 @@ impl Ci {
 - `on_ref_changes` runs after every recorded batch of ref changes (push,
   merge, startup rescan) under the repository lock: the old commit of each
   moved branch may be superseded, the new tip of the default branch or of an
-  open pull request head or a current `refs/branvil/gate/<number>` gets a run.
+  open pull request head  gets a run.
   The pipeline is read from Git before the write transaction (`git cat-file`), from the commit itself.
 - A background task (started by `serve` after recovery) sweeps every 5 s:
   expired leases are interrupted (re-queued once), queued work fails with
   `startup_failure` when no runner has been seen for `ci.runner_absent_secs`,
   waiting runs are admitted; at start and every minute the reconciler
-  registers the default-branch tips, open pull request heads, and current gate
-  refs again (a missing run is created, jobs without a current attempt are
+  registers the default-branch tips, open pull request heads again (a missing run is created, jobs without a current attempt are
   queued); every hour retention deletes old logs and artifacts. At start it removes orphaned files.
 - The runner API (`src/ci/api.rs`) is the runner's only access: the source
   bundle is produced by the service (`git pack-objects` behind a bundle
@@ -261,7 +258,7 @@ What the owner sees (GitHub as the example):
    replaced by **Publish to GitHub**. It shows exactly what will be posted (the
    title and the current body, plus `Closes`/`Refs` lines for linked tickets
    that name a GitHub issue) and has the same preconditions as a merge (open,
-   not a draft, a passed current gate at the front of its base's queue,
+   not a draft, the shared landing conditions,
    the required checks succeeded on the head, the required approvals of the
    head) plus two more: the base is the default branch, and the pull request's
    author has a GitHub account in Branvil.
@@ -455,123 +452,42 @@ on the host is replaced the next time Branvil's changes.
 - **Failures** (network, credential, host errors) are kept on the record and
   shown; the next poll retries. Nothing in Branvil waits for them.
 
-## Landing queues and automatic landing
+## Landing and automatic landing
 
-Each repository/base branch has a persistent queue. An open, ready pull request
-joins its end when its head adds changes, its required head checks succeed,
-its head has enough approvals, and no statement awaits its author's answer
-(`domain::pulls::unanswered`, the one place that is decided; the pull
-request's view carries the same list, and the webhook is told nothing while it
-is not empty). GuildBotics' patrol gives the author work on the same
-statements, so they must agree on what answers one. With an upstream, the base must also be the
-default branch and the author must have an account on the host. Admission does
-not change the pull request's revision or activity time. `GET /repos/{repo}/landing`
-and each pull request's `landing` show the queue, its state times, and the base,
-head, and gate SHAs (`docs/api.md`). These identify what waited and what CI
-actually checked, even after a failure.
+Landing conditions are computed for each open pull request independently by
+`landing::blockers`: `draft`, `already_in_base` (including an empty head),
+`conflict` (with `files`), `publish_requirements`, `head_checks`, `approvals`,
+`unanswered`, and `host_failed` (with `jobs`). A stale recorded head/base pair
+adds `checking` until the sweep refreshes it. A behind head can land without
+merging the base into it when it does not conflict. Required checks accept
+service path skips. No gate commits or landing queues are created.
 
-Only the first pull request in each queue has a gate. If its head contains the
-base, the gate is that head and uses its existing CI run. Otherwise
-`git merge-tree --write-tree` combines base and head, and `commit-tree` creates
-a commit with parents `[base, head]`, with Branvil as author and committer.
-The hidden `refs/branvil/gate/<number>` keeps it reachable. This checks the
-combined changes without changing the reviewed head or invalidating approvals.
+Merge and publish re-evaluate the conditions on the current head and base under
+the repository lock; blockers return `409 not_mergeable` with their codes and
+messages. Local merges create the merge commit using the local merge policy;
+publishing sends the original reviewed head. Integration of independently
+landed changes is checked by main verification after merging.
 
-The queue states are `waiting`, `gating`, `passed`, and `left`. Required gate
-checks passing changes the first to `passed`; it keeps its place until merged
-or removed. With an upstream, this includes the time spent waiting for GitHub's
-merge. A local merge advances base to head when head contains base, otherwise to a
-new Branvil merge commit with parents `[base, head]`. Main verification checks
-the new default-branch commit and may reuse successful executions of the same tree. Publishing
-sends the original head, and later pushes to a published head are sent as before.
+The record retains `repo`, `number`, `head_sha`, `base_sha`, `conflicts`,
+`told`, `notified_at`, and `error`. A new head clears told problems, notification
+time and automatic error. Closing or merging deletes the record. The sweep
+refreshes conflict files when either tip changes and comments as `branvil`
+once per head for conflicts and once per failed host job. These comments have
+no `meta` and await the author's answer. All consumers use the same blockers.
 
-- A failed required gate job, merge conflict, stopped publication, or failed
-  host check on the head used to build the gate removes the first from the
-  queue. Closing, marking draft, changing the head or target base branch, or
-  losing the head's checks or approvals, or a statement that awaits the
-  author's answer, also removes it; the answer puts it at the end again. A temporary publication
-  error keeps its place and shows the error while polling retries. A stopped
-  publication returns through the
-  owner's `POST /repos/{repo}/pulls/{number}/landing/resume`, with expected
-  head/base. Its entry records `resume_publish: true` and keeps the original
-  `upstream.stopped` reason while the gate runs. Once passed at the front, the
-  owner publishes again to replace the host branch; that action clears the
-  intent. Automatic landing never replaces a stopped publication.
-- A departed entry with a changed head or base can rejoin at the end. Otherwise
-  a failed gate stays out until all its required jobs succeed: retry failed jobs
-  and any required jobs cancelled on departure. A failed host check can rejoin
-  when it succeeds, and other exclusions can rejoin when their reason clears.
-  Conflicts require a head or base change. This avoids rerunning an unchanged
-  failed gate on every sweep. Whether such a failure still stands is decided
-  once (`landing::failure_stands`); the patrol of `GET /pulls?involves=me`
-  counts a pull request held by it as one whose checks failed.
-- Advancing base preserves active entries' admission times and order. Waiting
-  entries use the current base when their turn arrives. The first entry gets
-  a new gate in the same place when base advances during its gate. For a passed
-  entry published to the repository's current upstream, a combined tree equal
-  to the new base means the changes already landed: it keeps the gate and
-  waits for the poller to mark the pull request merged. If the host then
-  confirms the pull request is still open, the changes arrived through another
-  integration: it leaves with `already_in_base`.
-- Gate failures and conflicts add a comment by the reserved author `branvil`.
-  It names the base, head, and gate SHAs, failed jobs and log links or conflicting
-  files, and how a successful gate retry returns the pull request to the queue.
-  A `host_failed` departure adds one with the head and the failed host checks'
-  links: nothing else tells the author of a failure on the host. These comments
-  carry no `meta`, so they await the author's answer like any other statement:
-  the pull request rejoins once the failure is cleared and the author answered.
-  The GUI gives this author Branvil's icon; it is not a member account.
+`autoland::start` sweeps on pull, check, repo, upstream and verification events,
+at startup and every minute. It also runs CI notification and repair sweeps.
+With `auto_land`, every eligible PR merges or publishes in the same sweep.
+Each local merge reads the newly advanced base before the next PR is evaluated.
+Automatic publication happens once; a stopped publication is replaced directly
+by the owner's publish after rechecking its conditions. Automatic errors are
+retained for the current head and left to the owner.
 
-Gate refs follow the same ref-change boundary as branches. CI registers a run
-only when the queue entry owns that gate SHA, under `gate/<number>`, with a
-branch cache scope that cannot save dependency caches. Moving or deleting a
-gate ref supersedes its unfinished work when no other CI ref needs the commit.
-Leaving or merging deletes the gate ref. The reconciler registers current gate
-refs at startup and every minute, including after a crash between ref creation
-and CI registration. A failed gate stays reachable through
-`refs/branvil/failed-gate/<number>` while the open pull request waits for a retry
-with the same head and base, including after it rejoins behind another entry.
-Once the gate becomes active, its normal gate ref or head branch keeps it
-reachable. Closing the pull request or changing its gate inputs removes the
-failed-gate ref. Startup recovery repairs both namespaces from their owning
-entries.
-
-One task (`autoland::start`, started by `serve` after the poller) advances queues
-for all repositories, including those with `auto_land` off. It subscribes to
-`pull`, `check`, `repo`, and `upstream` events and sweeps the affected repositories.
-Start, every minute, and an event-stream `reset` sweep them all. Sweeps do not
-overlap. `merge_pull` and `publish_pull` recheck the repository, queue, tips,
-checks, and approvals under their locks before acting.
-
-With `auto_land` on, a passed first entry merges locally or publishes as its
-author. Automatic publication happens only while the pull request has no
-`upstream` record, checked again under its lock. Once published, including a
-failed or stopped publication, another publication is the owner's action.
-`upstream.auto` records who published it. Queues and new gates continue for
-already published pull requests.
-
-Each gate that passes with `auto_land` on and an upstream records `notify: true`.
-Once the queue's next action is `owner_merge_host` (`landing::first`, the same
-rule the GUI shows: the head is on the host, sending is not stopped, and every
-host check of it succeeded), the owner's webhook receives `{"text": …}` saying
-the gate passed and the pull request is ready to merge there. The host
-registers its checks some time after a push or an event of the pull request
-(its creation, an edit Branvil sends, its reopening), and
-a workflow run creates a job's check run only once it starts the job (after the
-jobs it needs, its concurrency group, or an approval), so the checks read are
-all there are only when both hold: the poller has read the host after
-`[upstream] checks_registration_secs` (60 s by default) passed since the last
-event (`Published.checks_registered_by`, cleared by that read; a failed read
-clears nothing), and at that read every GitHub Actions workflow run of the head had
-finished, and so had every other app's check suite of it that has check runs
-(`Published.checks_settled`; how the host says so is the provider's). This includes a
-new gate for an already published head. `Landing.notified_at` records a `2xx`
-answer for that gate; a later pass has its own notification. Pending notices
-are retried even if automatic landing is later turned off. The URL is kept in
-the service's vault, like an upstream credential, never returned or backed up. Delivery is at least
-once: a crash before the write can repeat it. Failures are kept in memory in
-`GET /admin/webhook`'s `problem`, without the URL. A send times out after 10
-seconds, and a sweep stops sending after one failure.
+For automatically published PRs in automatic repositories, `owner_merge_host`
+sends a webhook notice once per head. Checks must have settled and the
+registration window must have ended. Author statements block the notice.
+Successful delivery stores `notified_at`; failed delivery is retried. Delivery
+is at least once across a crash between sending and recording success.
 
 ## Backups
 
@@ -590,7 +506,7 @@ repository) from a
 broadcast channel of 256 entries; a subscriber that falls behind receives
 `event: reset` and refetches. Keep-alive comments keep idle connections open.
 The landing task is a subscriber of the same channel inside the service
-("Landing queues and automatic landing").
+("Landing and automatic landing").
 
 ## Entering the GUI
 
@@ -731,32 +647,12 @@ The list sizes state and CI columns to their contents, wraps reviewer avatars,
 and scrolls horizontally within its own frame when the columns need more room.
 It names repositories without the workspace prefix.
 Where an open pull request is on its way into its base is decided once
-(`whereabouts` in `web/src/views/pull/LandingStatus.tsx`) from its queue entry,
-the required checks on its head, its approvals, the statements awaiting its
-author's answer (each linked on the page) and draft state: the stops are
-requirements, queue, gate, the upstream host (with an upstream only), merge and
-base, and at the current stop Branvil, the host or CI is working, a person has
-a turn, or the pull request left the queue there. A queue entry for an older
-head, or a departure the head or its author clears (a move, a draft, an
-answer), puts it back at
-the requirements. The list shows this as one badge per open pull request (its
-title names every missing requirement, the departure reason, or who goes
-first); the pull request's page shows it as a card under the header with every
-stop, one line saying the state and whose turn it is, and only what the current
-stop needs: missing requirements, the pull request that enters the gate first,
-gate progress, the host's pull request when the owner acts there, how many wait
-behind, or the reason it left and how to return. Check details stay in the
-check list, which marks required checks.
-The merge or publish card holds only the action. It stays disabled until the
-required checks have succeeded on the displayed head (while checks are loading
-or cannot be read, they remain unsatisfied), the approvals reach the
-repository's required approvals, and the gate has passed at the front of the
-queue; the reviewer badges and that count come from the review states the
-server puts in the pull request. The server rechecks these conditions when the
-action is submitted. For a stopped publication, the owner returns it to the
-queue before publishing again after the gate passes. When the repository lands
-automatically, the card says that it acts by itself, and a pull request it
-published says so.
+from the server's per-pull `landing.next` and `landing.blockers`. The stops are
+conditions, the upstream host (when configured), merge, and base. Condition
+messages come directly from the server. The list badge shows the first blocker
+or the next action. Merge and publish buttons are enabled for `owner_merge`
+and `owner_publish` respectively, and the server rechecks on submission.
+Stopped publication is replaced directly by the owner's publish.
 While a card is dragged, the box under the pointer scrolls when the pointer is
 near its edge, faster the nearer (`web/src/dragScroll.ts`).
 The service's state is not a page: the GUI warns at the top of every page only

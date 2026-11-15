@@ -999,11 +999,7 @@ pub enum Basis {
 /// they reuse only the same tree; so do jobs without paths and attempts
 /// whose run has no digest of the job.
 fn basis(a: &Attempt) -> Basis {
-    if a.cache_scope == "protected"
-        || a.cache_scope.starts_with("branch:gate/")
-        || a.job.paths.is_empty()
-        || a.inputs.is_none()
-    {
+    if a.cache_scope == "protected" || a.job.paths.is_empty() || a.inputs.is_none() {
         Basis::Tree
     } else {
         Basis::Paths

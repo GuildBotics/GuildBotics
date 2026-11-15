@@ -42,7 +42,7 @@ async fn resolved_markdown_matches_the_shared_gui_examples_and_tracks_state() {
             );
         } else if n == 3 {
             crate::ci::eventually("reference PR's landing gate", || async {
-                s.ok(&path, &w.owner).await["landing"]["state"] == "passed"
+                s.ok(&path, &w.owner).await["landing"]["blockers"] == json!([])
             })
             .await;
             let p = s.ok(&path, &w.owner).await;

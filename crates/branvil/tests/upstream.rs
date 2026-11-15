@@ -70,21 +70,6 @@ pub(crate) async fn publish(w: &World, number: u64) -> (StatusCode, Value) {
         .await
 }
 
-async fn resume_publish(w: &World, number: u64) -> Value {
-    let pull = format!("{}/pulls/{number}", w.repo_path());
-    let p = w.server.ok(&pull, &w.owner).await;
-    let (st, v) = w
-        .server
-        .post(
-            &format!("{pull}/landing/resume"),
-            &w.owner,
-            json!({"expected_head": p["head_sha"], "expected_base": p["base_sha"]}),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
-    v
-}
-
 fn branvil_tip(w: &World, branch: &str) -> String {
     let dir = w.server.data.join("repos/acme/demo.git");
     git_ok(
@@ -613,57 +598,10 @@ async fn a_commit_added_on_the_host_stops_sending_until_published_again() {
         "{got}"
     );
     assert_eq!(gh.tip(GH, "feature").as_deref(), Some(theirs.as_str()));
-    eventually("the stopped publication leaves the queue", || async {
-        s.ok(&pull, &w.owner).await["landing"]["state"] == "left"
-    })
-    .await;
     let stopped = s.ok(&pull, &w.owner).await;
-    let resume = format!("{pull}/landing/resume");
     let input = json!({"expected_head": ours, "expected_base": stopped["base_sha"]});
-    let (st, v) = s.post(&resume, &w.aiko, input.clone()).await;
-    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
-    for (field, code) in [
-        ("expected_head", "head_moved"),
-        ("expected_base", "base_moved"),
-    ] {
-        let mut stale = input.clone();
-        stale[field] = json!("0".repeat(40));
-        let (st, v) = s.post(&resume, &w.owner, stale).await;
-        assert_eq!(st, StatusCode::CONFLICT, "{v}");
-        assert_eq!(v["error"]["code"], code);
-    }
-    let unchanged = s.ok(&pull, &w.owner).await;
-    assert_eq!(unchanged["landing"], stopped["landing"]);
-    assert_eq!(
-        unchanged["upstream"]["stopped"],
-        stopped["upstream"]["stopped"]
-    );
-
-    // Another pull request now owns the base. Resuming rejoins behind it,
-    // and cannot replace the host branch until its turn and gate pass.
-    git_ok(&w.work, &["checkout", "-q", "main"]);
-    w.push_change("next", "n.txt", "next\n");
-    let next = w.open_pull("next", json!([])).await;
-    let next_path = format!("{}/pulls/{}", w.repo_path(), next["number"]);
-    eventually("the next pull request passes its gate", || async {
-        s.ok(&next_path, &w.owner).await["landing"]["state"] == "passed"
-    })
-    .await;
-    let resumed = resume_publish(&w, n).await;
-    assert_eq!(resumed["landing"]["state"], "waiting", "{resumed}");
-    assert_eq!(resumed["landing"]["position"], 2, "{resumed}");
-    assert_eq!(
-        resumed["upstream"]["stopped"],
-        stopped["upstream"]["stopped"]
-    );
-    let (st, v) = publish(&w, n).await;
-    assert_eq!(st, StatusCode::CONFLICT, "{v}");
-    assert_eq!(v["error"]["code"], "not_mergeable");
-    assert_eq!(gh.tip(GH, "feature").as_deref(), Some(theirs.as_str()));
-    let (st, v) = s
-        .post(&format!("{next_path}/close"), &w.owner, json!({}))
-        .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
+    let resume = format!("{pull}/landing/resume");
+    assert_eq!(s.post(&resume, &w.owner, input).await.0, 404);
     // The owner's explicit replacement now passes the same gate as any publish.
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{v}");
@@ -781,7 +719,6 @@ async fn a_first_publish_replaces_only_what_branvil_pushed_and_survives_a_lost_a
         })
     });
     // Publishing again is the owner's decision to replace the branch.
-    resume_publish(&w, n).await;
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(gh.tip(GH, "feat").as_deref(), Some(ours.as_str()));
@@ -1002,7 +939,7 @@ async fn retained_publication_problems_apply_only_to_the_current_upstream() {
             }
             refresh(&w).await;
             let expected = match condition {
-                "stopped" => Some("publish_stopped"),
+                "stopped" => None,
                 "failed" => Some("host_failed"),
                 _ => None,
             };
@@ -1011,11 +948,12 @@ async fn retained_publication_problems_apply_only_to_the_current_upstream() {
                 || async {
                     let got = w.server.ok(&pull, &w.owner).await;
                     match expected {
-                        Some(code) => {
-                            got["landing"]["state"] == "left"
-                                && got["landing"]["reason"]["code"] == code
-                        }
-                        None => got["landing"]["state"] == "passed",
+                        Some(code) => got["landing"]["blockers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|b| b["code"] == code),
+                        None => got["landing"]["blockers"] == json!([]),
                     }
                 },
             )
@@ -1045,7 +983,7 @@ async fn retained_publication_problems_apply_only_to_the_current_upstream() {
             }
             eventually(
                 &format!("{condition}/{destination}: an old publication cannot exclude the new destination"),
-                || async { w.server.ok(&pull, &w.owner).await["landing"]["state"] == "passed" },
+                || async { w.server.ok(&pull, &w.owner).await["landing"]["blockers"] == json!([]) },
             )
             .await;
             let got = w.server.ok(&pull, &w.owner).await;
@@ -1502,18 +1440,7 @@ async fn branvils_references_are_written_for_the_host_when_published() {
         .await;
     assert_eq!(preview["title"], "Follow-up to #7");
     assert_eq!(preview["body"], expected.as_str());
-    // The first published pull request owns this base's gate until it leaves.
-    let (st, v) = publish(&w, n).await;
-    assert_eq!(st, StatusCode::CONFLICT, "{v}");
-    assert_eq!(v["error"]["code"], "not_mergeable");
-    let (st, v) = s
-        .post(
-            &format!("{}/pulls/{}/close", w.repo_path(), first["number"]),
-            &w.owner,
-            json!({}),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
+    // Another published pull request does not block this publication.
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     let hp = gh.pull(v["upstream"]["number"].as_u64().unwrap());

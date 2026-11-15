@@ -145,14 +145,6 @@ impl Classifier {
         if repo.is_protected(branch) {
             return Ok(Priority::new(Class::Protected));
         }
-        if let Some(number) = branch.strip_prefix("gate/").and_then(|s| s.parse().ok())
-            && crate::landing::current(r, &repo.id, number)?.is_some_and(|e| {
-                matches!(e.state.as_str(), "gating" | "passed")
-                    && e.gate.as_deref() == Some(&run.sha)
-            })
-        {
-            return Ok(Priority::new(Class::Landing));
-        }
         let mut best: Option<Priority> = None;
         for (_, number) in r.prefix_raw(
             store::IX_OPEN_PULLS,

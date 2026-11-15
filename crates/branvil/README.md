@@ -3,7 +3,7 @@
 Branvil is a lightweight local code hosting service for GuildBotics: Git
 repositories over Smart HTTP in workspaces, each workspace with one kanban
 board for the tickets of its repositories, pull requests with reviews and a
-serial landing queue, and a CI that runs each job in a microVM. It is one Rust
+per-pull landing conditions, and a CI that runs each job in a microVM. It is one Rust
 service that keeps metadata in redb and Git data in bare repositories, and
 listens on loopback only; CI jobs run in a separate `guildbotics branvil runner` process.
 
@@ -177,31 +177,14 @@ agent reads everything and works in every repository: tickets, comments,
 reviews, pull requests, pushes to unprotected branches. Creating workspaces
 and repositories, settings and upstreams, members and their accounts, backups,
 merging, publishing, and marking a draft pull request ready are the owner's. A
-merge or a publish needs a passed landing gate at the front of its base
-branch's queue, the repository's required checks on the head, and its
-required approvals (Settings → Repositories → a repository → CI; 1 unless
-changed, 0 needs none): members other than the author whose last approve or
-request changes approves the current head (a comment keeps it) and who were
-not asked to review again since. The
-author can only comment on their own pull request. With **Land automatically**
-on the same tab, the repository merges (or, with an upstream, publishes once)
-by itself an open pull request that is not a draft as soon as it meets them.
-The queue and gates also run with this setting off. A pull request joins its
-base branch's queue only once no statement awaits its author's answer: an
-unresolved thread whose last comment is someone else's, a review with a body
-(an approval may carry a suggestion), or a conversation comment (a machine's
-notice, which carries `meta`, does not count; Branvil's own note of a failed
-gate or host check does). The author answers with a reply in the thread, a
-reaction, or anything said after it; a new statement takes a queued pull request
-out, and the answer puts it at the end of the queue again. Pull requests the
-owner wrote, and those of interactive tickets, never wait for this. Only the first pull request
-in each repository/base queue gets a gate: the head itself when it contains
-the base, otherwise a merge commit of base and head whose required checks
-must succeed. The head and its approvals stay unchanged. The next pull request
-waits until the first merges or leaves the queue, including while GitHub's
-merge is pending. The pull request list and each pull request's page show
-where it is on its way into the base and whose turn it is. Keeping a pull
-request a draft holds it. A runner uses only the runner API.
+merge or a publish requires successful required head checks, enough approvals,
+no conflicts, and no statements awaiting the author's answer. With an upstream,
+the base must be the default branch and the author must have an account there.
+A head may be behind base when it does not conflict. With **Land automatically**
+on, every eligible pull request merges or publishes immediately, independently
+of other pull requests. Combined changes are checked by main verification after
+merging. The list and detail page show each pull request's conditions and next
+action. Drafts stay on hold. A runner uses only the runner API.
 
 Under Settings → Members → a member → Reviewers, the owner chooses who is
 asked to review every pull request that member opens (owners and agents other
@@ -626,7 +609,7 @@ does so itself); the pipeline stays as it is. The Rust jobs fetch crates
 from crates.io and `branvil-web` fetches packages from `registry.npmjs.org`, so the
 repository's CI tab must allow its jobs the network. `rust-clippy` and the two
 test jobs each cache Cargo's registry and `target`, keyed by `rust-toolchain.toml` so lockfile changes
-can reuse dependencies on PR heads and gates. The pipeline comments explain
+can reuse dependencies on PR heads. The pipeline comments explain
 this temporary choice and the return to lockfile keys in ticket #120.
 `branvil-web` caches npm's
 downloads, keyed by the repository root's `package-lock.json`.
@@ -675,11 +658,10 @@ outside see. Branvil never pushes the default branch; it follows it.
    and its pull request and tickets close.
 
    With **Land automatically** on, Branvil publishes a pull request by itself
-   once it meets the conditions. Each time its landing gate passes, Branvil
-   tells a webhook, with links to both pull requests, that it is ready to
-   merge on GitHub once GitHub's checks of its head have succeeded. This
-   includes a new gate for an already published head. When a check on GitHub
-   fails, Branvil says so on its pull request instead. Under
+   once it meets the conditions. Once the published head's host checks succeed
+   and no more can arrive, Branvil tells the webhook once per PR head, with
+   links to both pull requests. Failed host checks are reported in a comment.
+   Under
    Settings → Notifications, the owner enters its URL (a Slack Incoming Webhook takes the
    message as it is), which is kept like a credential and never shown again.
 

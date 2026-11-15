@@ -966,12 +966,18 @@ async fn patrol_rank(app: &App, repo: &Repo, p: &Pull, me: &str, tips: &Tips) ->
         },
     );
     let (id, number) = (repo.id.clone(), p.number);
-    if let Some(e) = app
+    let conflict = app
         .store
         .read(move |r| crate::landing::current(r, &id, number))
         .await?
-        && crate::landing::failure_stands(app, repo, p, &e, &head, &base).await?
-    {
+        .is_some_and(|e| e.head_sha == head && e.base_sha == base && !e.conflicts.is_empty());
+    let host_failed = crate::landing::published(repo, p).is_some_and(|x| {
+        x.pushed.as_deref() == Some(head.as_str())
+            && x.checks
+                .iter()
+                .any(|c| c.status == "completed" && !c.succeeded())
+    });
+    if conflict || host_failed {
         checks = crate::landing::HeadChecks::Failed;
     }
     Ok(patrol_order(fold(&p.author) == me, approved, checks))
@@ -1203,17 +1209,6 @@ pub fn store_published(
     let old = load_pull(w, repo, number)?;
     let mut changed = old.upstream.as_ref() != Some(&published);
     if changed {
-        // Keep the wait clock's publication/error semantics without storing
-        // a second copy of the host's publication flag in Landing.
-        let stage = |x: Option<&Published>| {
-            (
-                x.is_some_and(|x| x.number.is_some() && x.stopped.is_none()),
-                x.and_then(|x| x.error.clone()),
-            )
-        };
-        if stage(old.upstream.as_ref()) != stage(Some(&published)) {
-            crate::landing::publication_changed(w, &repo.id, number)?;
-        }
         let mut p = old.clone();
         p.upstream = Some(published);
         write_pull(w, Some(&old), &p)?;
@@ -1912,7 +1907,6 @@ async fn display_checks(
         app.ci.head_checks(repo, head_sha).await?
     };
     let checks = &mut head.checks;
-    checks.extend(crate::landing::checks(app, repo, p.number, head_sha).await?);
     if let Some(published) = &p.upstream
         && published.pushed.as_deref() == Some(head_sha)
     {
@@ -1954,19 +1948,15 @@ fn not_mergeable(message: impl Into<String>) -> AppError {
     AppError::conflict_code("not_mergeable", message)
 }
 
-/// The checks a merge and a publish share: open, not a draft, the head and
-/// base the owner saw, successful required head checks and approvals, and a
-/// passed gate at the front of the current base queue; for one
-/// made by the repository itself (`auto`), that it still lands by itself.
-/// Returns the checked head, base, and gate. Call under the repository lock with the
-/// repository and the pull request read under it.
+/// Rechecks landing conditions and the expected tips under the repository lock.
+/// Returns the head and base validated for this operation.
 pub async fn check_landable(
     app: &App,
     repo: &Repo,
     p: &Pull,
     input: &MergeInput,
     auto: bool,
-) -> AppResult<(String, String, String)> {
+) -> AppResult<(String, String)> {
     let number = p.number;
     if auto && !repo.auto_land {
         return Err(not_mergeable(format!(
@@ -2001,62 +1991,18 @@ pub async fn check_landable(
             ),
         ));
     }
-    let checks = app.ci.head_checks(repo, &head).await?;
-    let missing: Vec<&str> = repo
-        .required_checks
-        .iter()
-        .filter(|name| {
-            !checks
-                .checks
-                .iter()
-                .any(|c| &c.name == *name && c.head_satisfied())
-        })
-        .map(String::as_str)
-        .collect();
-    if !missing.is_empty() {
-        return Err(not_mergeable(format!(
-            "Required checks did not succeed on {head}: {}.",
-            missing.join(", ")
-        )));
-    }
-    let approved = approvals(&read_review_states(app, p, &head).await?);
-    if approved < repo.required_approvals {
-        return Err(not_mergeable(format!(
-            "Approvals of {head}: {approved} / {} required.",
-            repo.required_approvals
-        )));
-    }
-    let id = repo.id.clone();
-    let branch = p.base.clone();
-    let gate = app
-        .store
-        .read(move |r| {
-            let queue = crate::landing::active(r, &id)?;
-            Ok(queue.into_iter().find(|e| e.base == branch))
-        })
-        .await?;
-    let gate = gate
-        .filter(|e| {
-            e.number == number && e.state == "passed" && e.head_sha == head && e.base_sha == base
-        })
-        .and_then(|e| e.gate)
-        .ok_or_else(|| {
-            not_mergeable(format!(
-                "!{number} has not passed the current landing gate at the front of its queue."
-            ))
-        })?;
-    let gate_checks = app.ci.head_checks(repo, &gate).await?;
-    if !repo.required_checks.iter().all(|n| {
-        gate_checks
-            .checks
-            .iter()
-            .any(|c| &c.name == n && c.succeeded())
-    }) {
+    let e = crate::landing::refresh_locked(app, repo, p, &head, &base, true).await?;
+    let blockers = crate::landing::blockers(app, repo, p, &head, &base, &e).await?;
+    if !blockers.is_empty() {
         return Err(not_mergeable(
-            "The required landing gate checks have not succeeded.",
+            blockers
+                .iter()
+                .map(|b| format!("{}: {}", b.code, b.message))
+                .collect::<Vec<_>>()
+                .join("; "),
         ));
     }
-    Ok((head, base, gate))
+    Ok((head, base))
 }
 
 pub async fn merge(
@@ -2113,18 +2059,11 @@ async fn merge_locked(
     }
     let r2 = repo.clone();
     let p = app.store.read(move |r| load_pull(r, &r2, number)).await?;
-    crate::landing::reconcile_locked(app, &repo).await?;
-    let (head, base, _) = check_landable(app, &repo, &p, &input, auto).await?;
+    let (head, base) = check_landable(app, &repo, &p, &input, auto).await?;
     let dir = app.git.repo_dir(&repo.path);
     let commit = app
         .git
-        .merge_commit(
-            &dir,
-            &base,
-            &head,
-            &format!("Merge !{number}: {}", p.title),
-            true,
-        )
+        .merge_commit(&dir, &base, &head, &format!("Merge !{number}: {}", p.title))
         .await?;
     let merge_sha = local_merge_sha(commit)?;
     keep_merged(app, &repo, number, &head).await?;
@@ -2170,7 +2109,6 @@ async fn merge_locked(
             Ok(p)
         })
         .await?;
-    crate::landing::remove_merged_ref(app, &repo, number).await?;
     retire_merged_head(app, &repo, &merged).await?;
     refs::record_refs_locked(app, &repo).await?;
     app.events.publish("pull", &repo.path, number.to_string());

@@ -94,13 +94,11 @@ describe("change events", () => {
     expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
   });
 
-  it("refreshes a pull's gate checks by the gate commit and its queue when the leader changes", () => {
+  it("refreshes a pull independently of another pull's state", () => {
     const queue = new QueryClient();
-    queue.setQueryData(keys.landing("acme/demo"), { items: [] });
-    queue.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head", landing: { gate: "gate", first: { number: 3 } } });
-    queue.setQueryData(keys.pullPart("acme/demo", 4, "checks"), { head_sha: "head" });
-    expect(stale(queue, { kind: "check", path: "acme/demo", id: "gate" })).toEqual([k(keys.pullPart("acme/demo", 4, "checks"))]);
-    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([k(keys.landing("acme/demo")), k(keys.pull("acme/demo", 4)), k(keys.pullPart("acme/demo", 4, "checks"))].sort());
+    queue.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head", landing: { next: "conditions", blockers: [] } });
+    queue.setQueryData(keys.pullPart("acme/demo", 4, "checks"), { head_sha: "head", checks: [] });
+    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([k(keys.pullPart("acme/demo",4,"checks"))]);
   });
 
   it("maps a repository change (a push, new settings) to its pull requests, branch tips, and commits' checks but not diffs, commits, or tickets", () => {

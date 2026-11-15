@@ -410,24 +410,6 @@ pub async fn publish(
     publish_pull(app, &repo, number, input, false).await
 }
 
-/// Resumes a stopped publish's landing checks. The host branch is replaced
-/// only by the owner's subsequent publish after the gate passes.
-pub async fn resume_landing(
-    app: &App,
-    caller: &Caller,
-    path: &str,
-    number: u64,
-    input: MergeInput,
-) -> AppResult<PullView> {
-    caller.require_owner()?;
-    let repo = repos::visible(app, caller, path).await?;
-    crate::landing::resume_publish(app, &repo, number, input).await?;
-    let r2 = repo.clone();
-    let p = app.store.read(move |r| load_pull(r, &r2, number)).await?;
-    let tips = pulls::tips(app, &repo).await?;
-    pulls::pull_view(app, &repo, &p, &tips).await
-}
-
 /// `publish` of a pull request of `repo`, by the owner or (`auto`) by the
 /// repository landing automatically (`autoland`).
 pub async fn publish_pull(
@@ -489,8 +471,7 @@ async fn publish_op(
         let host = app.upstream.hosts.get(&setting.provider)?;
         super::require_account(&author, host)
             .map_err(|why| AppError::conflict_code("no_account", why))?;
-        crate::landing::reconcile_locked(app, &repo).await?;
-        let (head, _, _) = check_landable(app, &repo, &p, &input, auto).await?;
+        let (head, _) = check_landable(app, &repo, &p, &input, auto).await?;
         (repo, setting, p, author, head)
     };
     let host = app.upstream.hosts.get(&setting.provider)?;
@@ -582,7 +563,6 @@ async fn publish_op(
         .store
         .write(move |w| {
             pulls::store_published(w, &r2, number, x, None)?;
-            crate::landing::clear_resume_publish(w, &r2.id, number)?;
             load_pull(w, &r2, number)
         })
         .await?;

@@ -3,8 +3,7 @@
 Branvil runs a small CI of its own: a pipeline file in the repository, a
 persistent queue in the service, and a runner process that executes each job
 in a throwaway microVM. Its results are the checks of `GET
-/api/v1/repos/{repo}/pulls/{n}/checks` and the merge gate (every required check
-must have succeeded on the gate; the head also accepts service path skips).
+/api/v1/repos/{repo}/pulls/{n}/checks` and landing conditions (required checks accept service path skips).
 
 ```
 git push ─▶ guildbotics branvil serve ─ register run (pipeline from the commit) ─────────▶ redb queue
@@ -109,7 +108,6 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | Attempt | Cache refresh | 4b (last) |
   | Run | Missing run or repository, or no branches want the commit | 4b |
   | Branch | Protected, except healthy default-branch verification (4m) | 1 |
-  | Branch | `gate/<n>` with a gating/passed landing record whose gate matches the commit | 2 (near landing) |
   | Branch | No open PR using this head branch | 4b |
   | PR | Draft | 4b |
   | PR | A required check completed without satisfying the head, including a missing required job | 4a (deferred) |
@@ -155,7 +153,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   merge-base is skipped (Git's `diff-tree -r --quiet --no-renames` from
   merge-base to head, including deletions and both sides of renames), and a
   job whose matching files did change may reuse a success with the same input
-  digest of those files ("Trust"). Gates and protected branches reuse only
+  digest of those files ("Trust"). Protected branches reuse only
   the same tree and never take a head's reuse by paths as their result, so a
   file missing from `paths` shows there. Empty `paths` runs every time.
   Changing `paths` changes the job definition used for reuse.
@@ -252,8 +250,7 @@ What a job's commands find, as on common CI services:
 Every commit runs its own pipeline: a tip of the default branch and the head
 of an open pull request alike read `.branvil/ci.toml` from that commit. A pull
 request that changes the pipeline runs the changed pipeline as its checks, so
-a mistake in it shows before the merge. The first pull request in each
-repository/base landing queue also checks the combination of base and head.
+a mistake in it shows before the merge. Main verification checks the combination after merge.
 PR-head jobs with `paths` run if any matching file changed since the
 merge-base with the current base tip of any open PR sharing that head SHA
 (and may then reuse a success with the same contents of paths, below).
@@ -262,7 +259,7 @@ The run saves each PR's base name, tip and merge-base and its skipped job
 names. Re-registration updates this snapshot when PRs or base tips change;
 unchanged inputs do not create new attempts. Queue admission after waiting
 uses the saved selection and counts only jobs that actually run. Protected
-branches and gates always run every job when registered by the triggers below;
+branches always run every job when registered by the triggers below;
 protection alone does not register a non-default branch. A protected
 registration of a SHA that had path skips queues those jobs too, and so are
 the jobs whose current attempt reused another tree's result by the contents
@@ -283,9 +280,7 @@ satisfy a required check.
 
 The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
 default). These jobs do not run on ordinary branches or PR heads, even before a PR
-opens, without a merge base, or when the pipeline changes. Gates and protected
-branches execute them. A head with service skips cannot itself serve as a gate;
-the gate creates a `[base, head]` commit and executes the skipped jobs there.
+opens, without a merge base, or when the pipeline changes. Protected branches execute them during main verification.
 Manual retries also execute them and their skips cannot supply reusable results.
 
 The owner controls this in repository settings rather than `.branvil/ci.toml` so a
@@ -296,96 +291,9 @@ running jobs finish and manual retries remain executable. Removing a name restor
 normal path selection and queues a real attempt when it is selected again.
 The log for this decision is `[branvil] skipped: post-merge only (repository setting)`.
 
-When head contains base, its selection skips no jobs, and none of its current
-attempts reused another tree's result by the contents of paths, its existing
-run is the gate. Otherwise Branvil
-creates a commit with parents `[base, head]` and runs that commit's pipeline
-through `refs/branvil/gate/<number>`. A conflict appears in the pull request checks response's `conflicts` field;
-CI jobs appear as `gate/<job>` on the pull request. An up-to-date head with
-path skips gets a gate with the head's tree and parents `[base, head]`. If
-that tree already equals the base's, it leaves as `already_in_base`.
-Gate checks require actual success; jobs
-that really succeeded on head can be reused for the identical tree. The PR
-stays in its queue while the skipped head jobs, and those that reused by the
-contents of paths, execute at the gate.
-Approvals still apply to
-the original head. Gate checks, including retries after leaving the queue,
-remain visible only while the entry's `head_sha` matches the pull request
-checks response's `head_sha`, regardless of the entry's state. Once the head
-changes, its old gate results no longer count as checks of the new head. The
-pull request's gate panel then waits for the new head's checks and approvals
-instead of showing old failures or asking to retry them.
-
-A local merge advances base to head when head contains base, otherwise to a
-new merge commit with parents `[base, head]`. The new default-branch commit is
-verified by main verification. Its jobs may reuse successful gate executions
-of the same tree under the Trust rules below. Jobs declaring artifacts execute
-again after a non-fast-forward merge because the merge commit has a different
-SHA from the gate. An upstream squash merge also gets its own run.
-
-When a runner claims an attempt, the service offers the most recently finished
-successful execution whose files have not been pruned, in the same repository
-with the same parsed job definition and network setting, and with the same
-basis:
-
-| Order | Attempt (scope and input digest as copied at claim) | Basis |
-| --- | --- | --- |
-| 1 | A protected (`protected`) or gate (`branch:gate/…`) run's | Tree |
-| 2 | Its job has empty `paths` | Tree |
-| 3 | Its run has no input digest of the job yet | Tree |
-| 4 | Otherwise (a pull request's head) | Paths |
-
-Jobs declaring artifacts may reuse only an execution of the same commit,
-even when the tree or paths match, because artifacts may embed commit identity.
-
-The **tree** basis requires the same Git tree. The **paths** basis requires
-the same input digest of the job's `paths` (`ix_ci_inputs`), from any run:
-another branch or pull request, a protected branch, a gate, or a cache
-refresh; a source of the same tree has that digest too. Finish checks the
-reported source against the basis the attempt was claimed with. Reused
-attempts cannot themselves be a source. Retention after claim does not reject
-finish or extend the source's file lifetime. After resolving the image and
-before fetching source, the runner checks that the image's configuration
-digest matches. A matching attempt succeeds without a VM, including a
-protected job with a missing or old cache. For cached jobs the source must
-have recorded its cache key. A protected attempt requests a separate cache
-refresh when that key has no complete save on this runner within 24 hours.
-A different digest executes as usual. Registration, queue order,
-and commands are unchanged. Manual and automatic retries always execute,
-including after their first interruption.
-
-This treats inputs other than the tree (on a pull request's head, the files
-matching `paths`), job definition, image, and network as equivalent: history, tags, `BRANVIL_SHA` and other per-attempt environment
-variables, external services, and the runner's resource limits may differ.
-Jobs that inspect those inputs are outside this approximation. Selection uses
-the latest **successful** execution; a later failed retry does not erase it.
-
-Reused attempts have their own successful check, log, and timing, and record
-the source attempt's ID and commit. Their artifact names and downloads resolve
-to that source's files, within the source's original `retention_days`; reuse
-does not extend retention. Duration estimates exclude reused attempts.
-
-A pull request can therefore change its own jobs, but not the repository's
-settings, which only the owner changes (`PATCH /api/v1/repos/{repo}`):
-
-- **Required checks.** Each required check needs a successful job of that
-  name in the head's own run. A head whose pipeline drops or breaks one cannot
-  be merged or published; a head that weakens what one does is caught by
-  reviewing its diff (below).
-- **Network access** (`ci_network`). Whatever the pipeline says, a job has no
-  network unless the owner allows it for the repository.
-- **What a job runs on.** A job runs in a microVM with no secrets, the
-  runner's CPUs and memory, and its time limit capped by the runner's; its
-  image is the version the owner put in the runner's cache under the tag the
-  pipeline names (a pipeline cannot name a digest), and a pull request's run
-  never writes the cache ("Dependency cache"). Settings → CI lists
-  the images of the default branches' pipelines; a pull request that names
-  another image concludes `startup_failure` with the reason until the owner
-  pulls or loads it.
-
-So a change to `.branvil/ci.toml` in a pull request changes that pull request's
-own checks, and is reviewed as part of its diff: the owner reads it before
-merging or publishing, as with any other change.
+Head jobs skipped by paths or reusing success by paths are not executed before
+landing. Main verification runs them after merge and verifies the combination.
+Local merges use the local merge policy; artifact jobs run for the new SHA.
 
 ## Runs, attempts, and states
 
@@ -405,9 +313,9 @@ What registers a run:
 
 - a push of the head of an open pull request (after
   the push is recorded, `Ci::on_ref_changes`), opening or reopening a pull
-  request, a merge, and creating or moving a current landing gate ref;
+  request, a merge;
 - the reconciler (at start and every minute), which registers every
-  running verification SHA, open pull request head, and current gate ref again:
+  running verification SHA, open pull request head again:
   a crash between recording a push and registering its run, or a Git failure
   while reading its pipeline, is repaired, and until then the checks say "No
   CI run is registered for this commit yet" (`queued`, never `no checks`).
@@ -422,18 +330,16 @@ current attempts; an attempt of a job the pipeline dropped or defined
 differently stays on its job page as history, never counts as a check, and
 cannot be retried.
 
-Rapid pushes: when a branch or gate ref moves from commit A to B and no
-other branch or current gate ref still wants A, A is **superseded**: its queued
+Rapid pushes: when a branch ref moves from commit A to B and no
+other branch ref still wants A, A is **superseded**: its queued
 attempts are concluded `cancelled`
 ("Superseded: …"), its running attempts are asked to stop (the runner sees
 `cancel: true` on its next heartbeat), and any result a runner still reports
 for A is recorded as `cancelled`. B has its own attempts; a runner may conclude
 one successfully by reusing an actual successful execution of the same tree
 under the conditions above. A commit that becomes a tip again gets fresh
-attempts, eligible for the same claim-time reuse decision. Leaving a landing
-queue or merging deletes its gate ref and supersedes work no other CI ref
-needs. The reconciler repairs registration after a crash between gate-ref
-creation and CI registration, as it does for branch tips.
+attempts, eligible for the same claim-time reuse decision. The reconciler repairs
+registration after an interrupted branch update.
 
 Leases and interruptions:
 
@@ -493,7 +399,7 @@ successfully so launchd leaves it stopped.
   interrupted as in a restart above.
 - Then, after either signal, the GUI's event streams end, the service stops
   accepting requests, and the requests in flight get 5 seconds. The
-  repository operations already started (a merge, a gate, recording a push,
+  repository operations already started (a merge, recording a push,
   following the upstream, publishing a pull request or a poll's work on one)
   finish; none starts meanwhile, and the standard output says
   `branvil stopping: waiting for the started repository operations …` while
@@ -529,8 +435,7 @@ Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
 `cancelled` at once and asks a running one to stop; `POST …/jobs/{id}/retry`
 queues the next attempt number of the latest check attempt, once completed,
 with the same job definition (the pipeline is not read again). Cache refreshes
-cannot be retried. Retry takes the repository lock used for ref changes. If a landing gate has just left its queue, its ref cleanup
-finishes before the new attempt is queued, so it cannot cancel that retry.
+cannot be retried. Retry takes the repository lock used for ref changes.
 
 ## Automatic retries
 
@@ -538,7 +443,7 @@ Every job of a protected run automatically retries up to three times
 after its initial failure. Eligible endings are command failure, timeout,
 no runner contacting the service, and the second interruption of an attempt.
 Other startup failures (such as a missing image), requested cancellations,
-supersession, pull-request/gate runs, and cache refreshes do
+supersession, pull-request runs, and cache refreshes do
 not trigger automatic retries.
 
 The failed attempt and the next queued attempt are recorded in one transaction:
@@ -593,7 +498,7 @@ is refused, and nothing outside the work directory is read.
 `cache.paths` are restored into the work directory before the job, and saved
 after a successful job of a run that a protected branch asked for (its cache
 scope is `protected`). When a protected branch comes to want a commit whose
-jobs ran for a pull request or landing gate, jobs with a cache get
+jobs ran for a pull request, jobs with a cache get
 protected attempts (one still running for the pull request is stopped), and an
 attempt still queued takes its run's scope when a runner claims it. These
 check attempts execute only when they cannot reuse a result. Reused protected
@@ -604,7 +509,7 @@ job name, and cache key, even across commits. A full queue skips the refresh;
 a later request can enqueue it. The check links to the new or existing refresh.
 
 Refresh attempts always execute in protected scope and save after success.
-They never appear in commit checks, required checks, readiness, or landing gates;
+They never appear in commit checks, required checks, readiness;
 their waiting, execution, or failure therefore does not delay automatic updates.
 They survive branch movement. Successful refreshes can supply reuse results
 and duration estimates. They share queue limits and file retention with checks.
@@ -612,8 +517,7 @@ Their pages identify them as cache refreshes; manual retry is only for checks.
 If an image tag changes before execution, the refresh computes and saves the
 key for the image it actually runs.
 
-A pull request's run (`branch:<name>`) and a gate's run
-(`branch:gate/<number>`) restore the same entries and save nothing (their logs
+A pull request's run (`branch:<name>`) restores the same entries and save nothing (their logs
 say `cache not saved`): they cannot plant a cache entry that the default branch
 would use, and never push out the entries every run restores. The key is the SHA-256
 of the repository, the job name, the configuration digest of the image the

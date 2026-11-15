@@ -192,7 +192,22 @@ async fn author_feedback_reactions_and_holds(f: &mut Fixture<'_>) {
 async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
     for inline in [false, true] {
         let mut p = f.open(false, vec![]).await;
-        let before = f.owner.pulls_get(REPOSITORY, p.number).await.unwrap();
+        // Wait for the asynchronous landing pair check before asserting that
+        // the stale operation itself changed nothing.
+        let before = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                let before = f.owner.pulls_get(REPOSITORY, p.number).await.unwrap();
+                let v = serde_json::to_value(&before).unwrap();
+                if v["landing"]["head_sha"] == v["head_sha"]
+                    && v["landing"]["base_sha"] == v["base_sha"]
+                {
+                    break before;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("landing pair checked before stale-operation snapshot");
         let stale = if inline {
             f.code
                 .review_comment(

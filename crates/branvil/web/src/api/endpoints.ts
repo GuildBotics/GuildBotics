@@ -22,7 +22,6 @@ import type {
   JobLog,
   Lane,
   ListedPull,
-  Landing,
   Member,
   MemberKind,
   Page,
@@ -113,7 +112,7 @@ export const repos = {
   update: (repo: string, body: RepoPatch) => request<Repository>("PATCH", `/repos/${enc(repo)}`, { body }),
   pulls: (repo: string, state: "open" | "closed" | "all", cursor?: string | null) =>
     get<Page<ListedPull>>(`/repos/${enc(repo)}/pulls`, { state, sort: "readiness", cursor, limit: 30 }),
-  landing: (repo: string) => get<{ items: Landing[] }>(`/repos/${enc(repo)}/landing`),
+
   branch: (repo: string, name: string) => get<Branch>(`/repos/${enc(repo)}/branches/${enc(name)}`),
   commit: (repo: string, sha: string) => get<Commit>(`/repos/${enc(repo)}/commits/${enc(sha)}`),
   verification: (repo: string) => get<Verification>(`/repos/${enc(repo)}/verification`),
@@ -228,10 +227,6 @@ export const pulls = {
     request<unknown>(on ? "POST" : "DELETE", `${pullPath(repo, number)}/reactions`, { body: { target_id: targetId, reaction } }),
   merge: (repo: string, number: number, expectedHead: string, expectedBase: string) =>
     request<PullRequest>("POST", `${pullPath(repo, number)}/merge`, {
-      body: { expected_head: expectedHead, expected_base: expectedBase },
-    }),
-  resumeLanding: (repo: string, number: number, expectedHead: string, expectedBase: string) =>
-    request<PullRequest>("POST", `${pullPath(repo, number)}/landing/resume`, {
       body: { expected_head: expectedHead, expected_base: expectedBase },
     }),
   /** What publishing to the upstream host would post. */

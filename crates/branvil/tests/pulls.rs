@@ -44,8 +44,8 @@ async fn readiness_order_is_applied_before_pagination_and_bound_to_the_cursor() 
     let url = format!("{}?sort=readiness&limit=2", pulls(&w));
     let first = w.server.ok(&url, &w.aiko).await;
     assert_eq!(first["items"][0]["number"], 1);
-    assert_eq!(first["items"][0]["merge_order"][0], 6);
-    assert_eq!(first["items"][1]["merge_order"][0], 8);
+    assert_eq!(first["items"][0]["merge_order"][0], 4);
+    assert_eq!(first["items"][1]["merge_order"][0], 6);
     let cursor = first["next_cursor"].as_str().unwrap();
     let (status, _) = w
         .server
@@ -837,7 +837,10 @@ async fn the_owner_merges_the_current_head_and_closes_tickets() {
         .await;
     assert_eq!(st, 409);
     assert!(
-        v["error"]["message"].as_str().unwrap().contains("test"),
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("head_checks"),
         "{v}"
     );
     let (_, repo) = s.get(&w.repo_path(), &w.owner).await;
@@ -1139,7 +1142,13 @@ async fn reviewer_states_decide_the_approvals_a_merge_needs() {
     assert_eq!(st, 409, "{v}");
     assert_eq!(v["error"]["code"], "not_mergeable");
     let refused = format!("Approvals of {head}: 1 / 2 required.");
-    assert_eq!(v["error"]["message"], refused.as_str(), "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("approvals"),
+        "{refused}: {v}"
+    );
     assert_eq!(review(&w, &pull, &w.owner, "approve", &head).await, 201);
     assert_eq!(review_states(&w, &pull).await.1, 2);
 
@@ -1174,7 +1183,13 @@ async fn reviewer_states_decide_the_approvals_a_merge_needs() {
     let (st, v) = merge_at(&w, &pull, &head2).await;
     assert_eq!(st, 409, "{v}");
     let refused = format!("Approvals of {head2}: 0 / 2 required.");
-    assert_eq!(v["error"]["message"], refused.as_str(), "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("approvals"),
+        "{refused}: {v}"
+    );
     for token in [&w.ken, &w.owner] {
         assert_eq!(review(&w, &pull, token, "approve", &head2).await, 201);
     }
@@ -1315,7 +1330,7 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
         async move {
             let at = format!("{}/pulls/{n}", w.repo_path());
             eventually(&format!("!{n} passed"), || async {
-                s.ok(&at, &w.owner).await["landing"]["state"] == "passed"
+                s.ok(&at, &w.owner).await["landing"]["blockers"] == json!([])
             })
             .await;
             let p = s.ok(&at, &w.owner).await;
@@ -1383,12 +1398,17 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
         );
         let state = if n == 3 { "left" } else { "passed" };
         eventually(&format!("!{n} {state}"), || async {
-            s.ok(&at, &w.owner).await["landing"]["state"] == state
+            s.ok(&at, &w.owner).await["landing"]["next"]
+                == if state == "left" {
+                    "conditions"
+                } else {
+                    "owner_merge"
+                }
         })
         .await;
     }
     assert_eq!(
-        s.ok(&format!("{}/pulls/3", w.repo_path()), &w.owner).await["landing"]["reason"]["code"],
+        s.ok(&format!("{}/pulls/3", w.repo_path()), &w.owner).await["landing"]["blockers"][0]["code"],
         "conflict"
     );
     let fives = by_update(&w, [5, 6]).await;
@@ -1473,4 +1493,64 @@ async fn checks_report_conflicts_for_unrelated_histories_without_losing_ci() {
             }
         );
     }
+}
+
+#[tokio::test]
+async fn readiness_places_answer_only_work_before_missing_approvals() {
+    let w = World::new().await;
+    let r = w.server.ok(&w.repo_path(), &w.owner).await;
+    assert_eq!(
+        w.server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision":r["revision"],"required_approvals":1})
+            )
+            .await
+            .0,
+        200
+    );
+    for n in 1..=4 {
+        git_ok(&w.work, &["checkout", "-q", "main"]);
+        let head = w.push_change(&format!("sort{n}"), &format!("{n}.txt"), "change");
+        w.open_pull(&format!("sort{n}"), json!([])).await;
+        if n < 4 {
+            assert_eq!(
+                w.server
+                    .post(
+                        &format!("{}/pulls/{n}/reviews", w.repo_path()),
+                        &w.ken,
+                        json!({"verdict":"approve","commit":head})
+                    )
+                    .await
+                    .0,
+                201
+            );
+        }
+    }
+    assert_eq!(
+        w.server
+            .post(
+                &format!("{}/pulls/3/comments", w.repo_path()),
+                &w.owner,
+                json!({"body":"Please explain."})
+            )
+            .await
+            .0,
+        201
+    );
+    crate::ci::eventually("ready pairs", || async {
+        let page = w
+            .server
+            .ok(&format!("{}/pulls?sort=readiness", w.repo_path()), &w.owner)
+            .await;
+        let stages: Vec<_> = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["merge_order"][0].as_u64().unwrap())
+            .collect();
+        stages == vec![0, 0, 2, 4]
+    })
+    .await;
 }

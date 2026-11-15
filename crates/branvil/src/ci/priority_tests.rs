@@ -1,7 +1,7 @@
 use super::tests::{DIGEST, T0, reg, store};
 use super::*;
 use crate::ci::priority::{Class, class_of};
-use crate::model::{self, Landing, Pull, Repo, Review};
+use crate::model::{self, Pull, Repo, Review};
 
 fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
     w.put(
@@ -314,27 +314,6 @@ fn gate_leaving_closed_pulls_and_multiple_branches_choose_the_best_class() {
         enqueue(w, "normal", "normal")?;
         pull(w, 3, "normal", false)?;
         enqueue(w, "gate", "gate/2")?;
-        let mut gate = Landing {
-            repo: "repo_1".into(),
-            number: 2,
-            base: "main".into(),
-            queued_at: T0.into(),
-            sequence: 1,
-            state: "gating".into(),
-            state_at: T0.into(),
-            gate: Some("gate".into()),
-            base_sha: "base".into(),
-            head_sha: "sha".into(),
-            reason: None,
-            notified_at: None,
-            notify: false,
-            resume_publish: false,
-            error: None,
-        };
-        w.put(store::LANDING, &Pull::key("repo_1", 2), &gate)?;
-        assert_eq!(class(w, "gate")?, Class::Landing);
-        gate.state = "left".into();
-        w.put(store::LANDING, &Pull::key("repo_1", 2), &gate)?;
         assert_eq!(class(w, "gate")?, Class::Last);
         enqueue(w, "sha", "release")?;
         assert_eq!(class(w, "sha")?, Class::Protected);

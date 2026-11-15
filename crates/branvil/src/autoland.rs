@@ -1,6 +1,4 @@
-//! Advances each repository's landing queues and, with `auto_land`, merges
-//! or publishes their passed leaders. Each automatic gate pass is told to
-//! the owner's webhook, since people merge upstream pull requests there.
+//! Lands each eligible pull independently and notifies the owner once its host checks pass.
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
@@ -148,9 +146,9 @@ async fn sweep(app: &App, dirty: &Dirty) {
     }
 }
 
-/// An automatic gate pass the webhook has not been told about.
+/// An automatic publication the webhook has not been told about.
 fn awaits_notice(x: &Landing) -> bool {
-    x.state == "passed" && x.notify && x.notified_at.is_none()
+    x.notified_at.is_none()
 }
 
 /// Lands what the repository can when it lands automatically, then tells the
@@ -164,21 +162,22 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
         .read(move |r| {
             let mut candidates = Vec::new();
             for p in pulls::open_pulls(r, &r2)? {
-                let passed = crate::landing::current(r, &r2.id, p.number)?
-                    .is_some_and(|l| l.state == "passed");
-                if r2.auto_land && passed && (r2.upstream.is_none() || p.upstream.is_none()) {
+                if r2.auto_land && (r2.upstream.is_none() || p.upstream.is_none()) {
                     candidates.push(p);
                 }
             }
             Ok(candidates)
         })
         .await?;
-    let tips = if candidates.is_empty() {
-        Default::default()
-    } else {
-        pulls::tips(app, repo).await?
-    };
     for p in candidates {
+        crate::landing::sweep_repo(app, repo).await?;
+        let tips = pulls::tips(app, repo).await?;
+        let Some(view) = crate::landing::view(app, repo, p.number, &tips).await? else {
+            continue;
+        };
+        if !view.blockers.is_empty() || view.entry.error.is_some() {
+            continue;
+        }
         let input = MergeInput {
             expected_head: tips.get(&p.head).cloned().unwrap_or_default(),
             expected_base: tips.get(&p.base).cloned().unwrap_or_default(),
@@ -220,11 +219,19 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
     let notices = app
         .store
         .read(move |r| {
-            Ok(crate::landing::active(r, &r2.id)?
-                .into_iter()
-                .filter(awaits_notice)
-                .map(|l| l.number)
-                .collect::<Vec<_>>())
+            let mut notices = vec![];
+            if r2.auto_land && r2.upstream.is_some() {
+                for p in pulls::open_pulls(r, &r2)? {
+                    if p.upstream.as_ref().is_some_and(|x| x.auto)
+                        && crate::landing::current(r, &r2.id, p.number)?
+                            .as_ref()
+                            .is_some_and(awaits_notice)
+                    {
+                        notices.push(p.number);
+                    }
+                }
+            }
+            Ok(notices)
         })
         .await?;
     for number in notices {
@@ -238,8 +245,8 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
 
 // ---------------------------------------------------------------- the webhook
 
-/// Tells the webhook, once per gate pass, that pull request `number` can merge
-/// on the host: its queue's next action is the owner's merge there.
+/// Tells the webhook, once per head, that pull request `number` can merge
+/// on the host: its next action is the owner's merge there.
 /// Without a webhook nothing is sent; a failure is kept and tried again.
 /// Returns false when the send failed. A crash between the webhook's answer
 /// and the write of `notified_at` sends it again: at least once.
@@ -271,21 +278,33 @@ async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
     let tips = pulls::tips(app, &repo).await?;
     let head = tips.get(&p.head).map(String::as_str).unwrap_or_default();
     let following = app.upstream.following(&repo.id);
-    let first = crate::landing::first(&repo, &p, &landing, &following, head);
+    let blockers = crate::landing::blockers(
+        app,
+        &repo,
+        &p,
+        head,
+        tips.get(&p.base).map(String::as_str).unwrap_or_default(),
+        &landing,
+    )
+    .await?;
+    let (next, _) = crate::landing::next(&repo, &p, &landing, &following, head, &blockers);
     let Some(up) = repo
         .upstream
         .as_ref()
-        .filter(|_| first.next == "owner_merge_host")
+        .filter(|_| next == "owner_merge_host")
     else {
         return Ok(true);
     };
     let text = format!(
-        "{} ({} !{number}) passed its landing gate and is ready to merge on {}.\n{}\n{}",
+        "{} ({} !{number}) is ready to merge on {}.\n{}\n{}",
         p.title,
         repo.path,
         app.upstream.host_name(&up.provider),
         app.pull_url(&repo.path, number),
-        first.host_url.unwrap_or_default(),
+        p.upstream
+            .as_ref()
+            .and_then(|x| x.url.clone())
+            .unwrap_or_default(),
     );
     if !app.autoland.send(&app.secrets, &text).await {
         return Ok(false);
