@@ -15,7 +15,7 @@ restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
 recover    Resume an interrupted update or return to the previous build.
 uninstall  Let in-flight work finish and remove the LaunchAgent.
-auto-install    確認済みのコミットを追う自動更新を登録する。
+auto-install    Register automatic updates that follow verified commits, using this PATH.
 auto-uninstall  Stop and unregister automatic updates.
 auto-once       Run one automatic update inspection (also used by tests).
 
