@@ -2199,6 +2199,22 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
     for old in [path_of(&moving), new_path] {
         assert_eq!(s.ok(&old, &w.aiko).await["key"], "5", "{old}");
     }
+    // Short references and URLs of either old number link to its number
+    // now, which differs from each of them.
+    let (st, rendered) = s
+        .post(
+            &format!("/repos/{}/markdown", encode("acme/other")),
+            &w.aiko,
+            json!({"source": format!("acme/demo#2, #2, {url} and {}", moving["url"].as_str().unwrap())}),
+        )
+        .await;
+    assert_eq!(st, 200, "{rendered}");
+    let now = format!("href=\"{}/{REPO}/-/tickets/5\"", s.url);
+    assert_eq!(
+        rendered["markdown"].as_str().unwrap().matches(&now).count(),
+        4,
+        "{rendered}"
+    );
     w.server.stop();
     let checked = w.server.cli(&w.owner, &["admin", "check"]);
     assert!(
