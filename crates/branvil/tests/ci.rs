@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 const IMAGE: &str = "docker.io/library/alpine:3.22";
 /// The configuration digest the scripted runner reports for the image.
-const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
+pub(crate) const DIGEST: &str =
+    "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
 async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position() {
@@ -464,6 +465,12 @@ async fn paths_land(auto: bool) {
             .await;
         assert_eq!(status, 200, "{result}");
     }
+    let merged = w.server.ok(&pull_path, &w.owner).await;
+    assert_eq!(
+        merged["merge_sha"], head,
+        "path-skipped head still fast-forwards"
+    );
+    assert_eq!(merged["head_sha"], head);
 }
 
 #[tokio::test]
@@ -1017,7 +1024,7 @@ impl Runner {
         }
     }
 
-    async fn post(&self, c: &Value, what: &str, body: Value) -> (StatusCode, Value) {
+    pub(crate) async fn post(&self, c: &Value, what: &str, body: Value) -> (StatusCode, Value) {
         let resp = self
             .http
             .post(self.at(&format!(

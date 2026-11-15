@@ -2114,15 +2114,26 @@ async fn merge_locked(
     let r2 = repo.clone();
     let p = app.store.read(move |r| load_pull(r, &r2, number)).await?;
     crate::landing::reconcile_locked(app, &repo).await?;
-    let (head, base, gate) = check_landable(app, &repo, &p, &input, auto).await?;
+    let (head, base, _) = check_landable(app, &repo, &p, &input, auto).await?;
     let dir = app.git.repo_dir(&repo.path);
+    let commit = app
+        .git
+        .merge_commit(
+            &dir,
+            &base,
+            &head,
+            &format!("Merge !{number}: {}", p.title),
+            true,
+        )
+        .await?;
+    let merge_sha = local_merge_sha(commit)?;
     keep_merged(app, &repo, number, &head).await?;
     let entry = JournalEntry {
         id: util::new_id("jnl"),
         repo: repo.id.clone(),
         refname: format!("refs/heads/{}", p.base),
         old: base.clone(),
-        new: gate.clone(),
+        new: merge_sha.clone(),
         op: JournalOp::Merge { number },
         created_at: util::now(),
     };
@@ -2136,7 +2147,7 @@ async fn merge_locked(
         .update_ref(
             &dir,
             &entry.refname,
-            &gate,
+            &merge_sha,
             &base,
             &format!("branvil: merge !{number}"),
         )
@@ -2165,6 +2176,20 @@ async fn merge_locked(
     app.events.publish("pull", &repo.path, number.to_string());
     tickets::publish_closed_by(app, &merged).await;
     Ok((repo, merged))
+}
+
+/// Resolve the merge result before writing refs, the journal, or pull state.
+fn local_merge_sha(commit: crate::git::MergeCommit) -> AppResult<String> {
+    match commit {
+        crate::git::MergeCommit::Ready { sha, .. } => Ok(sha),
+        crate::git::MergeCommit::Conflicts { files } => Err(AppError::conflict_code(
+            "merge_conflict",
+            format!(
+                "Merge conflicts in: {}. Nothing was written.",
+                files.join(", ")
+            ),
+        )),
+    }
 }
 
 /// Points the hidden ref `refs/branvil/merged/<number>` at the head a pull
@@ -2307,6 +2332,17 @@ mod tests {
     use crate::domain::repos::{self, NewRepo, NewWorkspace};
     use crate::model::MemberKind;
     use std::time::Duration;
+
+    #[test]
+    fn local_merge_conflicts_are_rejected_before_any_writes() {
+        let error = super::local_merge_sha(crate::git::MergeCommit::Conflicts {
+            files: vec!["a.txt".into(), "b.txt".into()],
+        })
+        .unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.code, "merge_conflict");
+        assert!(error.message.contains("a.txt, b.txt"));
+    }
 
     async fn fixture() -> (tempfile::TempDir, crate::app::Shared, Caller, Repo, Pull) {
         let temp = tempfile::tempdir().unwrap();

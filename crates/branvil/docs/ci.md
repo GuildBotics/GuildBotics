@@ -297,11 +297,12 @@ changes, its old gate results no longer count as checks of the new head. The
 pull request's gate panel then waits for the new head's checks and approvals
 instead of showing old failures or asking to retry them.
 
-A local merge moves base to that exact gate commit, preserving its run. Jobs
-without a dependency cache keep their gate attempts; jobs with a cache get a
-new protected attempt (a running branch attempt is stopped). A squash merge
-on the upstream gets its own run. New attempts may reuse an earlier successful
-execution of the same tree.
+A local merge advances base to head when head contains base, otherwise to a
+new merge commit with parents `[base, head]`. The new default-branch commit is
+verified by main verification. Its jobs may reuse successful gate executions
+of the same tree under the Trust rules below. Jobs declaring artifacts execute
+again after a non-fast-forward merge because the merge commit has a different
+SHA from the gate. An upstream squash merge also gets its own run.
 
 When a runner claims an attempt, the service offers the most recently finished
 successful execution whose files have not been pruned, in the same repository
@@ -314,6 +315,9 @@ basis:
 | 2 | Its job has empty `paths` | Tree |
 | 3 | Its run has no input digest of the job yet | Tree |
 | 4 | Otherwise (a pull request's head) | Paths |
+
+Jobs declaring artifacts may reuse only an execution of the same commit,
+even when the tree or paths match, because artifacts may embed commit identity.
 
 The **tree** basis requires the same Git tree. The **paths** basis requires
 the same input digest of the job's `paths` (`ix_ci_inputs`), from any run:

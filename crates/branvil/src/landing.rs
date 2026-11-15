@@ -11,7 +11,7 @@ use crate::auth::Caller;
 use crate::ci::Check;
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
-use crate::git::GateCommit;
+use crate::git::MergeCommit;
 use crate::model::{Landing, LandingReason, Published, Pull, Repo};
 use crate::store::{self, Key, Rd, Wtx};
 use crate::util;
@@ -906,30 +906,30 @@ pub async fn reconcile_locked(app: &App, repo: &Repo) -> AppResult<()> {
         }
         if e.state == "waiting" {
             let gate = match &e.gate {
-                Some(sha) => GateCommit::Ready {
+                Some(sha) => MergeCommit::Ready {
                     sha: sha.clone(),
                     tree: String::new(),
                 },
                 None => {
                     app.git
-                        .gate_commit(
+                        .merge_commit(
                             &app.git.repo_dir(&repo.path),
                             &e.base_sha,
                             &e.head_sha,
-                            e.number,
+                            &format!("Branvil landing gate !{}", e.number),
                             !app.ci.needs_gate_commit(repo, &e.head_sha).await?,
                         )
                         .await?
                 }
             };
             match gate {
-                GateCommit::Conflicts { files } => {
+                MergeCommit::Conflicts { files } => {
                     let mut why = reason("conflict", "The head conflicts with the base.");
                     why.files = files;
                     leave(app, repo, e, why, &[]).await?;
                     continue;
                 }
-                GateCommit::Ready { sha, tree } => {
+                MergeCommit::Ready { sha, tree } => {
                     if sha != e.head_sha
                         && !tree.is_empty()
                         && app
