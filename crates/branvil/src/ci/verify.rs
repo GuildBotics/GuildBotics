@@ -251,6 +251,11 @@ impl Ci {
                             .collect();
                     }
                     v.finished_at = Some(now.clone());
+                    let commits = if v.state == "failed" {
+                        self.narrowing_commits(repo, v).await?
+                    } else {
+                        vec![]
+                    };
                     let (id, done) = (repo.id.clone(), v.clone());
                     let closed = self
                         .inner
@@ -264,8 +269,10 @@ impl Ci {
                                     &Key::new().s(&id).bytes(),
                                 )?;
                                 crate::repair::passed(w, &id, &done.sha)?;
+                                super::narrow::abandon(w, &id, &now)?;
                             } else {
                                 crate::repair::failed(w, &id, &done.sha, &done.failed_jobs)?;
+                                super::narrow::start(w, &id, &done, &commits, &now)?;
                             }
                             Ok(closed)
                         })
@@ -357,7 +364,9 @@ pub fn start(app: crate::app::Shared) {
                     let repo_path = repo.path.clone();
                     if let Err(e) = app
                         .locked(&id, move |app| async move {
-                            app.ci.advance_verification(&repo, false).await
+                            let count = app.ci.advance_verification(&repo, false).await?;
+                            app.ci.advance_narrowings(&repo).await?;
+                            Ok::<_, crate::error::AppError>(count)
                         })
                         .await
                     {

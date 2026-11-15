@@ -934,6 +934,7 @@ pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
     }
     let _: Vec<crate::ci::verify::Verification> = r.prefix_all(store::CI_VERIFICATIONS, &[])?;
     out.extend(crate::ci::queue::expected_index(r)?);
+    out.extend(crate::ci::narrow::expected_index(r)?);
     Ok(out)
 }
 

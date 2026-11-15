@@ -17,6 +17,7 @@ pub mod admin;
 pub mod api;
 pub mod config;
 pub mod files;
+pub mod narrow;
 pub mod notify;
 mod order;
 pub mod pipeline;
@@ -665,6 +666,7 @@ impl Ci {
                 repo.path
             ),
         }
+        self.advance_narrowings(repo).await?;
         wanted.sort();
         wanted.dedup();
         for branch in wanted {

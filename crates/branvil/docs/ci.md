@@ -106,6 +106,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | Scope | Condition | Class |
   | --- | --- | --- |
   | Attempt | Cache refresh | 4b (last) |
+  | Attempt | Probe (even with a protected run, or without a run) | 2 |
   | Run | Missing run or repository, or no branches want the commit | 4b |
   | Branch | Protected, except healthy default-branch verification (4m) | 1 |
   | Branch | No open PR using this head branch | 4b |
@@ -299,7 +300,7 @@ Local merges use the local merge policy; artifact jobs run for the new SHA.
 
 A **run** is the CI of one commit of one repository; an **attempt** is one try
 of one job (`att_<ULID>`, numbered 1, 2, … per job). An attempt's `purpose`
-is `check` or `cache_refresh`; both purposes share the job's attempt numbers.
+is `check`, `cache_refresh`, or `probe`; all purposes share the job's attempt numbers.
 For example, check #1 followed by refresh #2 makes a manual check retry #3.
 Checks show the latest `check` attempt of each job: a pull request's page
 shows its head's, a commit's page that commit's, and the pull request list's header the default branch tips'
@@ -816,3 +817,39 @@ subsequent failures are consumed without another ticket. Evidence tables show at
 most 100 commits. When main passes, all pending failures are discarded and open
 repairs close as completed in `done`, even if no linked PR merged (the comment
 then notes that the failure may be intermittent).
+
+
+## Failure narrowing
+
+A failed default-branch verification starts one persistent narrowing per failed
+job with an attempt, keyed by repository, verified base, and job. Without a base
+it starts none; later failures with the same key do not restart it. Verification
+failure and repair records are written in the same transaction as the narrowing.
+
+A narrowing reads the first-parent history from its verified base c0 through the
+failed commit cn. It executes one `probe` at a time, using that commit's own job
+definition. cn contributes its verification attempts, including retries. First
+c0 runs: two failures mean `outside`, and a failure followed by a success means
+`inconsistent`. Otherwise the search bisects between the last observed passing
+commit and first observed failure. Adjacent boundary commits are tested until
+each has two results. Mixed results at one commit or a success after an observed
+failure mean `inconsistent`; otherwise `found` records both boundary SHAs. All
+observations retain their attempt IDs. An absent job or invalid pipeline counts
+as passing with `not_run` and creates no attempt. Two consecutive non-pass/fail
+probe outcomes mean `undetermined`, with a reason. A passing main verification
+cancels queued probes, requests running probes to stop, and records `abandoned`.
+Only the conclusion transaction completes a narrowing; `ci::narrow::concluded`
+returns concluded records for repair hints. Check events and the minute reconciler
+advance searches while holding the repository lock.
+
+Probes create attempts without registering runs. They never affect commit checks,
+verified refs, required checks, failure notifications, landing or member readiness.
+They always execute (`allow_reuse=false`), read caches with `cache_scope=probe`,
+and never save them. Claim copies cache scope from a run only for `check`; input
+digests are copied for every purpose when a run exists. Successful actual probes
+can supply tree and paths reuse to checks. Intermediate commits without runs are
+absent from both reuse indexes. Probes do not retry automatically or accept manual
+retry, survive branch replacement, and recover from interruption like other
+attempts. Their job page and logs use the usual routes. Class 2 admission counts
+only class 1–3 queued attempts: a full lower-priority queue does not block probes;
+when class 1–3 capacity is full, the next event or sweep retries admission.

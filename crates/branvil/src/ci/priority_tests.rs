@@ -657,3 +657,32 @@ fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
     })
     .unwrap();
 }
+
+#[test]
+fn probe_admission_and_claim_use_class_two_even_on_protected_commits() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        repo(w, &[], 1)?;
+        pull(w, 1, "feature", false)?;
+        register(w, reg("normal", "feature", &["test"]), 10, T0)?;
+        register(w, reg("base", "main", &["test"]), 10, T0)?;
+        let repository: Repo = w.get(store::REPOS, &Repo::key("repo_1"))?.unwrap();
+        let PipelineState::Jobs { jobs } = reg("base", "main", &["test"]).pipeline else {
+            unreachable!()
+        };
+        assert!(probe(w, &repository, "middle", &jobs[0], 2, T0)?.is_none());
+        let diagnostic = probe(w, &repository, "base", &jobs[0], 3, T0)?.unwrap();
+        assert_eq!(class_of(w, &diagnostic)?.class, Class::Landing);
+        assert_eq!(claim(w, "runner", 60, T0)?.unwrap().attempt.sha, "base");
+        let c = claim(w, "runner", 60, T0)?.unwrap();
+        assert_eq!(c.attempt.id, diagnostic.id);
+        assert_eq!(c.attempt.cache_scope, "probe");
+        assert_eq!(claim(w, "runner", 60, T0)?.unwrap().attempt.sha, "normal");
+        // Class 4b fills the nominal queue, but does not consume probe capacity.
+        register(w, reg("last", "unwanted", &["test"]), 1, T0)?;
+        assert!(probe(w, &repository, "middle", &jobs[0], 1, T0)?.is_some());
+        assert!(get_run(w, "repo_1", "middle")?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}

@@ -237,7 +237,7 @@ async fn removed_landing_routes_return_404() {
 }
 
 #[tokio::test]
-async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
+async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     let mut w = World::new().await;
     w.push_change("feature", "README.md", "feature");
     git_ok(&w.work, &["checkout", "-q", "main"]);
@@ -251,7 +251,7 @@ async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
     .await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_31(&db);
+    as_schema_32(&db);
     let out = std::process::Command::new(BIN)
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
@@ -268,7 +268,7 @@ async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
         .find(|e| e["number"] == 2)
         .unwrap();
     assert_eq!(e["conflicts"], json!(["README.md"]));
-    assert_eq!(e["told"], json!([]));
+    assert_eq!(e["told"], json!(["conflict"]));
     let out = std::process::Command::new(BIN)
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)
@@ -287,7 +287,7 @@ async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
             .as_array()
             .unwrap()
             .len()
-            == 2
+            == 1
     })
     .await;
     assert!(
@@ -298,12 +298,7 @@ async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
             .any(|b| b["code"] == "conflict")
     );
     w.server.stop();
-    as_schema_31(&db);
-    edit_records(&db, "landing", |v| {
-        v["state"] = json!("left");
-        v["reason"] =
-            json!({"code":"conflict","files":["README.md"],"jobs":[],"message":"conflict"});
-    });
+    as_schema_32(&db);
     let out = std::process::Command::new(BIN)
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
@@ -325,6 +320,6 @@ async fn upgrading_waiting_conflicts_checks_the_pair_before_the_first_sweep() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        1
     );
 }

@@ -193,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_31_upgrade_preserves_non_landing_records() {
+async fn schema_32_upgrade_preserves_existing_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -259,15 +259,16 @@ async fn schema_31_upgrade_preserves_non_landing_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_31(&db);
+    as_schema_32(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 31 to 32"), "{output}");
-    // Only the table of ticket moves is new, and empty.
-    assert_eq!(tables(&db).get("ticket_moves"), Some(&Vec::new()));
+    assert!(output.contains("from schema version 32 to 33"), "{output}");
+    for name in ["ci_narrowings", "ix_ci_narrowing"] {
+        assert_eq!(tables(&db).get(name), Some(&Vec::new()));
+    }
     assert_eq!(records(&db, "repos"), repos);
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
@@ -286,7 +287,7 @@ async fn schema_31_upgrade_preserves_non_landing_records() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-31-")
+                .starts_with("branvil-schema-32-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1024,7 +1025,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_31(&db);
+    as_schema_32(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
@@ -2998,5 +2999,83 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
             .await
             .0,
         400
+    );
+
+    // Once a base exists, a later failed main creates diagnostic attempts,
+    // visible as jobs without changing the verified commit's checks.
+    let base = state["tip"].as_str().unwrap();
+    let checks_url = format!("/repos/{}/commits/{base}/checks", encode(path));
+    let baseline = w.server.ok(&checks_url, &w.owner).await;
+    git_ok(&work, &["checkout", "-qb", "probe-head"]);
+    std::fs::write(work.join("changed.txt"), "changed").unwrap();
+    git_ok(&work, &["add", "changed.txt"]);
+    git_ok(&work, &["commit", "-qm", "failing main"]);
+    git_as_ok(
+        &work,
+        "alice",
+        &w.owner,
+        &["push", "-q", &w.server.remote(path), "probe-head"],
+    );
+    let pulls = format!("/repos/{}/pulls", encode(path));
+    let (status, body) = w
+        .server
+        .post(
+            &pulls,
+            &w.owner,
+            json!({"title":"probe test", "head":"probe-head", "base":"main"}),
+        )
+        .await;
+    assert_eq!(status, 201, "{body}");
+    let pull = w.server.ok(&format!("{pulls}/1"), &w.owner).await;
+    let (status, body) = w
+        .server
+        .post(
+            &format!("{pulls}/1/reviews"),
+            &w.aiko,
+            json!({"verdict":"approve", "commit":pull["head_sha"]}),
+        )
+        .await;
+    assert_eq!(status, 201, "{body}");
+    let (status, body) = w
+        .server
+        .post(
+            &format!("{pulls}/1/merge"),
+            &w.owner,
+            json!({"expected_head":pull["head_sha"],"expected_base":pull["base_sha"]}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    for _ in 0..=3 {
+        let c = runner.next_claim().await;
+        assert_eq!(c["purpose"], "check");
+        assert_eq!(runner.finish(&c, "failure").await.0, 200);
+    }
+    let probe = runner.next_claim().await;
+    assert_eq!(probe["purpose"], "probe");
+    assert_eq!(probe["sha"], base);
+    assert_eq!(probe["cache_scope"], "probe");
+    assert!(probe["reuse"].is_null());
+    let job_url = format!(
+        "/repos/{}/jobs/{}",
+        encode(path),
+        probe["attempt_id"].as_str().unwrap()
+    );
+    assert_eq!(w.server.ok(&job_url, &w.aiko).await["purpose"], "probe");
+    assert_eq!(
+        w.server.get(&format!("{job_url}/log"), &w.aiko).await.0,
+        200
+    );
+    assert_eq!(runner.finish(&probe, "failure").await.0, 200);
+    assert_eq!(
+        w.server
+            .post(&format!("{job_url}/retry"), &w.owner, json!({}))
+            .await
+            .0,
+        409
+    );
+    assert_eq!(w.server.ok(&checks_url, &w.owner).await, baseline);
+    assert_eq!(
+        w.server.ok(&url, &w.owner).await["latest_verified"]["sha"],
+        base
     );
 }

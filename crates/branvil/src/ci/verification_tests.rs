@@ -16,7 +16,11 @@ impl Fixture {
         ci.inner.layout.create().unwrap();
         ci.inner
             .store
-            .write_sync(|w| w.put(store::REPOS, &Repo::key(&repo.id), &repo))
+            .write_sync(|w| {
+                w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
+                crate::model::rebuild_indexes(w)?;
+                Ok(())
+            })
             .unwrap();
         let dir = ci.inner.git.repo_dir(&repo.path);
         ci.inner.git.init_bare(&dir, "main").await.unwrap();
@@ -386,4 +390,243 @@ async fn reconciliation_isolates_verification_and_repository_errors() {
             .unwrap();
     assert_eq!(run.branches, vec!["feature"]);
     assert_eq!(f.record().state, "running");
+}
+
+/// Actual Git history, normal checks, persistent probes, and a restarted controller.
+#[tokio::test]
+async fn narrowing_finds_first_failure_without_changing_verified_checks() {
+    let mut f = Fixture::new(&["test"]).await;
+    f.advance().await;
+    f.finish(f.claim(), "success");
+    f.advance().await;
+    let base = f.sha.clone();
+    let before = f.ci.head_checks(&f.repo, &base).await.unwrap();
+    let mut commits = vec![base.clone()];
+    for _ in 0..4 {
+        commits.push(f.push_next().await);
+    }
+    f.advance().await;
+    // main verification retries failures; every one is retained as evidence.
+    for _ in 0..=queue::MAX_AUTO_RETRIES {
+        f.finish(f.claim(), "failure");
+    }
+    f.advance().await;
+    assert_eq!(f.record().state, "failed");
+    let mut positions = vec![];
+    loop {
+        f.ci.advance_narrowings(&f.repo).await.unwrap();
+        let done =
+            f.ci.inner
+                .store
+                .read_sync(|r| narrow::concluded(r, &f.repo.id, &base, "test"))
+                .unwrap();
+        if let Some(done) = done {
+            assert_eq!(done.conclusion, "found");
+            assert_eq!(
+                done.boundary,
+                Some((commits[2].clone(), commits[3].clone()))
+            );
+            break;
+        }
+        let c = f.claim();
+        assert_eq!(c.attempt.purpose, queue::Purpose::Probe);
+        assert_eq!(c.attempt.cache_scope, "probe");
+        assert!(!c.attempt.allow_reuse);
+        assert!(c.reuse.is_none());
+        let pos = commits.iter().position(|s| s == &c.attempt.sha).unwrap();
+        positions.push(pos);
+        let id = c.attempt.id.clone();
+        f.finish(c, if pos < 3 { "success" } else { "failure" });
+        assert!(
+            f.ci.inner
+                .store
+                .write_sync(|w| queue::retry(w, &id, 256, &util::now()))
+                .is_err()
+        );
+        f = f.restart();
+        assert!(positions.len() <= 6);
+    }
+    assert_eq!(positions, [0, 2, 3, 2, 3]);
+    let after = f.ci.head_checks(&f.repo, &base).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+    assert!(f.marked().await);
+    assert!(
+        f.ci.inner
+            .store
+            .read_sync(crate::model::index_problems)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+async fn failed_narrowing() -> (Fixture, Vec<String>) {
+    let f = Fixture::new(&["test"]).await;
+    f.advance().await;
+    f.finish(f.claim(), "success");
+    f.advance().await;
+    let mut commits = vec![f.sha.clone()];
+    for _ in 0..4 {
+        commits.push(f.push_next().await);
+    }
+    f.advance().await;
+    for _ in 0..=queue::MAX_AUTO_RETRIES {
+        f.finish(f.claim(), "failure");
+    }
+    f.advance().await;
+    (f, commits)
+}
+
+#[tokio::test]
+async fn narrowing_outside_inconsistent_undetermined_dedup_and_abandonment() {
+    for (second, expected) in [
+        ("failure", "outside"),
+        ("success", "inconsistent"),
+        ("cancelled", "undetermined"),
+    ] {
+        let (f, commits) = failed_narrowing().await;
+        for outcome in [
+            if second == "cancelled" {
+                "cancelled"
+            } else {
+                "failure"
+            },
+            second,
+        ] {
+            f.ci.advance_narrowings(&f.repo).await.unwrap();
+            let c = f.claim();
+            assert_eq!(c.attempt.sha, commits[0]);
+            f.finish(c, outcome);
+        }
+        f.ci.advance_narrowings(&f.repo).await.unwrap();
+        let n =
+            f.ci.inner
+                .store
+                .read_sync(|r| narrow::concluded(r, &f.repo.id, &commits[0], "test"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(n.conclusion, expected);
+        assert_eq!(n.results[0].len(), 2);
+        // Repeating the same failed verification cannot reset a concluded search.
+        let record = f.record();
+        f.ci.inner
+            .store
+            .write_sync(|w| narrow::start(w, &f.repo.id, &record, &commits, &util::now()))
+            .unwrap();
+        assert_eq!(
+            f.ci.inner
+                .store
+                .read_sync(|r| narrow::concluded(r, &f.repo.id, &commits[0], "test"))
+                .unwrap()
+                .unwrap()
+                .conclusion,
+            expected
+        );
+    }
+    let (f, commits) = failed_narrowing().await;
+    f.ci.advance_narrowings(&f.repo).await.unwrap();
+    let queued =
+        f.ci.inner
+            .store
+            .read_sync(|r| queue::scheduled(r, false))
+            .unwrap()[0]
+            .0
+            .clone();
+    // A later passing verification closes active searches in its transaction.
+    f.push_next().await;
+    f.advance().await;
+    let main = f.claim();
+    assert_eq!(main.attempt.purpose, queue::Purpose::Check);
+    f.finish(main, "success");
+    f.advance().await;
+    let n =
+        f.ci.inner
+            .store
+            .read_sync(|r| narrow::concluded(r, &f.repo.id, &commits[0], "test"))
+            .unwrap()
+            .unwrap();
+    assert_eq!(n.conclusion, "abandoned");
+    assert_eq!(
+        f.ci.inner
+            .store
+            .read_sync(|r| queue::get_attempt(r, &queued.id))
+            .unwrap()
+            .unwrap()
+            .conclusion
+            .as_deref(),
+        Some("cancelled")
+    );
+    assert!(
+        f.ci.inner
+            .store
+            .read_sync(crate::model::index_problems)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn narrowing_missing_job_is_not_run_and_boundary_disagreement_keeps_attempts() {
+    for missing in [false, true] {
+        let f = Fixture::new(&["test"]).await;
+        f.advance().await;
+        f.finish(f.claim(), "success");
+        f.advance().await;
+        let mut commits = vec![f.sha.clone()];
+        for i in 1..=4 {
+            let pipeline = if missing && i == 2 {
+                "invalid pipeline"
+            } else {
+                "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n"
+            };
+            std::fs::write(f.temp.path().join("work/.branvil/ci.toml"), pipeline).unwrap();
+            commits.push(f.push_next().await);
+        }
+        f.advance().await;
+        for _ in 0..=queue::MAX_AUTO_RETRIES {
+            f.finish(f.claim(), "failure");
+        }
+        f.advance().await;
+        let mut at_three = 0;
+        for _ in 0..7 {
+            f.ci.advance_narrowings(&f.repo).await.unwrap();
+            if let Some(n) =
+                f.ci.inner
+                    .store
+                    .read_sync(|r| narrow::concluded(r, &f.repo.id, &commits[0], "test"))
+                    .unwrap()
+            {
+                assert_eq!(n.conclusion, if missing { "found" } else { "inconsistent" });
+                if missing {
+                    assert_eq!(n.results[2][0].outcome, "not_run");
+                } else {
+                    assert_eq!(n.results[3].len(), 2);
+                    assert!(n.results[3].iter().all(|r| r.attempt.is_some()));
+                }
+                break;
+            }
+            let c = f.claim();
+            let pos = commits.iter().position(|s| s == &c.attempt.sha).unwrap();
+            if pos == 3 {
+                at_three += 1;
+            }
+            f.finish(
+                c,
+                if pos < 3 || (!missing && at_three == 2) {
+                    "success"
+                } else {
+                    "failure"
+                },
+            );
+        }
+        assert!(
+            f.ci.inner
+                .store
+                .read_sync(|r| narrow::concluded(r, &f.repo.id, &commits[0], "test"))
+                .unwrap()
+                .is_some()
+        );
+    }
 }

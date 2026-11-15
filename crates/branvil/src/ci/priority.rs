@@ -57,6 +57,9 @@ pub fn class_of(r: &impl Rd, attempt: &queue::Attempt) -> AppResult<Priority> {
     if attempt.purpose == queue::Purpose::CacheRefresh {
         return Ok(Priority::reason(Class::Last, "cache refresh"));
     }
+    if attempt.purpose == queue::Purpose::Probe {
+        return Ok(Priority::new(Class::Landing));
+    }
     Classifier::default().run(r, attempt)
 }
 
@@ -71,6 +74,9 @@ impl Snapshot {
     pub(crate) fn class_of(&mut self, r: &impl Rd, a: &queue::Attempt) -> AppResult<Priority> {
         if a.purpose == queue::Purpose::CacheRefresh {
             return Ok(Priority::reason(Class::Last, "cache refresh"));
+        }
+        if a.purpose == queue::Purpose::Probe {
+            return Ok(Priority::new(Class::Landing));
         }
         let key = (a.repo.clone(), a.sha.clone());
         if let Some(p) = self.runs.get(&key) {
@@ -120,16 +126,17 @@ impl Classifier {
             && v.sha == run.sha
         {
             let failed = queue::attempts_of(r, &repo.id, &run.sha)?.iter().any(|a| {
-                a.status == "completed"
-                    && matches!(
-                        a.conclusion.as_deref(),
-                        Some("failure" | "timed_out" | "startup_failure")
-                    )
-                    || (a.after_interrupt
-                        && a.status == "completed"
-                        && a.conclusion.as_deref() == Some("cancelled")
-                        && !a.cancel_requested
-                        && !a.superseded)
+                a.purpose == queue::Purpose::Check
+                    && (a.status == "completed"
+                        && matches!(
+                            a.conclusion.as_deref(),
+                            Some("failure" | "timed_out" | "startup_failure")
+                        )
+                        || (a.after_interrupt
+                            && a.status == "completed"
+                            && a.conclusion.as_deref() == Some("cancelled")
+                            && !a.cancel_requested
+                            && !a.superseded))
             });
             return Ok(
                 if v.failing_since.is_some() || (v.state == "running" && failed) {

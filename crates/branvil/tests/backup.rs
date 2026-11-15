@@ -270,14 +270,14 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 30 wrote.
+    // A backup of the previous schema version: what version 32 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_31(&db);
+    as_schema_32(&db);
     let bytes = std::fs::read(&db).unwrap();
     let mut old = manifest.clone();
-    old["schema_version"] = json!(31);
+    old["schema_version"] = json!(32);
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {
             f["bytes"] = json!(bytes.len());
@@ -311,12 +311,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 31 to 32"),
+        text(&out).contains("from schema version 32 to 33"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("removed landing gates and queues"),
+        text(&out).contains("added CI narrowings and running index"),
         "{}",
         text(&out)
     );
