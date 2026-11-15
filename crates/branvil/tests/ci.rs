@@ -184,7 +184,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_28_upgrade_preserves_inputs_selections_and_verification() {
+async fn schema_29_upgrade_preserves_inputs_and_adds_repair_markers() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -249,32 +249,21 @@ async fn schema_28_upgrade_preserves_inputs_selections_and_verification() {
     let attempts = records(&db, "ci_attempts");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let repos = records(&db, "repos");
-    as_schema_28(&db);
+    let prior_runs = records(&db, "ci_runs");
+    as_schema_29(&db);
     let before = tables(&db);
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 28 to 29"), "{output}");
+    assert!(output.contains("from schema version 29 to 30"), "{output}");
     assert_eq!(records(&db, "ci_attempts"), attempts);
     assert_eq!(records(&db, "repos"), repos);
-    assert_eq!(repos[0]["responder"], "aiko");
+    assert_eq!(records(&db, "ci_runs"), prior_runs);
     let runs = records(&db, "ci_runs");
     assert!(
-        records(&db, "repos")
+        records(&db, "tickets")
             .iter()
-            .all(|r| r["post_merge_jobs"] == json!([]))
-    );
-    assert!(
-        runs.iter()
-            .filter(|r| r["selection"].is_object())
-            .all(|r| r["selection"]["post_merge_jobs"] == json!([]))
-    );
-    assert!(attempts.iter().any(|a| a["path_skip"].is_object()));
-    assert!(
-        records(&db, "ci_attempts")
-            .iter()
-            .filter(|a| a["path_skip"].is_object())
-            .all(|a| a["path_skip"]["reason"] == "paths")
+            .all(|r| r.get("repair") == Some(&Value::Null))
     );
     assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
@@ -289,7 +278,7 @@ async fn schema_28_upgrade_preserves_inputs_selections_and_verification() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-28-")
+                .starts_with("branvil-schema-29-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1054,7 +1043,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_28(&db);
+    as_schema_29(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
@@ -2955,6 +2944,23 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
         .await;
         last = c;
     }
+    let repair_url = format!("/repos/{}/tickets/1", encode(path));
+    eventually(
+        "verification event creates repair without the minute sweep",
+        || async { w.server.get(&repair_url, &w.owner).await.0 == 200 },
+    )
+    .await;
+    let repair = w.server.ok(&repair_url, &w.owner).await;
+    assert_eq!(repair["repair"], true);
+    assert_eq!(repair["author"], "branvil");
+    assert_eq!(repair["lane"], "ready");
+    assert!(repair["assignee"]["name"].is_string());
+    assert!(
+        repair["body"]
+            .as_str()
+            .unwrap()
+            .contains(last["attempt_id"].as_str().unwrap())
+    );
     let failed = w.server.ok(&url, &w.owner).await;
     assert_eq!(failed["failing_since"], failed["tip"]);
     assert_eq!(
@@ -2974,6 +2980,10 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
         w.server.ok(&url, &w.owner).await["state"] == "verified"
     })
     .await;
+    let repaired = w.server.ok(&repair_url, &w.owner).await;
+    assert_eq!(repaired["state"], "closed");
+    assert_eq!(repaired["state_reason"], "completed");
+    assert_eq!(repaired["lane"], "done");
     let state = w.server.ok(&url, &w.aiko).await;
     assert_eq!(state["ahead"], 0);
     assert_eq!(state["tip"], state["latest_verified"]["sha"]);

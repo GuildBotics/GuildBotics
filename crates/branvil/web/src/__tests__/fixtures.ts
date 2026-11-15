@@ -12,6 +12,7 @@ export function card(key: string, lane: Card["lane"], extra: Partial<Card> = {})
     state: "open",
     state_reason: null,
     author: "aiko",
+    repair: false,
     assignee: null,
     labels: [],
     interactive: false,

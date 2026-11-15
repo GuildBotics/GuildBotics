@@ -151,6 +151,7 @@ export interface Assignee {
 }
 
 export interface Ticket {
+  repair: boolean;
   url: string;
   repository: string;
   /** The ticket's number in its repository, as a string ("1"). */

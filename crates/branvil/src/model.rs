@@ -199,7 +199,14 @@ pub struct Assignee {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Repair {
+    pub jobs: Vec<String>,
+    pub reported: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Ticket {
+    pub repair: Option<Repair>,
     /// The id of the repository the ticket belongs to.
     pub repo: String,
     /// The id of that repository's workspace, whose board the ticket is on.
@@ -678,6 +685,12 @@ pub fn ticket_index(t: &Ticket) -> Vec<IxEntry> {
         store::IX_CARDS,
         Ticket::card_key(&t.workspace, &t.lane, &t.rank, &t.repo, t.number),
     )];
+    if t.repair.is_some() && t.state == "open" {
+        out.push(IxEntry::mark(
+            store::IX_OPEN_REPAIRS,
+            Ticket::key(&t.repo, t.number),
+        ));
+    }
     out.extend(mention_index(&t.mentions, &t.repo, t.number, 0));
     out.extend(attachment_index(&t.body, &t.repo, t.number, 0));
     for label in &t.labels {
