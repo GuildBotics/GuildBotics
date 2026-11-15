@@ -347,6 +347,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "required_approvals": 1,
   "auto_land": false,
   "ci_network": false,
+  "responder": {"member": "aiko", "chosen": false, "automatic": "aiko"},
   "labels": ["bug", "feature"],
   "upstream": null,
   "revision": 4
@@ -362,7 +363,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "required_approvals"?, "auto_land"?, "protected_branches"?, "ci_network"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "required_approvals"?, "auto_land"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -427,6 +428,20 @@ permission approved on the installation (GitHub asks the account that
 installed the app to approve it); for a fine-grained token the same
 permission; for a classic token the `security_events` (or `repo`) scope.
 Dependabot alerts must be enabled for the repository.
+
+Repository responses include `responder: {"member": "aiko", "chosen": false, "automatic": "aiko"}`.
+`member` is the effective assignee. `automatic` always names the current automatic
+candidate, including when `chosen` is true; the CI editor uses it to preview
+returning to automatic selection. Automatic selection is evaluated once for each response.
+The owner may PATCH `responder` with an existing agent name (stored with the
+member's canonical spelling), or `null` to return to automatic selection.
+Omission keeps the setting. Owner, runner, and unknown names return 400
+`invalid` without changing the record or revision; non-owners receive 403.
+New repositories use automatic selection. The effective responder is resolved
+at read time: the agent author of the repository's most recently merged agent
+PR (`merged_at`), otherwise the oldest agent (`created_at`), otherwise the
+owner. An explicit name has `chosen: true` and overrides that ordering.
+
 
 ## Tickets and the board
 

@@ -232,7 +232,7 @@ describe("CI settings", () => {
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, CI),
       "GET /api/v1/repos": page([
-        { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], ci_network: false, labels: [], upstream: null, revision: 1 },
+        { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" }, labels: [], upstream: null, revision: 1 },
       ]),
     });
     const user = userEvent.setup();

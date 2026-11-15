@@ -69,7 +69,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
+async fn schema_27_upgrade_preserves_inputs_and_adds_automatic_responders() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -94,6 +94,13 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
         };
         assert_eq!(runner.finish(c, conclusion).await.0, 200);
     }
+    assert_eq!(
+        w.server
+            .post("/repos", &w.owner, json!({"path": "acme/second"}))
+            .await
+            .0,
+        201
+    );
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
@@ -118,20 +125,23 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
     assert_eq!(indexed.len(), 1);
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
-    let mut attempts = records(&db, "ci_attempts");
+    let verifications = records(&db, "ci_verifications");
+    let attempts = records(&db, "ci_attempts");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
-    as_schema_26(&db);
+    as_schema_27(&db);
     let before = tables(&db);
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 26 to 27"), "{output}");
-    for a in &mut attempts {
-        a["verified_sha"] = Value::Null;
-    }
+    assert!(output.contains("from schema version 27 to 28"), "{output}");
+    assert!(
+        records(&db, "repos")
+            .iter()
+            .all(|r| r.get("responder") == Some(&Value::Null))
+    );
     assert_eq!(records(&db, "ci_attempts"), attempts);
     let runs = records(&db, "ci_runs");
-    assert!(records(&db, "ci_verifications").is_empty());
+    assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
     assert!(run["failure_notified_at"].is_null());
@@ -144,7 +154,7 @@ async fn schema_26_upgrade_preserves_inputs_and_starts_verification_empty() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-26-")
+                .starts_with("branvil-schema-27-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -903,7 +913,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_26(&db);
+    as_schema_27(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])

@@ -10,7 +10,7 @@ import { BASE, HEAD, landing, pull } from "./fixtures";
 const P = "/api/v1/repos/acme/demo/pulls/3";
 const REPO: Repository = {
   path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: ["main"],
-  required_checks: ["test"], required_approvals: 1, auto_land: false, ci_network: false, labels: [], revision: 1,
+  required_checks: ["test"], required_approvals: 1, auto_land: false, ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" }, labels: [], revision: 1,
   upstream: { provider: "github", host: "GitHub", repository: "example/demo", url: "https://github.com/example/demo", reader: { member: "agent", chosen: false }, following: { tip: BASE, checked_at: null, followed_at: null, error: null, stopped: null } },
 };
 const PREVIEW = { host: "GitHub", repository: "example/demo", head: "topic", base: "main", title: "Change", body: "", account: "agent", login: "agent-bot" };

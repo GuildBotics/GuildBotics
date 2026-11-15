@@ -149,7 +149,7 @@ pub async fn set(
         .await?;
     app.events.publish("repo", &updated.path, "");
     app.upstream.wake();
-    Ok(repo_view(app, &updated))
+    repo_view(app, &updated).await
 }
 
 pub async fn delete(app: &App, caller: &Caller, path: &str) -> AppResult<RepoView> {
@@ -169,7 +169,7 @@ pub async fn delete(app: &App, caller: &Caller, path: &str) -> AppResult<RepoVie
         .await?;
     app.upstream.following.lock().unwrap().remove(&repo.id);
     app.events.publish("repo", &updated.path, "");
-    Ok(repo_view(app, &updated))
+    repo_view(app, &updated).await
 }
 
 /// Polls the repository now ("Check now") and answers with what it found.
@@ -182,7 +182,7 @@ pub async fn refresh(app: &App, caller: &Caller, path: &str) -> AppResult<RepoVi
         )));
     }
     super::poll_repo(app, &repo).await;
-    Ok(repo_view(app, &repo))
+    repo_view(app, &repo).await
 }
 
 /// A reader picked as when nobody is named (`pick_reader`).
