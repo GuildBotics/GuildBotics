@@ -691,3 +691,16 @@ mentioning members. A successful verification atomically clears all pending
 failures and closes all open repair tickets with a system comment naming any
 linked merged PRs. Closing links alone leave repair tickets open until verification
 passes. Ordinary ticket creation and board ordering keep their existing behavior.
+
+While a repair ticket is open, the sweep reports new failing jobs, linked merges
+that are ancestors of the failed commit but not of `repair.reported`, and failed
+retries of the same reported commit. It appends one system comment per pending
+failure, updates `repair.jobs` and `repair.reported`, and moves new/done tickets to
+the front of ready. Ready/in-progress tickets retain their lane. Ancestor checks
+run outside transactions; writes recheck the open ticket and reported SHA. The
+pending record is consumed atomically with the comment, preventing duplicate
+sweep/restart reports while allowing each explicit verification retry to report.
+
+A shared repair-PR predicate uses the open repair ticket and local ticket links
+for API responses, CI priority, full head-job selection and landing. Repair PRs
+run ahead of ordinary approved heads in class 2 and require all jobs to succeed.

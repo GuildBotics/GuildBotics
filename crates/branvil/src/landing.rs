@@ -189,9 +189,7 @@ pub async fn blockers(
             ));
         }
     }
-    if head.is_empty()
-        || head_checks(repo, &app.ci.head_checks(repo, head).await?.checks) != HeadChecks::Passed
-    {
+    if head.is_empty() || pull_head_checks(app, repo, p, head).await? != HeadChecks::Passed {
         out.push(reason(
             "head_checks",
             format!(
@@ -358,6 +356,38 @@ pub(crate) enum HeadChecks {
     Running,
     /// One completed without succeeding.
     Failed,
+}
+
+pub(crate) async fn pull_head_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+) -> AppResult<HeadChecks> {
+    let p = p.clone();
+    let repair = app
+        .store
+        .read(move |r| crate::repair::is_pull(r, &p))
+        .await?;
+    let checks = app.ci.head_checks(repo, head).await?;
+    let mut required = repo.clone();
+    if repair {
+        if !checks.run_registered {
+            return Ok(HeadChecks::Running);
+        }
+        required
+            .required_checks
+            .extend(checks.checks.iter().map(|c| c.name.clone()));
+        if checks.checks.iter().any(|c| {
+            c.path_skip.is_some()
+                || c.reused_from
+                    .as_ref()
+                    .is_some_and(|s| s.basis == crate::ci::queue::Basis::Paths)
+        }) {
+            return Ok(HeadChecks::Running);
+        }
+    }
+    Ok(head_checks(&required, &checks.checks))
 }
 
 pub(crate) fn head_checks(repo: &Repo, checks: &[Check]) -> HeadChecks {

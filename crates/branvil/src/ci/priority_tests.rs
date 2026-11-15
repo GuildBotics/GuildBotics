@@ -108,6 +108,54 @@ fn take(w: &Wtx) -> AppResult<Claimed> {
 }
 
 #[test]
+fn repair_precedes_approved_work_and_refuses_paths_reuse() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        repo(w, &[], 1)?;
+        let ticket: model::Ticket = serde_json::from_value(serde_json::json!({
+            "repo":"repo_1", "workspace":"acme", "number":1, "title":"Repair", "body":"", "mentions":[],
+            "state":"open", "author":"branvil", "labels":[], "interactive":false, "lane":"ready", "rank":"a",
+            "blocked_by":[], "created_at":T0, "updated_at":T0, "revision":1,
+            "repair":{"reported":"main", "jobs":["test"]}
+        })).unwrap();
+        crate::domain::tickets::write_ticket(w, None, &ticket)?;
+        pull(w, 1, "approved", false)?;
+        review(w, 1, "reviewer", "approve", "", "approved")?;
+        pull(w, 2, "ordinary", false)?;
+        let mut p = pull(w, 3, "fix", false)?;
+        let old = p.clone();
+        p.tickets.push(model::TicketLink {url:"ticket".into(), local:Some(("repo_1".into(),1)), closes:false});
+        save_pull(w, Some(&old), &p)?;
+        enqueue(w, "approved", "approved")?;
+        enqueue(w, "ordinary", "ordinary")?;
+        enqueue(w, "repair", "fix")?;
+        assert_eq!(take(w)?.attempt.sha, "repair");
+        assert_eq!(take(w)?.attempt.sha, "approved");
+        assert_eq!(take(w)?.attempt.sha, "ordinary");
+        // A real result on another tree with matching inputs must not be offered.
+        let source = || {
+        let mut source = reg("source", "source", &["paths"]);
+        if let PipelineState::Jobs {jobs} = &mut source.pipeline { jobs[0].paths = vec!["src/**".into()]; }
+        source.inputs.insert("paths".into(), "same-inputs".into());
+        source
+        };
+        register(w, source(), 100, T0)?;
+        let c = take(w)?;
+        finish(w, &c.attempt.id, &c.lease, "success", None, ResultInfo {image_digest:Some(DIGEST.into()), ..Default::default()}, 100, T0)?;
+        let mut dest = source(); dest.sha = "dest".into(); dest.branch = "fix".into(); dest.tree = Some("different-tree".into());
+        register(w, dest, 100, T0)?;
+        let c = take(w)?;
+        assert_eq!(c.attempt.sha, "dest");
+        assert!(c.reuse.is_none());
+        let mut same = source(); same.sha = "same-tree".into(); same.branch = "fix".into();
+        register(w, same, 100, T0)?;
+        let c = take(w)?;
+        assert_eq!(c.reuse.as_ref().map(|r| r.basis), Some(Basis::Tree));
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
 fn classes_override_registration_order_and_do_not_cancel_running_work() {
     let (_d, s) = store();
     s.write_sync(|w| {

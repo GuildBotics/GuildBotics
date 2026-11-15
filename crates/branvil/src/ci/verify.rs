@@ -66,7 +66,15 @@ pub struct LatestVerified {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RepairTicket {
+    pub number: u64,
+    pub assignee: Option<String>,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct MainState {
+    pub repair: Option<RepairTicket>,
     pub branch: String,
     pub tip: Option<String>,
     pub state: &'static str,
@@ -87,7 +95,7 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
         .get(&repo.default_branch)
         .cloned();
     let id = repo.id.clone();
-    let (record, number) = app
+    let (record, number, repair) = app
         .store
         .read(move |r| {
             let record = get(r, &id)?;
@@ -100,7 +108,7 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
                     .max()
                     .unwrap_or(0);
             }
-            Ok((record, number))
+            Ok((record, number, crate::repair::open_ticket(r, &id)?))
         })
         .await?;
     let latest_verified = record
@@ -140,6 +148,11 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
     };
     let failing_since = record.as_ref().and_then(|v| v.failing_since.clone());
     Ok(MainState {
+        repair: repair.map(|t| RepairTicket {
+            number: t.number,
+            assignee: t.assignee.map(|a| a.name),
+            url: format!("{}/{}/-/tickets/{}", app.base_url, repo.path, t.number),
+        }),
         branch: repo.default_branch.clone(),
         tip,
         state,

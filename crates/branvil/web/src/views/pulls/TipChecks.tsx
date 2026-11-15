@@ -36,7 +36,7 @@ function RepositoryTipChecks({ tip }: { tip: Tip }) {
   const data = tip.data;
   return (
     <Stack gap="sm">
-      <Group><StateBadge tone={TONE[tip.status]}>{verificationLabel(t, tip)}</StateBadge></Group>
+      <Group><StateBadge tone={TONE[tip.status]}>{verificationLabel(t, tip)}</StateBadge>{tip.status === "failing" && tip.data?.repair && <a href={tip.data.repair.url}>#{tip.data.repair.number}</a>}</Group>
       {data.state === "empty" && <Text size="sm" c="dimmed">{t("repo.noTip", { branch: data.branch })}</Text>}
       {data.state !== "verified" && data.state !== "empty" && <Text size="sm">{data.latest_verified ? t("verification.ahead", { count: data.ahead ?? 0 }) : t("verification.noVerified")}</Text>}
       {data.current && ["verifying", "failing"].includes(data.state) && <CommitChecksCard repo={tip.path} sha={data.current.sha} title={t("repo.tipChecks", { branch: data.branch })} embedded onOpen={(c) => setCheck(drawerTarget(c))} />}
@@ -86,7 +86,8 @@ function WorkspaceTipChecks({ workspace, tips }: { workspace: string; tips: Tip[
 
 const label = (t: ReturnType<typeof useT>, status: TipStatus) => status === "loading" ? t("common.loading") : status === "error" ? t("pulls.tipError") : status === "empty" ? t("pulls.tipEmpty") : t(`verification.${status}`);
 
-const verificationLabel = (t: ReturnType<typeof useT>, tip: Tip) => tip.status === "verifying" && (tip.data?.current?.retry.number ?? 0) > 0
+const verificationLabel = (t: ReturnType<typeof useT>, tip: Tip) => tip.status === "failing" && tip.data?.repair
+  ? t("verification.repair", { number: tip.data.repair.number }) : tip.status === "verifying" && (tip.data?.current?.retry.number ?? 0) > 0
   ? t("verification.retry", { number: tip.data!.current!.retry.number, max: tip.data!.current!.retry.max }) : label(t, tip.status);
 
 /**
@@ -111,6 +112,7 @@ export function TipChecks({ workspace, paths, repo }: { workspace: string; paths
           })}
         </Group>
       </Button>
+      {repo && tips[0]?.status === "failing" && tips[0].data?.repair && <a href={tips[0].data.repair.url}>#{tips[0].data.repair.number}</a>}
       <Drawer opened={open} onClose={() => setOpen(false)} position="right" size="lg" title={<Text fw={700}>{repo ?? title}</Text>} closeButtonProps={{ "aria-label": t("common.close") }}>
         {repo ? tips[0] && <RepositoryTipChecks tip={tips[0]} /> : <WorkspaceTipChecks workspace={workspace} tips={tips} />}
         {shown.length > CI_BUDGET && <Text size="xs" c="dimmed" mt="xs">{t("pulls.tipCut", { count: CI_BUDGET, omitted: shown.length - CI_BUDGET })}</Text>}

@@ -112,8 +112,14 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | PR | Draft | 4b |
   | PR | A required check completed without satisfying the head, including a missing required job | 4a (deferred) |
   | PR | A current changes-requested verdict, too few approvals, and an unanswered statement for the author | 4a |
+  | PR | Linked to the open repair ticket | 2 (before other class 2 work) |
   | PR | Enough current approvals | 2 |
   | PR | Otherwise | 3 (normal) |
+
+  While verification has `failing_since`, required failures with names in its
+  `failed_jobs` or the open repair ticket's `repair.jobs` do not demote a head to
+  4a. This also applies while verification is running with empty `failed_jobs`.
+  Once verification passes, all required failures count again.
 
   A run takes the highest class of its branches; a branch takes the highest
   class of its open PRs. Review verdicts, approvals, unanswered statements, and
@@ -276,11 +282,18 @@ becomes a completed service skip as well; running executions and manual retries
 are preserved. A runner's `skipped` has no `path_skip` and does not
 satisfy a required check.
 
+Repair PR heads (open PRs linked to their repository's open repair ticket) run
+all jobs, without paths skips or reuse across different trees by paths contents.
+Same-tree reuse remains available. Linking a repair ticket reselects the current
+head, replaces service skips and paths reuses with real attempts, and preserves
+running attempts.
+
 ### Post-merge only jobs
 
 The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
 default). These jobs do not run on ordinary branches or PR heads, even before a PR
-opens, without a merge base, or when the pipeline changes. Protected branches execute them during main verification.
+opens, without a merge base, or when the pipeline changes. Protected branches execute them during main verification. Repair PR heads execute
+them before merge too, regardless of paths.
 Manual retries also execute them and their skips cannot supply reusable results.
 
 The owner controls this in repository settings rather than `.branvil/ci.toml` so a
@@ -290,6 +303,10 @@ it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
 running jobs finish and manual retries remain executable. Removing a name restores
 normal path selection and queues a real attempt when it is selected again.
 The log for this decision is `[branvil] skipped: post-merge only (repository setting)`.
+
+Repair PR landing requires success of every head job as well as all required
+checks. A pending, skipped, or failed optional job blocks publication and merging.
+Ordinary PRs continue to require only their configured required checks.
 
 Head jobs skipped by paths or reusing success by paths are not executed before
 landing. Main verification runs them after merge and verifies the combination.
