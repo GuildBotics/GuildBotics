@@ -435,8 +435,8 @@ async fn waits_for_host_checks(w: &World, other: &Other, n: u64, what: &str) {
     refresh(w).await;
     swept(w, other).await;
     let p = pull(w, n).await;
-    assert_eq!(p["landing"]["state"], "passed", "{what}: {p}");
-    assert_eq!(p["landing"]["first"]["next"], "host_checks", "{what}: {p}");
+    assert_eq!(p["landing"]["blockers"], json!([]), "{what}: {p}");
+    assert_eq!(p["landing"]["next"], "host_checks", "{what}: {p}");
     assert!(p["landing"]["notified_at"].is_null(), "{what}: {p}");
 }
 
@@ -519,7 +519,7 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
         .await
         .expect("the deadline must not wait for the regular poll");
         let p = pull(&w, number).await;
-        assert_eq!(p["landing"]["first"]["next"], "owner_merge_host", "{p}");
+        assert_eq!(p["landing"]["next"], "owner_merge_host", "{p}");
         assert!(!check_names(&w, number).await.contains(&json!("github")));
     }
 }
@@ -597,12 +597,9 @@ async fn the_webhook_is_told_only_once_every_host_check_of_the_head_succeeded() 
     let received = hook.received();
     assert_eq!(received.len(), 1, "{received:?}");
     let text = received[0].1["text"].as_str().unwrap();
-    assert!(
-        text.contains("passed its landing gate and is ready to merge on GitHub"),
-        "{text}"
-    );
+    assert!(text.contains("is ready to merge on GitHub"), "{text}");
     let p = pull(&w, n).await;
-    assert_eq!(p["landing"]["first"]["next"], "owner_merge_host");
+    assert_eq!(p["landing"]["next"], "owner_merge_host");
     assert!(!check_names(&w, n).await.contains(&json!("github")));
 
     // An edit sent to the host runs the host's checks of edits.
@@ -618,7 +615,7 @@ async fn the_webhook_is_told_only_once_every_host_check_of_the_head_succeeded() 
     assert_eq!(st, StatusCode::OK, "{v}");
     refresh(&w).await;
     let p = pull(&w, n).await;
-    assert_eq!(p["landing"]["first"]["next"], "host_checks", "{p}");
+    assert_eq!(p["landing"]["next"], "host_checks", "{p}");
     assert_eq!(
         gh.pull(p["upstream"]["number"].as_u64().unwrap()).title,
         "PR feat, edited"
@@ -666,17 +663,6 @@ async fn an_automatic_publish_the_host_refuses_is_left_to_the_owner() {
     assert_eq!(gh.tip(GH, "feat").as_deref(), Some(theirs.as_str()));
     assert!(gh.pulls(GH).is_empty());
 
-    // The owner first resumes the gate, then explicitly replaces the host branch.
-    let p = pull(&w, n).await;
-    let (st, v) = w
-        .server
-        .post(
-            &format!("{}/pulls/{n}/landing/resume", w.repo_path()),
-            &w.owner,
-            json!({"expected_head": p["head_sha"], "expected_base": p["base_sha"]}),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["upstream"]["auto"], false);
@@ -779,7 +765,7 @@ async fn the_webhook_url_is_a_secret_shown_only_by_its_host() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_webhook_set_later_is_told_of_an_automatic_publish_whatever_auto_land() {
+async fn a_webhook_set_later_is_told_when_automatic_landing_is_enabled() {
     let (w, _gh) = followed().await;
     with_aiko_account(&w).await;
     settings(&w, json!({"auto_land": true})).await;
@@ -789,8 +775,7 @@ async fn a_webhook_set_later_is_told_of_an_automatic_publish_whatever_auto_land(
         pull(&w, n).await["upstream"]["number"].is_u64()
     })
     .await;
-    // No webhook then; it is set after the repository stopped landing.
-    settings(&w, json!({"auto_land": false})).await;
+    // The webhook can be configured after the automatic publication.
     let hook = Hook::start(&w, &[]).await;
     let (st, _) = w
         .server
@@ -824,7 +809,6 @@ async fn a_changed_upstream_never_notifies_the_old_publication_or_republishes_au
     let original = pull(&w, n).await;
     assert_eq!(original["upstream"]["auto"], true);
     assert!(original["landing"]["notified_at"].is_null());
-    let old_url = original["upstream"]["url"].as_str().unwrap();
 
     let (st, result) = w
         .server
@@ -847,28 +831,20 @@ async fn a_changed_upstream_never_notifies_the_old_publication_or_republishes_au
     assert_eq!(st, StatusCode::CREATED, "{result}");
     swept(&w, &other).await;
     let retained = pull(&w, n).await;
-    assert_eq!(retained["landing"]["state"], "passed");
-    assert_eq!(retained["landing"]["first"]["next"], "owner_publish");
+    assert_eq!(retained["landing"]["blockers"], json!([]));
+    assert_eq!(retained["landing"]["next"], "owner_publish");
     assert_eq!(retained["upstream"]["repository"], GH);
     assert!(hook.received().is_empty(), "{:?}", hook.received());
     assert!(retained["landing"]["notified_at"].is_null());
     assert!(gh.pulls("octo/other").is_empty());
     assert!(gh.tip("octo/other", "feat").is_none());
 
-    // The pending automatic gate notice can describe only the publication
-    // that the owner explicitly made at the new destination.
+    // A manual publication to the new destination sends no automatic notice.
     let (st, published) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{published}");
-    assert_eq!(published["upstream"]["repository"], "octo/other");
     assert_eq!(published["upstream"]["auto"], false);
-    eventually("the new destination's notice", || async {
-        hook.received().len() == 1
-    })
-    .await;
-    let notices = hook.received();
-    let text = notices[0].1["text"].as_str().unwrap();
-    assert!(text.contains(published["upstream"]["url"].as_str().unwrap()));
-    assert!(!text.contains(old_url), "{text}");
+    swept(&w, &other).await;
+    assert!(hook.received().is_empty());
     assert_eq!(gh.pulls("octo/other").len(), 1);
 }
 
@@ -949,7 +925,7 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
     w.push_change("feature", "f.txt", "feature");
     let n = number(&w.open_pull("feature", json!([])).await);
     eventually("gate passed", || async {
-        pull(&w, n).await["landing"]["state"] == "passed"
+        pull(&w, n).await["landing"]["blockers"] == json!([])
     })
     .await;
     // Model restoring a backup: account metadata survives, credentials do not.
@@ -958,12 +934,12 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
     auto_land_on(&w, REPO);
     w.restart(&[]);
     eventually("stored automatic failure", || async {
-        pull(&w, n).await["landing"]["first"]["next"] == "owner_fix_auto"
+        pull(&w, n).await["landing"]["next"] == "owner_fix_auto"
     })
     .await;
     let failed = pull(&w, n).await;
     assert!(
-        failed["landing"]["first"]["next_detail"]
+        failed["landing"]["next_detail"]
             .as_str()
             .unwrap()
             .contains("no_account")
@@ -975,16 +951,14 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
         .unwrap();
     assert_eq!(entry["error"], failed["landing"]["error"]);
     w.restart(&[]);
-    assert_eq!(
-        pull(&w, n).await["landing"]["first"]["next"],
-        "owner_fix_auto"
-    );
+    assert_eq!(pull(&w, n).await["landing"]["next"], "owner_fix_auto");
     with_aiko_account(&w).await;
+    assert_eq!(publish(&w, n).await.0, StatusCode::OK);
     eventually("repaired publication", || async {
-        pull(&w, n).await["landing"]["first"]["next"] == "owner_merge_host"
+        pull(&w, n).await["landing"]["next"] == "owner_merge_host"
     })
     .await;
-    assert!(pull(&w, n).await["landing"]["error"].is_null());
+    assert!(pull(&w, n).await["upstream"]["error"].is_null());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1023,7 +997,11 @@ async fn a_statement_on_a_published_pull_request_holds_its_notice_until_answered
         .await;
     assert_eq!(st, StatusCode::CREATED, "{said}");
     eventually("the departure", || async {
-        pull(&w, n).await["landing"]["reason"]["code"] == "unanswered"
+        pull(&w, n).await["landing"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "unanswered")
     })
     .await;
     // The host's checks are over: still no notice while the author has not
@@ -1032,7 +1010,7 @@ async fn a_statement_on_a_published_pull_request_holds_its_notice_until_answered
     refresh(&w).await;
     swept(&w, &other).await;
     let p = pull(&w, n).await;
-    assert_eq!(p["landing"]["state"], "left", "{p}");
+    assert_eq!(p["landing"]["next"], "conditions", "{p}");
     assert!(hook.received().is_empty(), "{:?}", hook.received());
     let (st, v) = w
         .server

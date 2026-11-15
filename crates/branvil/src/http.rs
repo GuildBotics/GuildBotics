@@ -1371,7 +1371,6 @@ pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
         crate::ci::admin::ROUTES,
         crate::upstream::http::ROUTES,
         crate::autoland::ROUTES,
-        crate::landing::ROUTES,
     ] {
         for route in table {
             routes.push((format!("/api/v1{}", route.path), *route));
@@ -1405,7 +1404,6 @@ pub fn router(app: Shared) -> Router {
         .merge(crate::ci::admin::routes())
         .merge(crate::upstream::http::routes())
         .merge(crate::autoland::routes())
-        .merge(crate::landing::routes())
         .fallback(|| async { AppError::not_found("No such endpoint.") })
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(app.clone(), idempotency));

@@ -68,7 +68,6 @@ export const useBranch = (repo: string, name: string, enabled = true) =>
 
 export const useRepo = (repo: string) => useQuery({ queryKey: keys.repo(repo), queryFn: () => api.repos.get(repo) });
 
-export const useLanding = (repo: string) => useQuery({ queryKey: keys.landing(repo), queryFn: () => api.repos.landing(repo) });
 
 export const useRepoPulls = (repo: string, state: "open" | "closed" | "all") =>
   useQuery({ queryKey: keys.repoPulls(repo, state), queryFn: () => api.repos.pulls(repo, state) });

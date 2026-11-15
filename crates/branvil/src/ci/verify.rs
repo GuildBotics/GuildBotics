@@ -182,7 +182,7 @@ impl Ci {
         if let Some(v) = record.as_mut().filter(|v| v.state == "running") {
             if recover {
                 let reg = self
-                    .registration(repo, &repo.default_branch, &v.sha, false)
+                    .registration(repo, &repo.default_branch, &v.sha)
                     .await?;
                 changed += usize::from(self.register(repo, &v.sha, reg).await?);
             }
@@ -326,9 +326,7 @@ impl Ci {
                 .write(move |w| w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v))
                 .await?;
             self.inner.events.publish("verification", &repo.path, "");
-            let reg = self
-                .registration(repo, &repo.default_branch, &sha, false)
-                .await?;
+            let reg = self.registration(repo, &repo.default_branch, &sha).await?;
             changed += usize::from(self.register(repo, &sha, reg).await?);
             self.publish(&[(repo.path.clone(), sha)]);
         }

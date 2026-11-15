@@ -79,7 +79,7 @@ describe("change events", () => {
   });
 
   it("refreshes all check lists when a completion can change the queued order", () => {
-    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([...checkKeys].sort());
+    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([...checkKeys, k(keys.pull("acme/demo", 4))].sort());
     expect(stale(client, { kind: "pull", path: "other/repo", id: "1" })).toEqual([...checkKeys, k(keys.ticketPart("acme/demo", "1", "pulls"))].sort());
   });
 
@@ -94,13 +94,28 @@ describe("change events", () => {
     expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
   });
 
-  it("refreshes a pull's gate checks by the gate commit and its queue when the leader changes", () => {
+  it("refreshes ticket-linked landing decisions across repositories and ancestors", () => {
+    const c = new QueryClient();
+    c.setQueryData(keys.pull("acme/demo", 3), { tickets: [{ url: "http://localhost/acme/tickets/-/tickets/1" }] });
+    c.setQueryData(keys.pull("beta/demo", 4), { tickets: [{ url: "http://localhost/beta/tickets/-/tickets/2" }] });
+    c.setQueryData(keys.pull("acme/demo", 5), { tickets: [] });
+    // A ticket event can name an ancestor, which is not part of the PR cache.
+    expect(stale(c, { kind: "ticket", path: "acme/tickets", id: "99" })).toEqual([k(keys.pull("acme/demo",3)), k(keys.pull("beta/demo",4))]);
+  });
+
+  it("refreshes landing decisions for pulls sharing the checked head", () => {
+    const c = new QueryClient();
+    c.setQueryData(keys.pull("acme/demo", 3), { head_sha: "head" });
+    c.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head" });
+    c.setQueryData(keys.pull("acme/demo", 5), { head_sha: "other" });
+    expect(stale(c, { kind: "check", path: "acme/demo", id: "head" })).toEqual([k(keys.pull("acme/demo", 3)), k(keys.pull("acme/demo", 4))]);
+  });
+
+  it("refreshes a pull independently of another pull's state", () => {
     const queue = new QueryClient();
-    queue.setQueryData(keys.landing("acme/demo"), { items: [] });
-    queue.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head", landing: { gate: "gate", first: { number: 3 } } });
-    queue.setQueryData(keys.pullPart("acme/demo", 4, "checks"), { head_sha: "head" });
-    expect(stale(queue, { kind: "check", path: "acme/demo", id: "gate" })).toEqual([k(keys.pullPart("acme/demo", 4, "checks"))]);
-    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([k(keys.landing("acme/demo")), k(keys.pull("acme/demo", 4)), k(keys.pullPart("acme/demo", 4, "checks"))].sort());
+    queue.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head", landing: { next: "conditions", blockers: [] } });
+    queue.setQueryData(keys.pullPart("acme/demo", 4, "checks"), { head_sha: "head", checks: [] });
+    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([k(keys.pullPart("acme/demo",4,"checks"))]);
   });
 
   it("maps a repository change (a push, new settings) to its pull requests, branch tips, and commits' checks but not diffs, commits, or tickets", () => {

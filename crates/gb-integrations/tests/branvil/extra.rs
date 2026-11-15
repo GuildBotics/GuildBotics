@@ -13,19 +13,7 @@ async fn open(c: &dyn CodeHostingService, repo: &str, branch: &str) -> PullReque
     .await
     .unwrap()
 }
-async fn landing(owner: &::branvil::api::MemberApi, repo: &str, n: u64, state: &str) -> Value {
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        loop {
-            let p = serde_json::to_value(owner.pulls_get(repo, n).await.unwrap()).unwrap();
-            if p["landing"]["state"] == state {
-                return p["landing"].clone();
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("landing fixture did not reach expected state")
-}
+
 pub(super) async fn reused_and_gates(
     root: &Path,
     owner: &::branvil::api::MemberApi,
@@ -35,7 +23,7 @@ pub(super) async fn reused_and_gates(
     runner: &str,
 ) {
     let credential = c.git_credential().await.unwrap().unwrap();
-    for conclusion in ["success", "failure", "conflict"] {
+    for conclusion in ["success", "conflict"] {
         let repo = format!("acme/gate-{conclusion}");
         owner
             .repos_create(input(json!({"path":repo})))
@@ -167,54 +155,6 @@ pub(super) async fn reused_and_gates(
             )
             .await
             .unwrap();
-        let name = if conclusion == "conflict" {
-            "gate"
-        } else {
-            "gate/test"
-        };
-        if conclusion == "conflict" {
-            let left = landing(owner, &repo, number, "left").await;
-            assert_eq!(left["reason"]["files"], json!(["a.py"]));
-        } else {
-            let gate = landing(owner, &repo, number, "gating").await;
-            let pending = c
-                .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
-                .await
-                .unwrap();
-            assert_eq!(pending.behind_by, Some(1));
-            assert_eq!(pending.out_of_date, Some(true));
-            assert!(
-                pending
-                    .checks
-                    .iter()
-                    .any(|c| c.name == name && c.conclusion.is_none())
-            );
-            assert_eq!(pending.readiness, ReadinessReadiness::Blocked);
-            assert!(
-                pending
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "checks_pending")
-            );
-            assert!(
-                !pending
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "base_behind")
-            );
-            finish(base, runner, gate["gate"].as_str().unwrap(), conclusion).await;
-            landing(
-                owner,
-                &repo,
-                number,
-                if conclusion == "success" {
-                    "passed"
-                } else {
-                    "left"
-                },
-            )
-            .await;
-        }
         let result = c
             .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
@@ -248,16 +188,8 @@ pub(super) async fn reused_and_gates(
                 .unwrap();
             assert_eq!(page.items()[0]["failed_logs"], json!([]));
         } else {
-            let gate = result.checks.iter().find(|c| c.name == name).unwrap();
-            assert_eq!(gate.status, "completed");
-            assert_eq!(gate.conclusion.as_deref(), Some(conclusion));
-            assert_eq!(
-                result
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "checks_failed"),
-                conclusion == "failure"
-            );
+            assert!(result.checks.iter().all(|c| !c.name.starts_with("gate/")));
+            assert_eq!(result.readiness, ReadinessReadiness::Ready);
         }
     }
 }

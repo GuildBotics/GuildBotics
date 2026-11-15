@@ -511,7 +511,7 @@ impl Git {
         Ok(Err(files))
     }
 
-    /// When allowed by the caller, a head containing the base needs no new commit. Otherwise,
+    /// A head containing the base needs no new commit. Otherwise,
     /// creates the merge result with base first in its parent list. Identity
     /// is explicit because service Git inherits no author configuration.
     pub async fn merge_commit(
@@ -520,10 +520,9 @@ impl Git {
         base: &str,
         head: &str,
         message: &str,
-        reuse_head: bool,
     ) -> AppResult<MergeCommit> {
         let contains_base = self.is_ancestor(dir, base, head).await?;
-        if contains_base && reuse_head {
+        if contains_base {
             let tree = self
                 .run_ok(Some(dir), &["rev-parse", &format!("{head}^{{tree}}")])
                 .await?;
@@ -1056,31 +1055,13 @@ mod tests {
         let dir = work.join(".git");
         let head = commit_file(&git, &work, "feature.txt", "feature\n").await;
         let MergeCommit::Ready { sha, .. } = git
-            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7", true)
+            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7")
             .await
             .unwrap()
         else {
             panic!("fast-forward head conflicts");
         };
         assert_eq!(sha, head, "an up-to-date head creates no commit");
-        let MergeCommit::Ready { sha: forced, tree } = git
-            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7", false)
-            .await
-            .unwrap()
-        else {
-            panic!("forced gate conflicts")
-        };
-        assert_ne!(forced, head);
-        assert_eq!(
-            tree,
-            git.run_ok(Some(&dir), &["rev-parse", &format!("{head}^{{tree}}")])
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            git.commit_info(&dir, &forced).await.unwrap().unwrap().3,
-            vec![initial.clone(), head.clone()]
-        );
         git.run_ok(Some(&dir), &["update-ref", "refs/heads/main", &initial])
             .await
             .unwrap();
@@ -1092,7 +1073,7 @@ mod tests {
         .unwrap();
         let base = commit_file(&git, &work, "main.txt", "main\n").await;
         let MergeCommit::Ready { sha, tree } = git
-            .merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+            .merge_commit(&dir, &base, &head, "Branvil landing gate !7")
             .await
             .unwrap()
         else {
@@ -1150,7 +1131,7 @@ mod tests {
             .filter(|kind| *kind == "commit")
             .count();
         assert_eq!(
-            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7")
                 .await
                 .unwrap(),
             MergeCommit::Conflicts {
@@ -1215,7 +1196,7 @@ mod tests {
         );
         assert!(git.merge_tree(&dir, &base, &head).await.is_err());
         assert!(
-            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7", true)
+            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7")
                 .await
                 .is_err()
         );

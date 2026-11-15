@@ -39,14 +39,7 @@ export const NEW_HEAD = "b".repeat(40);
 export const BASE = "c".repeat(40);
 
 export function landing(extra: Partial<Landing> = {}): Landing {
-  const state = extra.state ?? "passed";
-  return {
-    number: 3, base: "main", queued_at: "2026-10-14T10:00:00Z", resume_publish: false, title: "Fix login", pull_state: "open", draft: false, error: null,
-    state: "passed", state_at: "2026-10-14T10:01:00Z", gate: HEAD,
-    base_sha: BASE, head_sha: HEAD, reason: null, position: 1,
-    first: { number: 3, next: state === "passed" ? "owner_merge_host" : "gate", host_url: "https://example.test/pulls/3", next_detail: null, state, state_at: "2026-10-14T10:01:00Z", error: null },
-    ...extra,
-  };
+  return { number: 3, head_sha: HEAD, base_sha: BASE, conflicts: [], told: [], notified_at: null, error: null, blockers: [], next: "owner_merge_host", host_url: "https://example.test/pulls/3", next_detail: null, ...extra };
 }
 
 export function pull(extra: Partial<ListedPull> = {}): ListedPull {

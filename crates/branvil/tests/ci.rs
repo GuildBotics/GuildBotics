@@ -67,7 +67,7 @@ async fn post_merge_settings_validate_the_result_atomically_and_require_owner() 
 }
 
 #[tokio::test]
-async fn post_merge_jobs_skip_even_before_pr_and_pipeline_changes_but_execute_in_gate() {
+async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     let w = World::new().await;
     std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
     let runner = Runner::new(&w, "post-merge-runner").await;
@@ -116,16 +116,25 @@ async fn post_merge_jobs_skip_even_before_pr_and_pipeline_changes_but_execute_in
         log["log"],
         "[branvil] skipped: post-merge only (repository setting)\n"
     );
+    let (status, result) = w
+        .server
+        .post(
+            &format!("{}/pulls/{n}/merge", w.repo_path()),
+            &w.owner,
+            json!({"expected_head":p["head_sha"],"expected_base":p["base_sha"]}),
+        )
+        .await;
+    assert_eq!(status, 200, "{result}");
     let mut seen = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..1 {
         let c = runner.next_claim().await;
-        assert_ne!(c["sha"], head);
+        assert_eq!(c["sha"], head);
         assert!(!(c["job"]["name"] == "slow" && c["reuse"].is_object()));
         seen.push(c["job"]["name"].as_str().unwrap().to_owned());
         runner.finish(&c, "success").await;
     }
     seen.sort();
-    assert_eq!(seen, ["fast", "slow"]);
+    assert_eq!(seen, ["slow"]);
 }
 
 #[tokio::test]
@@ -184,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_30_upgrade_preserves_every_record_and_adds_ticket_moves() {
+async fn schema_31_upgrade_preserves_non_landing_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -250,13 +259,13 @@ async fn schema_30_upgrade_preserves_every_record_and_adds_ticket_moves() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_30(&db);
+    as_schema_31(&db);
     let before = tables(&db);
-    assert!(!before.contains_key("ticket_moves"));
+    assert!(before.contains_key("ticket_moves"));
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 30 to 31"), "{output}");
+    assert!(output.contains("from schema version 31 to 32"), "{output}");
     // Only the table of ticket moves is new, and empty.
     assert_eq!(tables(&db).get("ticket_moves"), Some(&Vec::new()));
     assert_eq!(records(&db, "repos"), repos);
@@ -277,7 +286,7 @@ async fn schema_30_upgrade_preserves_every_record_and_adds_ticket_moves() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-30-")
+                .starts_with("branvil-schema-31-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -457,8 +466,11 @@ async fn paths_empty_tree_changes_leave_as_already_in_base() {
     eventually("a no-op gate leaves the queue", || async {
         w.server
             .ok(&format!("{}/pulls/{n}", w.repo_path()), &w.owner)
-            .await["landing"]["reason"]["code"]
-            == "already_in_base"
+            .await["landing"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "already_in_base")
     })
     .await;
     assert!(runner.claim().await.is_none());
@@ -521,7 +533,13 @@ async fn paths_land(auto: bool) {
     // A runner's skipped is not a path decision, so the PR cannot enter the gate.
     let pull_path = format!("{}/pulls/{n}", w.repo_path());
     let current = w.server.ok(&pull_path, &w.owner).await;
-    assert!(current["landing"].is_null());
+    assert!(
+        current["landing"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "head_checks")
+    );
     let id = always["attempt_id"].as_str().unwrap();
     assert_eq!(
         w.server
@@ -536,29 +554,10 @@ async fn paths_land(auto: bool) {
     );
     let actual = runner.claim().await.unwrap();
     assert_eq!(runner.finish(&actual, "success").await.0, 200);
-    let mut seen = Vec::new();
-    let mut next = Some(runner.next_claim().await);
-    while let Some(c) = next {
-        assert_ne!(c["sha"], head, "head remains satisfied throughout gating");
-        let name = c["job"]["name"].as_str().unwrap().to_string();
-        if name == "always" {
-            assert_eq!(c["reuse"]["attempt_id"], actual["attempt_id"]);
-            let source = c["reuse"]["attempt_id"].clone();
-            assert_eq!(runner.post(&c, "finish", json!({"lease":c["lease"],"conclusion":"success","image_digest":DIGEST,"reused_from":source})).await.0, 200);
-        } else {
-            assert!(c["reuse"].is_null(), "service skips are not reuse sources");
-            assert_eq!(runner.finish(&c, "success").await.0, 200);
-        }
-        seen.push(name);
-        assert_eq!(check(&checks(&w, n).await, "rust")["conclusion"], "skipped");
-        next = runner.claim().await;
-    }
-    seen.sort();
-    assert_eq!(seen, ["always", "rust", "web"]);
-    eventually("gate passed", || async {
-        w.server.ok(&pull_path, &w.owner).await["landing"]["state"] == "passed"
-    })
-    .await;
+    assert!(
+        runner.claim().await.is_none(),
+        "no gate jobs are registered"
+    );
     if auto {
         let repo = w.server.ok(&w.repo_path(), &w.owner).await;
         assert_eq!(
@@ -737,41 +736,14 @@ async fn paths_reuse_gate(reused: bool, verified: bool) {
     assert!(always["reuse"].is_null(), "another tree, and no paths");
     assert_eq!(runner.finish(&always, "success").await.0, 200);
     let pull_path = format!("{}/pulls/{n}", w.repo_path());
-    if !reused {
-        eventually("the head's run is the gate and passes", || async {
-            let landing = &w.server.ok(&pull_path, &w.owner).await["landing"];
-            landing["gate"] == json!(head) && landing["state"] == "passed"
-        })
-        .await;
-        assert!(runner.claim().await.is_none());
-        return;
-    }
-    let mut seen = Vec::new();
-    let mut next = Some(runner.next_claim().await);
-    while let Some(c) = next {
-        assert_ne!(c["sha"], head, "the gate is a commit of its own");
-        let name = c["job"]["name"].as_str().unwrap().to_string();
-        if name == "rust" {
-            assert!(c["reuse"].is_null(), "a paths reuse is no gate result");
-            let (st, result) = runner.finish(&c, "success").await;
-            assert_eq!(st, 200, "{result}");
-            assert!(result["reused_from"].is_null(), "{result}");
-        } else {
-            assert_eq!(c["reuse"]["attempt_id"], always["attempt_id"], "same tree");
-            assert_eq!(c["reuse"]["basis"], "tree");
-            let source = c["reuse"]["attempt_id"].clone();
-            assert_eq!(runner.post(&c, "finish", json!({"lease":c["lease"],"conclusion":"success","image_digest":DIGEST,"reused_from":source})).await.0, 200);
-        }
-        seen.push(name);
-        next = runner.claim().await;
-    }
-    seen.sort();
-    assert_eq!(seen, ["always", "rust"]);
-    eventually("gate passed", || async {
-        let landing = &w.server.ok(&pull_path, &w.owner).await["landing"];
-        landing["state"] == "passed" && landing["gate"] != json!(head)
+    eventually("head conditions satisfied", || async {
+        w.server.ok(&pull_path, &w.owner).await["landing"]["blockers"] == json!([])
     })
     .await;
+    assert!(
+        runner.claim().await.is_none(),
+        "no gate jobs are registered"
+    );
 }
 
 #[tokio::test]
@@ -919,11 +891,16 @@ async fn a_reused_success_counts_for_required_checks_and_not_for_duration_estima
         None,
     )
     .await;
+    runner.drain("success").await;
+    sync_main(&w);
+    w.push_change("source", "source.txt", "source change");
+    w.open_pull("source", json!([])).await;
     let source = runner.claim().await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     assert_eq!(runner.finish(&source, "success").await.0, 200);
     set_required(&w, &["test"]).await;
     sync_main(&w);
+    git_ok(&w.work, &["checkout", "-q", "source"]);
     git_ok(&w.work, &["checkout", "-qb", "same"]);
     git_ok(&w.work, &["commit", "--allow-empty", "-qm", "same tree"]);
     git_as_ok(&w.work, "aiko", &w.aiko, &["push", "-q", "origin", "same"]);
@@ -966,12 +943,17 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
     let cached_pipeline =
         pipeline(&["test"]).replace("commands =", "cache = { paths = [\"target\"] }\ncommands =");
     land(&w, "setup", &[(".branvil/ci.toml", &cached_pipeline)], None).await;
+    runner.drain("success").await;
+    sync_main(&w);
+    w.push_change("source", "source.txt", "source change");
+    w.open_pull("source", json!([])).await;
     let source = runner.claim().await.unwrap();
     let key = "a".repeat(64);
     let (st, result) = runner.post(&source, "finish", json!({"lease": source["lease"], "conclusion": "success", "image_digest": DIGEST, "cache_key": key})).await;
     assert_eq!(st, 200, "{result}");
     set_required(&w, &["test"]).await;
     sync_main(&w);
+    git_ok(&w.work, &["checkout", "-q", "source"]);
     git_ok(&w.work, &["checkout", "-qb", "same"]);
     git_ok(&w.work, &["commit", "--allow-empty", "-qm", "same tree"]);
     git_as_ok(&w.work, "aiko", &w.aiko, &["push", "-q", "origin", "same"]);
@@ -1042,7 +1024,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_30(&db);
+    as_schema_31(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
@@ -2425,7 +2407,12 @@ async fn a_merge_needs_success_on_the_exact_head_and_refuses_a_moved_base() {
         (409, Some("not_mergeable")),
         "{v}"
     );
-    assert!(v["error"]["message"].as_str().unwrap().contains("test"));
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("head_checks")
+    );
     assert_ne!(s1, s2);
     assert_eq!(
         w.server
@@ -2526,7 +2513,7 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|check| check["name"] == "gate/test" && check["conclusion"] == "success")
+            .any(|check| check["name"] == "test" && check["conclusion"] == "success")
     })
     .await;
     let before = checks(&w, n).await;

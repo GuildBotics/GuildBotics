@@ -881,9 +881,24 @@ impl Fixture {
         let sequence = self.sequence.get();
         self.sequence.set(sequence + 1);
         let branch = format!("feature-{sequence}");
-        let tree = self.git(&["hash-object", "-t", "tree", "-w", "--stdin"]);
-        let base = self.git(&["commit-tree", &tree, "-m", "base"]);
-        self.git(&["update-ref", "refs/heads/main", &base]);
+        let mut base = self.git(&["for-each-ref", "--format=%(objectname)", "refs/heads/main"]);
+        if base.is_empty() {
+            let tree = self.git(&["hash-object", "-t", "tree", "-w", "--stdin"]);
+            base = self.git(&["commit-tree", &tree, "-m", "base"]);
+            self.git(&["update-ref", "refs/heads/main", &base]);
+        }
+        // A linked PR must add real content; empty commits cannot land.
+        let file = self._temp.path().join("feature.txt");
+        std::fs::write(&file, format!("feature {sequence}")).unwrap();
+        let blob = self.git(&["hash-object", "-w", file.to_str().unwrap()]);
+        self.git(&["read-tree", &base]);
+        self.git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},feature-{sequence}.txt"),
+        ]);
+        let tree = self.git(&["write-tree"]);
         let head = self.git(&["commit-tree", &tree, "-p", &base, "-m", &branch]);
         self.git(&["update-ref", &format!("refs/heads/{branch}"), &head]);
         let pull = self

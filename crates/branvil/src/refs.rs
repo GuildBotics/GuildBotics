@@ -189,12 +189,11 @@ pub async fn recover(app: &App) -> AppResult<RecoveryReport> {
     }
     let repos: Vec<Repo> = app.store.read(|r| r.prefix_all(store::REPOS, &[])).await?;
     for repo in repos {
-        // A gate's database record may precede its hidden ref after a crash.
-        // Restore it before recording refs, so existing jobs are not cancelled.
+        // Reconcile recorded refs with Git after journal recovery.
         let r = repo.clone();
         let changes = app
             .locked(&repo.id, move |app| async move {
-                crate::landing::repair_refs_locked(&app, &r).await
+                record_refs_locked(&app, &r).await
             })
             .await?;
         if !changes.is_empty() {

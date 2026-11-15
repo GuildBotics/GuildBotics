@@ -46,7 +46,10 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
     case "ticket":
       return [
         isCheckList,
-        // Interactive tickets can clear author actions on linked PRs, including other repositories.
+        // Ticket ancestry is not cached with a PR, and interactive ancestors
+        // can clear author actions across repositories. Refresh linked PRs.
+        (q) => keyOf(q)[0] === "repo" && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+          ((q.state.data as PullRequest | undefined)?.tickets?.length ?? 0) > 0,
         (q) => keyOf(q)[0] === "pull-lists",
         (q) => isRepo(q, path) && keyOf(q)[2] === "ticket" && (id === "" || keyOf(q)[3] === id),
         // The board of the repository's workspace may show the ticket (or show
@@ -61,9 +64,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
         (q) => isPullList(q, path),
         // That pull request only (its diff is keyed by the head sha), and the repository's PR list.
         (q) => isRepo(q, path) && (id === "" || pullNumberOf(q) === id) && keyOf(q)[4] !== "files",
-        (q) => isRepo(q, path) && (keyOf(q)[2] === "pull-list" || keyOf(q)[2] === "landing"),
-        // A waiting pull shows its leader's current state, even though its own row did not change.
-        (q) => isRepo(q, path) && keyOf(q)[2] === "pull" && keyOf(q).length === 4 && String((q.state.data as PullRequest | undefined)?.landing?.first?.number) === id,
+        (q) => isRepo(q, path) && keyOf(q)[2] === "pull-list",
         (q) => keyOf(q)[2] === "ticket" && keyOf(q)[4] === "pulls",
         boardCardsWhere((cards) =>
           cards.some((c) =>
@@ -80,6 +81,9 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       return [
         isCheckList,
         (q) => isPullList(q, path),
+        // The server's per-pull landing decision changes with head checks.
+        (q) => isRepo(q, path) && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+          (id === "" || (q.state.data as PullRequest | undefined)?.head_sha === id),
         (q) => {
           if (!isRepo(q, path)) return false;
           const k = keyOf(q);
@@ -91,7 +95,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           if (id === "") return true;
           const checks = q.state.data as Checks | undefined;
           const pull = client.getQueryData<PullRequest>(["repo", k[1], "pull", k[3]]);
-          return checks?.head_sha === id || pull?.head_sha === id || pull?.landing?.gate === id;
+          return checks?.head_sha === id || pull?.head_sha === id;
         },
       ];
     case "repo":

@@ -1,5 +1,5 @@
 //! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
-//! Pass --board-order-only to run just the shared board-order contract.
+//! Pass --board-order-only or --code-parity-only to run the corresponding contract.
 mod alerts;
 mod code_parity;
 #[path = "../support/contracts.rs"]
@@ -234,8 +234,8 @@ async fn merge_checked(
     n: u64,
     head: &str,
     base_sha: &str,
-    base_url: &str,
-    runner: &str,
+    _base_url: &str,
+    _runner: &str,
 ) {
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         let mut previous=json!({"unset":true});
@@ -255,16 +255,6 @@ async fn merge_checked(
             }
             let p = serde_json::to_value(owner.pulls_get(repo, n).await.unwrap()).unwrap();
             if p["landing"]!=previous {eprintln!("fixture {repo}!{n}: {}",json!({"landing":p["landing"],"draft":p["draft"],"approvals":p["approvals"],"reviews":p["review_states"],"unanswered":p["unanswered"],"head":p["head"],"base":p["base"]}));previous=p["landing"].clone();}
-            if p["landing"]["state"] == "gating"
-                && let Some(gate) = p["landing"]["gate"].as_str()
-            {
-                let report = owner.pulls_checks(repo, n).await.unwrap();
-                if report.checks.iter().any(|c| {
-                    c.name == "gate/test" && c.status == "queued" && c.attempt_id.is_some()
-                }) {
-                    finish(base_url, runner, gate, "success").await;
-                }
-            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
@@ -310,7 +300,7 @@ async fn ticket_relations(t: &dyn TicketService) {
             .is_empty()
     );
 }
-async fn scenario(board_order_only: bool) {
+async fn scenario(board_order_only: bool, code_parity_only: bool) {
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("branvil");
     let owner_token = ::branvil::api::initialize(&data, "owner").unwrap();
@@ -390,6 +380,18 @@ async fn scenario(board_order_only: bool) {
     .unwrap();
     let t = factory.create_ticket_service().unwrap();
     let c = factory.create_code_hosting_service().unwrap();
+    if code_parity_only {
+        code_parity::contract(
+            temp.path(),
+            &owner,
+            c.as_ref(),
+            t.as_ref(),
+            owner_token.trim(),
+        )
+        .await;
+        running.stop().await.unwrap();
+        return;
+    }
     if board_order_only {
         let git = Git::new(temp.path());
         let driver = driver::Driver {
@@ -858,6 +860,9 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(scenario(args.iter().any(|a| a == "--board-order-only")));
+        .block_on(scenario(
+            args.iter().any(|a| a == "--board-order-only"),
+            args.iter().any(|a| a == "--code-parity-only"),
+        ));
     ExitCode::SUCCESS
 }

@@ -172,10 +172,7 @@ impl Fixture {
 async fn verification_promotion_retries_failed_and_cancelled_heads_but_keeps_actual_success() {
     for conclusion in ["failure", "cancelled", "timed_out", "startup_failure"] {
         let f = Fixture::new(&["lint", "test"]).await;
-        let reg =
-            f.ci.registration(&f.repo, "feature", &f.sha, false)
-                .await
-                .unwrap();
+        let reg = f.ci.registration(&f.repo, "feature", &f.sha).await.unwrap();
         f.ci.inner
             .store
             .write_sync(|w| queue::register(w, reg, 10, &util::now()))

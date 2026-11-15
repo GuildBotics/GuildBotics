@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { choose } from "../test/mantine";
 import { applyChange, LOST_AFTER_MS } from "../query/events";
-import { pull } from "./fixtures";
+import { landing, pull } from "./fixtures";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
 const repo = (path: string) => ({ path, default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], required_approvals: 0, labels: [], upstream: null, revision: 1 });
@@ -112,7 +112,7 @@ describe("pages", () => {
       label: "!1",
       title: "Draft work",
       draft: true,
-      landing: null,
+      landing: landing({ next: "conditions", blockers: [{ code: "draft", message: "The pull request is a draft.", jobs: [], files: [] }] }),
       updated_at: "2026-10-15T10:00:00.000Z",
     });
     const fake = fakeApi({
@@ -130,7 +130,7 @@ describe("pages", () => {
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["acme/web !1 Draft work", "acme/demo !3 Fix login"]);
     expect(rows[1]).toHaveAttribute("href", "/acme/demo/-/pulls/3");
-    expect(await within(rows[0] as HTMLElement).findByText(/Not queued: Draft/)).toBeInTheDocument();
+    expect(await within(rows[0] as HTMLElement).findByText("The pull request is a draft.")).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Reviewers" })).toBeInTheDocument();
     for (const row of rows) {
       expect(within(row).getByRole("img", { name: "Reviewers: owner (Requested)" })).toBeInTheDocument();

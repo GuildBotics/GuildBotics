@@ -8,7 +8,7 @@
 # its own shell. Keep dependency caches here, rather than relying on HOME, and
 # point CARGO_HOME here too: the image's is not writable to the job, and
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
-# PR heads select jobs by paths; default-branch and landing-gate runs execute
+# PR heads select jobs by paths; default-branch verification runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
@@ -30,11 +30,11 @@
 # #123's measurements decide otherwise.
 # Use the toolchain, rather than Cargo.lock, for the Rust cache keys for now:
 # workspace crate additions change the lockfile before the protected branch
-# can save that key, leaving PR heads and gates without dependencies to restore.
+# can save that key, leaving PR heads without dependencies to restore.
 # Cargo still resolves the locked dependencies and rebuilds touched crates.
 # The current runner refreshes protected-branch caches after 24 hours; changing
 # the toolchain starts a new generation. Ticket #120 will restore lockfile keys
-# when the runner can restore from a recent generation and retain gate caches.
+# when the runner can restore from a recent generation and retain verification caches.
 
 [[jobs]]
 name = "test"

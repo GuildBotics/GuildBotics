@@ -3,7 +3,7 @@
 //! (`api.rs`). See `docs/ci.md`.
 //!
 //! - The pipeline (`.branvil/ci.toml`) is read from the commit itself, for a
-//!   tip of the default branch, a pull request head, and a landing gate alike. What a head
+//!   tip of the default branch and a pull request head alike. What a head
 //!   cannot change is the repository's settings: the required checks and
 //!   `ci_network`.
 //! - Runs and attempts live in redb (`queue.rs`); logs and artifacts are files
@@ -107,7 +107,7 @@ impl Check {
         self.status == "completed" && self.conclusion.as_deref() == Some("success")
     }
 
-    /// Head admission accepts a service selection, while gates require success.
+    /// Required head checks accept the service path selection.
     pub fn head_satisfied(&self) -> bool {
         self.succeeded()
             || (self.status == "completed"
@@ -208,37 +208,6 @@ impl Ci {
     /// What the owner changes from the GUI (`settings.rs`).
     pub fn settings(&self) -> &settings::Control {
         &self.inner.settings
-    }
-
-    /// Whether the head's run cannot be the gate: it skipped jobs by paths,
-    /// or a current attempt reused another tree's result by the contents of
-    /// paths. Gate checks are actual runs or reuses of the same tree.
-    pub async fn needs_gate_commit(&self, repo: &Repo, sha: &str) -> AppResult<bool> {
-        let (id, sha) = (repo.id.clone(), sha.to_string());
-        self.inner
-            .store
-            .read(move |r| {
-                let Some(run) = queue::get_run(r, &id, &sha)? else {
-                    return Ok(false);
-                };
-                if run
-                    .selection
-                    .as_ref()
-                    .is_some_and(|s| !s.skipped_jobs.is_empty())
-                {
-                    return Ok(true);
-                }
-                let PipelineState::Jobs { jobs } = &run.pipeline else {
-                    return Ok(false);
-                };
-                for a in queue::current_attempts(r, &id, &sha, jobs)? {
-                    if queue::source_of(r, &a)?.basis == Some(queue::Basis::Paths) {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })
-            .await
     }
 
     /// The jobs of the pipeline on the tip of `repo`'s default branch (none
@@ -462,58 +431,31 @@ impl Ci {
     }
 
     /// Registers CI of `sha` for `branch` when the branch wants CI: it is the
-    /// default branch, the head of an open pull request, or a current landing
-    /// gate. The pipeline is the commit's own. The caller holds the repository lock.
+    /// default branch, the head of an open pull request, or an open pull request head. The pipeline is the commit's own. The caller holds the repository lock.
     async fn consider(&self, repo: &Repo, refname: &str, sha: &str) -> AppResult<bool> {
-        let Some((branch, gate)) = ci_ref(refname) else {
+        let Some(branch) = ci_ref(refname) else {
             return Ok(false);
         };
-        if let Some(number) = gate {
-            let (id, sha) = (repo.id.clone(), sha.to_string());
-            if !self
-                .inner
-                .store
-                .read(move |r| {
-                    Ok(
-                        crate::landing::current(r, &id, number)?.is_some_and(|entry| {
-                            matches!(entry.state.as_str(), "gating" | "passed")
-                                && entry.gate.as_deref() == Some(sha.as_str())
-                                && entry.head_sha != sha
-                        }),
-                    )
-                })
-                .await?
-            {
-                return Ok(false);
-            }
-        } else {
-            if branch == repo.default_branch {
-                return Ok(false);
-            }
-            let (id, b) = (repo.id.clone(), branch.to_string());
-            if !self
-                .inner
-                .store
-                .read(move |r| has_open_pull(r, &id, &b))
-                .await?
-            {
-                return Ok(false);
-            }
+        if branch == repo.default_branch {
+            return Ok(false);
         }
-        let reg = self.registration(repo, branch, sha, gate.is_some()).await?;
+        let (id, b) = (repo.id.clone(), branch.to_string());
+        if !self
+            .inner
+            .store
+            .read(move |r| has_open_pull(r, &id, &b))
+            .await?
+        {
+            return Ok(false);
+        }
+        let reg = self.registration(repo, branch, sha).await?;
         self.register(repo, sha, reg).await
     }
 
-    async fn registration(
-        &self,
-        repo: &Repo,
-        branch: &str,
-        sha: &str,
-        gate: bool,
-    ) -> AppResult<Registration> {
+    async fn registration(&self, repo: &Repo, branch: &str, sha: &str) -> AppResult<Registration> {
         let pipeline = self.read_pipeline(repo, sha).await?;
         let selection = self
-            .select_jobs(repo, sha, &pipeline, gate || repo.is_protected(branch))
+            .select_jobs(repo, sha, &pipeline, repo.is_protected(branch))
             .await?;
         let inputs = self.job_inputs(repo, sha, &pipeline).await?;
         let reg = Registration {
@@ -535,7 +477,7 @@ impl Ci {
                     .to_string(),
             ),
             branch: branch.to_string(),
-            protected: !gate && repo.is_protected(branch),
+            protected: repo.is_protected(branch),
             pipeline,
             network: repo.ci_network,
         };
@@ -587,7 +529,7 @@ impl Ci {
     /// Called once per batch of ref changes Branvil recorded (push, merge,
     /// startup rescan), after the database reflects them, under the
     /// repository lock. Older commits a branch left are superseded; new tips
-    /// of the default branch, pull request heads, and current gates get a run.
+    /// of the default branch and open pull request heads get a run.
     pub async fn on_ref_changes(&self, repo: &Repo, changes: &[RefChange]) {
         if let Err(e) = self.apply_ref_changes(repo, changes).await {
             // The reconciler registers what this missed.
@@ -600,7 +542,7 @@ impl Ci {
         // Attach new owners before dropping old ones in the same ref batch.
         // In particular a merged head's queued jobs must survive its deletion.
         for c in changes {
-            let Some((branch, _)) = ci_ref(&c.refname) else {
+            let Some(branch) = ci_ref(&c.refname) else {
                 continue;
             };
             if c.new != ZERO_SHA {
@@ -621,7 +563,7 @@ impl Ci {
             tracing::error!("CI verification of {} failed: {e}", repo.path);
         }
         for c in changes {
-            let Some((branch, _)) = ci_ref(&c.refname) else {
+            let Some(branch) = ci_ref(&c.refname) else {
                 continue;
             };
             if c.old != ZERO_SHA {
@@ -671,7 +613,7 @@ impl Ci {
     }
 
     /// Registers the tips of the default branch, every open pull request
-    /// head, and every current gate again: a run that is missing (a crash between a push and
+    /// head again: a run that is missing (a crash between a push and
     /// its registration, a failed registration) is created, and a run whose
     /// recorded pipeline is not the commit's own gets it. Returns how many
     /// runs changed.
@@ -709,19 +651,10 @@ impl Ci {
             .inner
             .store
             .read(move |r| {
-                let mut wanted: Vec<String> = open_pull_heads(r, &id)?
+                let wanted: Vec<String> = open_pull_heads(r, &id)?
                     .into_iter()
                     .map(|head| format!("refs/heads/{head}"))
                     .collect();
-                for entry in crate::landing::active(r, &id)? {
-                    if entry
-                        .gate
-                        .as_ref()
-                        .is_some_and(|sha| sha != &entry.head_sha)
-                    {
-                        wanted.push(format!("refs/branvil/gate/{}", entry.number));
-                    }
-                }
                 Ok(wanted)
             })
             .await?;
@@ -1035,14 +968,12 @@ fn check_order<'a>(c: &'a Check, positions: &BTreeMap<String, usize>) -> (u8, &'
     )
 }
 
-/// CI branch names preserve the public branch or identify a hidden gate.
-fn ci_ref(refname: &str) -> Option<(&str, Option<u64>)> {
+/// Only public branch refs request CI.
+fn ci_ref(refname: &str) -> Option<&str> {
     if let Some(branch) = refname.strip_prefix("refs/heads/") {
-        return Some((branch, None));
+        return Some(branch);
     }
-    let branch = refname.strip_prefix("refs/branvil/")?;
-    let number = branch.strip_prefix("gate/")?.parse::<u64>().ok()?;
-    (number > 0 && branch == format!("gate/{number}")).then_some((branch, Some(number)))
+    None
 }
 
 /// Whether an open pull request has `branch` as its head.
@@ -1840,189 +1771,13 @@ mod tests {
             0,
             "unowned hidden ref is not CI"
         );
-        let mut entry = crate::model::Landing {
-            repo: repo.id.clone(),
-            number: 7,
-            base: "main".into(),
-            queued_at: util::now(),
-            sequence: 1,
-            state: "gating".into(),
-            state_at: util::now(),
-            gate: Some(shas[0].clone()),
-            base_sha: "base".into(),
-            head_sha: "head".into(),
-            reason: None,
-            notified_at: None,
-            notify: false,
-            resume_publish: false,
-            error: None,
-        };
-        let saved = entry.clone();
-        let pull = open_pull(&repo.id, entry.number, "feature", &entry.base);
-        app.store
-            .write(move |w| {
-                put_pull(w, &pull)?;
-                w.put(
-                    store::LANDING,
-                    &crate::model::Pull::key(&saved.repo, saved.number),
-                    &saved,
-                )
-            })
-            .await
-            .unwrap();
-        // The ref already exists, as after stopping between ref creation and registration.
-        assert_eq!(app.ci.reconcile(&app).await.unwrap(), 1);
         let (id, sha) = (repo.id.clone(), shas[0].clone());
-        let run = app
-            .store
-            .read(move |r| queue::get_run(r, &id, &sha))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(run.branches, vec!["gate/7"]);
-        assert_eq!(run.cache_scope, "branch:gate/7");
-        assert_eq!(run.tree, app.git.tree_oid(&dir, &shas[0]).await.unwrap());
-        // Register the existing snapshot before moving the ref so branch_left sees both ends.
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        let before =
-            serde_json::to_value(app.ci.head_checks(&repo, &shas[0]).await.unwrap().checks)
-                .unwrap();
-        app.git
-            .run_ok(Some(&dir), &["update-ref", "-d", "refs/branvil/gate/7"])
-            .await
-            .unwrap();
-        crate::refs::recover(&app).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(app.ci.head_checks(&repo, &shas[0]).await.unwrap().checks)
-                .unwrap(),
-            before,
-            "repairing a missing gate ref must not cancel its already registered jobs"
-        );
-        entry.gate = Some(shas[1].clone());
-        let saved = entry.clone();
-        app.store
-            .write(move |w| {
-                w.put(
-                    store::LANDING,
-                    &crate::model::Pull::key(&saved.repo, saved.number),
-                    &saved,
-                )
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            app.ci.reconcile(&app).await.unwrap(),
-            0,
-            "the row rejects a stale ref"
-        );
         assert!(
-            app.git
-                .update_ref(
-                    &dir,
-                    "refs/branvil/gate/7",
-                    &shas[1],
-                    &shas[0],
-                    "gate moved"
-                )
+            app.store
+                .read(move |r| queue::get_run(r, &id, &sha))
                 .await
                 .unwrap()
-        );
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        let (id, sha) = (repo.id.clone(), shas[0].clone());
-        let old = app
-            .store
-            .read(move |r| queue::get_run(r, &id, &sha))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(old.superseded_by.as_deref(), Some(shas[1].as_str()));
-        assert!(
-            app.git
-                .update_ref(&dir, "refs/branvil/gate/7", ZERO_SHA, &shas[1], "gate left")
-                .await
-                .unwrap()
-        );
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        let (id, sha) = (repo.id.clone(), shas[1].clone());
-        let old = app
-            .store
-            .read(move |r| queue::get_run(r, &id, &sha))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(old.superseded_by.is_some());
-        assert_eq!(app.ci.reconcile(&app).await.unwrap(), 0);
-        assert!(
-            app.git
-                .update_ref(
-                    &dir,
-                    "refs/branvil/failed-gate/7",
-                    &shas[1],
-                    ZERO_SHA,
-                    "keep failure"
-                )
-                .await
-                .unwrap()
-        );
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        assert_eq!(
-            app.ci.reconcile(&app).await.unwrap(),
-            0,
-            "retained failures never get registered"
-        );
-
-        // No background tasks run in this fixture. Simulate stopping after
-        // saving an owned gate in redb, but before its ref is made reachable.
-        assert!(
-            app.git
-                .update_ref(
-                    &dir,
-                    "refs/branvil/failed-gate/7",
-                    ZERO_SHA,
-                    &shas[1],
-                    "remove retained fixture ref"
-                )
-                .await
-                .unwrap()
-        );
-        assert!(
-            !app.git
-                .all_refs(&dir)
-                .await
-                .unwrap()
-                .contains_key("refs/branvil/gate/7")
-        );
-        crate::refs::recover(&app).await.unwrap();
-        assert_eq!(
-            app.git
-                .all_refs(&dir)
-                .await
-                .unwrap()
-                .get("refs/branvil/gate/7"),
-            Some(&shas[1]),
-            "startup recovery must restore an owned gate before any background sweep or backup"
-        );
-        let bundle = temp.path().join("immediate-backup.bundle");
-        app.git
-            .run_ok(
-                Some(&dir),
-                &["bundle", "create", bundle.to_str().unwrap(), "--all"],
-            )
-            .await
-            .unwrap();
-        let heads = app
-            .git
-            .run_ok(
-                Some(&dir),
-                &["bundle", "list-heads", bundle.to_str().unwrap()],
-            )
-            .await
-            .unwrap();
-        assert!(
-            heads
-                .lines()
-                .any(|line| line == format!("{} refs/branvil/gate/7", shas[1])),
-            "the immediate backup must carry its recorded gate: {heads}"
+                .is_none()
         );
     }
 

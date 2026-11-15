@@ -278,38 +278,19 @@ export interface PullRequest {
 /** The readiness-sorted list carries its server-computed comparison key. */
 export type ListedPull = PullRequest & { merge_order: [number, number, number] };
 
-export type LandingState = "waiting" | "gating" | "passed" | "left";
-
-export type LandingNext = "gate" | "publishing" | "owner_publish" | "host_checks" | "owner_merge_host" | "following" | "owner_fix_following" | "host_closed" | "owner_fix_auto" | "auto_merge" | "owner_merge";
-
-export interface LandingFirst {
+export type LandingNext = "conditions" | "publishing" | "owner_publish" | "host_checks" | "owner_merge_host" | "following" | "owner_fix_following" | "host_closed" | "owner_fix_auto" | "auto_merge" | "owner_merge";
+export interface Landing {
   number: number;
+  head_sha: string;
+  base_sha: string;
+  conflicts: string[];
+  told: string[];
+  notified_at: string | null;
+  error: string | null;
+  blockers: { code: string; message: string; jobs: string[]; files: string[] }[];
   next: LandingNext;
   host_url: string | null;
   next_detail: string | null;
-  state: LandingState;
-  state_at: string;
-  error: string | null;
-}
-
-/** One pull request in its base branch's landing queue. */
-export interface Landing {
-  number: number;
-  title: string;
-  pull_state: "open" | "closed";
-  draft: boolean;
-  base: string;
-  queued_at: string;
-  resume_publish: boolean;
-  error: string | null;
-  state: LandingState;
-  state_at: string;
-  gate: string | null;
-  base_sha: string;
-  head_sha: string;
-  reason: { code: string; message: string; jobs: string[]; files: string[] } | null;
-  position: number | null;
-  first: LandingFirst | null;
 }
 
 /** A pull request published to the upstream host. */

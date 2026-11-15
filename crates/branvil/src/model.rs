@@ -370,7 +370,7 @@ pub struct Pull {
     pub closed_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_sha: Option<String>,
-    /// The reviewed head, distinct from the gate commit placed on the base.
+    /// The reviewed head, distinct from the merge commit placed on the base.
     pub merged_head: Option<String>,
     /// The base tip the merge moved from (so the merged diff stays available).
     pub merged_base: Option<String>,
@@ -379,26 +379,16 @@ pub struct Pull {
     pub revision: u64,
 }
 
-/// A position in one repository/base landing queue. Kept after leaving so the
-/// failed gate remains visible and a successful retry can rejoin the queue.
+/// The last checked pair and per-head landing notices.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Landing {
     pub repo: String,
     pub number: u64,
-    pub base: String,
-    pub queued_at: String,
-    pub sequence: u64,
-    pub state: String,
-    pub state_at: String,
-    pub gate: Option<String>,
-    pub base_sha: String,
     pub head_sha: String,
-    pub reason: Option<LandingReason>,
+    pub base_sha: String,
+    pub conflicts: Vec<String>,
+    pub told: Vec<String>,
     pub notified_at: Option<String>,
-    pub notify: bool,
-    /// Owner explicitly resumed a stopped publication through its next gate.
-    pub resume_publish: bool,
-    /// Last automatic publish/merge failure, persisted across restarts.
     pub error: Option<String>,
 }
 

@@ -162,14 +162,13 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
 
 #[test]
 fn without_inputs_or_paths_or_on_protected_and_gate_runs_only_the_tree_counts() {
-    for case in ["no_inputs", "no_paths", "protected", "gate"] {
+    for case in ["no_inputs", "no_paths", "protected"] {
         let (_d, s) = store();
         s.write_sync(|w| {
             let first = run(w, head("h1", "feature", "d1"), "success", T0)?;
             let mut next = match case {
                 "no_inputs" => head("h2", "feature", ""),
                 "protected" => head("h2", "main", "d1"),
-                "gate" => head("h2", "gate/1", "d1"),
                 _ => head("h2", "feature", "d1"),
             };
             if case == "no_paths" {
@@ -192,7 +191,6 @@ fn without_inputs_or_paths_or_on_protected_and_gate_runs_only_the_tree_counts() 
             // The same tree is still reused.
             let branch = match case {
                 "protected" => "main",
-                "gate" => "gate/1",
                 _ => "feature",
             };
             let mut same = head("h3", branch, "d1");
