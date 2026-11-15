@@ -78,6 +78,9 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       return [
         isCheckList,
         (q) => isPullList(q, path),
+        // The server's per-pull landing decision changes with head checks.
+        (q) => isRepo(q, path) && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+          (id === "" || (q.state.data as PullRequest | undefined)?.head_sha === id),
         (q) => {
           if (!isRepo(q, path)) return false;
           const k = keyOf(q);

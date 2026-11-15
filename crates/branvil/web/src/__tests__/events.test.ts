@@ -79,7 +79,7 @@ describe("change events", () => {
   });
 
   it("refreshes all check lists when a completion can change the queued order", () => {
-    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([...checkKeys].sort());
+    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([...checkKeys, k(keys.pull("acme/demo", 4))].sort());
     expect(stale(client, { kind: "pull", path: "other/repo", id: "1" })).toEqual([...checkKeys, k(keys.ticketPart("acme/demo", "1", "pulls"))].sort());
   });
 
@@ -92,6 +92,14 @@ describe("change events", () => {
     void loading.prefetchQuery({ queryKey: keys.commitChecks("acme/demo", "ddd"), queryFn: () => new Promise(() => {}) });
     expect(stale(loading, { kind: "check", path: "acme/demo", id: "ddd" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
     expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
+  });
+
+  it("refreshes landing decisions for pulls sharing the checked head", () => {
+    const c = new QueryClient();
+    c.setQueryData(keys.pull("acme/demo", 3), { head_sha: "head" });
+    c.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head" });
+    c.setQueryData(keys.pull("acme/demo", 5), { head_sha: "other" });
+    expect(stale(c, { kind: "check", path: "acme/demo", id: "head" })).toEqual([k(keys.pull("acme/demo", 3)), k(keys.pull("acme/demo", 4))]);
   });
 
   it("refreshes a pull independently of another pull's state", () => {

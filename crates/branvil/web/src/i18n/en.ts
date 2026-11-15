@@ -424,7 +424,7 @@ export const en = {
   "publish.mergeThere": "Published. People review and merge it on {host}; Branvil follows.",
   "publish.noPullYet": "branch pushed, pull request not opened yet",
   "publish.as": "as {account}",
-  "publish.stopped": "Sending stopped: {reason} Resume landing, then publish again after the gate passes to replace what is there.",
+  "publish.stopped": "Sending stopped: {reason} Publish again when the conditions are met to replace the host branch with Branvil's head.",
   "publish.failing": "Last attempt failed (retried): {reason}",
 
   "member.create": "Create member",

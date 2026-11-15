@@ -5,7 +5,7 @@ import type { Check, Checks } from "../api/types";
 import { dictionaries, format } from "../i18n";
 import { applyChange } from "../query/events";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
-import { BASE, HEAD, NEW_HEAD, card, pull } from "./fixtures";
+import { BASE, HEAD, NEW_HEAD, card, landing, pull } from "./fixtures";
 
 const P = "/api/v1/repos/acme/demo/pulls/3";
 const SUCCESS: Check = { name: "test", status: "completed", conclusion: "success" };
@@ -222,8 +222,7 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       required_approvals: 0,
       revision: 1,
     }),
-    [`GET ${P}`]: json(200, pull()),
-    "GET /api/v1/repos/acme/demo/landing": json(200, { items: [pull().landing] }),
+    [`GET ${P}`]: json(200, pull({ landing: landing({ next: "owner_merge" }) })),
     [`GET ${P}/activity`]: json(200, {
       comments: [
         {
@@ -625,7 +624,10 @@ describe("pull request review", () => {
       ...UPSTREAM_REPOSITORY,
       upstream: upstream ? UPSTREAM_REPOSITORY.upstream : null,
     };
+    const ready = landing({ next: upstream ? "owner_publish" : "owner_merge" });
+    const waiting = (code: string) => landing({ next: "conditions", blockers: [{ code, message: `Waiting: ${code}`, jobs: [], files: [] }] });
     const routes = {
+      [`GET ${P}`]: json(200, pull({ landing: ready })),
       "GET /api/v1/repos/acme/demo": json(200, repository),
       [`GET ${P}/publish`]: json(200, PREVIEW),
     };
@@ -652,9 +654,10 @@ describe("pull request review", () => {
       })),
       { label: "success for another head", checks: [SUCCESS], head_sha: NEW_HEAD },
     ];
-    it.each(unsuccessful)(`${action}: blocks $label`, async ({ checks, head_sha }) => {
+    it.each(unsuccessful)(`${action}: follows the server blocker for $label`, async ({ checks, head_sha }) => {
       const fake = fakeApi(pullRoutes({
         ...routes,
+        [`GET ${P}`]: json(200, pull({ landing: waiting("head_checks") })),
         "GET /api/v1/repos/acme/demo": json(200, { ...repository, post_merge_jobs: [], required_checks: ["test", "lint"] }),
         [`GET ${P}/checks`]: json(200, { ...CHECKS, head_sha: head_sha ?? HEAD, checks: [...checks, { ...SUCCESS, name: "lint" }] }),
       }));
@@ -668,26 +671,28 @@ describe("pull request review", () => {
       expect(fake.calls("POST", `${P}/${upstream ? "publish" : "merge"}`)).toHaveLength(0);
     });
 
-    it(`${action}: stays disabled until checks load`, async () => {
+    it(`${action}: waits for the server landing refresh after a check event`, async () => {
       let answer!: (value: ReturnType<typeof json>) => void;
-      fakeApi(pullRoutes({ ...routes, [`GET ${P}/checks`]: () => new Promise((resolve) => { answer = resolve; }) }));
-      renderApp("/acme/demo/-/pulls/3");
+      fakeApi(pullRoutes({ ...routes, [`GET ${P}`]: [json(200,pull({ landing: waiting("checking") })),json(200,pull({ landing: ready }))], [`GET ${P}/checks`]: () => new Promise((resolve) => { answer = resolve; }) }));
+      const { client } = renderApp("/acme/demo/-/pulls/3");
       expect(await screen.findByRole("button", { name: action })).toBeDisabled();
       await waitFor(() => expect(answer).toBeTypeOf("function"));
       answer(json(200, CHECKS));
+      applyChange({ kind: "check", path: "acme/demo", id: HEAD }, client);
       await waitFor(() => expect(screen.getByRole("button", { name: action })).toBeEnabled());
     });
 
-    it(`${action}: stays disabled when checks cannot be read`, async () => {
+    it(`${action}: preserves the server action when the check list cannot be read`, async () => {
       fakeApi(pullRoutes({ ...routes, [`GET ${P}/checks`]: apiError(403, "forbidden", "Cannot read checks.") }));
       renderApp("/acme/demo/-/pulls/3");
       expect(await screen.findByText(/Cannot read checks\./)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: action })).toBeDisabled();
+      expect(screen.getByRole("button", { name: action })).toBeEnabled();
     });
 
     it(`${action}: enables on success after a check event and ignores optional failures`, async () => {
       fakeApi(pullRoutes({
         ...routes,
+        [`GET ${P}`]: [json(200,pull({ landing: waiting("head_checks") })), json(200,pull({ landing: ready }))],
         "GET /api/v1/repos/acme/demo": json(200, { ...repository, post_merge_jobs: [], required_checks: ["test", "lint"] }),
         [`GET ${P}/checks`]: [
           json(200, { ...CHECKS, checks: [] }),
@@ -717,7 +722,7 @@ describe("pull request review", () => {
         ...routes,
         "GET /api/v1/repos/acme/demo": json(200, { ...repository, required_approvals: required }),
         [`GET ${P}/checks`]: json(200, CHECKS),
-        [`GET ${P}`]: json(200, pull({ review_states: reviewStates, approvals })),
+        [`GET ${P}`]: json(200, pull({ review_states: reviewStates, approvals, landing: enabled ? ready : waiting("approvals") })),
       }));
       const user = userEvent.setup();
       renderApp("/acme/demo/-/pulls/3");
@@ -754,7 +759,7 @@ describe("pull request review", () => {
     const fake = fakeApi(
       pullRoutes({
         "GET /api/v1/repos/acme/demo": UPSTREAM_REPO,
-        [`GET ${P}`]: [json(200, pull()), json(200, published)],
+        [`GET ${P}`]: [json(200, pull({ landing: landing({ next: "owner_publish" }) })), json(200, published)],
         [`GET ${P}/publish`]: json(200, PREVIEW),
         [`GET ${P}/checks`]: json(200, CHECKS),
         [`POST ${P}/publish`]: json(200, published),
@@ -788,13 +793,14 @@ describe("pull request review", () => {
     expect(screen.getByRole("button", { name: "Publish to GitHub" })).toBeDisabled();
   });
 
-  it("shows why sending to the host stopped and offers to resume landing", async () => {
+  it("shows why sending to the host stopped and offers to publish directly", async () => {
     fakeApi(
       pullRoutes({
         "GET /api/v1/repos/acme/demo": UPSTREAM_REPO,
         [`GET ${P}`]: json(
           200,
           pull({
+            landing: landing({ next: "owner_publish" }),
             upstream: {
               provider: "github",
               repository: "octo/demo",
@@ -816,7 +822,7 @@ describe("pull request review", () => {
     );
     renderApp("/acme/demo/-/pulls/3");
     expect(await screen.findByRole("alert")).toHaveTextContent("Sending stopped: The host refused the branch ticket/3");
-    expect(screen.getByRole("button", { name: "Resume landing" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Publish again to GitHub" })).toBeEnabled();
     expect(screen.getByText("published automatically")).toBeInTheDocument();
   });
 

@@ -56,6 +56,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     renderApp("/acme/demo/-/pulls/3",lang);
     const button = await screen.findByRole("button",{ name: words["publish.again"].replaceAll("{host}","GitHub") });
     expect(button).toBeEnabled();
+    for (const alert of screen.getAllByRole("alert")) expect(alert).not.toHaveTextContent(lang === "ja" ? "検問" : "Resume landing");
     expect(screen.queryByRole("button",{ name: words["landing.resume"] })).not.toBeInTheDocument();
   });
 

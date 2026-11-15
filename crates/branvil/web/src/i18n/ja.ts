@@ -426,7 +426,7 @@ export const ja: Record<MessageKey, string> = {
   "publish.mergeThere": "出しました。{host} で人がレビューしてマージし、Branvil はそれに追従します。",
   "publish.noPullYet": "ブランチは push 済み、PR はまだ開いていません",
   "publish.as": "{account} として",
-  "publish.stopped": "送信を止めています：{reason} 検問の列に戻し、検問を通過してからもう一度公開すると、上流の内容を置き換えます。",
+  "publish.stopped": "送信を止めています：{reason} 条件がそろったらもう一度公開すると、上流のブランチを Branvil の head で置き換えます。",
   "publish.failing": "直近の試行に失敗（再試行します）：{reason}",
 
   "member.create": "メンバーを作成",
