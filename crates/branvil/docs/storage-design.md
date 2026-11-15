@@ -59,7 +59,7 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `28`). The current
+`meta["schema_version"]` is written on creation (currently `29`). The current
 format includes persistent landing queues, each merged pull request's original
 reviewed head distinct from its merge commit, and per-gate notification and
 publication-resume state. CI runs hold their commit's pipeline and tree;
@@ -71,13 +71,14 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
-snapshots store the opt-in boolean of the same name. The 27 → 28 upgrade adds
-`responder: null` to every repository; all other records stay unchanged.
+snapshots store the opt-in boolean of the same name. The 28 → 29 upgrade adds
+the empty `ticket_moves` table; all records stay unchanged. A version-28 build
+must still refuse the database: it would not follow the moves, and its
+attachment sweep, counting only the uploading repository's tickets, would
+delete the images of moved tickets.
 Tickets and conversation comments store their resolved `mentions` lists.
 The 19 → 20 upgrade resolves existing bodies against the stored members,
 writes those lists, and rebuilds the derived indexes in the upgrade transaction.
-`ticket_moves` was added without raising the version: opening a database
-creates the tables it lacks, and records of other tables did not change.
 Images attached to tickets are recorded in `attachments`; the 23 → 24
 upgrade indexes the attachment ids the kept ticket bodies and comments refer
 to (`ix_attachment_refs`).

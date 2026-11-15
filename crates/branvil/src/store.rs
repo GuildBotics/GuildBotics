@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 28;
+pub const SCHEMA_VERSION: u64 = 29;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -814,10 +814,6 @@ impl Upgrading {
                 crate::upgrade::FROM
             ),
         }
-    }
-
-    pub fn read<T>(&self, f: impl FnOnce(&ReadTransaction) -> AppResult<T>) -> anyhow::Result<T> {
-        f(&self.db.begin_read()?).map_err(|e| anyhow::anyhow!("{}", e.message))
     }
 
     /// Writes a copy of the database as it is next to it

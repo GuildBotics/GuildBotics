@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::auth::Caller;
-use crate::domain::{repo_by_path, repos};
+use crate::domain::{repo_by_path, repos, tickets};
 use crate::error::AppResult;
 use crate::model::{Pull, Repo, Ticket};
 use crate::references::{self, Kind, Reference};
@@ -30,15 +30,29 @@ pub fn resolve(r: &impl Rd, own: &Repo, reference: &Reference) -> AppResult<Opti
         },
     };
     let n = reference.number;
-    let item = match reference.kind {
-        Kind::Ticket => r
-            .get::<Ticket>(store::TICKETS, &Ticket::key(&repo.id, n))?
-            .map(|t| Item::Ticket(Box::new(t))),
-        Kind::Pull => r
+    match reference.kind {
+        // A ticket moved to another repository is what its old reference
+        // names, where it is now.
+        Kind::Ticket => match tickets::ticket_by_key(r, &repo, &n.to_string()) {
+            Ok((repo, t)) => Ok(Some((repo, Item::Ticket(Box::new(t))))),
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(e),
+        },
+        Kind::Pull => Ok(r
             .get::<Pull>(store::PULLS, &Pull::key(&repo.id, n))?
-            .map(|p| Item::Pull(Box::new(p))),
-    };
-    Ok(item.map(|item| (repo, item)))
+            .map(|p| (repo, Item::Pull(Box::new(p))))),
+    }
+}
+
+impl Item {
+    /// Its number in its repository, which a reference to a moved ticket
+    /// does not carry.
+    pub fn number(&self) -> u64 {
+        match self {
+            Item::Ticket(t) => t.number,
+            Item::Pull(p) => p.number,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -82,12 +96,12 @@ pub async fn render(app: &App, caller: &Caller, path: &str, source: String) -> A
             };
             markdown.push_str(&source[at..range.start]);
             let label = &source[range.clone()];
-            if let Some((repo, item)) = target {
+            if let Some((repo, item)) = &*target {
                 let (kind, state, title, route) = match item {
                     Item::Ticket(t) => ("ticket", t.state.as_str(), t.title.as_str(), "tickets"),
                     Item::Pull(p) => ("pull", if p.merged { "merged" } else { p.state.as_str() }, p.title.as_str(), "pulls"),
                 };
-                let url = format!("{base}/{}/-/{route}/{}", repo.path, reference.number);
+                let url = format!("{base}/{}/-/{route}/{}", repo.path, item.number());
                 markdown.push_str(&format!(
                     "<a href=\"{}\" data-branvil-kind=\"{kind}\" data-branvil-state=\"{state}\" title=\"{}\">{}</a>",
                     escape(&url), escape(title), escape(label),

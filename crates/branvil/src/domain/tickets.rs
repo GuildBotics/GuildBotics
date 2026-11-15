@@ -781,7 +781,7 @@ pub async fn update_ticket(
                 .store
                 .read(move |r| ticket_by_key(r, &repo, &key))
                 .await?;
-            Some(Some(app.upstream.check_issue(&now_in, url)?))
+            Some(Some((app.upstream.check_issue(&now_in, url)?, now_in.id)))
         }
         Some(None) => Some(None),
         None => None,
@@ -814,7 +814,15 @@ pub async fn update_ticket(
                 t.interactive = interactive;
             }
             if let Some(issue) = upstream_issue {
-                t.upstream_issue = issue;
+                // Checked against the repository it was in before it moved.
+                if let Some((_, checked)) = &issue
+                    && *checked != repo.id
+                {
+                    return Err(AppError::conflict(format!(
+                        "Ticket {key} moved to another repository meanwhile."
+                    )));
+                }
+                t.upstream_issue = issue.map(|(url, _)| url);
             }
             // Related tickets are of the same workspace, as its board is.
             let related = |url: &str| related_ticket(w, &base_url, &repo, url);
@@ -952,7 +960,7 @@ pub async fn move_ticket(
     let to = repos::visible(app, caller, &input.repository).await?;
     let key = key.to_string();
     let base_url = app.base_url.clone();
-    let (moved, before, pull_paths) = app
+    let (moved, before, pull_paths, descendants) = app
         .store
         .write(move |w| {
             let (from, old) = ticket_by_key(w, &repo, &key)?;
@@ -1058,6 +1066,10 @@ pub async fn move_ticket(
                     if l.local.as_ref() == Some(&old_id) {
                         l.url = ticket_url(&base_url, &to, number);
                         l.local = Some(new_id.clone());
+                        // A merge closes only the tickets of its pull
+                        // request's repository, even of one reopened later;
+                        // a merged one keeps what it closed.
+                        l.closes &= p.merged || p.repo == to.id;
                     }
                 }
                 model::put_indexed(
@@ -1070,6 +1082,12 @@ pub async fn move_ticket(
                 )?;
                 pull_paths.push((repo_by_id(w, &p.repo)?.path, p.number.to_string()));
             }
+            // Its descendants show it as their interactive ancestor, by its
+            // URL.
+            let descendants = descendants(w, &new_id)?
+                .iter()
+                .map(|d| ticket_ref(w, &base_url, d))
+                .collect::<AppResult<Vec<_>>>()?;
             Ok((
                 TicketMoved {
                     ticket: ticket_view(w, &base_url, &to, &t)?,
@@ -1077,10 +1095,14 @@ pub async fn move_ticket(
                 },
                 before,
                 pull_paths,
+                descendants,
             ))
         })
         .await?;
     publish_tickets(app, [&before, &moved.ticket]);
+    for d in &descendants {
+        app.events.publish("ticket", &d.repository, d.key.clone());
+    }
     for (path, number) in pull_paths {
         app.events.publish("pull", &path, number);
     }

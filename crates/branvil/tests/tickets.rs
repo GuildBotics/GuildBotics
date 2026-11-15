@@ -2055,7 +2055,8 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
         .open_pull("linking", json!([{"url": moving["url"], "closes": false}]))
         .await;
     w.push_change("closing", "c.txt", "c\n");
-    w.open_pull("closing", json!([{"url": waiting["url"], "closes": true}]))
+    let closing = w
+        .open_pull("closing", json!([{"url": waiting["url"], "closes": true}]))
         .await;
     let to = |path: &str| json!({"repository": path});
     let move_path = |t: &Value| format!("{}/repository", path_of(t));
@@ -2158,6 +2159,37 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
         s.ok(&format!("{new_path}/comments"), &w.aiko).await["items"][1]["body"],
         "by the old address"
     );
+    // References to its old number lead to it too.
+    let (st, rendered) = s
+        .post(
+            &format!("{}/markdown", w.repo_path()),
+            &w.aiko,
+            json!({"source": format!("#2 and {}", moving["url"].as_str().unwrap())}),
+        )
+        .await;
+    assert_eq!(st, 200, "{rendered}");
+    assert_eq!(
+        rendered["markdown"]
+            .as_str()
+            .unwrap()
+            .matches(&format!("href=\"{url}\""))
+            .count(),
+        2,
+        "{rendered}"
+    );
+    // A pull request of the old repository that has not merged no longer
+    // closes it once it moves, even if it is reopened.
+    let closing_path = format!("{}/pulls/{}", w.repo_path(), closing["number"]);
+    let (st, v) = s
+        .post(&format!("{closing_path}/close"), &w.owner, json!({}))
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = s.put(&move_path(&waiting), &w.aiko, to("acme/other")).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        s.ok(&closing_path, &w.aiko).await["tickets"],
+        json!([{"url": v["ticket"]["url"], "closes": false}])
+    );
     assert_eq!(w.ticket("Next").await["key"], "4");
     let (st, back) = s
         .put(&format!("{new_path}/repository"), &w.aiko, to(REPO))
@@ -2174,4 +2206,52 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
         "{}",
         String::from_utf8_lossy(&checked.stderr)
     );
+}
+
+#[tokio::test]
+async fn a_move_reaches_the_views_of_all_its_descendants() {
+    let w = World::new().await;
+    let s = &w.server;
+    let (st, v) = s
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let top = w.ticket("Top").await;
+    let middle = w.ticket("Middle").await;
+    let bottom = w.ticket("Bottom").await;
+    for (child, parent) in [(&middle, &top), (&bottom, &middle)] {
+        let (st, v) = s
+            .patch(&path_of(child), &w.aiko, json!({"parent": parent["url"]}))
+            .await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let mut events = s
+        .http
+        .get(format!("{}/api/v1/events", s.url))
+        .bearer_auth(&w.aiko)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(events.status(), 200);
+    let (st, v) = s
+        .put(
+            &format!("{}/repository", path_of(&top)),
+            &w.ken,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
+    let mut seen = String::new();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Ok(Some(chunk)) = events.chunk().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if seen.contains(&bottom_changed) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(found, Ok(true), "{seen}");
 }

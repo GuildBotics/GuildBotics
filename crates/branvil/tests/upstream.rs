@@ -1523,6 +1523,44 @@ async fn branvils_references_are_written_for_the_host_when_published() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reference_to_a_moved_ticket_is_written_for_where_it_is_now() {
+    let (w, _gh) = followed().await;
+    with_aiko_account(&w).await;
+    let s = &w.server;
+    let (st, v) = s
+        .post("/repos", &w.owner, json!({"path": "acme/other"}))
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    w.ticket("Moving").await; // #1
+    let (st, v) = s
+        .put(
+            &format!("{}/tickets/1/repository", w.repo_path()),
+            &w.aiko,
+            json!({"repository": "acme/other"}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    w.push_change("refers", "r.txt", "r\n");
+    let (st, v) = s
+        .post(
+            &format!("{}/pulls", w.repo_path()),
+            &w.aiko,
+            json!({"head": "refers", "title": "About #1", "body": "Fixes #1."}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    // Not the host's #1: the ticket as Branvil names it now.
+    let preview = s
+        .ok(
+            &format!("{}/pulls/{}/publish", w.repo_path(), v["pull"]["number"]),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(preview["title"], "About `acme/other#1`");
+    assert_eq!(preview["body"], "Fixes `acme/other#1`.");
+}
+
 const APP_ID: &str = "4242";
 const INSTALLATION: &str = "777";
 

@@ -585,10 +585,16 @@ workspace.
   with it; the tickets that name it as their parent or blocker and the pull
   requests that link it name its new URL, without changing their revisions.
   Its images stay in the repository they were uploaded to (see "Attachments").
+  A pull request that has not merged and is not of its new repository no
+  longer closes it (a merge closes only the tickets of its own repository,
+  also after a reopen); a merged one keeps what it closed.
   Its old number is not reused and keeps leading to it: every operation on
   `/api/v1/repos/{old repo}/tickets/{old number}` and its old URL (as a
   relation or a pull request's link) acts on the moved ticket and answers with
-  its new `url`, through each move it made. `400 invalid` for its own
+  its new `url`, through each move it made. References to its old number or
+  URL in Markdown link to it where it is now, and a published pull request
+  names it there. A relative reference in its own text (`#7`) is read in its
+  new repository. `400 invalid` for its own
   repository or one of another workspace, `404` for an unknown repository,
   `409 conflict` for a stale `revision`, `409 move_upstream_issue` while it
   has an `upstream_issue` (an issue of its repository's upstream host), and
