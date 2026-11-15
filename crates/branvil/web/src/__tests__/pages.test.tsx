@@ -32,10 +32,15 @@ it.each([ ["en", "paths"], ["ja", "paths"], ["en", "post_merge"], ["ja", "post_m
   renderApp(`/acme/demo/-/commits/${sha}`,lang);
   const label = reason === "post_merge" ? (lang === "ja" ? "マージ後だけ" : "Post-merge only") : lang === "ja" ? "省略（変更なし）" : "Skipped (no changes)";
   expect(await screen.findByText(label)).toBeInTheDocument();
+  const postMergeExplanation = lang === "ja"
+    ? "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。"
+    : "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.";
+  if (reason === "post_merge") expect(screen.getByText(postMergeExplanation)).toBeInTheDocument();
   if (reason === "paths") expect(screen.getByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
   if (reason === "paths") expect(screen.getByTitle(mergeBase).closest("a")).toHaveAttribute("href",`/acme/demo/-/commits/${mergeBase}`);
   await user.click(screen.getByRole("button",{name:lang === "ja" ? "チェック test を開く" : "Open check test"}));
   const drawer = await screen.findByRole("dialog");
+  if (reason === "post_merge") expect(await within(drawer).findByText(postMergeExplanation)).toBeInTheDocument();
   if (reason === "paths") expect(await within(drawer).findByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
   expect(within(drawer).getByText(label)).toBeInTheDocument();
   expect(within(drawer).getByRole("button",{name:lang === "ja" ? "再実行" : "Retry"})).toBeEnabled();

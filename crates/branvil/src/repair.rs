@@ -58,7 +58,7 @@ mod tests {
     async fn automatic_order_and_explicit_override() {
         let dir = tempfile::tempdir().unwrap();
         let s = store::Store::open(&dir.path().join("test.redb"), 1 << 20, 1).unwrap();
-        let mut repo: Repo = serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":[],"required_approvals":0,"auto_land":false,"ci_network":false,"responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"})).unwrap();
+        let mut repo: Repo = serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":[],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"ci_network":false,"responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"})).unwrap();
         async fn check(s: &store::Store, repo: &Repo, name: &str, chosen: bool, automatic: &str) {
             let repo = repo.clone();
             assert_eq!(

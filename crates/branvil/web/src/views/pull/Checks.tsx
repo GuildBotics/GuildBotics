@@ -39,7 +39,7 @@ export function CheckStatusBadge({ status, conclusion, path_skip }: Pick<Check, 
 
 function PathSkipReason({ repo, skip }: { repo: string; skip: PathSkip }) {
   const t = useT();
-  if (skip.reason === "post_merge") return <Text size="xs" c="dimmed">{t("settings.postMergeJobsHelp")}</Text>;
+  if (skip.reason === "post_merge") return <Text size="xs" c="dimmed">{t("ci.postMergeReason")}</Text>;
   return <Stack gap={2}>
     <Text size="xs" c="dimmed">{t("ci.pathsReason", { paths: skip.paths.join(", ") })}</Text>
     {skip.bases.map((b) => <Text key={b.pull} size="xs" c="dimmed">

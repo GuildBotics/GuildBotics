@@ -311,6 +311,7 @@ export const en = {
   "ci.conclusion.skipped": "skipped",
   "settings.postMergeJobs": "Post-merge only jobs",
   "settings.postMergeJobsHelp": "Jobs listed here run only during main verification after merging, not on PRs. They cannot be required checks.",
+  "ci.postMergeReason": "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.postMergeSkipped": "Post-merge only",
   "landing.check.postMergeSkipped": "Post-merge only",
   "ci.pathsSkipped": "Skipped (no changes)",
