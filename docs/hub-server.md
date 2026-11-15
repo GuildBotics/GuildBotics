@@ -47,13 +47,15 @@ scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 
 ## 手動更新
 
-Hubのチェックアウトで、オーナーが更新するコミットを確認してから実行します。
+Hubのチェックアウトで、オーナーがBranvilのmainの表示にある確認済みのコミットを確認してから実行します。保存形式を上げる場合は、稼働中の版から1段ずつ進めてください。
 
 ```sh
 git fetch origin main
-git merge --ff-only FETCH_HEAD
+git merge --ff-only <確認済みのコミットのSHA>
 scripts/hub-server.sh update
 ```
+
+確認済みでないコミットも手動で入れられます。そのあとの自動更新は、そのコミットより先の確認済みのコミットを待ちます。
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
 2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。GuildBotics も退避し、退避の写しに新ビルドの `server hub-data upgrade` と `check` を実行します。
@@ -120,7 +122,7 @@ scripts/hub-server.sh recover
 以下はシェルの更新ループ向けの隠しコマンドです。成功時の標準出力は1行の JSON、実行エラーは終了コード1です。状態の判定結果は終了コード0で返します。実データを変更せず、通知だけは外部の webhook へ送信します。
 
 - `guildbotics service status`: `server_running`、サービスの `running`、`state` を返します。サーバー停止中はそれぞれ `false`、`false`、`stopped`。サーバーのロックが指すポートへ接続し、オーナーの証明を検証してから状態を読みます。認証できない場合は停止扱いにせずエラーにします。
-- `guildbotics server hub-checks --repo GuildBotics/GuildBotics --sha <full-sha>`: `run_registered` と `state` を返します。`state` は `unregistered`（run 未登録）、`pending`（必須チェック未完了・欠落）、`failure`（必須チェック失敗）、`success`（必須チェック成功）。必須チェックのない登録済み run は `success`。不正な pipeline は失敗です。必須チェックは `success` またはサービスによるパス判定の `skipped` だけを成功とします。
+- `guildbotics server hub-verified --repo GuildBotics/GuildBotics --since <full-sha>`: `since_on_main` と `verified` を返します。mainのfirst-parent履歴をカーソルでたどり、指定コミットの直前までの確認済みのSHAを新しい順に返します。指定コミットが最後まで見つからなければ `since_on_main` は `false` です。
 - `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin は Branvil の clone URL（`{base}/git/{repo}.git`）の形で、設定済み base URL と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先は設定済み Hub に固定し、プロキシやリダイレクトを使いません。トークンは `BRANVIL_DATA_DIR` の `secrets/owner.token` から直接読み、引数や環境変数では受け取りません。
 - `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
 - `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。
@@ -167,7 +169,7 @@ scripts/hub-server.sh recover
 `base_url` は統合サーバーでは使わない。開発ワークスペースの Branvil 接続設定も共通 URL に変更する。
 
 
-## main を見張る自動更新
+## 確認済みのコミットを追う自動更新
 
 Hubのチェックアウトで、上記と同じRust、Node.js 24、npm、GitをPATHに入れ、
 オーナーのデスクトップセッションから、サーバーを `install` したあとに登録します。
@@ -183,10 +185,12 @@ scripts/hub-server.sh auto-uninstall
 常駐するのはGuildBoticsの実行ファイルだけで、ログイン項目やアクセスの確認にもその署名で表示されます。
 チェックアウトの場所は登録時に引数として記録します。登録時のPATHは更新のビルドのために保存し、サーバーのデータ、identity root、ポートは
 `local.guildbotics.plist` から読みます。チェックアウトは自動更新専用にしてください。
-必須チェックがすべて成功し、手動更新版の番号が現行以下、独自ベースイメージが
+HEADより先にある確認済みのコミットのうち、保存形式の版が稼働中の版+1以下で最も新しいものを選びます。
+手動更新版の番号が現行以下、独自ベースイメージが
 読み込み済みのときだけfast-forwardして通常の `update` を実行します。
 独自イメージとスナップショットはCLIで選択中のワークスペースについて確認します。
-チェック失敗は通知し、次の回で再確認します。未登録・未完了のチェックは次の回を待ちます。
+保存形式の版を1段ずつたどり、次の回でさらに先の確認済みのコミットへ進みます。候補がなければ待ちます。
+本番がmainからどれだけ遅れているかは、BranvilのPR一覧の見出しのmainの状態（「確認済みから n 本進んでいる」、失敗時は待っている修復チケット）で確認します。
 
 更新前にGuildBoticsのサービスが動いていた場合だけ、更新後やロールバック後に
 `guildbotics service start` で再開します。途中で停止した場合も、再開の意図を保存しておき、
@@ -215,7 +219,7 @@ scripts/hub-server.sh auto-uninstall
 - `operation` が残る：ほかの操作中なら待ちます。古いロックかをPIDだけで決めず、更新とビルドの
   プロセスが終わったことを確認してから取り除きます。自動削除はしません。
 - サーバー無応答：サーバーログを確認し、必要なら `restart` または `recover` を実行します。
-- 更新失敗：同じコミットでは再試行しません。手で対処するか、新しいコミットを待ちます。
+- 更新失敗：同じコミットでは再試行しません。手で対処するか、より新しい、保存形式の条件を満たす確認済みのコミットで自動に再試行します。
   更新途中でループが終了し、結果を記録できなかった場合も同じ扱いです。
 
 診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。

@@ -148,9 +148,17 @@ case "$name" in
                 [ ! -f "$FAKE_ROOT/missing-clients" ] || exit 1
                 printf '{"ready":true}\n'
                 ;;
-            server:hub-checks)
-                state=$(cat "$FAKE_ROOT/checks" 2>/dev/null || printf success)
-                printf '{"state":"%s"}\n' "$state"
+            server:hub-verified)
+                [ ! -f "$FAKE_ROOT/fail-verified" ] || exit 1
+                if [ -f "$FAKE_ROOT/verified" ]; then cat "$FAKE_ROOT/verified"; exit 0; fi
+                since=$6
+                found=false
+                commits=
+                for sha in $(git rev-list --first-parent FETCH_HEAD); do
+                    if [ "$sha" = "$since" ]; then found=true; break; fi
+                    commits="${commits}${commits:+,}\"$sha\""
+                done
+                printf '{"since_on_main":%s,"verified":[%s]}\n' "$found" "$commits"
                 ;;
             # The loop and the build removal under test are the real ones.
             server:hub-auto-update|server:hub-prune) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;

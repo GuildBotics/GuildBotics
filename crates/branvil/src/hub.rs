@@ -44,16 +44,20 @@ fn validate_repository(repo: &str) -> anyhow::Result<()> {
 }
 
 /// Read exactly the locally configured Hub, bypassing proxies and redirects.
-pub async fn checks(repo: Option<&str>, origin: Option<&str>, sha: &str) -> anyhow::Result<Value> {
+pub async fn verified(
+    repo: Option<&str>,
+    origin: Option<&str>,
+    since: &str,
+) -> anyhow::Result<Value> {
     let config = crate::serve_config()?;
-    checks_at(&config, repo, origin, sha).await
+    verified_at(&config, repo, origin, since).await
 }
 
-async fn checks_at(
+async fn verified_at(
     config: &crate::config::Config,
     repo: Option<&str>,
     origin: Option<&str>,
-    sha: &str,
+    since: &str,
 ) -> anyhow::Result<Value> {
     let base = config
         .base_url
@@ -67,7 +71,7 @@ async fn checks_at(
         None => repository(origin.context("checkout origin is missing")?, &base)?,
     };
     anyhow::ensure!(
-        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        since.len() == 40 && since.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid commit SHA"
     );
     let repo = crate::util::encode_segment(&repo);
@@ -92,47 +96,38 @@ async fn checks_at(
         );
         Ok(response.json().await.map_err(|e| e.without_url())?)
     };
-    let settings = get(String::new()).await?;
-    let checks = get(format!("/commits/{sha}/checks")).await?;
-    summarize(&settings, &checks)
-}
-
-fn summarize(repo: &Value, response: &Value) -> anyhow::Result<Value> {
-    let registered = response["run_registered"]
-        .as_bool()
-        .context("run_registered missing")?;
-    let required = repo["required_checks"]
-        .as_array()
-        .context("required_checks missing")?;
-    let checks = response["checks"].as_array().context("checks missing")?;
-    let mut state = "success";
-    if !registered {
-        state = "unregistered";
-    } else {
-        for name in required {
-            let name = name.as_str().context("invalid required check")?;
-            let check = checks.iter().find(|c| c["name"] == name);
-            match check {
-                Some(c) if c["status"] == "completed" => {
-                    if c["conclusion"] != "success"
-                        && !(c["conclusion"] == "skipped" && c["path_skip"].is_object())
-                    {
-                        state = "failure";
-                        break;
-                    }
-                }
-                _ => state = "pending",
+    let mut verified = Vec::new();
+    let mut cursor = None::<String>;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let path = match &cursor {
+            Some(cursor) => format!(
+                "/verification/commits?cursor={}",
+                crate::util::encode_segment(cursor)
+            ),
+            None => "/verification/commits".into(),
+        };
+        let page = get(path).await?;
+        for item in page["items"].as_array().context("items missing")? {
+            let sha = item["sha"].as_str().context("commit SHA missing")?;
+            anyhow::ensure!(
+                sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid commit SHA"
+            );
+            if sha.eq_ignore_ascii_case(since) {
+                return Ok(json!({"since_on_main":true,"verified":verified}));
+            }
+            if item["mark"] == "verified" {
+                verified.push(sha.to_owned());
             }
         }
-        // Invalid pipelines must block even with no required job names.
-        if checks
-            .iter()
-            .any(|c| c["name"] == "pipeline" && c["conclusion"] == "failure")
-        {
-            state = "failure";
-        }
+        cursor = match &page["next_cursor"] {
+            Value::Null => return Ok(json!({"since_on_main":false,"verified":verified})),
+            Value::String(value) => Some(value.clone()),
+            _ => anyhow::bail!("invalid verification cursor"),
+        };
+        anyhow::ensure!(seen.insert(cursor.clone()), "repeated verification cursor");
     }
-    Ok(json!({"run_registered": registered, "state": state}))
 }
 
 /// Download a named artifact from the locally configured Hub only.
@@ -202,7 +197,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn commit_checks_read_the_local_owner_file_and_public_http_contract() {
+    async fn verified_reads_owner_file_pages_until_since_and_sanitizes_errors() {
+        use axum::{
+            extract::{Query, State},
+            http::{HeaderMap, StatusCode},
+            routing::get,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let root = tempfile::tempdir().unwrap();
         let mut config = crate::config::Config::load(None, Some(root.path()), None, None).unwrap();
         std::fs::create_dir_all(root.path().join("secrets")).unwrap();
@@ -210,33 +211,74 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         config.base_url = Some(base.clone());
-        let sha = "a".repeat(40);
-        let app = axum::Router::new()
-            .route("/api/v1/repos/{repo}", axum::routing::get(|axum::extract::Path(repo): axum::extract::Path<String>, headers: axum::http::HeaderMap| async move {
-                assert_eq!(repo, "team/repo");
+        let mode = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route("/api/v1/repos/{repo}/verification/commits", get(
+            |State(mode): State<Arc<AtomicUsize>>, headers: HeaderMap,
+             Query(query): Query<std::collections::HashMap<String, String>>| async move {
                 assert_eq!(headers["authorization"], "Bearer fixture-owner");
-                axum::Json(json!({"required_checks":["test"]}))
-            }))
-            .route("/api/v1/repos/{repo}/commits/{sha}/checks", axum::routing::get(|axum::extract::Path((repo, sha)): axum::extract::Path<(String, String)>| async move {
-                assert_eq!(repo, "team/repo");
-                assert_eq!(sha, "a".repeat(40));
-                axum::Json(json!({"run_registered":true,"checks":[{"name":"test","status":"completed","conclusion":"success"}]}))
-            }));
+                let mode = mode.load(Ordering::SeqCst);
+                if mode == 2 { return (StatusCode::BAD_REQUEST, axum::Json(json!({"secret":"private response"}))); }
+                if mode == 3 { return (StatusCode::OK, axum::Json(json!({"items":[{"sha":"invalid private response","mark":"verified"}],"next_cursor":null}))); }
+                let page = if query.is_empty() {
+                    json!({"items":[{"sha":"a".repeat(40),"mark":"verified"},{"sha":"b".repeat(40),"mark":null}],"next_cursor":"opaque+/="})
+                } else {
+                    assert_eq!(query["cursor"], "opaque+/=");
+                    json!({"items":[{"sha":"c".repeat(40),"mark":"verified"},{"sha":"d".repeat(40),"mark":"verified"}],"next_cursor":null})
+                };
+                (StatusCode::OK, axum::Json(page))
+            }
+        )).with_state(mode.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         for (repo, origin) in [
             (Some("team/repo"), None),
             (None, Some(format!("{base}/git/team/repo.git"))),
         ] {
             assert_eq!(
-                checks_at(&config, repo, origin.as_deref(), &sha)
+                verified_at(&config, repo, origin.as_deref(), &"c".repeat(40))
                     .await
                     .unwrap(),
-                json!({"run_registered":true,"state":"success"})
+                json!({"since_on_main":true,"verified":["a".repeat(40)]})
             );
         }
+        assert_eq!(
+            verified_at(&config, Some("team/repo"), None, &"f".repeat(40))
+                .await
+                .unwrap(),
+            json!({"since_on_main":false,"verified":["a".repeat(40),"c".repeat(40),"d".repeat(40)]})
+        );
+        assert_eq!(
+            verified_at(&config, Some("team/repo"), None, &"a".repeat(40))
+                .await
+                .unwrap(),
+            json!({"since_on_main":true,"verified":[]})
+        );
+        for value in [2, 3] {
+            mode.store(value, Ordering::SeqCst);
+            let error = verified_at(&config, Some("team/repo"), None, &"c".repeat(40))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains(&base));
+            assert!(!error.contains("private response"));
+        }
+        assert!(
+            verified_at(
+                &config,
+                None,
+                Some("http://other/git/team/repo.git"),
+                &"c".repeat(40)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            verified_at(&config, Some("team/repo"), None, "invalid")
+                .await
+                .is_err()
+        );
         std::fs::remove_file(config.layout().owner_token()).unwrap();
         assert!(
-            checks_at(&config, Some("team/repo"), None, &sha)
+            verified_at(&config, Some("team/repo"), None, &"c".repeat(40))
                 .await
                 .is_err()
         );
@@ -274,51 +316,6 @@ mod tests {
         ] {
             assert!(repository(origin, "http://127.0.0.1:7878").is_err());
         }
-    }
-
-    #[test]
-    fn required_checks_distinguish_registration_and_terminal_results() {
-        let repo = json!({"required_checks":["test"]});
-        for (registered, checks, expected) in [
-            (false, json!([]), "unregistered"),
-            (true, json!([]), "pending"),
-            (
-                true,
-                json!([{"name":"test","status":"in_progress"}]),
-                "pending",
-            ),
-            (
-                true,
-                json!([{"name":"test","status":"completed","conclusion":"success"}]),
-                "success",
-            ),
-            (
-                true,
-                json!([{"name":"test","status":"completed","conclusion":"failure"}]),
-                "failure",
-            ),
-            (
-                true,
-                json!([{"name":"test","status":"completed","conclusion":"cancelled"}]),
-                "failure",
-            ),
-            (
-                true,
-                json!([{"name":"test","status":"completed","conclusion":"skipped"}]),
-                "failure",
-            ),
-            (
-                true,
-                json!([{"name":"test","status":"completed","conclusion":"skipped","path_skip":{}}]),
-                "success",
-            ),
-        ] {
-            assert_eq!(
-                summarize(&repo, &json!({"run_registered":registered,"checks":checks})).unwrap()["state"],
-                expected
-            );
-        }
-        assert!(summarize(&repo, &json!({})).is_err());
     }
 
     #[tokio::test]

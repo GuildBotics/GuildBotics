@@ -77,6 +77,8 @@ impl Hub {
             path,
         };
         hub.git(&["init", "-q"]);
+        fs::create_dir_all(hub.repo.join("crates/branvil/src")).unwrap();
+        hub.schema(10);
         hub.commit("old");
         hub
     }
@@ -124,7 +126,7 @@ impl Hub {
 
     fn commit(&self, name: &str) {
         fs::write(self.repo.join("build-id"), name).unwrap();
-        self.git(&["add", "scripts", "build-id", "hub-update.json"]);
+        self.git(&["add", "scripts", "build-id", "hub-update.json", "crates"]);
         self.git(&["commit", "-qm", name]);
     }
 
@@ -1045,6 +1047,35 @@ fn only_macos_is_supported() {
 }
 
 impl Hub {
+    fn schema(&self, version: u64) {
+        fs::write(
+            self.repo.join("crates/branvil/src/store.rs"),
+            format!("pub const SCHEMA_VERSION: u64 = {version};\n"),
+        )
+        .unwrap();
+    }
+
+    fn sha(&self) -> String {
+        String::from_utf8(
+            self.command("git")
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .into()
+    }
+
+    fn verified(&self, commits: &[&str]) {
+        fs::write(
+            self.root().join("verified"),
+            serde_json::json!({"since_on_main":true,"verified":commits}).to_string(),
+        )
+        .unwrap();
+    }
+
     fn auto_candidate(&self) {
         self.git(&["branch", "-M", "main"]);
         let remote = self.root().join("origin.git");
@@ -1064,29 +1095,144 @@ impl Hub {
 }
 
 #[test]
-fn auto_update_requires_successful_checks_and_notifies_failure_once() {
-    for checks in ["pending", "unregistered", "failure", "success"] {
+fn auto_update_ignores_unverified_main_and_waits_past_a_manual_build() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    let verified = String::from_utf8(
+        hub.command("git")
+            .args(["rev-parse", "origin/main"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    hub.verified(&[]);
+    hub.run("auto-once", None, true);
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("old");
+    assert!(!hub.root().join("notifications").exists());
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    hub.commit("unverified");
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", "HEAD^^"]);
+    hub.verified(&[&verified]);
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("new");
+    // A manual build ahead of the verified mark waits without notifying.
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    hub.run("update", None, true);
+    hub.verified(&[]);
+    hub.run("auto-once", None, true);
+    assert!(!hub.root().join("notifications").exists());
+    hub.commit("later");
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", "HEAD^"]);
+    fs::remove_file(hub.root().join("verified")).unwrap();
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("later");
+}
+
+#[test]
+fn auto_update_selects_latest_compatible_schema_and_advances_one_step() {
+    for versions in [[11, 12], [10, 10], [12, 12]] {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
-        fs::write(hub.root().join("checks"), checks).unwrap();
+        hub.git(&["merge", "--ff-only", "origin/main"]);
+        hub.schema(versions[0]);
+        hub.commit("c1");
+        let c1 = hub.sha();
+        hub.schema(versions[1]);
+        hub.commit("c2");
+        let c2 = hub.sha();
+        hub.git(&["push", "origin", "main"]);
+        hub.git(&["reset", "--hard", "HEAD~3"]);
+        hub.verified(&[&c2, &c1]);
         hub.run("auto-once", None, true);
-        if checks == "success" {
-            hub.assert_runs_signed("new");
-        } else {
-            hub.assert_runs_signed("old");
-            hub.run("auto-once", None, true);
-            if checks == "failure" {
-                assert_eq!(hub.lines("notifications").lines().count(), 1);
-                // A rerun on the same commit can turn a failed check green.
-                fs::write(hub.root().join("checks"), "success").unwrap();
+        match versions {
+            [11, 12] => {
+                hub.assert_runs_signed("c1");
+                hub.verified(&[&c2]);
                 hub.run("auto-once", None, true);
-                hub.assert_runs_signed("new");
-            } else {
-                assert!(!hub.root().join("notifications").exists());
+                hub.assert_runs_signed("c2");
+            }
+            [10, 10] => hub.assert_runs_signed("c2"),
+            _ => {
+                hub.run("auto-once", None, true);
+                hub.assert_runs_signed("old");
+                assert_eq!(hub.lines("notifications").lines().count(), 1);
+                assert!(hub.lines("notifications").contains(": migration:"));
             }
         }
     }
+}
+
+#[test]
+fn auto_verified_read_failure_notifies_each_episode_once() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.verified(&[]);
+    for episode in 1..=2 {
+        hub.mark("fail-verified");
+        hub.run("auto-once", None, true);
+        hub.run("auto-once", None, true);
+        assert_eq!(hub.lines("notifications").lines().count(), episode);
+        assert!(hub.lines("notifications").contains(": preflight:"));
+        fs::remove_file(hub.root().join("fail-verified")).unwrap();
+        hub.run("auto-once", None, true);
+    }
+}
+
+#[test]
+fn removed_hub_checks_command_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+        .args(["server", "hub-checks"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn failed_candidate_is_not_retried_but_a_newer_verified_commit_is() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.fail_start("new");
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("old");
+    fs::remove_file(hub.root().join("fail-start")).unwrap();
+    hub.run("auto-once", None, true);
+    assert!(!hub.lines("calls").contains("npm|"));
+    assert!(
+        hub.lines("notifications")
+            .contains("a newer verified commit is required for automatic retry")
+    );
+    hub.commit("newer");
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", "HEAD^"]);
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("newer");
+}
+
+#[test]
+fn checkout_outside_first_parent_notifies_once() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.commit("local");
+    for _ in 0..2 {
+        hub.run("auto-once", None, true);
+    }
+    hub.assert_runs_signed("old");
+    assert_eq!(hub.lines("notifications").lines().count(), 1);
+    assert!(
+        hub.lines("notifications")
+            .contains("Checkout cannot fast-forward to the verified commit")
+    );
 }
 
 #[test]
@@ -1403,7 +1549,7 @@ fn auto_update_uses_the_agents_identity_root_instead_of_the_shells() {
         }
         hub.run_with("install", &env, true);
         hub.auto_candidate();
-        fs::write(hub.root().join("checks"), "failure").unwrap();
+        hub.mark("fail-verified");
         hub.run_with(
             "auto-once",
             &[("GUILDBOTICS_IDENTITY_ROOT", "/unrelated/identity")],
@@ -1485,7 +1631,7 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
-        fs::write(hub.root().join("checks"), "pending").unwrap();
+        hub.verified(&[]);
         for episode in 1..=2 {
             let file = match stage {
                 "operation" => hub.builds().parent().unwrap().join("operation"),
@@ -1499,7 +1645,7 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
                 _ => fs::write(&file, "").unwrap(),
             }
             if stage == "service" {
-                fs::write(hub.root().join("checks"), "success").unwrap();
+                fs::remove_file(hub.root().join("verified")).ok();
             }
             hub.run("auto-once", None, true);
             if stage == "operation" {
@@ -1540,6 +1686,9 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
                 )
                 .unwrap();
                 fs::remove_file(hub.root().join("fail-sign")).unwrap();
+                // Selection starts after HEAD; restore the pre-attempt checkout
+                // so this test can exercise another service failure episode.
+                hub.git(&["reset", "--hard", "HEAD^"]);
                 // Keep only the service notices in this test's observation.
                 let notices = hub.lines("notifications");
                 fs::write(
