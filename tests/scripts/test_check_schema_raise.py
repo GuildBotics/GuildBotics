@@ -135,6 +135,32 @@ def test_repository_itself() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
+    jobs = tomllib.loads((ROOT / ".branvil/ci.toml").read_text())["jobs"]
+    [job] = [job for job in jobs if job["name"] == "schema-raise"]
+    # Match the image's command names without a virtualenv's bare python.
+    bin_dir = repo / "bin"
+    bin_dir.mkdir()
+    for name in ("python3", "git"):
+        executable = shutil.which(name)
+        assert executable is not None
+        (bin_dir / name).symlink_to(executable)
+    env = {**os.environ, "PATH": str(bin_dir), "BRANVIL_VERIFIED_SHA": "HEAD"}
+    for command in job["commands"]:
+        result = subprocess.run(
+            ["/bin/sh", "-c", command],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (
+            "schema-raise passed: verified version 25, checkout version 25"
+            in result.stdout
+        )
+
+
 def test_ci_schema_job() -> None:
     jobs = {
         job["name"]: job
@@ -144,5 +170,5 @@ def test_ci_schema_job() -> None:
     assert job["verified_sha"] is True
     assert "cache" not in job
     assert job["paths"] == [STORE, UPGRADE, SCRIPT]
-    assert job["commands"] == [f"python {SCRIPT}"]
+    assert job["commands"] == [f"python3 {SCRIPT}"]
     assert "verified_sha" not in jobs["test"]
