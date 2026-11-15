@@ -7,7 +7,7 @@ import { applyChange, LOST_AFTER_MS } from "../query/events";
 import { pull } from "./fixtures";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
-const repo = (path: string) => ({ path, default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], required_approvals: 0, labels: [], upstream: null, revision: 1 });
+const repo = (path: string) => ({ path, default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], required_approvals: 0, labels: [], upstream: null, revision: 1 });
 
 const SHELL = {
   "GET /api/v1/session": json(200, SESSION),
@@ -19,9 +19,9 @@ const SHELL = {
   "GET /api/v1/members": page([]),
 };
 
-it.each(["en", "ja"] as const)("explains service path skips in the check and attempt (%s)", async (lang) => {
+it.each([ ["en", "paths"], ["ja", "paths"], ["en", "post_merge"], ["ja", "post_merge"] ] as const)("explains service skips in the check and attempt (%s, %s)", async (lang, reason) => {
   const sha = "d".repeat(40), base = "b".repeat(40), mergeBase = "c".repeat(40);
-  const path_skip = {paths:["src/**", "tests/*.rs"], bases:[{pull:3,base:"main",base_sha:base,merge_base:mergeBase}]};
+  const path_skip = {reason, paths:["src/**", "tests/*.rs"], bases:[{pull:3,base:"main",base_sha:base,merge_base:mergeBase}]};
   fakeApi({...SHELL,
     [`GET /api/v1/repos/acme/demo/commits/${sha}`]:json(200,{sha,message:"Documentation",author:"Test",authored_at:"2026-10-27T00:00:00Z",parents:[base]}),
     [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]:json(200,{sha,checks_expected:true,checks:[{name:"test",status:"completed",conclusion:"skipped",path_skip,attempt_id:"att_skip",attempt:1}]}),
@@ -30,13 +30,18 @@ it.each(["en", "ja"] as const)("explains service path skips in the check and att
   });
   const user = userEvent.setup();
   renderApp(`/acme/demo/-/commits/${sha}`,lang);
-  const label = lang === "ja" ? "省略（変更なし）" : "Skipped (no changes)";
+  const label = reason === "post_merge" ? (lang === "ja" ? "マージ後だけ" : "Post-merge only") : lang === "ja" ? "省略（変更なし）" : "Skipped (no changes)";
   expect(await screen.findByText(label)).toBeInTheDocument();
-  expect(screen.getByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
-  expect(screen.getByTitle(mergeBase).closest("a")).toHaveAttribute("href",`/acme/demo/-/commits/${mergeBase}`);
+  const postMergeExplanation = lang === "ja"
+    ? "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。"
+    : "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.";
+  if (reason === "post_merge") expect(screen.getByText(postMergeExplanation)).toBeInTheDocument();
+  if (reason === "paths") expect(screen.getByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
+  if (reason === "paths") expect(screen.getByTitle(mergeBase).closest("a")).toHaveAttribute("href",`/acme/demo/-/commits/${mergeBase}`);
   await user.click(screen.getByRole("button",{name:lang === "ja" ? "チェック test を開く" : "Open check test"}));
   const drawer = await screen.findByRole("dialog");
-  expect(await within(drawer).findByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
+  if (reason === "post_merge") expect(await within(drawer).findByText(postMergeExplanation)).toBeInTheDocument();
+  if (reason === "paths") expect(await within(drawer).findByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
   expect(within(drawer).getByText(label)).toBeInTheDocument();
   expect(within(drawer).getByRole("button",{name:lang === "ja" ? "再実行" : "Retry"})).toBeEnabled();
 });

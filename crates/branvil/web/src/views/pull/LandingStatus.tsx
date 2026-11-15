@@ -51,8 +51,8 @@ function useGateDone(pull: PullRequest, required: string[], enabled: boolean): n
   return required.filter((name) => checks.data?.head_sha === pull.head_sha && checks.data.checks.some((c) => c.name === `gate/${name}` && c.status === "completed")).length;
 }
 
-export type CheckState = "checking" | "check.missing" | "check.running" | "check.pathsSkipped" | "check.success" | "check.failure";
-const satisfied = (state: CheckState) => state === "check.success" || state === "check.pathsSkipped";
+export type CheckState = "checking" | "check.missing" | "check.running" | "check.pathsSkipped" | "check.postMergeSkipped" | "check.success" | "check.failure";
+const satisfied = (state: CheckState) => state === "check.success" || state === "check.pathsSkipped" || state === "check.postMergeSkipped";
 
 /** Each required check on this head, as check_landable reads it: real success or a service path selection. */
 export function useRequiredChecks(pull: PullRequest, required: string[], load = true): { name: string; state: CheckState }[] {
@@ -60,7 +60,7 @@ export function useRequiredChecks(pull: PullRequest, required: string[], load = 
   const current = !query.isError && query.data?.head_sha === pull.head_sha ? query.data : undefined;
   return required.map((name) => {
     const c = current?.checks.find((check) => check.name === name);
-    const state: CheckState = !current ? "checking" : !c ? "check.missing" : c.status !== "completed" ? "check.running" : c.conclusion === "success" ? "check.success" : c.conclusion === "skipped" && c.path_skip ? "check.pathsSkipped" : "check.failure";
+    const state: CheckState = !current ? "checking" : !c ? "check.missing" : c.status !== "completed" ? "check.running" : c.conclusion === "success" ? "check.success" : c.conclusion === "skipped" && c.path_skip ? (c.path_skip.reason === "post_merge" ? "check.postMergeSkipped" : "check.pathsSkipped") : "check.failure";
     return { name, state };
   });
 }

@@ -322,7 +322,7 @@ describe("pickup order", () => {
   it("stays open on an Escape that belongs to a field or a drawer", async () => {
     const user = userEvent.setup();
     await opened(user, "1", {
-      "GET /api/v1/repos/acme/demo": json(200, { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], required_checks: [], labels: [], upstream: null, revision: 1 }),
+      "GET /api/v1/repos/acme/demo": json(200, { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], labels: [], upstream: null, revision: 1 }),
       "GET /api/v1/repos/acme/demo/tickets/1": json(200, CARDS[1]),
       "GET /api/v1/repos/acme/demo/tickets/1/comments": json(200, { items: [], next_cursor: null }),
       "GET /api/v1/repos/acme/demo/tickets/1/pulls": json(200, { items: [], next_cursor: null }),

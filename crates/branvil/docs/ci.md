@@ -274,8 +274,27 @@ Service path skips are completed `skipped` attempts with `path_skip`
 metadata and a `[branvil] skipped: no file matching paths changed since …`
 log line naming the PR/base/merge-base snapshot. They satisfy required head
 checks, never supply reusable results or duration estimates, and a manual
-retry executes the job. A runner's `skipped` has no `path_skip` and does not
+retry executes the job. On reselection, a newly path-excluded queued attempt
+becomes a completed service skip as well; running executions and manual retries
+are preserved. A runner's `skipped` has no `path_skip` and does not
 satisfy a required check.
+
+### Post-merge only jobs
+
+The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
+default). These jobs do not run on ordinary branches or PR heads, even before a PR
+opens, without a merge base, or when the pipeline changes. Gates and protected
+branches execute them. A head with service skips cannot itself serve as a gate;
+the gate creates a `[base, head]` commit and executes the skipped jobs there.
+Manual retries also execute them and their skips cannot supply reusable results.
+
+The owner controls this in repository settings rather than `.branvil/ci.toml` so a
+PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
+Selection records include the setting; reconciliation reselects open heads when
+it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
+running jobs finish and manual retries remain executable. Removing a name restores
+normal path selection and queues a real attempt when it is selected again.
+The log for this decision is `[branvil] skipped: post-merge only (repository setting)`.
 
 When head contains base, its selection skips no jobs, and none of its current
 attempts reused another tree's result by the contents of paths, its existing
@@ -380,7 +399,7 @@ shows its head's, a commit's page that commit's, and the pull request list's hea
 
 | Attempt status | Conclusion (when completed) |
 | --- | --- |
-| `queued` → `in_progress` → `completed` | `success`, `failure` (a command exited non-zero), `timed_out`, `cancelled`, `startup_failure` (the commands never started), `skipped` (a service path decision, or accepted from a runner; this runner does not produce it) |
+| `queued` → `in_progress` → `completed` (service skips go directly from `queued` to `completed`) | `success`, `failure` (a command exited non-zero), `timed_out`, `cancelled`, `startup_failure` (the commands never started), `skipped` (a service selection decision, or accepted from a runner; this runner does not produce it) |
 
 What registers a run:
 

@@ -63,6 +63,7 @@ pub struct SelectionBase {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct JobSelection {
+    pub post_merge_jobs: Vec<String>,
     pub bases: Vec<SelectionBase>,
     pub skipped_jobs: Vec<String>,
 }
@@ -70,12 +71,23 @@ pub struct JobSelection {
 /// A service decision, never a conclusion supplied by a runner.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PathSkip {
+    pub reason: SkipReason,
     pub paths: Vec<String>,
     pub bases: Vec<SelectionBase>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    Paths,
+    PostMerge,
+}
+
 impl PathSkip {
     pub fn reason(&self) -> String {
+        if self.reason == SkipReason::PostMerge {
+            return "post-merge only (repository setting)".into();
+        }
         format!(
             "no file matching paths changed since {}",
             self.bases
@@ -713,20 +725,35 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
         let current = current_attempts(w, &run.repo, &run.sha, jobs)?;
         for job in jobs.iter().filter(|j| run.skips(&j.name)) {
             let skip = PathSkip {
+                reason: if run
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .post_merge_jobs
+                    .contains(&job.name)
+                {
+                    SkipReason::PostMerge
+                } else {
+                    SkipReason::Paths
+                },
                 paths: job.paths.clone(),
                 bases: run.selection.as_ref().unwrap().bases.clone(),
             };
             let old = current.iter().find(|a| a.job.name == job.name);
             // Keep real executions and manual retries. Refresh only decisions.
-            if old.is_some_and(|a| !a.superseded && a.path_skip.is_none())
-                || old.is_some_and(|a| a.path_skip.as_ref() == Some(&skip))
+            if old.is_some_and(|a| {
+                !a.superseded && a.path_skip.is_none() && (a.status != "queued" || !a.allow_reuse)
+            }) || old.is_some_and(|a| a.path_skip.as_ref() == Some(&skip))
             {
                 continue;
             }
-            let mut a = new_attempt(w, &run, job, reg.network, now)?;
+            let mut a = match old.filter(|a| a.status == "queued" && !a.superseded) {
+                Some(a) => a.clone(),
+                None => new_attempt(w, &run, job, reg.network, now)?,
+            };
             conclude(&mut a, "skipped", Some(skip.reason()), now);
             a.path_skip = Some(skip);
-            put_attempt(w, None, &a)?;
+            put_attempt(w, old.filter(|old| old.id == a.id), &a)?;
             skipped = true;
         }
     }
@@ -1826,6 +1853,7 @@ mod tests {
             workspace: "ws".into(),
             default_branch: "main".into(),
             protected_branches: vec![],
+            post_merge_jobs: Vec::new(),
             required_checks: vec!["test".into()],
             required_approvals: 0,
             auto_land: false,
@@ -2280,6 +2308,7 @@ mod tests {
             }
         }
         reg.selection = Some(JobSelection {
+            post_merge_jobs: Vec::new(),
             bases: vec![SelectionBase {
                 pull: 1,
                 base: "main".into(),
@@ -2289,6 +2318,67 @@ mod tests {
             skipped_jobs: skipped.iter().map(|s| s.to_string()).collect(),
         });
         reg
+    }
+
+    #[test]
+    fn post_merge_reselection_preserves_running_and_manual_work_and_replaces_queued() {
+        for mode in ["queued", "running", "manual"] {
+            let (_d, s) = store();
+            s.write_sync(|w| register(w, selected("s1", &[]), 10, T0))
+                .unwrap();
+            if mode == "running" {
+                s.write_sync(|w| claim(w, "runner", 60, T0)).unwrap();
+            }
+            if mode == "manual" {
+                let a = latest(&s, "s1")
+                    .into_iter()
+                    .find(|a| a.job.name == "web")
+                    .unwrap();
+                s.write_sync(|w| cancel(w, &a.id, "member1", T0)).unwrap();
+                s.write_sync(|w| retry(w, &a.id, 10, T0)).unwrap();
+            }
+            let mut reg = selected("s1", &["web"]);
+            reg.selection.as_mut().unwrap().post_merge_jobs = vec!["web".into()];
+            s.write_sync(|w| register(w, reg, 10, T1)).unwrap();
+            let a = latest(&s, "s1")
+                .into_iter()
+                .find(|a| a.job.name == "web")
+                .unwrap();
+            if mode == "queued" {
+                assert_eq!(a.conclusion.as_deref(), Some("skipped"));
+                assert_eq!(a.path_skip.as_ref().unwrap().reason, SkipReason::PostMerge);
+                let history = s.read_sync(|r| attempts_of(r, "repo_1", "s1")).unwrap();
+                assert!(
+                    !history
+                        .iter()
+                        .any(|a| a.conclusion.as_deref() == Some("cancelled"))
+                );
+                s.write_sync(|w| register(w, selected("s1", &[]), 10, T2))
+                    .unwrap();
+                let a = latest(&s, "s1")
+                    .into_iter()
+                    .find(|a| a.job.name == "web")
+                    .unwrap();
+                assert_eq!(a.status, "queued");
+                assert!(a.path_skip.is_none());
+            } else {
+                assert!(a.path_skip.is_none());
+                assert!(!a.cancel_requested);
+                assert_eq!(
+                    a.status,
+                    if mode == "running" {
+                        "in_progress"
+                    } else {
+                        "queued"
+                    }
+                );
+            }
+            assert!(
+                s.read_sync(crate::model::index_problems)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -2350,8 +2440,9 @@ mod tests {
     fn protected_registration_and_retry_execute_selected_skips_and_cannot_reuse_them() {
         for protected in [false, true] {
             let (_d, s) = store();
-            s.write_sync(|w| register(w, selected("s1", &["web", "rust"]), 1, T0))
-                .unwrap();
+            let mut reg = selected("s1", &["web", "rust"]);
+            reg.selection.as_mut().unwrap().post_merge_jobs = vec!["web".into(), "rust".into()];
+            s.write_sync(|w| register(w, reg, 1, T0)).unwrap();
             let a = latest(&s, "s1")[0].clone();
             if protected {
                 let mut reg = selected("s1", &["web", "rust"]);
