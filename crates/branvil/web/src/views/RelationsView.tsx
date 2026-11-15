@@ -7,29 +7,35 @@ import { ticketRef, type Card, type Lane, type Ticket } from "../api/types";
 import { ErrorMessage, Loading, Refusal } from "../components/common";
 import { PageHeader } from "../components/PageHeader";
 import { type Translate, useT } from "../i18n";
-import { useBoard, useCards, usePeople } from "../query/hooks";
+import { useBoard, useCards, useMembers, usePeople, useSession } from "../query/hooks";
 import { useStored } from "../storage";
 import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
+import { ownsEscape } from "./ticket/TicketDrawer";
 import { hasFilter, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
-import type { Addition } from "./relations/RelationCard";
+import type { Addition, PickupTag } from "./relations/RelationCard";
 import { buildGraph, type Level } from "./relations/graph";
+import { pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
+import { PickupPanel, reasonText, type Drop } from "./relations/PickupPanel";
 
 /** A relation written: what it changes, what the notice then says, and what undoes it. */
 interface Write {
   /** Written in order. */
   changes: Change[];
   done: string;
-  undo?: Change[];
+  undo?: Undo;
   /** The ticket to bring into view once written (a new one), whether or not the change is made. */
   reveal?: string;
 }
 
+/** What undoes a change: the changes, made against the board as it is when Undo is clicked (it may have changed since). */
+type Undo = (cards: readonly Card[]) => Change[];
+
 /** What the page says after a change: the board's notice with an undo, or a refusal of the service as the ticket page shows it. */
-type Said = (Notice & { undo?: Change[] }) | { tone: "error"; error: unknown };
+type Said = (Notice & { undo?: Undo }) | { tone: "error"; error: unknown };
 
 /** What a new ticket made from a card's menu is made as. */
 function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
@@ -37,6 +43,19 @@ function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
   if (as === "parent") return to.parent ? t("relations.newParentBetween", { key, parent: ticketRef(to.parent) }) : t("relations.newParentOf", { key });
   return t(as === "child" ? "relations.newChildOf" : "relations.newNextOf", { key });
 }
+
+/** A card's tag of its number in its assignee's pickup order, and whether it will not start as things are. */
+function tagOf(row: PickupRow, assignee: string, open: boolean, t: Translate): PickupTag {
+  const place = t("pickup.tagNext", { name: assignee, n: String(row.n) });
+  const state = row.stuck.length > 0 ? `${place}${t("pickup.sentence")}${t("pickup.wontStart", { reason: reasonText(row.stuck, t) })}` : place;
+  return { n: row.n, stuck: row.stuck.length > 0, label: t("pickup.hint", { state }), open, assignee };
+}
+
+/** The pickup order panel: whose order it shows, and the card whose tag opened it. */
+type Panel = { assignee: string; current: string | null };
+
+/** A reorder of the pickup order to write, with the board's cards it was dropped on. */
+type Reorder = Drop & { cards: Card[] };
 
 /** The parents a viewer opened, as kept in the browser (a JSON array of refs). */
 function openParents(stored: string | null): Set<string> {
@@ -98,10 +117,61 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const ciUrls = useMemo(() => ciUrlsOf(cardsOf(graph.level)), [graph]);
   const refresh = () => client.invalidateQueries({ queryKey: ["board"] });
 
+  // The owner's pickup orders: only the owner reads members' kinds, and decides what comes first.
+  const owner = useSession().data?.me.kind === "owner";
+  const members = useMembers();
+  const isAgent = useMemo(() => {
+    const agents = new Set((members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => m.name.toLowerCase()));
+    return (name: string) => agents.has(name.toLowerCase());
+  }, [members.data]);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  /** A row being moved, shown before it is written (and until the cards are read again after). */
+  const [preview, setPreview] = useState<{ assignee: string; order: string[] } | null>(null);
+  const pointedAt = panel?.current ?? null;
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [point, setPoint] = useState<{ ref: string } | null>(null);
+  // Before the filters: a number must not change with what is shown.
+  const orders = useMemo(
+    () =>
+      owner && members.data ? pickupOrders(preview ? reordered(cards, preview.assignee, preview.order) : cards, isAgent) : null,
+    [owner, members.data, preview, cards, isAgent],
+  );
+  const tags = useMemo(() => {
+    if (!orders) return null;
+    const tagged = new Map<string, PickupTag>();
+    for (const [who, rows] of orders) {
+      for (const row of rows) {
+        tagged.set(row.ref, tagOf(row, who, pointedAt === row.ref, t));
+      }
+    }
+    return tagged;
+  }, [orders, pointedAt, t]);
+  // Every change of what the panel shows ends a move shown before it is written: its rows are gone.
+  const showPanel = useCallback((next: Panel | null | ((prev: Panel | null) => Panel | null)) => {
+    setPanel(next);
+    setHighlight(null);
+    setPreview(null);
+  }, []);
+  const closePanel = useCallback(() => showPanel(null), [showPanel]);
+  const onTag = useCallback(
+    (ref: string, assignee: string) => showPanel((prev) => (prev?.current === ref ? null : { assignee, current: ref })),
+    [showPanel],
+  );
+  useEffect(() => {
+    if (!panel) return;
+    // Not an Escape that belongs elsewhere: a field typed in, an open dropdown, a drawer or modal.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || ownsEscape(e.target as HTMLElement)) return;
+      if (!document.querySelector('[role="dialog"]')) closePanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panel, closePanel]);
+
   // The figure changes once the service has the change: a refusal leaves it as it was.
   const relate = useMutation({
     mutationFn: async ({ changes }: Write) => {
-      for (const c of changes) await ("patch" in c ? api.tickets.update(c.repo, c.key, c.patch) : api.tickets.place(c.repo, c.key, { lane: c.lane }));
+      for (const c of changes) await ("patch" in c ? api.tickets.update(c.repo, c.key, c.patch) : api.tickets.place(c.repo, c.key, { lane: c.lane, ...c.at }));
     },
     onMutate: () => setNotice(null),
     onSuccess: (_ticket, { done, undo }) => setNotice({ tone: "info", text: done, undo }),
@@ -123,9 +193,53 @@ export function RelationsView({ workspace }: { workspace: string }) {
     onSettled: () => void refresh(),
   });
 
+  // Written in turn; a refusal stops it, and what was written can be undone.
+  const reorder = useMutation({
+    mutationFn: async ({ moved, order, group, lane, cards: latest }: Reorder): Promise<Said> => {
+      const byRef = new Map(latest.map((c) => [ticketRef(c), c]));
+      const readyNow = new Set(latest.filter((c) => c.state === "open" && c.lane === "ready").map(ticketRef));
+      const plan = placements(order, group, readyNow);
+      if ("stale" in plan) return { tone: "info", text: t("pickup.stale", { key: plan.stale }) };
+      const done: string[] = [];
+      // Put back against the board as it is then: a ticket may have left the Ready lane meanwhile.
+      const undo = (): Undo | undefined => {
+        const moved = [...done];
+        if (moved.length === 0) return undefined;
+        return (now) => {
+          const nowByRef = new Map(now.map((c) => [ticketRef(c), c]));
+          const ready = new Set(now.filter((c) => c.state === "open" && c.lane === "ready").map(ticketRef));
+          return restoring(lane, moved, ready).map(({ ref, at }) => {
+            const c = nowByRef.get(ref) as Card;
+            return { repo: c.repository, key: c.key, lane: "ready" as const, at };
+          });
+        };
+      };
+      for (const { ref, at } of plan.writes) {
+        const c = byRef.get(ref) as Card;
+        try {
+          await api.tickets.place(c.repository, c.key, { lane: "ready", ...at });
+        } catch (err) {
+          return { ...moveRefusal(err, c, t), undo: undo() };
+        }
+        done.push(ref);
+      }
+      const others = group.filter((r) => r !== moved);
+      const text = others.length > 0 ? t("pickup.reorderedWith", { key: moved, tickets: others.join(", ") }) : t("pickup.reordered", { key: moved });
+      return { tone: "info", text, undo: undo() };
+    },
+    onMutate: () => setNotice(null),
+    onSuccess: (said) => setNotice(said),
+    onError: (error) => setNotice({ tone: "error", error }),
+    // The order shown while it is written stays until the cards are read again with it.
+    onSettled: async () => {
+      await refresh();
+      setPreview(null);
+    },
+  });
+
   const { mutate: write } = relate;
   const { mutate: place } = move;
-  const onEdit = useCallback((edit: Edit) => write({ changes: edit.changes, done: t(edit.message, edit.params), undo: edit.inverse }), [write, t]);
+  const onEdit = useCallback((edit: Edit) => write({ changes: edit.changes, done: t(edit.message, edit.params), undo: () => edit.inverse }), [write, t]);
   const onLane = useCallback((card: Card, lane: Lane) => place({ card, lane }), [place]);
   const onPlace = useCallback((card: Card, at: { before: string } | { after: string }) => place({ card, lane: card.lane, at }), [place]);
   const onAdd = useCallback((to: Card, as: Addition) => setAdding({ to, as }), []);
@@ -210,16 +324,20 @@ export function RelationsView({ workspace }: { workspace: string }) {
         status={required.isFetching && shown && t("common.refreshing")}
       />
       {notice && "error" in notice && <ErrorMessage error={notice.error} />}
-      {notice && "text" in notice && notice.tone === "error" && <Refusal>{notice.text}</Refusal>}
-      {notice && "text" in notice && notice.tone === "info" && (
-        <Group gap="sm" role="status">
-          <Text size="sm">{notice.text}</Text>
+      {notice && "text" in notice && (
+        <Group gap="sm" role={notice.tone === "info" ? "status" : undefined}>
+          {notice.tone === "error" ? <Refusal>{notice.text}</Refusal> : <Text size="sm">{notice.text}</Text>}
           {notice.undo && (
             <Button
               size="compact-sm"
               variant="default"
-              disabled={relate.isPending}
-              onClick={() => notice.undo && write({ changes: notice.undo, done: t("relations.undone") })}
+              // Not while the cards are read again: Undo is made against the board as it is.
+              disabled={relate.isPending || reorder.isPending || required.isFetching}
+              onClick={() => {
+                const changes = notice.undo?.(cards) ?? [];
+                if (changes.length > 0) write({ changes, done: t("relations.undone") });
+                else setNotice({ tone: "info", text: t("pickup.undoGone") });
+              }}
             >
               {t("relations.undo")}
             </Button>
@@ -235,9 +353,11 @@ export function RelationsView({ workspace }: { workspace: string }) {
           </Button>
         </Group>
       )}
+      {owner && members.isError && <ErrorMessage error={members.error} />}
       {!shown ? (
         !required.isError && <Loading />
       ) : (
+        <div className="relations-body">
         <Figure
           graph={graph}
           cards={cards}
@@ -246,7 +366,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
           loadChecks={ciUrls}
           filter={filter}
           moving={move.isPending && move.variables ? ticketRef(move.variables.card) : null}
-          editable={complete && !relate.isPending}
+          editable={complete && !relate.isPending && !reorder.isPending}
           onToggle={onToggle}
           onLane={onLane}
           onPlace={onPlace}
@@ -256,7 +376,34 @@ export function RelationsView({ workspace }: { workspace: string }) {
           onRevealed={onRevealed}
           freshOpen={filtering ? (filteredExpansion.fresh ?? true) : freshOpen}
           onFreshOpen={onFreshOpen}
+          tags={tags}
+          onTag={onTag}
+          highlight={highlight}
+          point={point}
         />
+        {panel && orders && (
+          <PickupPanel
+            // A move belongs to the rows it started among.
+            key={`${panel.assignee}\n${panel.current}`}
+            assignees={[...new Set([...orders.keys(), panel.assignee])].map((value) => ({ value, label: value }))}
+            assignee={panel.assignee}
+            rows={orders.get(panel.assignee) ?? []}
+            current={panel.current}
+            cards={cards}
+            hidden={(ref) => !graph.shown.has(ref)}
+            disabled={!complete || relate.isPending || reorder.isPending || move.isPending}
+            onAssignee={(assignee) => showPanel({ assignee, current: null })}
+            onClose={closePanel}
+            onHighlight={setHighlight}
+            onPoint={(ref) => setPoint({ ref })}
+            onPreview={(order) => setPreview(order && { assignee: panel.assignee, order })}
+            onDrop={(drop) => {
+              setPreview({ assignee: panel.assignee, order: drop.order });
+              reorder.mutate({ ...drop, cards });
+            }}
+          />
+        )}
+        </div>
       )}
       <NewTicketModal
         workspace={workspace}

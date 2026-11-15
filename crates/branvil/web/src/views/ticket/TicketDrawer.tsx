@@ -11,7 +11,7 @@ import { TicketOpener } from "./TicketLink";
  * dropdown). Closing the drawer there would lose what was typed. Of inputs,
  * only those typed in have a selection (not a checkbox's chip).
  */
-const ownsEscape = (el: HTMLElement) =>
+export const ownsEscape = (el: HTMLElement) =>
   ((el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.selectionStart !== null)) && !el.readOnly) ||
   el.dataset.mantineStopPropagation === "true";
 

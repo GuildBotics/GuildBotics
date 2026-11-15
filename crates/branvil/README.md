@@ -141,6 +141,37 @@ task flow. Switching workspaces keeps the task flow, pull requests, or settings
 page, and keeps the board only when its sidebar link is shown. Switching from
 a ticket or another page opens the task flow.
 
+In the owner's session, the task flow numbers the tickets each agent is to
+start, in the order the owner sets: the **pickup order**. GuildBotics' provider
+takes an agent's ready tickets from the top of the Ready lane (the board's
+order, one per workspace, whatever their parents or repositories), so the
+numbers are that order: each open ready ticket assigned to an agent, except
+interactive ones (left to a person), is numbered from 1 per agent, counted
+before the filters. Tickets in progress are already started and the system
+runs them, so they are outside this order, as are new, done, closed, and
+unassigned tickets and those of people. A number with **!** will not start as
+things are: a ticket it waits for (following what that waits for in turn) is
+open and is in New, has no assignee, or is in Done but still open (an agent
+moving it to Done does not close it), and nobody will move it on.
+
+Clicking a number opens the pickup order beside the figure, which narrows
+instead of being covered, at that card's row; the chooser above it switches to
+another agent. A row shows the number, why it will not start (if so), the
+ticket, and its parent. Pointing at or focusing a row marks its card (or the
+closed parent it is in) in the figure, clicking it scrolls there, and a row the
+filters hide says so. The same number, Escape, or the panel's close button
+closes it. Dragging a row, or Space, the arrow keys, and Space again on a
+focused row (Escape cancels), reorders the agent's tickets: the numbers update
+while it moves, and on drop each moved ticket is put just before the next
+row's ticket (after the previous one when dropped last). The agent's numbered
+tickets that the moved one waits for (following what those wait for) and that
+would stay after it move along, in their order, just before it, so it can
+start where it was put; other agents' tickets and tickets in progress do not
+move. If a moved ticket or the drop's neighbour left the Ready lane meanwhile,
+the drop writes nothing. Writes stop at a refusal, and **Undo** puts what was
+written back, against the board as it is then: a moved ticket that has left the
+Ready lane since stays where it is.
+
 What a member may do follows from its kind. The owner may do everything. An
 agent reads everything and works in every repository: tickets, comments,
 reviews, pull requests, pushes to unprotected branches. Creating workspaces

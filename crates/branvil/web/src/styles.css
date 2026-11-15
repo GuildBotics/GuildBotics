@@ -799,6 +799,162 @@ pre {
   z-index: 3;
 }
 
+/* ---- the pickup order beside the task flow ---- */
+/* The figure narrows to make room: no card is covered, and it scrolls in its own area as before. */
+.relations-body {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
+}
+
+.relations-body > .relations-scroll {
+  min-width: 0;
+}
+
+/* A card's lane and its number in its assignee's pickup order, joined into one control. */
+.lane-pickup {
+  display: inline-flex;
+}
+
+.lane-pickup > .card-control:first-child {
+  border-bottom-right-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.lane-pickup > .pickup-tag {
+  border-bottom-left-radius: 0;
+  border-top-left-radius: 0;
+  margin-left: -1px;
+}
+
+/* Hovered or focused, a part's border shows whole above its neighbour's. */
+.lane-pickup > .card-control:hover,
+.lane-pickup > .card-control:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+/* The number, and "!" when it will not start as things are. */
+.pickup-tag {
+  background: var(--color-brand-bg-subtle);
+  border-color: var(--color-brand-border-subtle);
+  color: light-dark(var(--literal-teal-800), #ffffff);
+  font-weight: 600;
+  gap: 4px;
+}
+
+.pickup-warn {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+  border-radius: 4px;
+  color: var(--color-warning-text);
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0 4px;
+}
+
+.pickup-tag[aria-expanded="true"] {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 1px;
+}
+
+/* A card a row of the pickup order points at. */
+.card.highlighted {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.pickup-panel {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 12px 0 0;
+  width: 320px;
+}
+
+.pickup-head,
+.pickup-assignee,
+.pickup-empty {
+  padding: 0 12px;
+}
+
+.pickup-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 12px 12px;
+}
+
+.pickup-row {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  cursor: grab;
+  display: grid;
+  font-size: 13px;
+  gap: 2px 8px;
+  grid-template-columns: auto 1fr;
+  padding: 6px 8px;
+}
+
+.pickup-row:hover,
+.pickup-row:focus-visible {
+  background: var(--color-bg-hover-subtle);
+  outline: none;
+}
+
+.pickup-row:focus-visible,
+.pickup-row.current {
+  border-color: var(--color-brand);
+}
+
+.pickup-row.moving {
+  background: var(--color-brand-bg-subtle);
+  border-style: dashed;
+}
+
+.pickup-number {
+  color: light-dark(var(--literal-teal-800), #ffffff);
+  font-weight: 700;
+  grid-column: 1;
+  grid-row: 1 / span 4;
+  min-width: 1.5em;
+  text-align: right;
+}
+
+.pickup-row > :not(.pickup-number) {
+  grid-column: 2;
+}
+
+.pickup-stuck {
+  color: var(--color-warning-text);
+  font-size: 12px;
+}
+
+.pickup-ticket {
+  overflow-wrap: anywhere;
+}
+
+.pickup-ticket .key {
+  color: var(--color-text-subtle);
+}
+
+.pickup-parent,
+.pickup-hidden {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 /* ---- lists (as GuildBotics' .trace-list) ---- */
 .list {
   border: 1px solid var(--color-border);
