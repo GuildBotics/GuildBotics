@@ -616,7 +616,7 @@ export const ja: Record<MessageKey, string> = {
   "notifications.problem": "直近の送信に失敗（再試行します）：{reason}",
   "settings.responder": "既定の担当者",
   "settings.responderAuto": "自動（今は {name}）",
-  "settings.responderHelp": "main の確認が落ちたとき、修復チケットの担当が PR の作者で決まらない場合に付ける。自動では、このリポジトリで最後にマージされたメンバーの PR の作者に付ける。",
+  "settings.responderHelp": "main の確認が落ちたとき、修復チケットの担当が PR の作者で決まらない場合に付ける。自動では、このリポジトリで最後にマージされた AI メンバー（agent）の PR の作者に付ける。",
   "settings.ciNetwork": "ジョブのネットワーク",
   "settings.ciNetworkHelp": "このリポジトリの CI ジョブにネットワークの利用を許可します。届くのは公開された宛先だけで、Branvil のマシンやプライベートネットワークには届きません。ホスト名による絞り込みはありません。",
   "ci.settings.title": "CI",

@@ -226,7 +226,7 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             <Select
               label={t("settings.responder")}
               description={t("settings.responderHelp")}
-              data={[{ value: "", label: t("settings.responderAuto", { name: repo.responder.member }) }, ...(members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => ({ value: m.name, label: m.name }))]}
+              data={[{ value: "", label: t("settings.responderAuto", { name: repo.responder.automatic }) }, ...(members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => ({ value: m.name, label: m.name }))]}
               value={form.responder ?? ""}
               onChange={(value) => setForm({ ...form, responder: value || null })}
               allowDeselect={false}

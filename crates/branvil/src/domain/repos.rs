@@ -22,7 +22,7 @@ pub struct RepoView {
     pub required_approvals: u64,
     pub auto_land: bool,
     pub ci_network: bool,
-    pub responder: crate::model::Reader,
+    pub responder: crate::repair::Responder,
     pub labels: Vec<String>,
     /// The upstream it follows and publishes to, with what the last poll found.
     pub upstream: Option<crate::upstream::UpstreamView>,

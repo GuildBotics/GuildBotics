@@ -347,7 +347,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "required_approvals": 1,
   "auto_land": false,
   "ci_network": false,
-  "responder": {"member": "aiko", "chosen": false},
+  "responder": {"member": "aiko", "chosen": false, "automatic": "aiko"},
   "labels": ["bug", "feature"],
   "upstream": null,
   "revision": 4
@@ -429,7 +429,10 @@ installed the app to approve it); for a fine-grained token the same
 permission; for a classic token the `security_events` (or `repo`) scope.
 Dependabot alerts must be enabled for the repository.
 
-Repository responses include `responder: {"member": "aiko", "chosen": false}`.
+Repository responses include `responder: {"member": "aiko", "chosen": false, "automatic": "aiko"}`.
+`member` is the effective assignee. `automatic` always names the current automatic
+candidate, including when `chosen` is true; the CI editor uses it to preview
+returning to automatic selection. Automatic selection is evaluated once for each response.
 The owner may PATCH `responder` with an existing agent name (stored with the
 member's canonical spelling), or `null` to return to automatic selection.
 Omission keeps the setting. Owner, runner, and unknown names return 400

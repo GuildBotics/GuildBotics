@@ -22,7 +22,7 @@ const REPO = {
   required_checks: [],
   required_approvals: 1,
   auto_land: false,
-  ci_network: false, responder: { member: "aiko", chosen: false },
+  ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
   upstream: null,
   revision: 4,
@@ -35,16 +35,22 @@ async function addPills(user: ReturnType<typeof userEvent.setup>, label: string 
 }
 
 describe("settings", () => {
-  it("selects only agents and saves an explicit responder or automatic null", async () => {
+  it.each([false, true])("selects only agents and preserves the automatic candidate after saving (chosen=%s)", async (chosen) => {
+    let current = { ...REPO, responder: { member: chosen ? "ken" : "aiko", chosen, automatic: "aiko" } };
     const fake = fakeApi({
       ...SHELL,
-      "GET /api/v1/repos": page([REPO]),
+      "GET /api/v1/repos": () => page([current]),
       "GET /api/v1/members": page([ME, { name: "aiko", kind: "agent", accounts: [], reviewers: [] }, { name: "ken", kind: "agent", accounts: [], reviewers: [] }, { name: "runner", kind: "runner", accounts: [], reviewers: [] }]),
-      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, responder: { member: "ken", chosen: true }, revision: 5 }),
+      "PATCH /api/v1/repos/acme/demo": (req) => {
+        const body = req.body as { responder: string | null; revision: number };
+        current = { ...current, responder: { member: body.responder ?? "aiko", chosen: body.responder !== null, automatic: "aiko" }, revision: body.revision + 1 };
+        return json(200, current);
+      },
     });
     const user = userEvent.setup();
     renderApp("/-/settings/repos/acme/demo");
-    expect(await screen.findByRole("combobox", { name: "Default responder" }, { timeout: 5000 })).toHaveValue("Automatic (currently aiko)");
+    const selector = await screen.findByRole("combobox", { name: "Default responder" }, { timeout: 5000 });
+    await waitFor(() => expect(selector).toHaveValue(chosen ? "ken" : "Automatic (currently aiko)"));
     await user.click(screen.getByRole("combobox", { name: "Default responder" }));
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Automatic (currently aiko)", "aiko", "ken"]);
     await user.click(screen.getByRole("option", { name: /^ken$/ }));
@@ -182,7 +188,7 @@ describe("settings", () => {
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([REPO]),
-      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, required_checks: ["test", "lint"], ci_network: true, responder: { member: "aiko", chosen: false }, revision: 5 }),
+      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, required_checks: ["test", "lint"], ci_network: true, responder: { member: "aiko", chosen: false, automatic: "aiko" }, revision: 5 }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings");

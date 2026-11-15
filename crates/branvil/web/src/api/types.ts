@@ -68,7 +68,7 @@ export interface Repository {
   auto_land: boolean;
   /** Whether its CI jobs may reach public network destinations. */
   ci_network: boolean;
-  responder: { member: string; chosen: boolean };
+  responder: { member: string; chosen: boolean; automatic: string };
   /** The labels its tickets may carry. */
   labels: string[];
   /** The upstream host it follows and publishes to. */
