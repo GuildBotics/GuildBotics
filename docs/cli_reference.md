@@ -1172,7 +1172,7 @@ Usage: guildbotics member ticket [OPTIONS]
   comment  Comment on a ticket in the member voice.
   create  Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
   reaction  Reactions to ticket comments.
-  read  Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  read  Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
   update  Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved. Updates return assignees and lane.
   --help  Print help
 ```
@@ -1265,7 +1265,7 @@ Usage: guildbotics member ticket reaction add [OPTIONS]
 ### guildbotics member ticket read
 
 ```text
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 Usage: guildbotics member ticket read [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1285,11 +1285,13 @@ Change a ticket's body, title, labels, state, interactive mode, parent, or the t
 Usage: guildbotics member ticket update [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
   --url <VALUE>  Ticket URL. [required]
+  --before <VALUE>  Place this ticket immediately before the given ticket in the same tracker and lane; requires --human-approved and an interactive session.
+  --after <VALUE>  Place this ticket immediately after the given ticket in the same tracker and lane; requires --human-approved and an interactive session.
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
-  --content-stdin  Read the command's entire free-form content from standard input.
-  --title <VALUE>  Replace the ticket title.
   --assignee <VALUE>  Replace all assignees with this roster person_id; interactive sessions only, requires --human-approved.
   --lane <in_progress>  Move to in_progress; interactive sessions only, requires --human-approved.
+  --content-stdin  Read the command's entire free-form content from standard input.
+  --title <VALUE>  Replace the ticket title.
   --interactive/--no-interactive  Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it.
   --add-label <VALUE>  Add a label already defined in the tracker. Repeat for several labels. (repeatable)
   --remove-label <VALUE>  Remove a label from the ticket. Repeat for several labels. (repeatable)

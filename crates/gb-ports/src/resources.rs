@@ -141,6 +141,9 @@ pub fn read_conditions(
         _ if resource.is_detail() => json!({}),
         _ => json!({"page_size":30, "node":""}),
     };
+    if resource == Resource::TrackerTickets {
+        result["lane"] = Value::Null;
+    }
     let defaults = result.as_object_mut().expect("conditions are objects");
     for (key, value) in given {
         let valid = match key.as_str() {
@@ -148,6 +151,9 @@ pub fn read_conditions(
             "log_tail_bytes" => value
                 .as_u64()
                 .is_some_and(|n| (1..=MAX_LOG_TAIL_BYTES as u64).contains(&n)),
+            "lane" => value
+                .as_str()
+                .is_some_and(|s| ["new", "ready", "in_progress", "done"].contains(&s)),
             "failed_logs" => value.is_boolean(),
             "state" => value.as_str().is_some_and(|s| {
                 if resource == Resource::TrackerTickets {

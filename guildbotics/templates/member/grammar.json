@@ -1065,17 +1065,16 @@
         "help": "Ticket URL."
       },
       {
+        "spelling": "--before",
+        "help": "Place this ticket immediately before the given ticket in the same tracker and lane; requires --human-approved and an interactive session."
+      },
+      {
+        "spelling": "--after",
+        "help": "Place this ticket immediately after the given ticket in the same tracker and lane; requires --human-approved and an interactive session."
+      },
+      {
         "spelling": "--content-file",
         "path": "content"
-      },
-      {
-        "spelling": "--content-stdin",
-        "flag": true
-      },
-      {
-        "spelling": "--title",
-        "default": null,
-        "help": "Replace the ticket title."
       },
       {
         "spelling": "--assignee",
@@ -1088,6 +1087,15 @@
           "in_progress"
         ],
         "help": "Move to in_progress; interactive sessions only, requires --human-approved."
+      },
+      {
+        "spelling": "--content-stdin",
+        "flag": true
+      },
+      {
+        "spelling": "--title",
+        "default": null,
+        "help": "Replace the ticket title."
       },
       {
         "spelling": "--interactive/--no-interactive",
@@ -1748,7 +1756,7 @@
         ]
       }
     ],
-    "help": "Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
+    "help": "Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "pr read": {
     "read_only": true,

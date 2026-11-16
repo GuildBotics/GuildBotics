@@ -614,6 +614,25 @@ async fn approval_diagnostics_are_localized_before_service_access() {
                 "チケットの担当とレーンの変更".to_owned(),
             ));
         }
+        for placement in [
+            TicketPlacement::Before("anchor".into()),
+            TicketPlacement::After("anchor".into()),
+        ] {
+            errors.push((
+                r.ticket_update(
+                    "url",
+                    UpdateTicket {
+                        placement: Some(placement),
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .await
+                .unwrap_err(),
+                "Changing the ticket order".to_owned(),
+                "チケットの着手の順の変更".to_owned(),
+            ));
+        }
         for (error, en, ja) in errors {
             let expected = if language == "ja" {
                 format!(

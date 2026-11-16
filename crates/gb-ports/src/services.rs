@@ -128,10 +128,25 @@ pub struct CreateTicket {
     pub parent: Option<String>,
     pub blocked_by: Vec<String>,
 }
+#[derive(Clone, Debug)]
+pub enum TicketPlacement {
+    Before(String),
+    After(String),
+}
+impl TicketPlacement {
+    pub fn url(&self) -> &str {
+        match self {
+            Self::Before(url) | Self::After(url) => url,
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct UpdateTicket {
     pub assignee: Option<ActorName>,
     pub lane: Option<MoveLane>,
+    /// Reorder within the current tracker and lane. Unsupported providers must reject
+    /// the whole update before writing any other fields.
+    pub placement: Option<TicketPlacement>,
     pub body: Option<String>,
     pub title: Option<String>,
     pub add_labels: Vec<String>,

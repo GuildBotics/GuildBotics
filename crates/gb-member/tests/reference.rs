@@ -280,3 +280,17 @@ fn interactive_takeover_documents_blockers_and_partial_failure_in_both_languages
         assert!(text.contains(term), "{term}");
     }
 }
+
+#[test]
+fn reference_requires_approved_interactive_order_and_readback() {
+    let text = help();
+    for phrase in [
+        "Never reorder in workflow or delegated runs",
+        "read tracker_tickets with lane",
+        "work still waits until the blocker closes",
+        "人が承認した着手の順",
+        "assignees",
+    ] {
+        assert!(text.contains(phrase), "{phrase}");
+    }
+}
