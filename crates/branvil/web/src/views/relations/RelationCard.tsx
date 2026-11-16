@@ -1,5 +1,5 @@
 import { ActionIcon, Menu } from "@mantine/core";
-import { ArrowRight, CornerDownRight, CornerLeftUp, Ellipsis } from "lucide-react";
+import { ArrowRight, CornerDownRight, CornerLeftUp, Ellipsis, Hourglass } from "lucide-react";
 import { memo, type PointerEvent } from "react";
 import { ticketRef, type Card, type Lane } from "../../api/types";
 import type { Person } from "../../components/PeoplePicker";
@@ -14,6 +14,8 @@ export interface PickupTag {
   n: number;
   /** It will not start as things are: a ticket it waits for, nobody moves on. */
   stuck: boolean;
+  /** It waits for a direct open blocker. */
+  waiting: boolean;
   /** What it means, and that a click opens the pickup order. */
   label: string;
   /** Its pickup order is open at this card. */
@@ -90,6 +92,7 @@ export const RelationCard = memo(function RelationCard({
               onClick={() => onTag(ref, tag.assignee)}
             >
               {tag.n}
+              {tag.waiting && !tag.stuck && <Hourglass size={12} className="pickup-wait" aria-hidden />}
               {tag.stuck && (
                 <span className="pickup-warn" aria-hidden>
                   !

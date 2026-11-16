@@ -47,8 +47,13 @@ function addingNote(to: Card, as: Addition | undefined, t: Translate): string {
 /** A card's tag of its number in its assignee's pickup order, and whether it will not start as things are. */
 function tagOf(row: PickupRow, assignee: string, open: boolean, t: Translate): PickupTag {
   const place = t("pickup.tagNext", { name: assignee, n: String(row.n) });
-  const state = row.stuck.length > 0 ? `${place}${t("pickup.sentence")}${t("pickup.wontStart", { reason: reasonText(row.stuck, t) })}` : place;
-  return { n: row.n, stuck: row.stuck.length > 0, label: t("pickup.hint", { state }), open, assignee };
+  const detail = row.stuck.length > 0
+    ? t("pickup.wontStart", { reason: reasonText(row.stuck, t) })
+    : row.waits.length > 0
+      ? t("pickup.waitHint", { tickets: row.waits.map((w) => w.ticket).join(t("pickup.and")) })
+      : null;
+  const state = detail ? `${place}${t("pickup.sentence")}${detail}` : place;
+  return { n: row.n, waiting: row.waits.length > 0, stuck: row.stuck.length > 0, label: t("pickup.hint", { state }), open, assignee };
 }
 
 /** The pickup order panel: whose order it shows, and the card whose tag opened it. */

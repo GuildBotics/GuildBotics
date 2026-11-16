@@ -844,6 +844,10 @@ pre {
   gap: 4px;
 }
 
+.pickup-wait {
+  color: var(--color-text-muted);
+}
+
 .pickup-warn {
   background: var(--color-warning-bg);
   border: 1px solid var(--color-warning);
@@ -950,7 +954,8 @@ pre {
 }
 
 .pickup-parent,
-.pickup-hidden {
+.pickup-hidden,
+.pickup-waits {
   color: var(--color-text-muted);
   font-size: 12px;
 }
