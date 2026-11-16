@@ -1,3 +1,6 @@
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createQueryClient } from "../query/hooks";
+import { keys } from "../query/keys";
 import { render, screen, within } from "@testing-library/react";
 import { theme } from "@guildbotics/ui/theme";
 import { MantineProvider } from "@mantine/core";
@@ -40,8 +43,14 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
 describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
   const words = dictionaries[lang];
   function component(next: LandingNext, blockers: Landing["blockers"] = [], journey = false, repo = REPO) {
-    const p = pull({ landing: landing({ next, blockers }) });
-    return render(<MantineProvider theme={theme}><I18nProvider initial={lang}>{journey ? <LandingJourney pull={p} repo={repo} /> : <JourneyBadge pull={p} repo={repo} load={false} />}</I18nProvider></MantineProvider>);
+    const p = pull({ landing: landing({ next, blockers }), unanswered: blockers.some(b => b.code === "unanswered") ? [{ kind: "comment", id: "question", author: "reviewer", url: "#question" }] : [] });
+    const client = createQueryClient();
+    client.setQueryData(keys.pullPart(p.repository, p.number, "checks"), { head_sha: HEAD, checks: [
+      { name: "test", status: "in_progress" },
+      { name: "rust-test", status: "completed", conclusion: "failure" },
+      { name: "passed", status: "completed", conclusion: "success" },
+    ] });
+    return render(<QueryClientProvider client={client}><MantineProvider theme={theme}><I18nProvider initial={lang}>{journey ? <LandingJourney pull={p} repo={repo} /> : <JourneyBadge pull={p} repo={repo} load={false} />}</I18nProvider></MantineProvider></QueryClientProvider>);
   }
   it("marks a failed local automatic merge at the merge step", () => {
     const { container } = component("owner_fix_auto", [], true, { ...REPO, upstream: null });
@@ -51,13 +60,41 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
   });
   it("names each unmet condition above its detail", () => {
     component("conditions", [
-      { code: "approvals", message: "Two approvals required", jobs: [], files: [] },
+      { code: "approvals", count: 0, required: 1, message: "Two approvals required", jobs: [], files: [] },
       { code: "head_checks", message: "test is running", jobs: ["test"], files: [] },
     ], true);
     expect(screen.getByText(words["landing.blocker.approvals"])).toBeInTheDocument();
-    expect(screen.getByText("Two approvals required")).toBeInTheDocument();
+    expect(screen.getByText(lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1")).toBeInTheDocument();
+    expect(screen.queryByText("Two approvals required")).not.toBeInTheDocument();
     expect(screen.getByText(words["landing.blocker.head_checks"])).toBeInTheDocument();
-    expect(screen.getByText("test is running")).toBeInTheDocument();
+    expect(screen.getByText(lang === "ja" ? "test · 実行中" : "test · Running")).toBeInTheDocument();
+    expect(screen.queryByText("test is running")).not.toBeInTheDocument();
+  });
+  it("uses structured values for every blocker in the journey and badge", () => {
+    const blockers = [
+      { code: "head_checks", message: "Server checks", jobs: ["rust-test", "test", "missing"], files: [] },
+      { code: "approvals", message: `Approvals of ${HEAD}`, count: 0, required: 1, jobs: [], files: [] },
+      { code: "unanswered", message: "Server unanswered", jobs: [], files: [] },
+      { code: "conflict", message: "Server conflict", jobs: [], files: ["README.md"] },
+      { code: "host_failed", message: "Server host", jobs: ["build"], files: [] },
+      ...["draft", "already_in_base", "publish_requirements", "checking"].map(code => ({ code, message: `Server ${code}`, jobs: [], files: [] })),
+    ];
+    const expected = [
+      `rust-test · ${words["landing.check.failure"]}`, `test · ${words["landing.check.running"]}`, `missing · ${words["landing.check.missing"]}`,
+      lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1", words["landing.unanswered"],
+      words["landing.detail.conflict"].replace("{files}", "README.md"),
+      words["landing.detail.host_failed"].replace("{jobs}", "build"),
+      ...["draft", "already_in_base", "publish_requirements", "checking"].map(code => words[`landing.detail.${code}` as keyof typeof words]),
+    ];
+    const journey = component("conditions", blockers, true);
+    for (const text of expected) expect(screen.getByText(text)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: words["landing.statement.comment"].replace("{author}", "reviewer") })).toHaveAttribute("href", "#question");
+    expect(journey.container.textContent).not.toContain(HEAD);
+    expect(journey.container.textContent).not.toContain("passed");
+    for (const b of blockers) expect(journey.container.textContent).not.toContain(b.message);
+    journey.unmount();
+    component("conditions", blockers);
+    expect(screen.getByText(`${words["landing.blocker.head_checks"]} +8`).closest(".mantine-Badge-root")).toHaveAttribute("title", expected.join(" / "));
   });
   it.each([
     ["owner_merge_host", "warning"], ["owner_merge", "warning"],
@@ -69,15 +106,16 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     expect(screen.getByText(text).closest(".mantine-Badge-root")).toHaveStyle({ "--badge-color": color === "neutral" ? "var(--color-text-subtle)" : `var(--color-${color}-text)` });
   });
   it.each(["draft", "already_in_base", "conflict", "publish_requirements", "head_checks", "approvals", "unanswered", "host_failed", "checking"] as const)("names the %s blocker", code => {
-    component("conditions", [{ code, message: "Server detail", jobs: [], files: [] }]);
+    component("conditions", [{ code, message: "Server detail", count: 0, required: 1, jobs: [], files: [] }]);
     const badge = screen.getByText(words[`landing.blocker.${code}`]).closest(".mantine-Badge-root");
-    expect(badge).toHaveAttribute("title", "Server detail");
+    expect(badge?.getAttribute("title")).not.toContain("Server detail");
+    expect(badge?.getAttribute("title")).not.toContain("landing.");
     expect(badge).toHaveStyle({ "--badge-color": ["conflict", "host_failed"].includes(code) ? "var(--color-danger-text)" : "var(--color-text-subtle)" });
   });
   it("summarizes blockers while keeping every detail in the title", () => {
-    component("conditions", [{ code: "approvals", message: "Needs approval", jobs: [], files: [] }, { code: "conflict", message: "Resolve conflict", jobs: [], files: [] }]);
+    component("conditions", [{ code: "approvals", count: 0, required: 1, message: "Needs approval", jobs: [], files: [] }, { code: "conflict", message: "Resolve conflict", jobs: [], files: [] }]);
     const badge = screen.getByText(`${words["landing.blocker.approvals"]} +1`).closest(".mantine-Badge-root");
-    expect(badge).toHaveAttribute("title", "Needs approval / Resolve conflict");
+    expect(badge).toHaveAttribute("title", `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{files}", "")}`);
     expect(badge).toHaveStyle({ "--badge-color": "var(--color-danger-text)" });
   });
   it.each(["owner_merge_host", "conditions", "owner_fix_auto"] as const)("restores journey icons for %s", next => {
@@ -111,10 +149,11 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     expect(journey.querySelector('[data-stop="gate"]')).toBeNull();
     expect(within(journey).getByText(words[`landing.next.${next}`].replaceAll("{host}", "GitHub").replaceAll("{base}", "main"))).toBeInTheDocument();
   });
-  it("renders the server's condition messages", async () => {
+  it("translates conflict details", async () => {
     fakeApi(routes(landing({ next: "conditions", blockers: [{ code: "conflict", message: "Merge main into topic and resolve README.md", files: ["README.md"], jobs: [] }] })));
     renderApp("/acme/demo/-/pulls/3", lang);
-    expect(await screen.findByText("Merge main into topic and resolve README.md")).toBeInTheDocument();
+    expect(await screen.findByText(words["landing.detail.conflict"].replace("{files}", "README.md"))).toBeInTheDocument();
+    expect(screen.queryByText("Merge main into topic and resolve README.md")).not.toBeInTheDocument();
     expect(screen.getByText(words["landing.blocker.conflict"])).toBeInTheDocument();
   });
   it("offers direct publication when sending stopped", async () => {

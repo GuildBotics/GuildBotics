@@ -393,8 +393,13 @@ pub struct Landing {
     pub error: Option<String>,
 }
 
+/// Computed response data; never stored in the landing record.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LandingReason {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<u64>,
     pub code: String,
     pub message: String,
     pub jobs: Vec<String>,

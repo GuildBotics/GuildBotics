@@ -288,7 +288,7 @@ export interface Landing {
   told: string[];
   notified_at: string | null;
   error: string | null;
-  blockers: { code: string; message: string; jobs: string[]; files: string[] }[];
+  blockers: { code: string; message: string; jobs: string[]; files: string[]; count?: number; required?: number }[];
   next: LandingNext;
   host_url: string | null;
   next_detail: string | null;

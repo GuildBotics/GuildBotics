@@ -937,11 +937,15 @@ or last departure, or `null` before it first joins (see "Landing").
 Each open pull request carries `landing` with the record fields described below,
 plus `blockers` (objects with `code`, `message`, `files`, `jobs`), `next`,
 `host_url`, and `next_detail`. Closed and merged pull requests carry `null`.
+These blockers are computed response data, not persisted records. `message` remains
+English for API/CLI consumers; the GUI translates `code` and the structured values.
 There is no queue-list or resume endpoint; both return 404.
 
 Landing conditions are computed for each open pull request independently by
 `landing::blockers`: `draft`, `already_in_base` (including an empty head),
-`conflict` (with `files`), `publish_requirements`, `head_checks`, `approvals`,
+`conflict` (with `files`), `publish_requirements`, `head_checks` (with `jobs` naming
+only unmet required checks), `approvals` (with `count` and `required`, the approval
+counts used by the server),
 `unanswered`, and `host_failed` (with `jobs`). A stale recorded head/base pair
 adds `checking` until the sweep refreshes it. A behind head can land without
 merging the base into it when it does not conflict. Required checks accept

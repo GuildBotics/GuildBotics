@@ -171,11 +171,70 @@ async fn approvals_and_checks_are_reported_by_the_shared_condition_function() {
         ),
     ] {
         settings(&w, fields).await;
+        let pull = ready(&w, 1).await;
+        let blocker = pull["landing"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["code"] == code)
+            .unwrap();
+        if code == "approvals" {
+            assert_eq!(blocker["count"], 0);
+            assert_eq!(blocker["required"], 1);
+        } else {
+            assert_eq!(blocker["jobs"], json!(["test"]));
+        }
         let (st, b) = try_merge(&w, 1).await;
         assert_eq!(st, 409, "{b}");
         assert!(b["error"]["message"].as_str().unwrap().contains(code));
     }
 }
+#[tokio::test]
+async fn head_check_blocker_jobs_only_list_unmet_required_checks() {
+    let w = World::new().await;
+    let runner = crate::ci::Runner::new(&w, "landing-runner").await;
+    settings(
+        &w,
+        json!({"required_checks": ["failed", "running", "passed"]}),
+    )
+    .await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    w.push_change(
+        "feature",
+        ".branvil/ci.toml",
+        &crate::ci::pipeline(&["failed", "running", "passed"]),
+    );
+    w.open_pull("feature", json!([])).await;
+    for name in ["failed", "running", "passed"] {
+        let claim = runner.next_claim().await;
+        assert_eq!(claim["job"]["name"], name);
+        if name != "running" {
+            assert_eq!(
+                runner
+                    .finish(
+                        &claim,
+                        if name == "failed" {
+                            "failure"
+                        } else {
+                            "success"
+                        }
+                    )
+                    .await
+                    .0,
+                200
+            );
+        }
+    }
+    let p = ready(&w, 1).await;
+    let blocker = p["landing"]["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["code"] == "head_checks")
+        .unwrap();
+    assert_eq!(blocker["jobs"], json!(["failed", "running"]));
+}
+
 #[tokio::test]
 async fn conflicts_notify_once_per_head_and_block_merge() {
     let w = World::new().await;
