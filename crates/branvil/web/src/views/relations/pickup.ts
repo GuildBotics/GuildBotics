@@ -7,12 +7,19 @@
 // The owner sets that order; when a ticket that is not yet started then waits
 // for one another member is working on, the system decides when it starts.
 
-import { ticketRef, type Card } from "../../api/types";
+import { ticketRef, type Card, type Lane } from "../../api/types";
 
 /** Why a ticket will not start as things are: a ticket it waits for, and what keeps that one. */
 export interface Stuck {
   ticket: string;
   why: "new" | "unassigned" | "done_open";
+}
+
+/** A direct open blocker, with its board details when loaded. */
+export interface Wait {
+  ticket: string;
+  lane: Lane | null;
+  assignee: string | null;
 }
 
 /** A ticket of an agent's pickup order: its number (from 1, in board order), and what keeps it from ever starting. */
@@ -21,12 +28,13 @@ export interface PickupRow {
   card: Card;
   n: number;
   stuck: Stuck[];
+  waits: Wait[];
 }
 
 /** Where a ticket is put in its lane: just before or after another ticket. */
 export type Place = { before: string } | { after: string };
 
-/** A ticket's open blockers (the cards not loaded are left out: a closed one waits for nothing). */
+/** A ticket's direct open blockers, including those not loaded on the board. */
 const openBlockers = (card: Card) => card.blocked_by.filter((b) => b.state === "open").map(ticketRef);
 
 /** The open tickets a ticket waits for, following what those wait for in turn. */
@@ -77,10 +85,18 @@ export function pickupOrders(cards: readonly Card[], isAgent: (name: string) => 
       const why = blocker && stuckOf(blocker);
       return why ? [{ ticket: b, why }] : [];
     });
-    rows.push({ ref, card, n: rows.length + 1, stuck });
+    const waits = openBlockers(card).map((ticket) => {
+      const blocker = byRef.get(ticket);
+      return { ticket, lane: blocker?.lane ?? null, assignee: blocker?.assignee?.name ?? null };
+    });
+    rows.push({ ref, card, n: rows.length + 1, stuck, waits });
   }
   return orders;
 }
+
+/** The first row that can start in the displayed order, including a drag preview. */
+export const nextPickup = (rows: readonly PickupRow[]): PickupRow | undefined =>
+  rows.find((row) => row.waits.length === 0 && row.stuck.length === 0);
 
 /**
  * `order` with `moved` put just before `before` (null: last). The tickets of

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card, TicketRef } from "../api/types";
-import { arrange, pickupOrders, placements, reordered, restoring, stepped, type PickupRow } from "../views/relations/pickup";
+import { arrange, nextPickup, pickupOrders, placements, reordered, restoring, stepped, type PickupRow } from "../views/relations/pickup";
 import { card } from "./fixtures";
 
 const AGENTS = new Set(["aiko", "kenji"]);
@@ -96,6 +96,44 @@ describe("pickup order", () => {
     const orders = pickupOrders(cards, isAgent);
     expect([...orders.keys()]).toEqual(["aiko"]);
     expect(orderOf(cards)).toEqual([["7", 1]]);
+  });
+});
+
+describe("open waits and the next pickup", () => {
+  it("skips an in-progress blocker without renumbering, then starts its dependent once closed", () => {
+    const a = card("A", "in_progress", by("aiko"));
+    const b = card("B", "ready", { ...by("aiko"), blocked_by: [ref(a)] });
+    const c = card("C", "ready", by("aiko"));
+    const rows = pickupOrders([a, b, c], isAgent).get("aiko")!;
+    expect(rows.map((r) => r.n)).toEqual([1, 2]);
+    expect(rows[0]?.waits).toEqual([{ ticket: "acme/demo#A", lane: "in_progress", assignee: "aiko" }]);
+    expect(nextPickup(rows)?.card.key).toBe("C");
+    const closed: Card = { ...a, state: "closed" };
+    const after = pickupOrders([closed, { ...b, blocked_by: [ref(closed)] }, c], isAgent).get("aiko")!;
+    expect(after[0]?.waits).toEqual([]);
+    expect(nextPickup(after)?.card.key).toBe("B");
+  });
+
+  it("lists only direct open blockers, including another agent's ready ticket", () => {
+    const a = card("A", "in_progress", by("aiko"));
+    const b = card("B", "ready", { ...by("kenji"), blocked_by: [ref(a)] });
+    const closed = card("X", "done", { state: "closed" });
+    const c = card("C", "ready", { ...by("aiko"), blocked_by: [ref(b), ref(closed)] });
+    const rows = pickupOrders([a, b, closed, c], isAgent).get("aiko")!;
+    expect(rows[0]?.waits).toEqual([{ ticket: "acme/demo#B", lane: "ready", assignee: "kenji" }]);
+    expect(nextPickup(rows)).toBeUndefined();
+  });
+
+  it("never selects stuck rows, and keeps an unloaded open blocker as a wait", () => {
+    const fresh = card("N", "new", by("aiko"));
+    const missing = card("M", "in_progress", by("kenji"));
+    const b = card("B", "ready", { ...by("aiko"), blocked_by: [ref(fresh)] });
+    const c = card("C", "ready", { ...by("aiko"), blocked_by: [ref(missing)] });
+    const rows = pickupOrders([fresh, b, c], isAgent).get("aiko")!;
+    expect(rows[0]?.stuck).toEqual([{ ticket: "acme/demo#N", why: "new" }]);
+    expect(rows[1]?.waits).toEqual([{ ticket: "acme/demo#M", lane: null, assignee: null }]);
+    expect(nextPickup(rows)).toBeUndefined();
+    expect(nextPickup([])).toBeUndefined();
   });
 });
 

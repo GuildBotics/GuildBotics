@@ -1,12 +1,12 @@
 // The pickup order beside the task flow: an agent's ready tickets in the order
 // it takes them up, reordered by dragging a row or with the keyboard.
 
-import { ActionIcon, Group, NativeSelect, Text } from "@mantine/core";
+import { ActionIcon, Badge, Group, NativeSelect, Text } from "@mantine/core";
 import { X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { ticketRef, type Card } from "../../api/types";
 import { type Translate, useT } from "../../i18n";
-import { arrange, stepped, type PickupRow, type Stuck } from "./pickup";
+import { arrange, nextPickup, stepped, type PickupRow, type Stuck } from "./pickup";
 
 /** A row being moved: the order it started from, where it would go, and the Ready lane then (for the undo). */
 interface Moving {
@@ -69,6 +69,7 @@ export function PickupPanel({
   onDrop: (drop: Drop) => void;
 }) {
   const t = useT();
+  const next = nextPickup(rows);
   const [moving, setMovingState] = useState<Moving | null>(null);
   const movingRef = useRef<Moving | null>(null);
   const [said, setSaid] = useState("");
@@ -235,6 +236,20 @@ export function PickupPanel({
               >
                 <span className="pickup-number">{row.n}</span>
                 {row.stuck.length > 0 && <span className="pickup-stuck">{t("pickup.stuck", { reason: reasonText(row.stuck, t) })}</span>}
+                {row.stuck.length === 0 && row.waits.length > 0 && (
+                  <span className="pickup-waits">
+                    {t("pickup.waits", {
+                      blockers: row.waits.map((w) => t("pickup.waitFor", {
+                        ticket: w.ticket,
+                        assignee: w.assignee ?? t("pickup.unassigned"),
+                        lane: w.lane ? t(`lane.${w.lane}`) : t("pickup.unknownLane"),
+                      })).join(t("pickup.and")),
+                    })}
+                  </span>
+                )}
+                {row === next && (
+                  <Badge size="xs" variant="light">{t("pickup.next")}</Badge>
+                )}
                 <span className="pickup-ticket">
                   <span className="key">{row.ref}</span> {row.card.title}
                 </span>

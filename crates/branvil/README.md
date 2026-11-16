@@ -154,6 +154,14 @@ things are: a ticket it waits for (following what that waits for in turn) is
 open and is in New, has no assignee, or is in Done but still open (an agent
 moving it to Done does not close it), and nobody will move it on.
 
+A number with a neutral hourglass waits for its direct open blockers. The
+panel names each blocker, its assignee and lane. **Starts next** marks the first
+row with neither open blockers nor **!**; there is no badge if none can start.
+While a blocker remains open, including during work or review, patrol skips
+that ticket and starts an available ticket further down first. Numbers keep
+the board order. To keep one ticket from starting before another, add the
+other as a blocker rather than relying on their numbers.
+
 Clicking a number opens the pickup order beside the figure, which narrows
 instead of being covered, at that card's row; the chooser above it switches to
 another agent. A row shows the number, why it will not start (if so), the
@@ -162,8 +170,8 @@ closed parent it is in) in the figure, clicking it scrolls there, and a row the
 filters hide says so. The same number, Escape, or the panel's close button
 closes it. Dragging a row, or Space, the arrow keys, and Space again on a
 focused row (Escape cancels), reorders the agent's tickets: the numbers update
-while it moves, and on drop each moved ticket is put just before the next
-row's ticket (after the previous one when dropped last). The agent's numbered
+while it moves, as does the **Starts next** badge, and on drop each moved ticket
+is put just before the next row's ticket (after the previous one when dropped last). The agent's numbered
 tickets that the moved one waits for (following what those wait for) and that
 would stay after it move along, in their order, just before it, so it can
 start where it was put; other agents' tickets and tickets in progress do not

@@ -40,6 +40,15 @@ describe("i18n", () => {
     expect(LANES.map((lane) => dictionaries.ja[`lane.${lane}`])).toEqual(["新規", "着手可", "作業中", "完了"]);
   });
 
+  it("explains waits and the next pickup in Japanese", () => {
+    const words = dictionaries.ja;
+    expect(format(words["pickup.waitFor"], { ticket: "acme/demo#237", assignee: "aiko", lane: words["lane.in_progress"] }))
+      .toBe("acme/demo#237 が閉じるまで（aiko・作業中）");
+    expect(format(words["pickup.waitHint"], { tickets: "acme/demo#237" }))
+      .toBe("acme/demo#237 が閉じるまで始まらず、その間は始められる後ろのチケットが先に始まる");
+    expect(words["pickup.next"]).toBe("次に始まる");
+  });
+
   it("picks the language from the browser and interpolates", () => {
     expect(detectLanguage(["ja-JP", "en"])).toBe("ja");
     expect(detectLanguage(["fr", "en-US"])).toBe("en");

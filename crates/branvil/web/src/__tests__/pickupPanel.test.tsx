@@ -90,6 +90,11 @@ describe("pickup order", () => {
     expect(lane.parentElement).toHaveClass("lane-pickup");
     // Waiting for #4, still open, #3 keeps its place: when it starts is the system's.
     expect(tagOf("3")).toHaveTextContent(/^3$/);
+    expect(tagOf("3")?.querySelector(".pickup-wait")).not.toBeNull();
+    expect(tagOf("3")).toHaveAccessibleName(/until acme\/demo#4 closes; ready tickets further down can start first/);
+    expect(tagOf("3")).toHaveAttribute("title", tagOf("3")?.getAttribute("aria-label"));
+    expect(tagOf("1")?.querySelector(".pickup-wait")).toBeNull();
+    expect(tagOf("6")?.querySelector(".pickup-wait")).toBeNull();
     expect(tagOf("4")).toHaveTextContent(/^4$/);
     expect(tagOf("6")).toHaveTextContent(/^5!$/);
     expect(tagOf("6")).toHaveClass("stuck");
@@ -101,6 +106,19 @@ describe("pickup order", () => {
     expect(tagOf("5")).not.toBeInTheDocument();
     expect(tagOf("9")).not.toBeInTheDocument();
     expect(tagOf("7")).not.toBeInTheDocument();
+  });
+
+  it("shows every direct wait's assignee and lane, with stuck taking precedence", async () => {
+    const working = card("W", "in_progress", aiko);
+    const other = card("K", "ready", { assignee: { name: "kenji", assigned_at: "" } });
+    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(working), ref(other)] } : c);
+    await opened(userEvent.setup(), "1", {
+      "GET /api/v1/workspaces/acme/board/cards": json(200, { items: [...cards, working, other], next_cursor: null }),
+    });
+    expect(rowOf("1")).toHaveTextContent("Waiting: until acme/demo#W closes (aiko · In progress); until acme/demo#K closes (kenji · Ready)");
+    expect(tagOf("1")).toHaveAccessibleName(/acme\/demo#W; acme\/demo#K/);
+    expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
+    expect(rowOf("6")).not.toHaveTextContent("Waiting:");
   });
 
   it("shows no tags outside the owner's session", async () => {
@@ -122,10 +140,10 @@ describe("pickup order", () => {
     expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
     expect(within(aside).getByRole("combobox", { name: "Assignee" })).toHaveValue("aiko");
     // A row: its number, why it will not start (if so), the ticket, and its parent; nothing of work in progress.
-    expect(rowOf("3")).toHaveTextContent(/^3acme\/demo#3 Title of 3$/);
+    expect(rowOf("3")).toHaveTextContent("Waiting: until acme/demo#4 closes (aiko · Ready)");
     expect(rowOf("6")).toHaveTextContent("5Won't start: acme/demo#9 is in New");
     expect(rowOf("2")).toHaveTextContent("Parent: acme/demo#7");
-    expect(aside).not.toHaveTextContent(/in progress|pull request|waiting|reply/i);
+    expect(aside).not.toHaveTextContent(/pull request|reply/i);
     // The figure stays usable beside it.
     expect(within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ })).toBeEnabled();
 
@@ -146,7 +164,7 @@ describe("pickup order", () => {
     expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["aiko", "kenji"]);
     await user.selectOptions(select, "kenji");
     const rows = within(screen.getByRole("list", { name: "Pickup order of kenji" })).getAllByRole("listitem");
-    expect(rows.map((li) => li.textContent)).toEqual(["1acme/demo#8 Title of 8"]);
+    expect(rows.map((li) => li.textContent)).toEqual(["1Starts nextacme/demo#8 Title of 8"]);
   });
 
   it("marks a row's card in the figure, or the closed parent it is in, and says when the filters hide it", async () => {
@@ -176,6 +194,7 @@ describe("pickup order", () => {
       "PUT /api/v1/repos/acme/demo/tickets/4/board": json(200, {}),
       "PUT /api/v1/repos/acme/demo/tickets/3/board": json(200, {}),
     });
+    expect(within(rowOf("1")).getByText("Starts next")).toBeInTheDocument();
     dragRow("3", "1");
     await screen.findByText("Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.");
     const puts = () => fake.requests.filter((r) => r.method === "PUT").map((r) => [r.path.split("/")[7], r.body]);
@@ -251,7 +270,9 @@ describe("pickup order", () => {
     for (const key of ["1", "6"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
     fireEvent.dragStart(rowOf("1"), { dataTransfer: dataTransfer() });
     dragAt("dragover", rowOf("6"), 35);
-    // Shown before it is written: the numbers follow.
+    // Shown before it is written: both the numbers and the next pickup follow.
+    expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
+    expect(within(rowOf("1")).queryByText("Starts next")).not.toBeInTheDocument();
     expect(rowKeys()).toEqual(["acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6", "acme/demo#1"]);
     expect(tagOf("4")).toHaveTextContent(/^3$/);
     expect(tagOf("1")).toHaveTextContent(/^5$/);
