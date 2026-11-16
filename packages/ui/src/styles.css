@@ -148,3 +148,7 @@ body {
 .workspace > * {
   min-width: 0;
 }
+
+.workspace > :not(.workspace-fill) {
+  flex-shrink: 0;
+}
