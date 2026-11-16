@@ -34,6 +34,7 @@ en:
     new_messages: "New source-thread messages have arrived since the last check."
     required: "%{reason} Run guildbotics member chat updates --person %{person}, read its result, and reconsider the operation before retrying."
   ticket_assignee: "No ticket-service account for roster member %{person}."
+  ticket_assignment_lane: "Changing the ticket assignee or lane"
   ticket_update_interactive_only: "Assignment and lane updates require an interactive session and human approval."
   ticket_interactive: "Changing the ticket interactive mode"
   ticket_create: "Creating a ticket"

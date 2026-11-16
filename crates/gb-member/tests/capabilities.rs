@@ -556,9 +556,13 @@ async fn approval_diagnostics_are_localized_before_service_access() {
             }
             text
         };
-        let mut errors = vec![r.ticket_create(request(), None, false).await.unwrap_err()];
+        let mut errors = vec![(
+            r.ticket_create(request(), None, false).await.unwrap_err(),
+            "Creating a ticket".to_owned(),
+            "チケットの作成".to_owned(),
+        )];
         for state in ["open", "closed"] {
-            errors.push(
+            errors.push((
                 r.ticket_update(
                     "url",
                     UpdateTicket {
@@ -569,10 +573,12 @@ async fn approval_diagnostics_are_localized_before_service_access() {
                 )
                 .await
                 .unwrap_err(),
-            );
+                format!("Changing the ticket state to '{state}'"),
+                format!("チケットの状態の '{state}' への変更"),
+            ));
         }
         for enabled in [true, false] {
-            errors.push(
+            errors.push((
                 r.ticket_update(
                     "url",
                     UpdateTicket {
@@ -583,17 +589,42 @@ async fn approval_diagnostics_are_localized_before_service_access() {
                 )
                 .await
                 .unwrap_err(),
-            );
+                "Changing the ticket interactive mode".to_owned(),
+                "チケットの対話指定の切り替え".to_owned(),
+            ));
         }
-        for error in errors {
-            let rendered = error.render(translate);
-            assert!(rendered.contains("--human-approved"));
-            assert!(!rendered.contains("%{"));
-            assert!(rendered.contains(if language == "ja" {
-                "人の依頼"
+        for request in [
+            UpdateTicket {
+                assignee: Some(ActorName("aiko".into())),
+                ..Default::default()
+            },
+            UpdateTicket {
+                lane: Some(MoveLane::InProgress),
+                ..Default::default()
+            },
+            UpdateTicket {
+                assignee: Some(ActorName("aiko".into())),
+                lane: Some(MoveLane::InProgress),
+                ..Default::default()
+            },
+        ] {
+            errors.push((
+                r.ticket_update("url", request, false).await.unwrap_err(),
+                "Changing the ticket assignee or lane".to_owned(),
+                "チケットの担当とレーンの変更".to_owned(),
+            ));
+        }
+        for (error, en, ja) in errors {
+            let expected = if language == "ja" {
+                format!(
+                    "{ja}には、人の依頼または承認が必要です。人に確認してから --human-approved を付けて再実行してください。"
+                )
             } else {
-                "human instruction"
-            }));
+                format!(
+                    "{en} requires a human instruction or approval. Ask the human first, then re-run with --human-approved."
+                )
+            };
+            assert_eq!(error.render(translate), expected);
         }
     }
 }

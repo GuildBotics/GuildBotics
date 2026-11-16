@@ -161,7 +161,7 @@ impl Repository<'_> {
         if request.assignee.is_some() || request.lane.is_some() {
             require_human(
                 approved,
-                "cli.member.ticket_update_interactive_only",
+                "cli.member.ticket_assignment_lane",
                 BTreeMap::new(),
             )?;
         }

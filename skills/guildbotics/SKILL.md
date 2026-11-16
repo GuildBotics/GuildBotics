@@ -92,7 +92,9 @@ unchanged; report that reopening is a human decision.
    replace all assignees with yourself; otherwise keep the assignment.
 2. Set the ticket's own `interactive` flag if false, even with an
    `interactive_ancestor`, since the ancestor setting may be removed independently.
-3. Move `new` or `ready` to `in_progress`; keep `in_progress`. Keep `done` and
+3. If any `blocked_by` ticket is open, keep the lane, omit `--lane`, and report
+   that work cannot start until the blockers close. Otherwise move `new` or
+   `ready` to `in_progress`; keep `in_progress`. Keep `done` and
    report that it is already in the completed lane.
 
 Apply the decided changes in ONE `member ticket update --person <person_id>
@@ -101,7 +103,8 @@ Apply the decided changes in ONE `member ticket update --person <person_id>
 start the ticket in an intermediate state. If the provider returns unsupported,
 nothing changed: explain which change is unavailable and that patrol may still
 work in parallel, then ask whether to continue interactively. Report the resulting
-assignees, interactive flag, and lane. To return to automatic patrol on request,
+assignees, interactive flag, and lane. For other update failures, read the ticket
+again and report its actual state: an error can follow partial writes. To return to automatic patrol on request,
 use `--no-interactive --human-approved`; an `interactive_ancestor` means the
 inherited interactive mode still applies and must be reported.
 
@@ -113,13 +116,15 @@ inherited interactive mode still applies and must be reported.
    対話指定だけでも担当者の巡回が止まるため。了承されたら自分だけにし、替えない場合は担当を保つ。
 2. 自身の `interactive` が false なら付ける。`interactive_ancestor` からの継承だけでも付ける。
    祖先の指定はこのセッションと関係なく外されうる。
-3. 新規・着手可なら作業中へ動かす。作業中ならそのまま。完了なら動かさず、そのことを伝える。
+3. `blocked_by` に開いたチケットがあれば、レーンを保ち `--lane` を付けず、依存先が閉じるまで着手できないと伝える。
+   それ以外は新規・着手可なら作業中へ動かす。作業中ならそのまま。完了なら動かさず、そのことを伝える。
 
 決めた変更を1回の `ticket update --interactive --assignee <自分のperson_id>
 --lane in_progress --human-approved` にまとめ、変更不要な項目は省く。
 分けると巡回が途中の状態を拾いうる。provider が unsupported で断った場合は何も変わらない。
 できない変更と巡回が並行して進めうることを伝え、このまま対話で進めるか確認する。
-結果の担当・対話指定・レーンを伝える。自動巡回へ戻す依頼には
+結果の担当・対話指定・レーンを伝える。unsupported 以外の失敗では、一部が書き込まれている可能性があるため、
+チケットを読み直して実際の状態を伝える。自動巡回へ戻す依頼には
 `--no-interactive --human-approved` を使い、`interactive_ancestor` による継承が残るなら伝える。
 
 ## Definition of Done
