@@ -142,6 +142,8 @@ impl TicketPlacement {
 }
 #[derive(Clone, Debug, Default)]
 pub struct UpdateTicket {
+    pub assignee: Option<ActorName>,
+    pub lane: Option<MoveLane>,
     /// Reorder within the current tracker and lane. Unsupported providers must reject
     /// the whole update before writing any other fields.
     pub placement: Option<TicketPlacement>,

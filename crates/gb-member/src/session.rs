@@ -192,6 +192,11 @@ impl Session<'_> {
                 .await?
             }
             "ticket update" => {
+                if (self.workflow || self.delegated_to.is_some())
+                    && (p.optional("assignee").is_some() || p.optional("lane").is_some())
+                {
+                    return Err(invalid("cli.member.ticket_update_interactive_only"));
+                }
                 if p.optional("before").is_some() && p.optional("after").is_some() {
                     return Err(invalid("cli.member.ticket_order_conflict"));
                 }
@@ -206,6 +211,8 @@ impl Session<'_> {
                 r.ticket_update(
                     p.text("url"),
                     UpdateTicket {
+                        assignee: p.optional("assignee").map(ActorName),
+                        lane: p.optional("lane").map(|v| decoded(&v)).transpose()?,
                         placement: p
                             .optional("before")
                             .map(TicketPlacement::Before)

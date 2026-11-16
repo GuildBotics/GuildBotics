@@ -13,6 +13,24 @@ fn command_summary_rejects_unknown_command_path() {
     }
 }
 #[test]
+fn ticket_update_help_preserves_order_and_assignment_conditions() {
+    let grammar: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../guildbotics/templates/member/grammar.json"
+    ))
+    .unwrap();
+    let summary = grammar["ticket update"]["help"].as_str().unwrap();
+    let reference = include_str!("../../../docs/cli_reference.md");
+    for text in [summary, reference] {
+        for sentence in [
+            "Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only.",
+            "In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved.",
+            "Updates return assignees and lane.",
+        ] {
+            assert!(text.contains(sentence), "{sentence}");
+        }
+    }
+}
+#[test]
 fn reference_covers_every_member_domain() {
     let text = help();
     assert!(text.contains("guildbotics member git commit"));
@@ -161,7 +179,19 @@ fn reference_states_which_code_host_writes_stay_human_decisions() {
             "do not express urgency by adding a label or setting a board or ticket field"
         )
     );
-    assert!(text.contains("Assignees and the lane are read-only on purpose"));
+    for term in [
+        "because who takes a ticket is assigned by a human on the board",
+        "because it changes whether patrol starts work automatically",
+        "it never authorizes changing an existing ticket",
+        "PR state, draft, and base are read-only because humans decide them",
+        "In interactive sessions",
+        "replacing all assignees",
+        "Workflow and delegated runs must not change assignment or lane",
+        "--assignee <person_id>",
+        "--lane in_progress",
+    ] {
+        assert!(text.contains(term), "{term}");
+    }
     assert!(text.contains("the labels the target tracker already defines"));
 }
 #[test]
@@ -251,6 +281,19 @@ fn repair_reference_explains_retry_priority_and_recovery() {
         "same repair PR",
         "CI configuration",
         "no limit",
+    ] {
+        assert!(text.contains(term), "{term}");
+    }
+}
+
+#[test]
+fn interactive_takeover_documents_blockers_and_partial_failure_in_both_languages() {
+    let text = include_str!("../../../skills/guildbotics/SKILL.md");
+    for term in [
+        "If any `blocked_by` ticket is open, keep the lane, omit `--lane`",
+        "read the ticket\nagain and report its actual state",
+        "`blocked_by` に開いたチケットがあれば",
+        "一部が書き込まれている可能性があるため",
     ] {
         assert!(text.contains(term), "{term}");
     }

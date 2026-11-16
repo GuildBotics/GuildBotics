@@ -350,6 +350,124 @@ async fn checks_retry_returns_url_and_preserves_service_errors() {
 }
 
 #[tokio::test]
+async fn ticket_assignment_and_lane_require_interactive_approval_and_roster() {
+    let services = Services(support::Probe::new(Some(ServiceError::Unsupported)));
+    let roster = [
+        ("aiko".into(), ActorName("agent1".into())),
+        ("owner".into(), ActorName("human1".into())),
+    ]
+    .into();
+    let records = Records::default();
+    for option in [["--assignee", "aiko"], ["--lane", "in_progress"]] {
+        for (workflow, delegated) in [(true, Some("aiko")), (false, Some("aiko")), (false, None)] {
+            let mut session = session(&services, &roster, &records);
+            session.workflow = workflow;
+            session.delegated_to = delegated;
+            let mut input = args(&["ticket", "update", "--person", "aiko", "--url", "url"]);
+            input.extend(args(&option));
+            if !workflow && delegated.is_none() {
+                assert_eq!(
+                    session.execute(&input, "").await.err().unwrap().to_string(),
+                    "cli.member.human_approval_required"
+                );
+            }
+            input.push("--human-approved".into());
+            let error = session.execute(&input, "").await.err().unwrap();
+            if workflow || delegated.is_some() {
+                assert_eq!(
+                    error.to_string(),
+                    "cli.member.ticket_update_interactive_only"
+                );
+            } else {
+                assert!(error.downcast_ref::<MemberError>().is_some());
+                assert!(error.to_string().contains("unsupported"));
+            }
+        }
+    }
+    let mut session = session(&services, &roster, &records);
+    session.workflow = false;
+    session.delegated_to = None;
+    for person in ["aiko", "owner", "missing"] {
+        let input = args(&[
+            "ticket",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "url",
+            "--assignee",
+            person,
+            "--interactive",
+            "--lane",
+            "in_progress",
+            "--human-approved",
+            "--title",
+            "Unchanged on refusal",
+        ]);
+        let error = session.execute(&input, "").await.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            if person == "missing" {
+                "cli.member.ticket_assignee"
+            } else {
+                "integrations.resources.operation_unsupported"
+            }
+        );
+    }
+    assert!(records.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn interactive_ticket_update_resolves_roster_and_returns_complete_state() {
+    for (person, actor) in [("aiko", "agent1"), ("owner", "human1")] {
+        let mut probe = support::Probe::new(None);
+        probe.update_result = Some(
+            serde_json::from_value(json!({
+                "body":"", "state":"open", "state_changed":false, "labels":[],
+                "target":{"kind":"ticket","url":"url","title":"Work","label":"#1"},
+                "assignees":[actor], "lane":"in_progress", "interactive":true,
+                "interactive_ancestor":null
+            }))
+            .unwrap(),
+        );
+        let services = Services(probe);
+        let roster = [(person.into(), ActorName(actor.into()))].into();
+        let records = Records::default();
+        let mut session = session(&services, &roster, &records);
+        session.workflow = false;
+        session.delegated_to = None;
+        let result = session
+            .execute(
+                &args(&[
+                    "ticket",
+                    "update",
+                    "--person",
+                    "aiko",
+                    "--url",
+                    "url",
+                    "--assignee",
+                    person,
+                    "--interactive",
+                    "--lane",
+                    "in_progress",
+                    "--human-approved",
+                ]),
+                "",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.payload["assignees"], json!([actor]));
+        assert_eq!(result.payload["lane"], "in_progress");
+        assert_eq!(result.payload["interactive"], true);
+        let requests = services.0.ticket_updates.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].assignee, Some(ActorName(actor.into())));
+        assert_eq!(requests[0].lane, Some(MoveLane::InProgress));
+        assert_eq!(requests[0].interactive, Some(true));
+    }
+}
+
+#[tokio::test]
 async fn ticket_order_requires_interactive_approval_and_exclusive_anchor() {
     let services = Services(support::Probe::new(Some(ServiceError::Unavailable)));
     let roster = BTreeMap::new();

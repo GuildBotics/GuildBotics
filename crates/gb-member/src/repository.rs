@@ -158,6 +158,26 @@ impl Repository<'_> {
         mut request: UpdateTicket,
         approved: bool,
     ) -> Result<Value> {
+        if request.assignee.is_some() || request.lane.is_some() {
+            require_human(
+                approved,
+                "cli.member.ticket_assignment_lane",
+                BTreeMap::new(),
+            )?;
+        }
+        request.assignee = request
+            .assignee
+            .map(|id| {
+                self.roster
+                    .get(&id.0)
+                    .cloned()
+                    .filter(|a| !a.0.is_empty())
+                    .ok_or_else(|| MemberError::CapabilityArgs {
+                        key: "cli.member.ticket_assignee",
+                        args: [("person".into(), id.0)].into(),
+                    })
+            })
+            .transpose()?;
         if request.placement.is_some() {
             require_human(approved, "cli.member.ticket_order", BTreeMap::new())?;
         }
@@ -180,6 +200,8 @@ impl Repository<'_> {
             && request.state.is_none()
             && request.parent.is_none()
             && request.interactive.is_none()
+            && request.assignee.is_none()
+            && request.lane.is_none()
             && request.placement.is_none()
             && request.add_labels.is_empty()
             && request.remove_labels.is_empty()

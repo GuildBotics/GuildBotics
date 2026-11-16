@@ -320,6 +320,8 @@ pub struct TicketCreated {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TicketUpdated {
+    pub assignees: Vec<ActorName>,
+    pub lane: Option<Lane>,
     pub body: String,
     pub state: String,
     pub state_changed: bool,

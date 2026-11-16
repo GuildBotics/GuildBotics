@@ -34,6 +34,8 @@ ja:
     new_messages: "前回の確認後に元のスレッドへ新着メッセージが届いています。"
     required: "%{reason} guildbotics member chat updates --person %{person} を実行し、結果を読んで操作内容を再検討してから再試行してください。"
   ticket_assignee: "名簿のメンバー %{person} にチケットサービスのアカウントがありません。"
+  ticket_assignment_lane: "チケットの担当とレーンの変更"
+  ticket_update_interactive_only: "担当とレーンの更新には、対話セッションと人の承認が必要です。"
   ticket_interactive: "チケットの対話指定の切り替え"
   ticket_create: "チケットの作成"
   ticket_state: "チケットの状態の '%{state}' への変更"

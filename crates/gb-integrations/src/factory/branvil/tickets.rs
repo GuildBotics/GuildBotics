@@ -64,13 +64,7 @@ impl TicketService for BranvilService {
     }
     fn assign_to_me<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
         Box::pin(async move {
-            let (repo, key) = self.item(url, "tickets")?;
-            self.writable(&repo)?;
-            self.member()
-                .await?
-                .tickets_set_assignee(&repo, &key, Some(self.username.clone()))
-                .await
-                .map_err(|e| error(e, "tickets_set_assignee"))?;
+            self.ticket_assign(url, &self.username).await?;
             Ok(())
         })
     }
@@ -321,6 +315,7 @@ impl TicketService for BranvilService {
                     || !self.on_board(&own)
                     || !self.on_board(&anchor)
                     || own["lane"] != anchor["lane"]
+                    || r.lane.is_some_and(|lane| own["lane"] != json!(lane))
                 {
                     return Err(diagnostic("integrations.resources.ticket_placement", []));
                 }
@@ -353,8 +348,33 @@ impl TicketService for BranvilService {
                     .await
                     .map_err(|e| error(e, "tickets_put_on_board"))?;
             }
-            let v = value(t.ticket)?;
+            if let Some(actor) = r.assignee {
+                self.ticket_assign(url, &actor.0).await?;
+            }
+            if let Some(lane) = r.lane.filter(|_| r.placement.is_none()) {
+                self.ticket_move(
+                    &Task {
+                        url: Some(url.into()),
+                        ..Default::default()
+                    },
+                    lane,
+                )
+                .await?;
+            }
+            let v = value(
+                self.member()
+                    .await?
+                    .tickets_get_ticket(&repo, &key)
+                    .await
+                    .map_err(|e| error(e, "tickets_get_ticket"))?,
+            )?;
             Ok(TicketUpdated {
+                assignees: decode(self.ticket_value(v.clone())["assignees"].clone())?,
+                lane: if self.on_board(&v) {
+                    decode(v["lane"].clone())?
+                } else {
+                    None
+                },
                 body: text(&v, "body").into(),
                 state: text(&v, "state").into(),
                 state_changed: changed,
@@ -418,6 +438,16 @@ impl TicketService for BranvilService {
 }
 
 impl BranvilService {
+    async fn ticket_assign(&self, url: &str, actor: &str) -> Result<(), ServiceError> {
+        let (repo, key) = self.item(url, "tickets")?;
+        self.writable(&repo)?;
+        self.member()
+            .await?
+            .tickets_set_assignee(&repo, &key, Some(actor.into()))
+            .await
+            .map_err(|e| error(e, "tickets_set_assignee"))?;
+        Ok(())
+    }
     fn ticket_summary(&self, v: &Value) -> Value {
         let t = self.ticket_value(v.clone());
         json!({"kind":t["kind"],"url":t["url"],"title":t["title"],"label":t["label"],"key":t["key"],"state":t["state"],"lane":t["lane"],"labels":t["labels"],"updated_at":v["updated_at"],"assignees":t["assignees"]})
