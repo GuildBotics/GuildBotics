@@ -485,7 +485,9 @@ an open repair ticket exists. `landing::held` reads only store records and is
 shared with CI priority classification in the caller's transaction. Repair
 PRs bypass the hold. Published PRs still show it and receive head updates;
 host merges cannot be prevented. Local merges, publication and ready notices
-use the blocker. Verification events and ticket closure trigger re-evaluation.
+use the blocker. Verification events trigger re-evaluation. Repair ticket state
+changes also emit a verification event, so closing a repair ticket triggers
+re-evaluation without waiting for the periodic sweep.
 Each local merge reads the newly advanced base before the next PR is evaluated.
 Automatic publication happens once; a stopped publication is replaced directly
 by the owner's publish after rechecking its conditions. Automatic errors are

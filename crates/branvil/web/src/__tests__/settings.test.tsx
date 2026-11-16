@@ -246,6 +246,28 @@ describe("settings", () => {
   });
 
   it.each([
+    { lang: "en", upstream: false, help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held." },
+    { lang: "ja", upstream: false, help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。" },
+    { lang: "en", upstream: true, help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published there. Those PRs are shown as held." },
+    { lang: "ja", upstream: true, help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。" },
+  ] as const)("explains hold behavior ($lang, upstream=$upstream)", async ({ lang, upstream, help }) => {
+    const words = lang === "ja" ? ja : en;
+    const repo = { ...REPO, upstream: upstream ? { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} } : null };
+    const fake = fakeApi({ ...SHELL, "GET /api/v1/repos": page([repo]), "GET /api/v1/members": page([]), "PATCH /api/v1/repos/acme/demo": json(200, { ...repo, hold_while_failing: true, revision: 5 }) });
+    const user = userEvent.setup();
+    renderApp("/-/settings", lang);
+    await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
+    await user.click(screen.getByRole("tab", { name: "CI" }));
+    const ci = screen.getByRole("tabpanel", { name: "CI" });
+    expect(within(ci).getByText(help)).toBeInTheDocument();
+    const hold = within(ci).getByRole("switch", { name: name => name.startsWith(words["settings.holdWhileFailing"]) });
+    expect(hold).not.toBeChecked();
+    await user.click(hold);
+    await user.click(within(ci).getByRole("button", { name: words["common.save"] }));
+    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, hold_while_failing: true }));
+  });
+
+  it.each([
     { upstream: null, says: /Branvil merges automatically/ },
     { upstream: { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} }, says: /Branvil publishes to GitHub automatically as the author/ },
   ])("turns automatic landing on from the CI tab and says what it does ($says)", async ({ upstream, says }) => {

@@ -43,12 +43,12 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     const p = pull({ landing: landing({ next, blockers }) });
     return render(<MantineProvider theme={theme}><I18nProvider initial={lang}>{journey ? <LandingJourney pull={p} repo={repo} /> : <JourneyBadge pull={p} repo={repo} load={false} />}</I18nProvider></MantineProvider>);
   }
-  it.each([false, true])("shows the repair link and hold (published=%s)", published => {
-    const blockers = [{ code: "held", message: "Repair #42; assignee: aiko.", held: { number: 42, assignee: "aiko" }, files: [], jobs: [] }];
+  it.each([false, true].flatMap(published => ["aiko", null].map(assignee => ({ published, assignee }))))("shows the repair link and hold (published=$published, assignee=$assignee)", ({ published, assignee }) => {
+    const blockers = [{ code: "held", message: "Repair #42; assignee: aiko.", held: { number: 42, assignee }, files: [], jobs: [] }];
     const p = pull({ landing: landing({ next: "conditions", blockers, host_url: published ? "https://host.test/pr/1" : null }) });
     render(<MantineProvider theme={theme}><I18nProvider initial={lang}><LandingJourney pull={p} repo={REPO} /><JourneyBadge pull={p} repo={REPO} load={false} /></I18nProvider></MantineProvider>);
-    expect(screen.getByRole("link", { name: "#42" })).toHaveAttribute("href", "/acme/demo/-/tickets/42");
-    expect(screen.getByText(words["landing.held"].replace("{number}", "42").replace("{name}", "aiko"))).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: lang === "ja" ? "修復チケット #42 を開く" : "Open repair ticket #42" })).toHaveAttribute("href", "/acme/demo/-/tickets/42");
+    expect(screen.getByText((assignee ? words["landing.held"].replace("{name}", assignee) : lang === "ja" ? "保留中：main の確認が失敗しています（修復 #{number}、担当なし）。main の確認が通ると、保留が解けます。" : "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes.").replace("{number}", "42"))).toBeInTheDocument();
     const caution = words["landing.heldPublished"].replace("{host}", "GitHub");
     expect(screen.queryByText(caution) !== null).toBe(published);
     expect(screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root")).toHaveStyle({ "--badge-color": "var(--color-warning-text)" });

@@ -274,7 +274,7 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             />
             <Switch
               label={t("settings.holdWhileFailing")}
-              description={t("settings.holdWhileFailingHelp", { host: repo.upstream?.host ?? "Branvil" })}
+              description={repo.upstream ? t("settings.holdWhileFailingHelpUpstream", { host: repo.upstream.host }) : t("settings.holdWhileFailingHelp")}
               checked={form.hold_while_failing}
               onChange={(e) => setForm({ ...form, hold_while_failing: e.currentTarget.checked })}
             />

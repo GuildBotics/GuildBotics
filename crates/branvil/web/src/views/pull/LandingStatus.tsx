@@ -49,8 +49,8 @@ export function LandingJourney({ pull, repo }: { pull: PullRequest; repo: Reposi
       </li>;
     })}</ol>
     {l?.blockers.map(b => <Stack key={b.code} gap={2}><Text size="sm" fw={700}>{t(blockerName(b.code))}</Text>{b.code === "held" && b.held ? <>
-      <Text size="sm">{t("landing.held", { number: b.held.number, name: b.held.assignee ?? t("board.unassigned") })}</Text>
-      <Anchor href={`/${pull.repository}/-/tickets/${b.held.number}`} size="sm">#{b.held.number}</Anchor>
+      <Text size="sm">{t(b.held.assignee ? "landing.held" : "landing.heldUnassigned", { number: b.held.number, name: b.held.assignee ?? "" })}</Text>
+      <Anchor href={`/${pull.repository}/-/tickets/${b.held.number}`} size="sm">{t("landing.repairLink", { number: b.held.number })}</Anchor>
       {l.host_url && <Text size="sm">{t("landing.heldPublished", { host: repo.upstream?.host ?? "" })}</Text>}
     </> : <Text size="sm">{b.message}</Text>}</Stack>)}
     {pull.unanswered.map(u => <Anchor key={u.id} href={`#${encodeURIComponent(u.id)}`} size="sm">{t(`landing.statement.${u.kind}`, { author: u.author })}</Anchor>)}
