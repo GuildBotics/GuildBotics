@@ -192,12 +192,19 @@ impl Session<'_> {
                 .await?
             }
             "ticket update" => {
+                if (self.workflow || self.delegated_to.is_some())
+                    && (p.optional("assignee").is_some() || p.optional("lane").is_some())
+                {
+                    return Err(invalid("cli.member.ticket_update_interactive_only"));
+                }
                 if p.optional("state-reason").is_some() && p.text("state") != "closed" {
                     return Err(invalid("cli.member.state_reason"));
                 }
                 r.ticket_update(
                     p.text("url"),
                     UpdateTicket {
+                        assignee: p.optional("assignee").map(ActorName),
+                        lane: p.optional("lane").map(|v| decoded(&v)).transpose()?,
                         body,
                         title: p.optional("title").map(|v| title(&v)).transpose()?,
                         add_labels: p.list("add-label"),

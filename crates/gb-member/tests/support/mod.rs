@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 pub struct Probe {
     pub error: Option<ServiceError>,
     pub links: BTreeMap<String, Vec<TicketLink>>,
+    pub ticket_updates: std::sync::Mutex<Vec<UpdateTicket>>,
+    pub update_result: Option<TicketUpdated>,
     pub ticket_requests: std::sync::Mutex<Vec<CreateTicket>>,
     pub closed: Vec<ClosedItem>,
     pub pages: BTreeMap<String, std::result::Result<ReadPage, ServiceError>>,
@@ -21,6 +23,8 @@ impl Probe {
         Self {
             error,
             links: Default::default(),
+            ticket_updates: Default::default(),
+            update_result: None,
             ticket_requests: Default::default(),
             closed: vec![],
             pages: BTreeMap::new(),
@@ -82,7 +86,14 @@ impl TicketService for Probe {
         _url: &'a str,
         _request: UpdateTicket,
     ) -> ServiceFuture<'a, TicketUpdated> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+        Box::pin(async move {
+            self.ticket_updates.lock().unwrap().push(_request);
+            if let Some(result) = &self.update_result {
+                Ok(result.clone())
+            } else {
+                Err(self.error.clone().expect("unexpected provider access"))
+            }
+        })
     }
     fn add_reaction<'a>(
         &'a self,

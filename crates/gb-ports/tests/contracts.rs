@@ -1,5 +1,6 @@
 //! Golden results were produced by the models and read_conditions executed
 //! from python-host:fea9e05aaf8b4bca96e19d615b6811ea0eacb7d0, not Rust.
+//! TicketUpdated fixtures include the interactive takeover result fields added in #284.
 //! Inputs exercise each required field and type, explicit null, omitted
 //! defaults, nested models, and rejected unknown fields.
 use gb_ports::*;

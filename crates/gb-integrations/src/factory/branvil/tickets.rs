@@ -64,13 +64,7 @@ impl TicketService for BranvilService {
     }
     fn assign_to_me<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
         Box::pin(async move {
-            let (repo, key) = self.item(url, "tickets")?;
-            self.writable(&repo)?;
-            self.member()
-                .await?
-                .tickets_set_assignee(&repo, &key, Some(self.username.clone()))
-                .await
-                .map_err(|e| error(e, "tickets_set_assignee"))?;
+            self.ticket_assign(url, &self.username).await?;
             Ok(())
         })
     }
@@ -275,8 +269,33 @@ impl TicketService for BranvilService {
                 .await
                 .map_err(|e| error(e, "tickets_update_ticket"))?;
             let changed = t.state_changed;
-            let v = value(t.ticket)?;
+            if let Some(actor) = r.assignee {
+                self.ticket_assign(url, &actor.0).await?;
+            }
+            if let Some(lane) = r.lane {
+                self.ticket_move(
+                    &Task {
+                        url: Some(url.into()),
+                        ..Default::default()
+                    },
+                    lane,
+                )
+                .await?;
+            }
+            let v = value(
+                self.member()
+                    .await?
+                    .tickets_get_ticket(&repo, &key)
+                    .await
+                    .map_err(|e| error(e, "tickets_get_ticket"))?,
+            )?;
             Ok(TicketUpdated {
+                assignees: decode(self.ticket_value(v.clone())["assignees"].clone())?,
+                lane: if self.on_board(&v) {
+                    decode(v["lane"].clone())?
+                } else {
+                    None
+                },
                 body: text(&v, "body").into(),
                 state: text(&v, "state").into(),
                 state_changed: changed,
@@ -336,5 +355,18 @@ impl TicketService for BranvilService {
     }
     fn aclose(&self) -> ServiceFuture<'_, ()> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+impl BranvilService {
+    async fn ticket_assign(&self, url: &str, actor: &str) -> Result<(), ServiceError> {
+        let (repo, key) = self.item(url, "tickets")?;
+        self.writable(&repo)?;
+        self.member()
+            .await?
+            .tickets_set_assignee(&repo, &key, Some(actor.into()))
+            .await
+            .map_err(|e| error(e, "tickets_set_assignee"))?;
+        Ok(())
     }
 }

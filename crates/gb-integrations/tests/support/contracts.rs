@@ -458,12 +458,12 @@ pub async fn ticket_board_order_contract(
     );
     // Moving to the working lane keeps its original creation-time ordering.
     for url in [&urls[1], &urls[0]] {
-        t.move_ticket(
-            &Task {
-                url: Some(url.clone()),
+        t.update_ticket(
+            url,
+            UpdateTicket {
+                lane: Some(MoveLane::InProgress),
                 ..Default::default()
             },
-            MoveLane::InProgress,
         )
         .await
         .unwrap();
@@ -515,6 +515,45 @@ pub async fn ticket_patrol_contract(
     other_actor: ActorName,
 ) {
     ticket_board_order_contract(t, driver, tracker, &actor, &other_actor).await;
+    // Interactive takeover replaces assignment and moves through the same placement path.
+    let mut q = ticket_request(tracker, "Interactive takeover");
+    q.assignee = Some(other_actor.clone());
+    q.lane = Some(CreateLane::Ready);
+    let url = t.create_ticket(q).await.unwrap().target.url;
+    let updated = t
+        .update_ticket(
+            &url,
+            UpdateTicket {
+                interactive: Some(true),
+                assignee: Some(actor.clone()),
+                lane: Some(MoveLane::InProgress),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.assignees, vec![actor.clone()]);
+    assert_eq!(updated.lane, Some(Lane::InProgress));
+    assert!(updated.interactive);
+    let read = t.read(Resource::Tickets, &url, None, "").await.unwrap();
+    let item = &read.items()[0];
+    assert_eq!(item["assignees"], json!([actor]));
+    assert_eq!(item["lane"], "in_progress");
+    assert_eq!(item["interactive"], true);
+    let reassigned = t
+        .update_ticket(
+            &url,
+            UpdateTicket {
+                assignee: Some(other_actor.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reassigned.assignees, vec![other_actor.clone()]);
+    assert!(reassigned.interactive);
+    assert_eq!(reassigned.lane, Some(Lane::InProgress));
+    finish_task(t, &url).await;
     let mention = format!("@{}", actor.0);
     let elsewhere = format!("@{} Please provide context.", other_actor.0);
     // Every creation combination publishes complete assignment, relations and lane.

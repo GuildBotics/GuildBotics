@@ -161,7 +161,15 @@ fn reference_states_which_code_host_writes_stay_human_decisions() {
             "do not express urgency by adding a label or setting a board or ticket field"
         )
     );
-    assert!(text.contains("Assignees and the lane are read-only on purpose"));
+    for term in [
+        "In interactive sessions",
+        "replacing all assignees",
+        "Workflow and delegated runs must not change assignment or lane",
+        "--assignee <person_id>",
+        "--lane in_progress",
+    ] {
+        assert!(text.contains(term), "{term}");
+    }
     assert!(text.contains("the labels the target tracker already defines"));
 }
 #[test]

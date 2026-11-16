@@ -130,6 +130,8 @@ pub struct CreateTicket {
 }
 #[derive(Clone, Debug, Default)]
 pub struct UpdateTicket {
+    pub assignee: Option<ActorName>,
+    pub lane: Option<MoveLane>,
     pub body: Option<String>,
     pub title: Option<String>,
     pub add_labels: Vec<String>,

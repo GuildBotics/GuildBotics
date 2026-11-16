@@ -2,6 +2,22 @@ use super::*;
 use std::{collections::BTreeSet, fs};
 use unicode_casefold::UnicodeCaseFold;
 impl LocalService {
+    fn ticket_assign(v: &mut Value, actor: &str) {
+        v["assignees"] = json!([actor]);
+    }
+    fn ticket_move_value(
+        &self,
+        r: &Ref,
+        v: &mut Value,
+        lane: MoveLane,
+    ) -> Result<(), ServiceError> {
+        self.store.scope.authorize(&r.place)?;
+        if v["lane"] != json!(lane) {
+            v["rank"] = json!(self.lane_end(&r.place, &json!(lane))?);
+            v["lane"] = json!(lane);
+        }
+        Ok(())
+    }
     pub(super) fn lane_end(&self, tracker: &str, lane: &Value) -> Result<i64, ServiceError> {
         self.store
             .items(WorkKind::Ticket, Some(tracker))?
@@ -282,7 +298,7 @@ impl TicketService for LocalService {
             let r = Ref::locate(url, WorkKind::Ticket)?;
             self.store.scope.authorize(&r.place)?;
             let mut v = self.store.load(&r)?;
-            v["assignees"] = json!([self.actor]);
+            Self::ticket_assign(&mut v, &self.actor);
             self.store.save(&r, &mut v)
         })
     }
@@ -461,8 +477,18 @@ impl TicketService for LocalService {
             }
             v["labels"] = json!(ls);
             let ancestor = self.ancestor(&v)?;
+            if let Some(actor) = q.assignee {
+                Self::ticket_assign(&mut v, &actor.0);
+            }
+            if let Some(lane) = q.lane {
+                self.ticket_move_value(&r, &mut v, lane)?;
+            }
             self.store.save(&r, &mut v)?;
             Ok(TicketUpdated {
+                assignees: serde_json::from_value(v["assignees"].clone())
+                    .map_err(|_| ServiceError::InvalidResult)?,
+                lane: serde_json::from_value(v["lane"].clone())
+                    .map_err(|_| ServiceError::InvalidResult)?,
                 body: text(&v, "body").into(),
                 state: text(&v, "state").into(),
                 state_changed: changed,
@@ -537,10 +563,7 @@ impl TicketService for LocalService {
                 WorkKind::Ticket,
             )?;
             let mut v = self.store.load(&r)?;
-            if v["lane"] != json!(l) {
-                v["rank"] = json!(self.lane_end(&r.place, &json!(l))?);
-                v["lane"] = json!(l);
-            }
+            self.ticket_move_value(&r, &mut v, l)?;
             self.store.save(&r, &mut v)?;
             Ok(true)
         })
