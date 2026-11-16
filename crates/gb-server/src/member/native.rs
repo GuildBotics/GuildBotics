@@ -322,6 +322,7 @@ impl Native {
         let control = RunControl {
             chat:Some(&guard),
             identity: Identity {
+                repair: invocation.is_some_and(|v| v.repair),
                 run_id,
                 person_id: &person.person_id,
                 work_kind: kind,
@@ -4976,6 +4977,7 @@ pub(crate) mod tests {
         .await;
         let url = ticket["target"]["url"].as_str().unwrap();
         native.invocation = Some(gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "mention".into(),
@@ -5128,6 +5130,7 @@ pub(crate) mod tests {
                 .exists()
         );
         native.invocation = Some(gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),
@@ -5324,6 +5327,7 @@ pub(crate) mod tests {
         .await;
         let (_, _, head) = seed_code(&native, temp.path());
         native.invocation = Some(gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "bound-run".into(),
@@ -5873,6 +5877,7 @@ pub(crate) mod tests {
         let interactive = fixture(temp.path());
         let mut bound = interactive.clone();
         bound.invocation = Some(gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "bound".into(),

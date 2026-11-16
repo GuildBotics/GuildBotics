@@ -44,6 +44,7 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics member chat updates`](#guildbotics-member-chat-updates)
 - [`guildbotics member checks`](#guildbotics-member-checks)
 - [`guildbotics member checks await`](#guildbotics-member-checks-await)
+- [`guildbotics member checks retry`](#guildbotics-member-checks-retry)
 - [`guildbotics member context`](#guildbotics-member-context)
 - [`guildbotics member git`](#guildbotics-member-git)
 - [`guildbotics member git commit`](#guildbotics-member-git-commit)
@@ -443,7 +444,7 @@ Operate as a configured GuildBotics member.
 
 Usage: guildbotics member [OPTIONS]
   chat  Chat identity, posting, replies, reactions, and run completion.
-  checks  End a run to await the CI checks of its pull requests.
+  checks  Await CI checks or retry a job.
   context  Show non-secret member context.
   git  Read repositories and prepare, commit, push, and publish member workspaces.
   help  Print the member capability reference (commands and cross-cutting rules). This is the same reference embedded in ``member context``; use it to reread the available commands without re-running the full context.
@@ -640,10 +641,11 @@ Usage: guildbotics member chat updates [OPTIONS]
 ### guildbotics member checks
 
 ```text
-End a run to await the CI checks of its pull requests.
+Await CI checks or retry a job.
 
 Usage: guildbotics member checks [OPTIONS]
   await  End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+  retry  Retry a CI job by its page URL.
   --help  Print help
 ```
 
@@ -657,6 +659,18 @@ Usage: guildbotics member checks await [OPTIONS]
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
   --content-stdin  Read the command's entire free-form content from standard input.
   --format <json|markdown> [default: json]  Output format.
+  --help  Print help
+```
+
+### guildbotics member checks retry
+
+```text
+Retry a CI job by its page URL.
+
+Usage: guildbotics member checks retry [OPTIONS]
+  --person <VALUE>  Person ID or name of the member. [required]
+  --job-url <VALUE>  Page URL of the CI job to retry. [required]
+  --format <json|text> [default: json]  Output format.
   --help  Print help
 ```
 

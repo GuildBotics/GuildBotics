@@ -230,3 +230,21 @@ fn draft_instructions_keep_duplicate_search_and_unavailable_outcomes() {
         assert!(text.contains(required), "{required}");
     }
 }
+
+#[test]
+fn repair_reference_explains_retry_priority_and_recovery() {
+    let text = help();
+    for term in [
+        "checks retry",
+        "--job-url",
+        "Repair tickets",
+        "asking",
+        "blocked",
+        "reverting",
+        "deterministic",
+        "next patrol",
+        "no limit",
+    ] {
+        assert!(text.contains(term), "{term}");
+    }
+}

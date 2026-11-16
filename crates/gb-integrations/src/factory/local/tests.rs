@@ -45,6 +45,8 @@ fn request(tracker: &str) -> CreateTicket {
 async fn ticket_shared_contract() {
     let (_d, s) = fixture();
     contracts::ticket_contract(&s, "acme/team", "bug", "local-aiko").await;
+    assert!(s.repair_tickets().await.unwrap().is_empty());
+    assert!(s.candidates().await.unwrap().iter().all(|t| !t.repair));
 }
 #[tokio::test]
 async fn chat_shared_contract() {
@@ -545,6 +547,25 @@ async fn pull_request_git_unicode_files_reviews_threads_checks_and_artifacts() {
     fs::write(artifacts.join("report.zip"), b"bytes").unwrap();
     let failure = s.readiness(url, true, 10).await.unwrap();
     assert_eq!(failure.rollup, ReadinessRollup::Failure);
+    let job_url = failure.checks[0].details_url.clone();
+    assert!(matches!(
+        s.retry_job("local://code/acme/repo/jobs/missing/1").await,
+        Err(ServiceError::NotFound)
+    ));
+    assert!(matches!(
+        s.retry_job(&format!("local://code/elsewhere/repo/jobs/{head}/1"))
+            .await,
+        Err(ServiceError::OutOfScope)
+    ));
+    let next = s.retry_job(&job_url).await.unwrap();
+    assert_ne!(next, job_url);
+    assert!(next.ends_with("/2"));
+    assert_eq!(
+        s.readiness(url, false, 10).await.unwrap().rollup,
+        ReadinessRollup::Pending
+    );
+    assert!(s.retry_job(&next).await.is_err());
+
     assert_eq!(
         failure.failed_logs.unwrap()[0].artifact_names,
         vec!["report"]

@@ -1721,6 +1721,7 @@ pub struct CardView {
 
 #[derive(Deserialize, Debug, Default)]
 pub struct CardQuery {
+    pub repair: Option<bool>,
     pub lane: Option<String>,
     pub assignee: Option<String>,
     pub state: Option<String>,
@@ -1870,7 +1871,9 @@ pub async fn cards(
                     let t: Ticket = r
                         .get(store::TICKETS, &Ticket::key(&repo.id, parts[4].u()))?
                         .ok_or_else(|| AppError::internal("card index names a missing ticket"))?;
-                    if !matches(&t, &filter, caller.name()) {
+                    if !matches(&t, &filter, caller.name())
+                        || q.repair.is_some_and(|repair| repair != t.repair.is_some())
+                    {
                         return Ok(None);
                     }
                     card_view(r, &base_url, &repo, &t, with_comments).map(Some)

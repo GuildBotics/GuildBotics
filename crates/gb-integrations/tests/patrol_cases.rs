@@ -742,3 +742,37 @@ fn a_wait_names_the_work_it_resumes() {
 // test_reviewer_is_not_started_by_empty_approvals_or_notices -> reviewer_statements_use_full_history_and_ignore_empty_approvals
 // test_statements_at_the_limit_only_stop_for_an_unreviewed_head -> reviewer_statements_use_full_history_and_ignore_empty_approvals
 // test_returning_to_a_head_reviewed_before_ready_does_not_hit_the_limit -> reviewer_statements_use_full_history_and_ignore_empty_approvals
+
+#[test]
+fn repairs_resume_failed_feedback_and_have_unlimited_review_rounds() {
+    for repair in [false, true] {
+        let mut pr = own();
+        pr.repair = repair;
+        pr.comments = vec![
+            comment(OTHER, "2026-01-02T00:00:00Z"),
+            PatrolComment {
+                status: Some(status("failed", json!({}))),
+                ..comment(ME, "2026-01-03T00:00:00Z")
+            },
+        ];
+        assert_eq!(work(&pr), repair.then_some("pull_request_feedback"));
+        pr.comments.last_mut().unwrap().status = Some(status(
+            "rate_limited",
+            json!({"retry_after_at":"2027-01-01T00:00:00Z"}),
+        ));
+        assert_eq!(work(&pr), None);
+        let mut pr = theirs();
+        pr.repair = repair;
+        pr.reviews = (1..=3)
+            .map(|n| {
+                review(
+                    ME,
+                    &format!("old-{n}"),
+                    &format!("2026-01-0{n}T00:00:00Z"),
+                    "fix",
+                )
+            })
+            .collect();
+        assert_eq!(work(&pr), if repair { REVIEW } else { LIMIT });
+    }
+}

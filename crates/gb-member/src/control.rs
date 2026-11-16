@@ -19,6 +19,7 @@ pub trait Recipients: Send + Sync {
     fn receives<'a>(&'a self, person: &'a str, subject: &'a str) -> crate::git::Pending<'a, bool>;
 }
 pub struct Identity<'a> {
+    pub repair: bool,
     pub run_id: &'a str,
     pub person_id: &'a str,
     pub work_kind: &'a str,
@@ -55,6 +56,7 @@ fn comment_type(kind: &str) -> bool {
 }
 fn evidence_kind(command: &str) -> Option<&'static str> {
     Some(match command {
+        "checks retry" => "checks_retry",
         "ticket comment" => "issue_comment",
         "ticket create" => "issue_create",
         "ticket update" => "issue_update",
@@ -128,6 +130,11 @@ impl RunControl<'_> {
             .map_err(failed)
     }
     fn check_evidence(&self, record: &RunRecord, status: Completion, summary: &str) -> Result<()> {
+        if self.identity.repair && matches!(status, Completion::Asking | Completion::Blocked) {
+            return Err(MemberError::Capability(
+                "capabilities.task_runs.repair_required",
+            ));
+        }
         let present = record
             .provider_evidence
             .iter()
@@ -174,7 +181,8 @@ impl RunControl<'_> {
                 let write = present.iter().any(|v| {
                     matches!(
                         *v,
-                        "issue_comment"
+                        "checks_retry"
+                            | "issue_comment"
                             | "pr_comment"
                             | "pr_review"
                             | "pr_review_comment"
@@ -192,7 +200,7 @@ impl RunControl<'_> {
                             .as_str()
                             .is_some_and(|sha| !sha.is_empty())
                 });
-                write && (!code || present.contains("pr_create"))
+                write && (!code || present.contains("pr_create") || self.identity.repair)
             }
         };
         if enough {
@@ -298,6 +306,69 @@ impl RunControl<'_> {
             self.repository.guard.ensure_current()?;
         }
         let mut snapshot = self.snapshot()?;
+        if self.identity.repair && status == Completion::Done {
+            self.check_evidence(&snapshot, status, summary)?;
+            if !snapshot
+                .provider_evidence
+                .iter()
+                .any(|e| e["type"] == "checks_retry")
+            {
+                let mut linked = false;
+                let origin = matches!(
+                    self.identity.work_kind,
+                    "ticket" | "pull_request" | "pull_request_review"
+                )
+                .then_some(self.identity.work_identity);
+                let evidence = if origin.is_some() {
+                    &[][..]
+                } else {
+                    snapshot.provider_evidence.as_slice()
+                };
+                for url in repository::work_pull_request_urls(
+                    self.repository.services.code()?,
+                    origin,
+                    evidence,
+                )
+                .await?
+                {
+                    let page = self
+                        .repository
+                        .services
+                        .code()?
+                        .read(gb_ports::Resource::PullRequests, &url, None, "")
+                        .await?;
+                    if !page.items().iter().any(|pr| pr["state"] == "open") {
+                        continue;
+                    }
+                    for link in self
+                        .repository
+                        .services
+                        .code()?
+                        .linked_tickets(&url)
+                        .await?
+                    {
+                        let page = self
+                            .repository
+                            .services
+                            .tickets()?
+                            .read(gb_ports::Resource::Tickets, &link.url, None, "")
+                            .await?;
+                        if page.items().iter().any(|ticket| ticket["repair"] == true) {
+                            linked = true;
+                            break;
+                        }
+                    }
+                    if linked {
+                        break;
+                    }
+                }
+                if !linked {
+                    return Err(MemberError::Capability(
+                        "capabilities.task_runs.repair_required",
+                    ));
+                }
+            }
+        }
         let recipients = self.waiting(p, &snapshot, status).await?;
         let mut readiness = vec![];
         let ticket = matches!(self.identity.work_kind, "ticket" | "pull_request")

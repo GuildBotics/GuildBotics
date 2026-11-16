@@ -1,5 +1,5 @@
 //! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
-//! Pass --board-order-only or --code-parity-only to run the corresponding contract.
+//! Pass --board-order-only, --code-parity-only, or --repair-only for one contract.
 mod alerts;
 mod code_parity;
 #[path = "../support/contracts.rs"]
@@ -380,6 +380,21 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
     .unwrap();
     let t = factory.create_ticket_service().unwrap();
     let c = factory.create_code_hosting_service().unwrap();
+    if std::env::args_os().any(|arg| arg == "--repair-only") {
+        readiness::retry_main_verification(
+            temp.path(),
+            &owner,
+            c.as_ref(),
+            t.as_ref(),
+            &base,
+            owner_token.trim(),
+            &runner.token,
+        )
+        .await;
+        running.stop().await.unwrap();
+        return;
+    }
+
     if code_parity_only {
         code_parity::contract(
             temp.path(),
@@ -821,6 +836,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         temp.path(),
         &owner,
         c.as_ref(),
+        t.as_ref(),
         &base,
         owner_token.trim(),
         &runner.token,

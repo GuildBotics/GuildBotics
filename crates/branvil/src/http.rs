@@ -633,6 +633,14 @@ async fn ticket_move(
 async fn board_cards(State(app): State<Shared>, c: Caller, P(ws): P<String>, q: Q) -> R {
     let page = q.page(&app, &c, &format!("cards\n{}", util::fold(&ws)))?;
     let query = tickets::CardQuery {
+        repair: q
+            .get("repair")
+            .map(|value| {
+                value
+                    .parse::<bool>()
+                    .map_err(|_| AppError::invalid("repair must be true or false."))
+            })
+            .transpose()?,
         lane: q.get("lane"),
         assignee: q.get("assignee"),
         state: q.get("state"),

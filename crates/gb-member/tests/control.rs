@@ -38,7 +38,10 @@ fn parsed(command: &[&str]) -> command::Parsed {
     command::parse(&command.iter().map(|v| (*v).into()).collect::<Vec<_>>()).unwrap()
 }
 fn seed(writes: &SharedWrites, workspace: &std::path::Path, redactor: &Redactor) {
-    let record:RunRecord=serde_json::from_value(json!({"run_id":"run","work_kind":"command","execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z"})).unwrap();
+    seed_kind(writes, workspace, redactor, "command");
+}
+fn seed_kind(writes: &SharedWrites, workspace: &std::path::Path, redactor: &Redactor, kind: &str) {
+    let record:RunRecord=serde_json::from_value(json!({"run_id":"run","work_kind":kind,"execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z"})).unwrap();
     writes
         .transaction(|writer| {
             RunStore::open(workspace).start(writer, record, redactor)?;
@@ -57,6 +60,7 @@ fn control<'a>(
     RunControl {
         chat: None,
         identity: Identity {
+            repair: false,
             run_id: "run",
             person_id: "aiko",
             work_kind: "command",
@@ -720,4 +724,123 @@ async fn recipient_service_failures_propagate_without_completing() {
             .result
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn repair_completion_requires_action_and_refuses_handoffs() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::new([]);
+    seed(&writes, &workspace, &redactor);
+    let services = Services(support::Probe::new(None));
+    let roster = BTreeMap::new();
+    let repository = Repository {
+        services: &services,
+        guard: &Current,
+        roster: &roster,
+    };
+    let mut control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+    control.identity.repair = true;
+    control
+        .record("ticket comment", false, &json!({"target":{"url":"item"}}))
+        .unwrap();
+    for status in ["asking", "blocked", "done"] {
+        let p = parsed(&[
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--status",
+            status,
+            "--content-stdin",
+        ]);
+        let e = control.command(&p, "summary").await.unwrap_err();
+        assert!(e.to_string().contains("repair_required"), "{e}");
+    }
+    control
+        .record("checks retry", false, &json!({"url":"new-job"}))
+        .unwrap();
+    let p = parsed(&[
+        "task",
+        "complete",
+        "--person",
+        "aiko",
+        "--status",
+        "done",
+        "--content-stdin",
+    ]);
+    assert_eq!(
+        control.command(&p, "retried").await.unwrap()["status"],
+        "done"
+    );
+}
+
+#[tokio::test]
+async fn repair_report_only_runs_require_a_current_open_repair_pr() {
+    for open in [false, true] {
+        for repair in [false, true] {
+            for (kind, report, origin) in [
+                ("ticket", "pr comment", "ticket"),
+                ("pull_request_review", "pr reply", "pr"),
+                ("pull_request", "pr reaction add", "pr"),
+                ("ticket", "ticket comment", "ticket"),
+            ] {
+                let temp = tempfile::tempdir().unwrap();
+                let workspace = temp.path().join("workspace");
+                let writes =
+                    SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+                let redactor = Redactor::default();
+                seed_kind(&writes, &workspace, &redactor, kind);
+                let mut provider = support::Probe::new(None);
+                provider.links.insert(
+                    "pr".into(),
+                    vec![TicketLink {
+                        url: "ticket".into(),
+                        closes: false,
+                    }],
+                );
+                provider.pages.insert("tickets|ticket|".into(), Ok(ReadPage::of(Resource::Tickets, [json!({"repair":repair,"kind":"ticket","url":"ticket","title":"T","label":"T","key":"1","tracker":"repo","repository":"repo","body":"","state":"open","assignees":[],"author":"member","labels":[],"lane":null,"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null})], None, None).unwrap()));
+                provider.pages.insert("pull_requests|pr|".into(), Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":"pr","title":"T","label":"!1","repository":"repo","body":"","state":if open {"open"} else {"closed"},"assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"User","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
+                provider
+                    .pages
+                    .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
+                provider.pages.insert("ticket_pull_requests|ticket|".into(), Ok(ReadPage::of(Resource::TicketPullRequests, [json!({"url":"pr","title":"P","label":"!1","state":"open","merged":false})], None, None).unwrap()));
+                let services = Services(provider);
+                let roster = BTreeMap::new();
+                let repository = Repository {
+                    services: &services,
+                    guard: &Current,
+                    roster: &roster,
+                };
+                let mut control =
+                    control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+                control.identity.repair = true;
+                control.identity.work_kind = kind;
+                control.identity.work_identity = origin;
+                control.identity.subject_url = "reporting-destination";
+                control
+                    .record(
+                        report,
+                        false,
+                        &json!({"target":{"kind":"pull_request","url":"pr"}}),
+                    )
+                    .unwrap();
+                let done = parsed(&[
+                    "task",
+                    "complete",
+                    "--person",
+                    "aiko",
+                    "--status",
+                    "done",
+                    "--content-stdin",
+                ]);
+                assert_eq!(
+                    control.command(&done, "repair").await.is_ok(),
+                    open && repair,
+                    "open={open}, repair={repair}, report={report}"
+                );
+            }
+        }
+    }
 }

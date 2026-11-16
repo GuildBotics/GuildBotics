@@ -1814,6 +1814,7 @@ mod tests {
         )
         .unwrap();
         let invocation = gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run".into(),

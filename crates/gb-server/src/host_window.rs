@@ -1339,6 +1339,7 @@ mod tests {
 
     fn command_context(root: &std::path::Path) -> Context {
         let invocation = gb_environment::broker::Invocation {
+            repair: false,
             chat_subject: None,
             person_id: "aiko".into(),
             run_id: "run-1".into(),
@@ -1499,6 +1500,7 @@ mod tests {
         let broker = Broker::new(
             dir.path().join("unused-cli"),
             gb_environment::broker::Invocation {
+                repair: false,
                 chat_subject: None,
                 person_id: "aiko".into(),
                 run_id: "run".into(),
@@ -2948,6 +2950,11 @@ pub(crate) fn broker_invocation(
     command: &gb_environment::Command,
 ) -> gb_environment::broker::Invocation {
     gb_environment::broker::Invocation {
+        repair: command.invocation.as_ref().is_some_and(|v| {
+            v.payload
+                .get("task")
+                .is_some_and(|task| task["repair"] == true)
+        }),
         chat_subject: command
             .invocation
             .as_ref()

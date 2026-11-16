@@ -350,14 +350,135 @@ async fn author_yields_running_checks(
     finish_claim(base, runner, &replacement, "success").await;
 }
 
-pub(super) async fn contract(
+pub(super) async fn retry_main_verification(
     root: &Path,
     owner: &::branvil::api::MemberApi,
     code: &dyn CodeHostingService,
+    tickets: &dyn TicketService,
     base: &str,
     owner_token: &str,
     runner: &str,
 ) {
+    let repo = "acme/retry-main".to_string();
+    owner
+        .repos_create(input(json!({"path":repo})))
+        .await
+        .unwrap();
+    let git = Git::new(&root.join("retry-main"));
+    let head = git.commit("", ".branvil/ci.toml", PIPELINE);
+    git.push(
+        &code.clone_url(&repo).await.unwrap(),
+        &head,
+        "main",
+        "owner",
+        owner_token,
+    );
+    let mut attempt = claim_head(base, runner, &head).await;
+    loop {
+        let before = serde_json::to_value(owner.repos_verification(&repo).await.unwrap()).unwrap()
+            ["current"]["retry"]["number"]
+            .as_u64()
+            .unwrap();
+        finish_claim(base, runner, &attempt, "failure").await;
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                let state =
+                    serde_json::to_value(owner.repos_verification(&repo).await.unwrap()).unwrap();
+                if state["current"]["state"] == "failed" {
+                    break true;
+                }
+                if state["current"]["retry"]["number"].as_u64().unwrap() > before {
+                    break false;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("verification did not settle or enqueue its automatic retry");
+        if failed {
+            break;
+        }
+        attempt = claim_head(base, runner, &head).await;
+    }
+    let url = format!(
+        "{base}/{repo}/-/jobs/{}",
+        attempt["attempt_id"].as_str().unwrap()
+    );
+    assert!(
+        code.retry_job(&format!("{base}/{repo}/-/jobs/missing"))
+            .await
+            .unwrap_err()
+            .is_not_found()
+    );
+    assert!(matches!(
+        code.retry_job(&format!("{base}/elsewhere/repo/-/jobs/missing"))
+            .await,
+        Err(ServiceError::OutOfScope)
+    ));
+    let repair = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let Some(ticket) = tickets
+                .repair_tickets()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|ticket| ticket.repository.as_deref() == Some(&repo))
+            {
+                break ticket;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("failed verification did not create its repair ticket");
+    assert!(repair.repair);
+    tickets.assign_to_me(&repair.url).await.unwrap();
+    tickets
+        .comment_takeover(
+            &repair.url,
+            "The previous assignee cannot work here; taking over.",
+        )
+        .await
+        .unwrap();
+
+    let tasks = tickets.candidates().await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.url.as_deref() == Some(&repair.url))
+        .unwrap();
+    assert!(
+        tickets.refresh(task).await.unwrap().is_some(),
+        "a neutral takeover fact must not suppress work on a fresh patrol"
+    );
+
+    assert!(
+        tasks
+            .iter()
+            .any(|task| task.url.as_deref() == Some(&repair.url) && task.repair)
+    );
+    let next = code.retry_job(&url).await.unwrap();
+    assert_ne!(next, url);
+    let verification = owner.repos_verification(&repo).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(verification).unwrap()["current"]["state"],
+        "running"
+    );
+    let retry = claim_head(base, runner, &head).await;
+    assert!(next.ends_with(retry["attempt_id"].as_str().unwrap()));
+    assert!(code.retry_job(&next).await.is_err());
+    finish_claim(base, runner, &retry, "success").await;
+}
+
+pub(super) async fn contract(
+    root: &Path,
+    owner: &::branvil::api::MemberApi,
+    code: &dyn CodeHostingService,
+    tickets: &dyn TicketService,
+    base: &str,
+    owner_token: &str,
+    runner: &str,
+) {
+    retry_main_verification(root, owner, code, tickets, base, owner_token, runner).await;
     author_yields_running_checks(root, owner, code, base, owner_token, runner).await;
     primary_failure_logs_and_cancelled_fallback(root, owner, code, base, owner_token, runner).await;
     ten_failed_logs_fit_one_page(root, owner, code, base, owner_token, runner).await;

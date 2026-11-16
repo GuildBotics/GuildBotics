@@ -58,6 +58,20 @@ impl Engine {
     }
 }
 
+fn prepend_repairs(batch: &mut VecDeque<Task>, repairs: Vec<Task>) {
+    for task in repairs.into_iter().rev() {
+        batch.retain(|old| old.url != task.url);
+        batch.push_front(task);
+    }
+}
+fn repair_outcome(outcome: Outcome, repair: bool) -> Outcome {
+    if repair && outcome == Outcome::Failed {
+        Outcome::Deferred
+    } else {
+        outcome
+    }
+}
+
 fn environment_message(language: &str, reason: Option<&str>) -> String {
     crate::i18n::t(
         language,
@@ -103,6 +117,7 @@ impl crate::scheduler::Engine for Engine {
             };
             let diagnostics = self.runtime.diagnostics();
             let selector = Selector {
+                roster: &self.runtime.roster,
                 diagnostics: &diagnostics,
                 person: &self.runtime.person.person_id,
                 source: "routine",
@@ -130,6 +145,25 @@ impl crate::scheduler::Engine for Engine {
                         );
                     }
                 }
+            } else if let Some(tasks) = batch.as_mut() {
+                match selector.repair_candidates().await {
+                    Ok(fresh) => {
+                        prepend_repairs(tasks, fresh);
+                    }
+                    Err(error) => {
+                        self.runtime
+                            .selection_failed(error.clone(), "routine")
+                            .await;
+                        return (
+                            if error.is_unavailable() {
+                                Outcome::Deferred
+                            } else {
+                                Outcome::Failed
+                            },
+                            false,
+                        );
+                    }
+                }
             }
             while let Some(task) = batch.as_mut().and_then(VecDeque::pop_front) {
                 match selector.refresh(&task).await {
@@ -152,20 +186,20 @@ impl crate::scheduler::Engine for Engine {
                             "routine",
                         );
                         if outcome == Outcome::Deferred {
-                            batch.as_mut().unwrap().push_front(task);
+                            batch.as_mut().unwrap().push_front(task.clone());
                         }
                         let exhausted = batch.as_ref().is_none_or(VecDeque::is_empty);
                         if exhausted {
                             *batch = None;
                         }
-                        return (outcome, exhausted);
+                        return (repair_outcome(outcome, task.repair), exhausted);
                     }
                     Err(error) => {
                         self.runtime
                             .selection_failed(error.clone(), "routine")
                             .await;
                         let outcome = if error.is_unavailable() {
-                            batch.as_mut().unwrap().push_front(task);
+                            batch.as_mut().unwrap().push_front(task.clone());
                             Outcome::Deferred
                         } else {
                             Outcome::Failed
@@ -263,5 +297,54 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    #[test]
+    fn fresh_repair_tickets_and_prs_precede_the_saved_batch_without_losing_it() {
+        let task = |url: &str, repair| Task {
+            url: Some(url.into()),
+            repair,
+            ..Default::default()
+        };
+        let mut batch =
+            VecDeque::from([task("ordinary-pr", false), task("ordinary-ticket", false)]);
+        for url in ["repair-ticket", "repair-pr"] {
+            prepend_repairs(&mut batch, vec![task(url, true)]);
+            assert_eq!(batch.pop_front().unwrap().url.as_deref(), Some(url));
+        }
+        assert_eq!(
+            batch.pop_front().unwrap().url.as_deref(),
+            Some("ordinary-pr")
+        );
+        assert_eq!(
+            batch.pop_front().unwrap().url.as_deref(),
+            Some("ordinary-ticket")
+        );
+        let mut batch = VecDeque::from([task("repair", true), task("ordinary", false)]);
+        prepend_repairs(&mut batch, vec![task("repair", true)]);
+        assert_eq!(batch.len(), 2);
+    }
+    #[test]
+    fn repeated_repair_failures_preserve_the_previous_worker_error_count() {
+        let mut errors = 2;
+        for _ in 0..5 {
+            assert_eq!(repair_outcome(Outcome::Failed, true), Outcome::Deferred);
+        }
+        // The worker increments only Failed and resets only Succeeded.
+        for outcome in [
+            repair_outcome(Outcome::Failed, true),
+            repair_outcome(Outcome::Failed, false),
+        ] {
+            match outcome {
+                Outcome::Failed => errors += 1,
+                Outcome::Succeeded => errors = 0,
+                Outcome::Deferred => (),
+            }
+        }
+        assert_eq!(errors, 3);
     }
 }

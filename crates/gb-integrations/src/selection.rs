@@ -49,16 +49,35 @@ pub struct TicketDecision {
     pub reason: Option<&'static str>,
     pub finish: bool,
 }
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TicketPolicy {
+    pub finish_merged: bool,
+    pub repair: bool,
+}
+
 pub fn select_ticket(
     status: &str,
     since: &[TaskMessage],
     latest_status: Option<&WorkflowStatus>,
     pending: bool,
     linked_pull: Option<&str>,
-    finish_merged: bool,
+    policy: TicketPolicy,
     now: DateTime<Utc>,
 ) -> TicketDecision {
+    let TicketPolicy {
+        repair,
+        finish_merged,
+    } = policy;
     let mine = since.last().is_some_and(|m| m.author_type == "Assistant");
+    if repair
+        && mine
+        && latest_status.is_some_and(|s| s.reason() == gb_ports::WorkflowStatusReason::Failed)
+    {
+        return TicketDecision {
+            reason: Some("working_lane"),
+            finish: false,
+        };
+    }
     let held = mine && latest_status.is_some_and(|s| s.holds_selection(now));
     let reason = if status == "ready" {
         if held || (mine && !pending) {
@@ -72,6 +91,8 @@ pub fn select_ticket(
         Some("issue_comment")
     } else if pending {
         Some("issue_mention")
+    } else if repair && since.is_empty() {
+        Some("working_lane")
     } else if linked_pull.is_some() || !since.is_empty() {
         None
     } else {
@@ -79,7 +100,8 @@ pub fn select_ticket(
     };
     TicketDecision {
         reason,
-        finish: status != "ready"
+        finish: !repair
+            && status != "ready"
             && !held
             && (since.is_empty() || mine)
             && !pending

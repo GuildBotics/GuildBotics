@@ -102,6 +102,8 @@ class TicketSummary(WorkTarget):
 
 
 class Ticket(WorkTarget):
+    #: Created by the code host after default-branch verification failed, or linked to that ticket. Performed before other work.
+    repair: bool
     #: What names the ticket in its service, short enough for a branch name
     #: (``ticket/<key>``): ``123``, ``PROJ-123``.
     key: str

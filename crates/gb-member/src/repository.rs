@@ -286,11 +286,11 @@ fn push_url(urls: &mut Vec<String>, value: &Value) {
         urls.push(url.into());
     }
 }
-pub async fn answered(
+pub async fn work_pull_request_urls(
     code: &dyn CodeHostingService,
     ticket: Option<&str>,
     evidence: &[Value],
-) -> Result<Vec<(Value, Readiness)>> {
+) -> Result<Vec<String>> {
     let mut urls = Vec::new();
     if let Some(ticket) = ticket {
         match code.read(Resource::PullRequests, ticket, None, "").await {
@@ -324,6 +324,15 @@ pub async fn answered(
     for url in evidence_urls(evidence) {
         push_url(&mut urls, &url.into());
     }
+    Ok(urls)
+}
+
+pub async fn answered(
+    code: &dyn CodeHostingService,
+    ticket: Option<&str>,
+    evidence: &[Value],
+) -> Result<Vec<(Value, Readiness)>> {
+    let urls = work_pull_request_urls(code, ticket, evidence).await?;
     let mut results = Vec::new();
     for url in urls {
         let page = code.read(Resource::PullRequests, &url, None, "").await?;

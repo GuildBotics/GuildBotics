@@ -51,6 +51,7 @@ impl BranvilService {
                     .tickets_cards(
                         &self.workspace,
                         tickets::CardQuery {
+                            repair: None,
                             lane: Some("ready,in_progress".into()),
                             assignee: Some("me".into()),
                             state: Some("open".into()),
@@ -161,6 +162,7 @@ impl BranvilService {
                 .any(|n| n.as_str().is_some_and(|s| fold(s) == me))
         };
         let mut task = Task {
+            repair: card["repair"] == true,
             id: Some(text(card, "url").into()),
             url: Some(text(card, "url").into()),
             title: text(card, "title").into(),
@@ -187,7 +189,10 @@ impl BranvilService {
             .iter()
             .zip(comments)
             .filter(|(m, c)| {
-                array(c, "mentions").is_empty() || mentions(c) || m.author_type == "Assistant"
+                c["meta"]["repair_takeover"] != true
+                    && (array(c, "mentions").is_empty()
+                        || mentions(c)
+                        || m.author_type == "Assistant")
             })
             .map(|(m, _)| m.clone())
             .collect();
@@ -222,7 +227,10 @@ impl BranvilService {
             latest.as_ref(),
             pending,
             linked,
-            finish,
+            crate::TicketPolicy {
+                finish_merged: finish,
+                repair: task.repair,
+            },
             Utc::now(),
         );
         if decision.finish {
@@ -390,6 +398,7 @@ impl BranvilService {
             .collect();
         comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         PatrolPullRequest {
+            repair: p["repair"] == true,
             id: text(p, "url").into(),
             url: text(p, "url").into(),
             label: text(p, "label").into(),

@@ -161,6 +161,7 @@ impl LocalService {
             ] {
                 e[k] = v[k].clone()
             }
+            e["repair"] = json!(false);
             e["key"] = json!(rf.name);
             e["tracker"] = json!(rf.place);
             e["repository"] = self.store.tracker(&rf.place)?["repository"].clone();
@@ -262,7 +263,10 @@ impl LocalService {
             latest.as_ref(),
             pending,
             None,
-            true,
+            crate::TicketPolicy {
+                finish_merged: true,
+                repair: false,
+            },
             chrono::Utc::now(),
         );
         Ok(d.reason.map(|reason| {
@@ -272,6 +276,17 @@ impl LocalService {
     }
 }
 impl TicketService for LocalService {
+    fn assign_to_me<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            let _g = lock()?;
+            let r = Ref::locate(url, WorkKind::Ticket)?;
+            self.store.scope.authorize(&r.place)?;
+            let mut v = self.store.load(&r)?;
+            v["assignees"] = json!([self.actor]);
+            self.store.save(&r, &mut v)
+        })
+    }
+
     fn read<'a>(
         &'a self,
         r: Resource,
