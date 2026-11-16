@@ -1,0 +1,10 @@
+# cargo-nextest settings for every `cargo nextest run` of the workspace.
+
+# A GuildBotics process holds its build's source tree (the root Cargo.toml) with
+# a shared lock while it runs; for the test binary's `guildbotics`, that tree is
+# this checkout. This test takes the tree exclusively, so other tests starting
+# `guildbotics` beside it made it wait for them, up to the end of the run. It
+# takes every test thread, so no other test runs while it does.
+[[profile.default.overrides]]
+filter = "package(guildbotics) & binary(main) & test(=hub_server::a_guildbotics_process_takes_its_source_tree_before_it_starts)"
+threads-required = "num-test-threads"

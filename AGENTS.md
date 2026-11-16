@@ -80,7 +80,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 
 ## 開発時の基本コマンド（CI準拠）
 
-Pythonは `.python-version` の3.15、Rustは `rust-toolchain.toml` の固定版を使う。CIの開発イメージも同じ版にそろえる。Rustのテストには `cargo install --locked cargo-nextest` でnextestを用意する。BranvilのGit lockはプロセス内に1つなので、テストごとにプロセスを分ける。通常の `cargo test` はスレッド数を1にしても同じプロセスを使う。
+Pythonは `.python-version` の3.15、Rustは `rust-toolchain.toml` の固定版を使う。CIの開発イメージも同じ版にそろえる。Rustのテストには `cargo install --locked cargo-nextest` でnextestを用意する。BranvilのGit lockはプロセス内に1つなので、テストごとにプロセスを分ける。通常の `cargo test` はスレッド数を1にしても同じプロセスを使う。nextestの設定は `.config/nextest.toml` にあり、ほかのテストと同時に流せないテストをそこで単独にする。
 
 ```bash
 uv sync --extra dev --extra test

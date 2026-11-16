@@ -149,6 +149,8 @@ paths = [
   "guildbotics/templates/commands/**",
   "rust-toolchain*",
   ".cargo/**",
+  # The nextest settings every run of the tests reads.
+  ".config/nextest.toml",
   "clippy.toml",
   "rustfmt.toml",
 ]
@@ -174,6 +176,8 @@ paths = [
   "Cargo.lock",
   "rust-toolchain*",
   ".cargo/**",
+  # The nextest settings every run of the tests reads.
+  ".config/nextest.toml",
 ]
 image = "guildbotics/agent-environment:dev"
 commands = [

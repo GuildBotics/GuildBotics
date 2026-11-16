@@ -598,8 +598,9 @@ fn an_update_removes_only_builds_that_nothing_runs() {
 fn a_guildbotics_process_takes_its_source_tree_before_it_starts() {
     let mark = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
     let update = fs::File::open(&mark).unwrap();
-    // Processes of other tests hold the tree for moments; wait for them to end.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    // No other test runs beside this one (.config/nextest.toml), but a process
+    // an earlier test started may outlive it for moments; wait for it to end.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while update.try_lock().is_err() {
         assert!(
             std::time::Instant::now() < deadline,

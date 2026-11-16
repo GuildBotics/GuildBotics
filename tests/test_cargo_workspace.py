@@ -258,15 +258,16 @@ def test_each_crate_is_tested_by_one_rust_test_job() -> None:
 
 def test_rust_test_jobs_run_on_changes_to_what_their_tests_build_from() -> None:
     """A PR head skips a job whose paths match none of its changes, so each
-    job's paths cover the workspace's Cargo settings and the files of every
-    crate its tests build: otherwise a change reaches the job's tests only at
-    the landing gate."""
+    job's paths cover the workspace's Cargo and nextest settings and the files
+    of every crate its tests build: otherwise a change reaches the job's tests
+    only at the landing gate."""
     crates = _crates()
     workspace = [
         ROOT / "Cargo.toml",
         ROOT / "Cargo.lock",
         *ROOT.glob("rust-toolchain*"),
         *(path for path in (ROOT / ".cargo").rglob("*") if path.is_file()),
+        ROOT / ".config/nextest.toml",
     ]
     for name, job in _rust_test_jobs().items():
         inputs = list(workspace)
