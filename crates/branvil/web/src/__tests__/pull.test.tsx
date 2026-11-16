@@ -583,6 +583,7 @@ describe("pull request review", () => {
     post_merge_jobs: [], required_checks: ["test"],
     required_approvals: 0,
     auto_land: false,
+    hold_while_failing: false,
     labels: [],
     upstream: {
       provider: "github",

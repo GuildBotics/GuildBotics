@@ -347,6 +347,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "post_merge_jobs": [],
   "required_approvals": 1,
   "auto_land": false,
+  "hold_while_failing": false,
   "ci_network": false,
   "responder": {"member": "aiko", "chosen": false, "automatic": "aiko"},
   "labels": ["bug", "feature"],
@@ -364,7 +365,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -969,6 +970,16 @@ merge, `host_closed`, `conditions` when blockers remain, `owner_publish` for a
 manual/previous/stopped publication, `owner_fix_auto` for this head's automatic
 failure, `publishing`, `host_checks`, `owner_merge_host`, or (without upstream)
 `auto_merge` / `owner_merge`.
+
+`hold_while_failing` defaults to false and is owner-editable. When enabled,
+`held` is the first blocker for a non-repair PR targeting the default branch
+while verification has `failing_since` and an open repair ticket exists.
+Its message names the repair number and assignee; `held: {number, assignee}`
+provides structured display data (other reasons have `held: null`). It prevents
+publication, local manual/automatic merging and readiness notifications.
+Already published PRs also show the hold, but host merging and head updates
+continue. A verification success or closing the repair ticket removes the hold
+on the next sweep, including a verification event.
 
 ### Landing automatically
 

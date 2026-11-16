@@ -14,7 +14,7 @@ import { BASE, HEAD, landing, pull } from "./fixtures";
 const P = "/api/v1/repos/acme/demo/pulls/3";
 const REPO: Repository = {
   path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: ["main"],
-  responder: { member: "aiko", chosen: false, automatic: "aiko" }, post_merge_jobs: [], required_checks: ["test"], required_approvals: 1, auto_land: false, ci_network: false, labels: [], revision: 1,
+  responder: { member: "aiko", chosen: false, automatic: "aiko" }, post_merge_jobs: [], required_checks: ["test"], required_approvals: 1, auto_land: false, hold_while_failing: false, ci_network: false, labels: [], revision: 1,
   upstream: { provider: "github", host: "GitHub", repository: "example/demo", url: "https://github.com/example/demo", reader: { member: "agent", chosen: false }, following: { tip: BASE, checked_at: null, followed_at: null, error: null, stopped: null } },
 };
 const PREVIEW = { host: "GitHub", repository: "example/demo", head: "topic", base: "main", title: "Change", body: "", account: "agent", login: "agent-bot" };
@@ -52,6 +52,19 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     client.setQueryData(keys.pullPart(p.repository, p.number, "checks"), { head_sha: HEAD, checks });
     return render(<QueryClientProvider client={client}><MantineProvider theme={theme}><I18nProvider initial={lang}>{journey ? <LandingJourney pull={p} repo={repo} /> : <JourneyBadge pull={p} repo={repo} load={false} />}</I18nProvider></MantineProvider></QueryClientProvider>);
   }
+  it.each([false, true].flatMap(published => ["aiko", null].map(assignee => ({ published, assignee }))))("shows the repair link and hold (published=$published, assignee=$assignee)", ({ published, assignee }) => {
+    const blockers = [{ code: "held", message: "Repair #42; assignee: aiko.", held: { number: 42, assignee }, files: [], jobs: [] }];
+    const p = pull({ landing: landing({ next: "conditions", blockers, host_url: published ? "https://host.test/pr/1" : null }) });
+    render(<QueryClientProvider client={createQueryClient()}><MantineProvider theme={theme}><I18nProvider initial={lang}><LandingJourney pull={p} repo={REPO} /><JourneyBadge pull={p} repo={REPO} load={false} /></I18nProvider></MantineProvider></QueryClientProvider>);
+    expect(screen.getByRole("link", { name: lang === "ja" ? "修復チケット #42 を開く" : "Open repair ticket #42" })).toHaveAttribute("href", "/acme/demo/-/tickets/42");
+    expect(screen.getByText((assignee ? words["landing.held"].replace("{name}", assignee) : lang === "ja" ? "保留中：main の確認が失敗しています（修復 #{number}、担当なし）。main の確認が通ると、保留が解けます。" : "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes.").replace("{number}", "42"))).toBeInTheDocument();
+    const detail = words[assignee ? "landing.held" : "landing.heldUnassigned"].replace("{number}", "42").replace("{name}", assignee ?? "");
+    expect(screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root")).toHaveAttribute("title", detail);
+    expect(screen.queryByText(blockers[0]!.message)).not.toBeInTheDocument();
+    const caution = words["landing.heldPublished"].replace("{host}", "GitHub");
+    expect(screen.queryByText(caution) !== null).toBe(published);
+    expect(screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root")).toHaveStyle({ "--badge-color": "var(--color-warning-text)" });
+  });
   it("marks a failed local automatic merge at the merge step", () => {
     const { container } = component("owner_fix_auto", [], true, { ...REPO, upstream: null });
     expect(container.querySelector('[data-stop="merge"]')).toHaveAttribute("data-state", "failed");

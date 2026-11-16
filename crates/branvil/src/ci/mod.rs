@@ -1131,6 +1131,7 @@ mod tests {
             required_checks: vec!["test".into()],
             required_approvals: 1,
             auto_land: false,
+            hold_while_failing: false,
             ci_network: false,
             responder: None,
             labels: vec![],

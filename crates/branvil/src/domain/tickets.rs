@@ -2049,6 +2049,7 @@ mod tests {
             required_checks: Vec::new(),
             required_approvals: 1,
             auto_land: false,
+            hold_while_failing: false,
             ci_network: false,
             responder: None,
             labels: Vec::new(),

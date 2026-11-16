@@ -99,6 +99,7 @@ export interface RepoPatch {
   post_merge_jobs?: string[];
   required_approvals?: number;
   auto_land?: boolean;
+  hold_while_failing?: boolean;
   ci_network?: boolean;
   responder?: string | null;
   protected_branches?: string[];

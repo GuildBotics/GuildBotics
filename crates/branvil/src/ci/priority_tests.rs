@@ -17,6 +17,7 @@ fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
             post_merge_jobs: Vec::new(),
             required_approvals: approvals,
             auto_land: false,
+            hold_while_failing: false,
             ci_network: false,
             responder: None,
             labels: vec![],
@@ -733,4 +734,65 @@ fn probe_admission_and_claim_use_class_two_even_on_protected_commits() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn held_approved_work_is_normal_until_main_recovers_or_repair_closes() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        repo(w, &[], 1)?;
+        let mut r: Repo = w.get(store::REPOS, &Repo::key("repo_1"))?.unwrap();
+        let mut p = pull(w, 1, "approved", false)?;
+        review(w, 1, "reviewer", "approve", "", "approved")?;
+        enqueue(w, "approved", "approved")?;
+        let mut ticket: model::Ticket = serde_json::from_value(serde_json::json!({
+            "repo":"repo_1", "workspace":"acme", "number":42, "title":"Repair", "body":"", "mentions":[],
+            "state":"open", "author":"branvil", "labels":[], "interactive":false, "lane":"ready", "rank":"a",
+            "assignee":{"name":"fixer", "assigned_at":T0},
+            "blocked_by":[], "created_at":T0, "updated_at":T0, "revision":1,
+            "repair":{"reported":"main", "jobs":["test"]}
+        })).unwrap();
+        crate::domain::tickets::write_ticket(w, None, &ticket)?;
+        let mut v = crate::ci::verify::Verification {
+            sha:"main".into(), base:None, state:"failed".into(), started_at:T0.into(),
+            finished_at:None, failed_jobs:vec![], failing_since:Some("broken".into()), last_verified:None,
+        };
+        let key = Key::new().s("repo_1").bytes();
+        w.put(store::CI_VERIFICATIONS, &key, &v)?;
+        assert!(crate::landing::held(w, &r, &p)?.is_none());
+        assert_eq!(class(w, "approved")?, Class::Landing);
+        r.hold_while_failing = true;
+        w.put(store::REPOS, &Repo::key(&r.id), &r)?;
+        for state in ["failed", "running"] {
+            v.state = state.into();
+            w.put(store::CI_VERIFICATIONS, &key, &v)?;
+            let hold = crate::landing::held(w, &r, &p)?.unwrap();
+            assert_eq!(hold.number, 42);
+            assert_eq!(hold.assignee.as_deref(), Some("fixer"));
+            assert_eq!(class(w, "approved")?, Class::Normal);
+        }
+        p.base = "release".into();
+        assert!(crate::landing::held(w, &r, &p)?.is_none());
+        p.base = "main".into();
+        let old = p.clone();
+        p.tickets.push(model::TicketLink {url:"repair".into(), local:Some((r.id.clone(),42)), closes:false});
+        save_pull(w, Some(&old), &p)?;
+        assert!(crate::landing::held(w, &r, &p)?.is_none());
+        assert_eq!(class(w, "approved")?, Class::Repair);
+        let old = p.clone();
+        p.tickets.clear();
+        save_pull(w, Some(&old), &p)?;
+        v.failing_since = None;
+        w.put(store::CI_VERIFICATIONS, &key, &v)?;
+        assert!(crate::landing::held(w, &r, &p)?.is_none());
+        assert_eq!(class(w, "approved")?, Class::Landing);
+        v.failing_since = Some("broken".into());
+        w.put(store::CI_VERIFICATIONS, &key, &v)?;
+        let old = ticket.clone();
+        ticket.state = "closed".into();
+        crate::domain::tickets::write_ticket(w, Some(&old), &ticket)?;
+        assert!(crate::landing::held(w, &r, &p)?.is_none());
+        assert_eq!(class(w, "approved")?, Class::Landing);
+        Ok(())
+    }).unwrap();
 }

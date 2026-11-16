@@ -705,37 +705,15 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_33(db: &Path) {
+pub fn as_schema_34(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(33);
+            *v = json!(34);
         }
     });
-    edit_records(db, "ci_runs", |v| {
-        v["failure_pending"] = json!(true);
-        v["failure_notified_at"] = json!("old-delivery");
+    edit_records(db, "repos", |v| {
+        v.as_object_mut().unwrap().remove("hold_while_failing");
     });
-    edit_records(db, "ci_attempts", |v| {
-        v["recovery_notified_at"] = json!("old-recovery");
-    });
-    edit_records(db, "tickets", |v| {
-        if let Some(repair) = v["repair"].as_object_mut() {
-            repair.remove("notice");
-        }
-    });
-    let database = redb::Database::open(db).unwrap();
-    let txn = database.begin_write().unwrap();
-    txn.delete_table(redb::TableDefinition::<&[u8], &[u8]>::new(
-        "ix_repair_unnotified",
-    ))
-    .unwrap();
-    for name in ["ix_ci_unnotified", "ix_ci_recovered"] {
-        let mut table = txn
-            .open_table(redb::TableDefinition::<&[u8], &[u8]>::new(name))
-            .unwrap();
-        table.insert(&b"old"[..], &b"old"[..]).unwrap();
-    }
-    txn.commit().unwrap();
 }
 
 /// Every table of a database, by name, as raw keys and values.
