@@ -353,24 +353,29 @@ impl Hub {
     }
 
     fn restore_service(&mut self) -> anyhow::Result<()> {
-        if let Some(before) = self.state.get("serviceBefore").and_then(Value::as_bool) {
-            let service = self.cli(&["service", "status"])?;
-            anyhow::ensure!(
-                service["server_running"] == true,
-                "Server is unavailable; service resume remains pending"
-            );
-            if service["running"].as_bool() != Some(before) {
-                let current = self.current.clone();
-                self.run(
-                    &current,
-                    &["service", if before { "start" } else { "stop" }],
-                    None,
-                    None,
-                )?;
-            }
-            self.state.remove("serviceBefore");
-            self.save()?;
+        let path = self.state_dir.join("service-before");
+        let saved = match std::fs::read(&path) {
+            Ok(saved) => saved,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let saved: Value = serde_json::from_slice(&saved)?;
+        let before: bool = serde_json::from_value(saved["service_running"].clone())?;
+        let service = self.cli(&["service", "status"])?;
+        anyhow::ensure!(
+            service["server_running"] == true,
+            "Server is unavailable; service resume remains pending"
+        );
+        if service["running"].as_bool() != Some(before) {
+            let current = self.current.clone();
+            self.run(
+                &current,
+                &["service", if before { "start" } else { "stop" }],
+                None,
+                None,
+            )?;
         }
+        std::fs::remove_file(path)?;
         Ok(())
     }
 
@@ -626,10 +631,6 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker(stage);
-        self.state.insert(
-            "serviceBefore".into(),
-            service["running"].as_bool().unwrap_or_default().into(),
-        );
         // Persist intent before moving HEAD: a terminated update must not retry.
         self.state.insert("attempt".into(), sha.as_str().into());
         self.state.insert("result".into(), "updating".into());

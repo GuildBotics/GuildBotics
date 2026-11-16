@@ -13,6 +13,9 @@ case "$name" in
     node) printf 'v24.0.0\n' ;;
     rustc) printf 'rustc %s (fixture)\n' "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" ;;
     cargo)
+        if [ -f "$FAKE_ROOT/start-during-build" ]; then touch "$FAKE_ROOT/service-running"; fi
+        if [ -f "$FAKE_ROOT/stop-during-build" ]; then rm -f "$FAKE_ROOT/service-running"; fi
+        [ ! -f "$FAKE_ROOT/fail-build" ] || exit 1
         while [ "$1" != --target-dir ]; do shift; done
         mkdir -p "$2/release"
         # A build is this stub marked with the commit's build-id and, like Cargo's
@@ -97,6 +100,7 @@ case "$name" in
                     printf '42\n' >"$FAKE_ROOT/job-pid"
                     printf '42\n' >"$FAKE_ROOT/holder"
                     if [ -f "$FAKE_ROOT/service-autostart" ]; then touch "$FAKE_ROOT/service-running"; fi
+                    if [ "$build" = new ] && [ -f "$FAKE_ROOT/unresponsive-after-update" ]; then touch "$FAKE_ROOT/unresponsive"; fi
                 fi
                 ;;
             bootout)
@@ -204,6 +208,10 @@ case "$name" in
                 ;;
             server:stop)
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
+                if [ "${3:-}" = --service-state ]; then
+                    if [ -f "$FAKE_ROOT/service-running" ]; then active=true; else active=false; fi
+                    printf '{"service_running":%s}\n' "$active" >"$4"
+                fi
                 rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/service-running"
                 ;;
             install:)

@@ -163,7 +163,7 @@ stop_agent() {
     if [ -n "$holder" ]; then
         [ "$holder" = "$(job_pid)" ] ||
             fail "A GuildBotics server outside this LaunchAgent is running (PID $holder)."
-        "$current" server stop || return
+        "$current" server stop "$@" || return
     fi
     unload
 }
@@ -468,7 +468,7 @@ case "$action" in
         cp "$current" "$lock/update-from"
         backup_and_rehearse
         stage="stopping the previous build"
-        stop_agent
+        stop_agent --service-state "$hub/service-before"
         assert_stopped "$current"
         cp "$candidate" "$builds/update-to"
         mv -f "$lock/update-from" "$pending"

@@ -14,6 +14,14 @@ impl std::fmt::Display for StartupSecrets {
     }
 }
 impl std::error::Error for StartupSecrets {}
+#[derive(Debug)]
+struct ServerStopping;
+impl std::fmt::Display for ServerStopping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("server_stopping")
+    }
+}
+impl std::error::Error for ServerStopping {}
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Default)]
@@ -74,13 +82,18 @@ impl Controller {
             native.branvil = Some(branvil);
         }
     }
-    pub async fn start(&self) -> anyhow::Result<crate::service::Status> {
+    pub async fn start(
+        &self,
+        shutdown: &crate::server::Shutdown,
+    ) -> anyhow::Result<crate::service::Status> {
         let _gate = self.gate.lock().await;
+        anyhow::ensure!(!shutdown.stopping(), ServerStopping);
         if self.service.status().await.running {
             return Ok(self.service.status().await);
         }
         if self.execution.generation().draining.is_cancelled() {
             self.execution.wait(self.execution.begin_drain(false)).await;
+            anyhow::ensure!(!shutdown.stopping(), ServerStopping);
         }
         let native = match self.native.as_ref() {
             Some(native) => native,
@@ -130,7 +143,15 @@ impl Controller {
             .await?;
         Ok(self.service.status().await)
     }
+    /// Sample intent after every previously admitted start has settled.
+    pub(crate) async fn resume_on_shutdown(&self) -> bool {
+        let _gate = self.gate.lock().await;
+        matches!(self.service.status().await.state, "starting" | "running")
+    }
     pub async fn stop(&self, force: bool) -> crate::service::Status {
+        if force {
+            self.execution.begin_drain(true);
+        }
         let (done, generation) = {
             let _gate = self.gate.lock().await;
             let generation = self.execution.begin_drain(force);
@@ -224,11 +245,12 @@ pub(crate) async fn start(
     // away does not cancel it into a failure, and a server that stops waits
     // for it.
     let selected = api.selected();
+    let api_shutdown = api.shutdown.clone();
     let started = api
         .work
         .spawn(async move {
             let _admitted = admitted;
-            selected.service.start().await?;
+            selected.service.start(&api_shutdown).await?;
             Ok::<_, anyhow::Error>(selected.service.view().await)
         })
         .await
@@ -273,7 +295,9 @@ fn startup_error(
     headers: &axum::http::HeaderMap,
 ) -> crate::api::ApiError {
     use axum::http::StatusCode;
-    if error.downcast_ref::<StartupSecrets>().is_some() {
+    if error.is::<ServerStopping>() {
+        crate::api::ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "server_stopping", headers)
+    } else if error.downcast_ref::<StartupSecrets>().is_some() {
         crate::api::ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "secret_store_unavailable",
@@ -618,6 +642,66 @@ async fn supervise_reception(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn queued_start_is_refused_inside_gate_after_shutdown() {
+        let controller = Arc::new(Controller::default());
+        let shutdown = crate::server::Shutdown::default();
+        let gate = controller.hold_start_for_test().await;
+        let start = tokio::spawn({
+            let controller = controller.clone();
+            let shutdown = shutdown.clone();
+            async move { controller.start(&shutdown).await }
+        });
+        tokio::task::yield_now().await;
+        shutdown.request(false);
+        drop(gate);
+        let error = start.await.unwrap().unwrap_err();
+        assert!(error.is::<ServerStopping>());
+        assert_eq!(controller.service.status().await.state, "stopped");
+    }
+
+    #[tokio::test]
+    async fn force_stop_cancels_work_while_restart_holds_gate() {
+        for server_stop in [false, true] {
+            let controller = Arc::new(Controller::default());
+            let shutdown = crate::server::Shutdown::default();
+            let work = controller
+                .execution
+                .spawn(|generation| async move {
+                    generation.cancelled.cancelled().await;
+                })
+                .unwrap();
+            controller.execution.begin_drain(false);
+            let start = tokio::spawn({
+                let controller = controller.clone();
+                let shutdown = shutdown.clone();
+                async move { controller.start(&shutdown).await }
+            });
+            while controller.gate.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+            if server_stop {
+                shutdown.request(true);
+                controller.execution.begin_drain(true);
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), controller.stop(true))
+                .await
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), work)
+                .await
+                .unwrap()
+                .unwrap();
+            let error = start.await.unwrap().unwrap_err();
+            if server_stop {
+                assert!(error.is::<ServerStopping>());
+            }
+            assert_eq!(
+                controller.service.status().await.state,
+                if server_stop { "stopped" } else { "failed" }
+            );
+        }
+    }
+
     struct Receiving;
     impl Worker for Receiving {
         fn listener_count(&self) -> usize {
@@ -709,7 +793,12 @@ mod tests {
         let view = controller.view().await;
         assert_eq!(view["events"]["events_error_count"], 0);
         assert!(view["events"]["error"].is_null());
-        assert!(controller.start().await.is_err());
+        assert!(
+            controller
+                .start(&crate::server::Shutdown::default())
+                .await
+                .is_err()
+        );
         let status = controller.service.status().await;
         assert_eq!(status.state, "failed");
         assert!(!status.running);
@@ -981,7 +1070,7 @@ mod tests {
         controller.execution.begin_drain(false);
         let start = tokio::spawn({
             let controller = controller.clone();
-            async move { controller.start().await }
+            async move { controller.start(&crate::server::Shutdown::default()).await }
         });
         tokio::task::yield_now().await;
         assert!(!start.is_finished());
@@ -1076,7 +1165,10 @@ mod tests {
             }
             let previous = controller.view().await;
             let records = bus.snapshot();
-            let error = controller.start().await.unwrap_err();
+            let error = controller
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap_err();
             assert_eq!(
                 error
                     .downcast_ref::<crate::service_settings::InvalidSettings>()
@@ -1202,7 +1294,10 @@ mod tests {
         let controller = Controller::new(native, host);
         let bus = Arc::new(crate::events::EventBus::default());
         controller.service.attach_events(bus.clone());
-        controller.start().await.unwrap();
+        controller
+            .start(&crate::server::Shutdown::default())
+            .await
+            .unwrap();
         controller.stop(true).await;
         let records = bus.snapshot();
         let events: Vec<_> = records.iter().filter(|r| r["source"] == "events").collect();
@@ -1256,7 +1351,10 @@ mod tests {
         )
         .unwrap();
         let controller = Controller::new(native.clone(), host);
-        controller.start().await.unwrap();
+        controller
+            .start(&crate::server::Shutdown::default())
+            .await
+            .unwrap();
         controller.stop(true).await;
         let previous = controller.view().await;
         std::fs::remove_file(
@@ -1271,7 +1369,12 @@ mod tests {
         let mut ids = vec![];
         for _ in 0..2 {
             let offset = bus.snapshot().len();
-            assert!(controller.start().await.is_err());
+            assert!(
+                controller
+                    .start(&crate::server::Shutdown::default())
+                    .await
+                    .is_err()
+            );
             let records = bus.snapshot();
             let records = &records[offset..];
             assert_eq!(
@@ -1353,7 +1456,7 @@ mod tests {
         let publication = controller.worker.write().await;
         let starting = {
             let controller = controller.clone();
-            tokio::spawn(async move { controller.start().await })
+            tokio::spawn(async move { controller.start(&crate::server::Shutdown::default()).await })
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while controller.service.status().await.state != "starting" {
@@ -1373,7 +1476,13 @@ mod tests {
         assert_eq!(controller.service.status().await.state, "failed");
         assert!(controller.service.status().await.error.is_some());
         drop(publication);
-        assert!(controller.start().await.unwrap().running);
+        assert!(
+            controller
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap()
+                .running
+        );
         assert!(controller.worker.read().await.is_some());
         assert!(!controller.stop(true).await.running);
     }
