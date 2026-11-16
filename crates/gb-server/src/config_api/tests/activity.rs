@@ -1,6 +1,84 @@
 use super::*;
 
 #[tokio::test]
+async fn opening_and_switching_recover_runs_before_publishing_the_workspace() {
+    let f = fixture();
+    let other = f.root.join("other");
+    for workspace in [f.workspace(), other.clone()] {
+        for id in ["active", "empty"] {
+            f.write(&workspace.join(format!(".guildbotics/state/task-runs/{id}/result.json")),
+                &json!({"run_id":id,"work_kind":"ticket","execution_mode":"autonomous","member_id":"alice","device_id":"device","source":"routine","started_at":"2026-11-01T00:00:00Z","status":"running","provider_evidence":if id == "active" {json!([{"recorded_at":"2026-11-01T00:01:00Z"}])} else {json!([])}}).to_string());
+        }
+    }
+    // Startup uses this same idle opening boundary before admitting requests.
+    let selected = Selected::open_idle(Some(f.workspace()), &f.api).unwrap();
+    let runs = gb_observability::runs::RunStore::open(selected.workspace.as_ref().unwrap());
+    assert_eq!(
+        runs.read("active").unwrap().unwrap().status,
+        gb_observability::runs::RunState::Interrupted
+    );
+    f.api.select(selected);
+    let (status, _) = f
+        .call("POST", "/workspace", json!({"workspace_dir":other}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(f.api.selected().workspace.as_ref(), Some(&other));
+    for (id, expected) in [
+        ("active", "2026-11-01T00:01:00+00:00"),
+        ("empty", "2026-11-01T00:00:00+00:00"),
+    ] {
+        let run = gb_observability::runs::RunStore::open(&other)
+            .read(id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, gb_observability::runs::RunState::Interrupted);
+        assert_eq!(run.finished_at.as_deref(), Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn history_excludes_sessions_whose_derived_end_is_before_the_window() {
+    let f = fixture();
+    f.init().await;
+    f.add(agent("alice")).await;
+    for (id, started) in [
+        ("old", "2026-10-01T00:00:00Z"),
+        ("inside", "2026-11-01T00:00:00Z"),
+    ] {
+        f.write(&f.workspace().join(format!(".guildbotics/state/task-runs/{id}/result.json")),
+            &json!({"run_id":id,"work_kind":"ticket","execution_mode":"autonomous","member_id":"alice","device_id":"device","source":"routine","started_at":started,"status":"running","attributes":{"target.url":"local://ticket/1"}}).to_string());
+    }
+    let history = f
+        .get("/activity/history?start=2026-11-01T00:00:00Z&end=2026-11-02T00:00:00Z")
+        .await;
+    let sessions = history["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{history}");
+    assert_eq!(sessions[0]["trace_id"], "inside");
+}
+
+#[tokio::test]
+async fn recovery_failure_does_not_publish_or_persist_the_new_workspace() {
+    let f = fixture();
+    f.init().await;
+    let previous = gb_workspace::selection::read_active(&f.data()).unwrap();
+    let other = f.root.join("other");
+    f.write(
+        &other.join(".guildbotics/state/task-runs/broken/result.json"),
+        "broken",
+    );
+    assert!(Selected::open_idle(Some(other.clone()), &f.api).is_err());
+    let (status, _) = f
+        .call("POST", "/workspace", json!({"workspace_dir":other}))
+        .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(f.api.selected().workspace.as_ref(), Some(&f.workspace()));
+    assert_eq!(
+        gb_workspace::selection::read_active(&f.data()).unwrap(),
+        previous
+    );
+}
+
+#[tokio::test]
 async fn consent_rejection_matrix_keeps_http_invalid_shape_and_state_bounds() {
     let f = fixture();
     let challenge = loopback_auth::b64(&loopback_auth::sha256(b"verifier"));

@@ -281,13 +281,19 @@ fn read(
     );
     records.extend(crate::diagnostics::memory_records(workspace));
     records.retain(|r| parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t <= end));
-    let result = gb_observability::timeline::build(
+    let mut result = gb_observability::timeline::build(
         members,
         lifecycles,
         records,
         |id| store.transcript_exists(id),
         |key, params| crate::i18n::t(language, key, params),
     );
+    if let Some(sessions) = result["sessions"].as_array_mut() {
+        sessions.retain(|s| {
+            parsed(text(s, "started_at")).is_some_and(|t| t <= end)
+                && parsed(text(s, "ended_at")).is_some_and(|t| t >= start)
+        });
+    }
     Ok(result)
 }
 fn completed(workspace: &Path) -> Vec<Value> {

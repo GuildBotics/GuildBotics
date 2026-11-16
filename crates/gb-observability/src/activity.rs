@@ -38,6 +38,33 @@ pub struct ActivityEvents {
     root: PathBuf,
 }
 impl ActivityEvents {
+    /// Recovery includes lifecycle facts that the display reader omits.
+    pub(crate) fn latest_by_trace(
+        &self,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, DateTime<FixedOffset>>> {
+        let mut latest = std::collections::BTreeMap::new();
+        for year in children(&self.root)? {
+            for month in children(&year)? {
+                for path in children(&month)? {
+                    if path.extension().is_none_or(|e| e != "json") {
+                        continue;
+                    }
+                    let event: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+                    let trace = text(&event, &["local_trace_id"]);
+                    if !trace.is_empty()
+                        && let Some(stamp) = timestamp(&event, "occurred_at")
+                    {
+                        latest
+                            .entry(trace.into())
+                            .and_modify(|t| *t = std::cmp::max(*t, stamp))
+                            .or_insert(stamp);
+                    }
+                }
+            }
+        }
+        Ok(latest)
+    }
+
     pub fn open(workspace: &Path) -> Self {
         Self {
             root: workspace.join(".guildbotics/state/events"),

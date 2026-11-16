@@ -7,6 +7,16 @@ use gb_observability::{
 use std::{path::PathBuf, sync::Arc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+/// The machine-wide server lock and workspace switch gate exclude live runs.
+pub(crate) fn recover(workspace: &std::path::Path, writes: &SharedWrites) -> anyhow::Result<()> {
+    writes.transaction(|writer| {
+        RunStore::open(workspace).interrupt_running(
+            writer,
+            &gb_observability::activity::ActivityEvents::open(workspace),
+        )
+    })
+}
+
 /// One drain generation is shared by API commands and autonomous workers.
 /// Registration and sealing are atomic, so a request cannot enter after a
 /// stopper has observed an empty tracker.
@@ -440,6 +450,38 @@ mod tests {
             record:serde_json::from_value(json!({"run_id":id,"work_kind":"routine","member_id":"aiko","device_id":"device",
                 "execution_mode":"autonomous","source":"routine","started_at":"2026-11-05T00:00:00Z","work_identity":{"slot":"1"}})).unwrap(),
             redactor:Redactor::default(),exclusive:true,record_start:true,cleanup:cleanup.clone()}
+    }
+
+    #[tokio::test]
+    async fn workspace_recovery_allows_the_same_work_identity_to_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let cleanup = TaskTracker::new();
+        let input = admission(root.path(), "abandoned", &cleanup);
+        input
+            .writes
+            .transaction(|w| {
+                RunStore::open(root.path()).start(w, input.record.clone(), &input.redactor)?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(matches!(
+            Execution::enter(
+                admission(root.path(), "retry", &cleanup),
+                CancellationToken::new()
+            )
+            .await,
+            Err(Rejected::Duplicate)
+        ));
+        recover(root.path(), &SharedWrites::new(root.path().into(), None)).unwrap();
+        let execution = Execution::enter(
+            admission(root.path(), "retry", &cleanup),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        execution.finish(RunState::Succeeded).await.unwrap();
+        cleanup.close();
+        cleanup.wait().await;
     }
 
     #[tokio::test]

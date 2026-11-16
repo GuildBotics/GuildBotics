@@ -359,22 +359,21 @@ async fn switch(
         selected.workspace.clone(),
         workspace.clone(),
     );
-    let switched = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    let opening = api.clone();
+    let switched = tokio::task::spawn_blocking(move || -> anyhow::Result<Selected> {
+        let next_selection = Selected::open_idle(Some(next.clone()), &opening)?;
         if let Some(previous) = previous {
             gb_observability::Diagnostics::open(&previous).finish_system_session()?;
         }
         gb_workspace::selection::write_active(&data, &next)?;
-        Ok(())
+        Ok(next_selection)
     })
     .await;
-    if let Err(error) = switched.map_err(anyhow::Error::from).and_then(|r| r) {
-        return failure(error, &headers);
-    }
-    api.select(Selected::open(
-        Some(workspace.clone()),
-        &api,
-        api.branvil.get().cloned(),
-    ));
+    let next_selection = match switched.map_err(anyhow::Error::from).and_then(|r| r) {
+        Ok(next) => next,
+        Err(error) => return failure(error, &headers),
+    };
+    api.select(next_selection);
     let diagnostics = gb_observability::Diagnostics::open(&workspace);
     match tokio::task::spawn_blocking(move || diagnostics.start_system_session(&instance)).await {
         Ok(Ok(())) => (),
