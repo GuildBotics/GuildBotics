@@ -13,6 +13,24 @@ fn command_summary_rejects_unknown_command_path() {
     }
 }
 #[test]
+fn ticket_update_help_preserves_order_and_assignment_conditions() {
+    let grammar: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../guildbotics/templates/member/grammar.json"
+    ))
+    .unwrap();
+    let summary = grammar["ticket update"]["help"].as_str().unwrap();
+    let reference = include_str!("../../../docs/cli_reference.md");
+    for text in [summary, reference] {
+        for sentence in [
+            "Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only.",
+            "In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved.",
+            "Updates return assignees and lane.",
+        ] {
+            assert!(text.contains(sentence), "{sentence}");
+        }
+    }
+}
+#[test]
 fn reference_covers_every_member_domain() {
     let text = help();
     assert!(text.contains("guildbotics member git commit"));
