@@ -4,9 +4,9 @@ use crate::{
     ticket_selector::Selector,
     workflow_runtime::{Refused, Runtime},
 };
-use gb_ports::Task;
+use gb_ports::{ServiceError, Task};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 pub struct Engine {
     pub runtime: Arc<Runtime>,
     pub chat: Option<crate::chat_dispatch::Dispatcher>,
-    candidates: Mutex<Option<VecDeque<Task>>>,
+    cycle: Mutex<Cycle>,
     environment: std::sync::Mutex<Option<String>>,
 }
 
@@ -23,7 +23,7 @@ impl Engine {
         Self {
             runtime,
             chat,
-            candidates: Mutex::new(None),
+            cycle: Mutex::new(Cycle::default()),
             environment: std::sync::Mutex::new(None),
         }
     }
@@ -58,10 +58,59 @@ impl Engine {
     }
 }
 
-fn prepend_repairs(batch: &mut VecDeque<Task>, repairs: Vec<Task>) {
-    for task in repairs.into_iter().rev() {
-        batch.retain(|old| old.url != task.url);
-        batch.push_front(task);
+/// Keep only work already attempted, never a saved ordering of future work.
+#[derive(Default)]
+struct Cycle {
+    attempted: BTreeSet<Option<String>>,
+}
+impl Cycle {
+    async fn patrol<F, Fut>(
+        &mut self,
+        selector: &Selector<'_>,
+        run: F,
+    ) -> (Result<Outcome, ServiceError>, bool)
+    where
+        F: FnOnce(Task, gb_wire::WorkflowInvocation) -> Fut,
+        Fut: std::future::Future<Output = Outcome>,
+    {
+        let mut tasks: VecDeque<_> = match selector.candidates().await {
+            Ok(tasks) => tasks
+                .into_iter()
+                .filter(|task| !self.attempted.contains(&task.url))
+                .collect(),
+            Err(error) => {
+                self.attempted.clear();
+                return (Err(error), true);
+            }
+        };
+        while let Some(candidate) = tasks.pop_front() {
+            let mut repair = candidate.repair;
+            let result = match selector.refresh(&candidate).await {
+                Ok(None) => continue,
+                Ok(Some(invocation)) => {
+                    let task: Task = serde_json::from_value(invocation.payload["task"].clone())
+                        .expect("selector serialized a validated refreshed task");
+                    repair = task.repair;
+                    Ok(run(task, invocation).await)
+                }
+                Err(error) => Err(error),
+            };
+            let deferred = matches!(&result, Ok(Outcome::Deferred))
+                || result.as_ref().is_err_and(|error| error.is_unavailable());
+            if !deferred {
+                self.attempted.insert(candidate.url);
+            }
+            let exhausted = !deferred && tasks.is_empty();
+            if exhausted {
+                self.attempted.clear();
+            }
+            return (
+                result.map(|outcome| repair_outcome(outcome, repair)),
+                exhausted,
+            );
+        }
+        self.attempted.clear();
+        (Ok(Outcome::Succeeded), true)
     }
 }
 fn repair_outcome(outcome: Outcome, repair: bool) -> Outcome {
@@ -127,93 +176,39 @@ impl crate::scheduler::Engine for Engine {
                 runner: self.runtime.as_ref(),
                 quota: self.runtime.quota.as_deref(),
             };
-            let mut batch = self.candidates.lock().await;
-            if batch.is_none() {
-                match selector.candidates().await {
-                    Ok(tasks) => *batch = Some(tasks.into()),
-                    Err(error) => {
+            let mut cycle = self.cycle.lock().await;
+            let (result, exhausted) = cycle
+                .patrol(&selector, |task, invocation| async move {
+                    Self::outcome(
                         self.runtime
-                            .selection_failed(error.clone(), "routine")
-                            .await;
-                        return (
-                            if error.is_unavailable() {
-                                Outcome::Deferred
-                            } else {
-                                Outcome::Failed
-                            },
-                            true,
-                        );
+                            .ticket(
+                                &task,
+                                invocation,
+                                slot,
+                                crate::ticket_selector::max_attempts(
+                                    &std::env::var("GUILDBOTICS_TICKET_MAX_ATTEMPTS")
+                                        .unwrap_or_default(),
+                                ),
+                            )
+                            .await,
+                        "routine",
+                    )
+                })
+                .await;
+            let outcome = match result {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    self.runtime
+                        .selection_failed(error.clone(), "routine")
+                        .await;
+                    if error.is_unavailable() {
+                        Outcome::Deferred
+                    } else {
+                        Outcome::Failed
                     }
                 }
-            } else if let Some(tasks) = batch.as_mut() {
-                match selector.repair_candidates().await {
-                    Ok(fresh) => {
-                        prepend_repairs(tasks, fresh);
-                    }
-                    Err(error) => {
-                        self.runtime
-                            .selection_failed(error.clone(), "routine")
-                            .await;
-                        return (
-                            if error.is_unavailable() {
-                                Outcome::Deferred
-                            } else {
-                                Outcome::Failed
-                            },
-                            false,
-                        );
-                    }
-                }
-            }
-            while let Some(task) = batch.as_mut().and_then(VecDeque::pop_front) {
-                match selector.refresh(&task).await {
-                    Ok(None) => continue,
-                    Ok(Some(invocation)) => {
-                        let task: Task = serde_json::from_value(invocation.payload["task"].clone())
-                            .expect("selector serialized a validated refreshed task");
-                        let outcome = Self::outcome(
-                            self.runtime
-                                .ticket(
-                                    &task,
-                                    invocation,
-                                    slot,
-                                    crate::ticket_selector::max_attempts(
-                                        &std::env::var("GUILDBOTICS_TICKET_MAX_ATTEMPTS")
-                                            .unwrap_or_default(),
-                                    ),
-                                )
-                                .await,
-                            "routine",
-                        );
-                        if outcome == Outcome::Deferred {
-                            batch.as_mut().unwrap().push_front(task.clone());
-                        }
-                        let exhausted = batch.as_ref().is_none_or(VecDeque::is_empty);
-                        if exhausted {
-                            *batch = None;
-                        }
-                        return (repair_outcome(outcome, task.repair), exhausted);
-                    }
-                    Err(error) => {
-                        self.runtime
-                            .selection_failed(error.clone(), "routine")
-                            .await;
-                        let outcome = if error.is_unavailable() {
-                            batch.as_mut().unwrap().push_front(task.clone());
-                            Outcome::Deferred
-                        } else {
-                            Outcome::Failed
-                        };
-                        let exhausted = batch.as_ref().is_none_or(VecDeque::is_empty);
-                        if exhausted {
-                            *batch = None;
-                        }
-                        return (outcome, exhausted);
-                    }
-                }
-            }
-            *batch = None;
-            (Outcome::Succeeded, true)
+            };
+            (outcome, exhausted)
         })
     }
     fn events(&self) -> Pending<'_, Outcome> {
@@ -304,31 +299,6 @@ mod tests {
 mod repair_tests {
     use super::*;
     #[test]
-    fn fresh_repair_tickets_and_prs_precede_the_saved_batch_without_losing_it() {
-        let task = |url: &str, repair| Task {
-            url: Some(url.into()),
-            repair,
-            ..Default::default()
-        };
-        let mut batch =
-            VecDeque::from([task("ordinary-pr", false), task("ordinary-ticket", false)]);
-        for url in ["repair-ticket", "repair-pr"] {
-            prepend_repairs(&mut batch, vec![task(url, true)]);
-            assert_eq!(batch.pop_front().unwrap().url.as_deref(), Some(url));
-        }
-        assert_eq!(
-            batch.pop_front().unwrap().url.as_deref(),
-            Some("ordinary-pr")
-        );
-        assert_eq!(
-            batch.pop_front().unwrap().url.as_deref(),
-            Some("ordinary-ticket")
-        );
-        let mut batch = VecDeque::from([task("repair", true), task("ordinary", false)]);
-        prepend_repairs(&mut batch, vec![task("repair", true)]);
-        assert_eq!(batch.len(), 2);
-    }
-    #[test]
     fn repeated_repair_failures_preserve_the_previous_worker_error_count() {
         let mut errors = 2;
         for _ in 0..5 {
@@ -346,5 +316,199 @@ mod repair_tests {
             }
         }
         assert_eq!(errors, 3);
+    }
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::*;
+
+    struct Fixture {
+        _root: tempfile::TempDir,
+        runtime: Runtime,
+        tickets: crate::test_ticket::Faults,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let runtime = crate::test_chat::runtime(root.path());
+            let tickets = crate::test_ticket::Faults::new(runtime.tickets.clone().unwrap());
+            Self {
+                _root: root,
+                runtime,
+                tickets,
+            }
+        }
+        fn order(&self, urls: &[&str]) {
+            *self.tickets.candidates.lock().unwrap() = Some(
+                urls.iter()
+                    .map(|url| Task {
+                        url: Some((*url).into()),
+                        assignee: Some("aiko".into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+            );
+        }
+        async fn patrol(
+            &self,
+            cycle: &mut Cycle,
+            outcome: Outcome,
+        ) -> (Result<Outcome, ServiceError>, bool, Option<String>) {
+            let diagnostics = self.runtime.diagnostics();
+            let selector = Selector {
+                roster: &self.runtime.roster,
+                diagnostics: &diagnostics,
+                person: "aiko",
+                source: "routine",
+                language: "en",
+                ticket: &self.tickets,
+                code: None,
+                runner: &self.runtime,
+                quota: None,
+            };
+            let mut selected = None;
+            let (result, exhausted) = cycle
+                .patrol(&selector, |task, _| {
+                    selected = task.url;
+                    std::future::ready(outcome)
+                })
+                .await;
+            (result, exhausted, selected)
+        }
+    }
+    #[tokio::test]
+    async fn reordering_and_newly_ready_work_apply_to_the_next_start() {
+        let f = Fixture::new();
+        let mut cycle = Cycle::default();
+        for (order, expected, exhausted) in [
+            (vec!["A", "B", "C", "D"], "A", false),
+            (vec!["D", "A", "B", "C"], "D", false),
+            (vec!["new", "D", "A", "B", "C"], "new", false),
+            (vec!["new", "D", "A", "B", "C"], "B", false),
+            (vec!["new", "D", "A", "B", "C"], "C", true),
+        ] {
+            f.order(&order);
+            assert_eq!(
+                f.patrol(&mut cycle, Outcome::Succeeded).await,
+                (Ok(Outcome::Succeeded), exhausted, Some(expected.into()))
+            );
+        }
+        assert!(cycle.attempted.is_empty());
+    }
+    #[tokio::test]
+    async fn failed_work_is_skipped_until_the_cycle_ends_but_deferred_work_retries() {
+        let f = Fixture::new();
+        f.order(&["A", "B"]);
+        let mut cycle = Cycle::default();
+        for (outcome, selected, exhausted) in [
+            (Outcome::Failed, "A", false),
+            (Outcome::Deferred, "B", false),
+            (Outcome::Succeeded, "B", true),
+            (Outcome::Deferred, "A", false),
+            (Outcome::Succeeded, "A", false),
+        ] {
+            assert_eq!(
+                f.patrol(&mut cycle, outcome).await,
+                (Ok(outcome), exhausted, Some(selected.into()))
+            );
+        }
+    }
+    #[tokio::test]
+    async fn fresh_repairs_take_precedence_and_failed_repairs_do_not_starve_other_work() {
+        let f = Fixture::new();
+        f.order(&["A", "B"]);
+        let mut cycle = Cycle::default();
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await.2,
+            Some("A".into())
+        );
+        f.order(&["A", "B", "repair"]);
+        f.tickets.candidates.lock().unwrap().as_mut().unwrap()[2].repair = true;
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Failed).await,
+            (Ok(Outcome::Deferred), false, Some("repair".into()))
+        );
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Ok(Outcome::Succeeded), true, Some("B".into()))
+        );
+    }
+    #[tokio::test]
+    async fn failed_pr_refresh_does_not_block_the_next_ticket() {
+        let f = Fixture::new();
+        f.order(&["PR", "ticket"]);
+        f.tickets.candidates.lock().unwrap().as_mut().unwrap()[0].pull_request_url =
+            Some("PR".into());
+        let mut cycle = Cycle::default();
+        // No code service: refreshing this PR fails at the selector boundary.
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Err(ServiceError::Unsupported), false, None)
+        );
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Ok(Outcome::Succeeded), true, Some("ticket".into()))
+        );
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Err(ServiceError::Unsupported), false, None)
+        );
+    }
+    #[tokio::test]
+    async fn refresh_failure_is_consumed_but_unavailability_is_deferred() {
+        let f = Fixture::new();
+        f.order(&["A", "B"]);
+        let mut cycle = Cycle::default();
+        f.tickets
+            .errors
+            .lock()
+            .unwrap()
+            .insert("refresh", ServiceError::Failed);
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Err(ServiceError::Failed), false, None)
+        );
+        f.tickets.errors.lock().unwrap().clear();
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await.2,
+            Some("B".into())
+        );
+        f.tickets
+            .errors
+            .lock()
+            .unwrap()
+            .insert("refresh", ServiceError::Unavailable);
+        for _ in 0..2 {
+            assert_eq!(
+                f.patrol(&mut cycle, Outcome::Succeeded).await,
+                (Err(ServiceError::Unavailable), false, None)
+            );
+            assert!(cycle.attempted.is_empty());
+        }
+        f.tickets.errors.lock().unwrap().clear();
+        f.order(&[]);
+        assert_eq!(
+            f.patrol(&mut cycle, Outcome::Succeeded).await,
+            (Ok(Outcome::Succeeded), true, None)
+        );
+    }
+    #[tokio::test]
+    async fn candidate_fetch_failures_end_the_cycle_and_keep_the_error_class() {
+        let f = Fixture::new();
+        for error in [ServiceError::Failed, ServiceError::Unavailable] {
+            f.tickets
+                .errors
+                .lock()
+                .unwrap()
+                .insert("candidates", error.clone());
+            let mut cycle = Cycle::default();
+            cycle.attempted.insert(Some("previous".into()));
+            assert_eq!(
+                f.patrol(&mut cycle, Outcome::Succeeded).await,
+                (Err(error), true, None)
+            );
+            assert!(cycle.attempted.is_empty());
+        }
     }
 }
