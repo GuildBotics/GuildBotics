@@ -199,7 +199,11 @@ impl Server {
         );
         api.keychain = keychain;
         let api = Arc::new(api);
-        api.select(Selected::open(workspace, &api, None));
+        let opening = api.clone();
+        let selected =
+            tokio::task::spawn_blocking(move || Selected::restore_idle(workspace, &opening))
+                .await?;
+        api.select(selected);
         if let Some(workspace) = &api.selected().workspace {
             let diagnostics = gb_observability::Diagnostics::open(workspace);
             let instance = api.instance_id.clone();
@@ -474,6 +478,31 @@ impl Server {
 }
 
 impl Selected {
+    /// A failed restore must leave the workspace recovery screens available.
+    pub(crate) fn restore_idle(workspace: Option<PathBuf>, api: &Api) -> Selected {
+        match Self::open_idle(workspace.clone(), api) {
+            Ok(selected) => selected,
+            Err(error) => {
+                tracing::error!("cannot recover abandoned runs: {error:#}");
+                Self::open(workspace, api, api.branvil.get().cloned())
+            }
+        }
+    }
+
+    /// Recover abandoned runs before constructing an idle workspace's services.
+    /// Provider attachment reopens the backend without repeating recovery.
+    pub(crate) fn open_idle(workspace: Option<PathBuf>, api: &Api) -> anyhow::Result<Selected> {
+        if let Some(workspace) = &workspace {
+            let mut writes = gb_base::shared_writes::SharedWrites::new(
+                api.identity_root.clone(),
+                Some(workspace.clone()),
+            );
+            writes.timeout = api.write_timeout;
+            crate::execution::recover(workspace, &writes)?;
+        }
+        Ok(Self::open(workspace, api, api.branvil.get().cloned()))
+    }
+
     /// What the server builds from `workspace`: its member backend and its
     /// service. Either that cannot be built is left out, and the screens
     /// stay to repair or replace the workspace.

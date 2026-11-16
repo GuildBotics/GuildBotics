@@ -29,6 +29,143 @@ fn seed(id: &str) -> RunRecord {
     )
     .unwrap()
 }
+
+#[test]
+fn abandoned_runs_end_at_the_latest_fact_or_evidence_across_months_and_offsets() {
+    let root = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(root.path().into(), None);
+    let runs = RunStore::open(root.path());
+    let events = ActivityEvents::open(root.path());
+    writes
+        .transaction(|w| {
+            for (id, source) in [
+                ("fact", "routine"),
+                ("evidence", "manual"),
+                ("empty", "routine"),
+                ("done", "routine"),
+            ] {
+                let mut r = seed(id);
+                r.started_at = "2026-10-31T23:00:00+00:00".into();
+                r.source = source.into();
+                runs.start(w, r, &Redactor::default())?;
+            }
+            for id in ["fact", "evidence"] {
+                runs.append(
+                    w,
+                    runs.read(id)?.unwrap(),
+                    &json!({"kind":"evidence","evidence_type":"reply"}),
+                    "2026-11-01T00:30:00Z",
+                    &Redactor::default(),
+                )?;
+            }
+            for (trace, stamp) in [
+                ("fact", "2026-11-01T10:00:00+09:00"),
+                ("evidence", "2026-11-01T00:10:00Z"),
+                ("other", "2026-12-01T00:00:00Z"),
+            ] {
+                events.record(
+                    w,
+                    &json!({"type":"command.finished","trace_id":trace,"timestamp":stamp}),
+                    &Redactor::default(),
+                )?;
+            }
+            runs.finish(
+                w,
+                "done",
+                RunFinish {
+                    state: RunState::Succeeded,
+                    summary: "done",
+                    attributes: BTreeMap::new(),
+                    now: "2026-11-01T00:00:00Z",
+                },
+                &Redactor::default(),
+            )?;
+            runs.interrupt_running(w, &events)
+        })
+        .unwrap();
+    for (id, expected) in [
+        ("fact", "2026-11-01T01:00:00Z"),
+        ("evidence", "2026-11-01T00:30:00Z"),
+        ("empty", "2026-10-31T23:00:00Z"),
+    ] {
+        let r = runs.read(id).unwrap().unwrap();
+        assert_eq!(r.status, RunState::Interrupted);
+        assert_eq!(
+            DateTime::parse_from_rfc3339(r.finished_at.as_deref().unwrap()).unwrap(),
+            DateTime::parse_from_rfc3339(expected).unwrap()
+        );
+        assert!(r.left_work_undone());
+    }
+    assert_eq!(
+        runs.read("done").unwrap().unwrap().status,
+        RunState::Succeeded
+    );
+    let before = runs.records().unwrap();
+    writes
+        .transaction(|w| runs.interrupt_running(w, &events))
+        .unwrap();
+    assert_eq!(runs.records().unwrap(), before);
+}
+#[test]
+fn recovery_skips_damaged_history_and_preserves_readable_siblings() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = RunStore::open(root.path());
+    let events = ActivityEvents::open(root.path());
+    let writes = SharedWrites::new(root.path().into(), None);
+    let state = root.path().join(".guildbotics/state");
+    for (path, body) in [
+        ("task-runs/broken/result.json", "broken"),
+        ("task-runs/shape/result.json", "{}"),
+        ("events/2026/11/broken.json", "broken"),
+        ("events/2026/11/shape.json", "{}"),
+        ("events/stray", "not a directory"),
+    ] {
+        let path = state.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+    for path in [
+        "task-runs/unreadable/result.json",
+        "events/2026/11/unreadable.json",
+    ] {
+        std::fs::create_dir_all(state.join(path)).unwrap();
+    }
+    writes.transaction(|w| {
+        for id in ["good", "bad-time", "bad-id", "redirect"] {
+            let mut r = seed(id);
+            r.started_at = if id == "bad-time" { "invalid" } else { "2026-11-01T00:00:00Z" }.into();
+            runs.start(w, r, &Redactor::default())?;
+        }
+        let path = state.join("task-runs/bad-id/result.json");
+        let mut invalid: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        invalid["run_id"] = "../invalid".into();
+        w.write_json(&path, &invalid)?;
+        #[cfg(unix)]
+        {
+            invalid["run_id"] = "back\\slash".into();
+            w.write_json(&state.join("task-runs/back\\slash/result.json"), &invalid)?;
+        }
+        invalid["run_id"] = "broken".into();
+        w.write_json(&state.join("task-runs/redirect/result.json"), &invalid)?;
+        events.record(w, &json!({"type":"command.finished", "trace_id":"good", "timestamp":"2026-11-01T00:10:00Z"}), &Redactor::default())?;
+        runs.interrupt_running(w, &events)
+    }).unwrap();
+    let good = runs.read("good").unwrap().unwrap();
+    assert_eq!(good.status, RunState::Interrupted);
+    assert_eq!(
+        good.finished_at.as_deref(),
+        Some("2026-11-01T00:10:00+00:00")
+    );
+    assert!(
+        runs.records().is_err(),
+        "workflow decision reads must remain strict"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("task-runs/broken/result.json")).unwrap(),
+        "broken"
+    );
+}
+
 fn session() -> InteractiveSession {
     serde_json::from_value(
         json!({"trace_id":"trace-1","person_id":"p1","workspace":"/workspace",

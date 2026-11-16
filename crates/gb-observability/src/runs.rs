@@ -113,6 +113,48 @@ pub struct RunCompletion<'a> {
     pub now: &'a str,
 }
 impl RunStore {
+    /// Called only while the server owns an idle workspace, before admission.
+    pub fn interrupt_running(
+        &self,
+        writer: &mut Writer<'_>,
+        events: &crate::activity::ActivityEvents,
+    ) -> anyhow::Result<()> {
+        let running: Vec<_> = self
+            .readable_records()?
+            .into_iter()
+            .filter(|r| r.status == RunState::Running)
+            .collect();
+        if running.is_empty() {
+            return Ok(());
+        }
+        let latest = events.latest_by_trace()?;
+        for record in running {
+            let Ok(mut last) = DateTime::parse_from_rfc3339(&record.started_at) else {
+                continue;
+            };
+            if let Some(stamp) = latest.get(&record.run_id) {
+                last = last.max(*stamp);
+            }
+            for evidence in &record.provider_evidence {
+                if let Some(stamp) = timestamp(evidence, "recorded_at") {
+                    last = last.max(stamp);
+                }
+            }
+            self.finish(
+                writer,
+                &record.run_id,
+                RunFinish {
+                    state: RunState::Interrupted,
+                    summary: &record.safe_summary,
+                    attributes: BTreeMap::new(),
+                    now: &last.to_rfc3339(),
+                },
+                &Redactor::default(),
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn open(workspace: &Path) -> Self {
         Self {
             root: workspace.join(".guildbotics/state/task-runs"),
@@ -291,6 +333,12 @@ impl RunStore {
             let Ok(record) = serde_json::from_slice::<RunRecord>(&bytes) else {
                 continue;
             };
+            if checked_id(&record.run_id).is_err()
+                || record.run_id.trim() != record.run_id
+                || dir.file_name().and_then(|n| n.to_str()) != Some(record.run_id.as_str())
+            {
+                continue;
+            }
             records.push(record);
         }
         Ok(records)
