@@ -277,8 +277,10 @@ impl Ci {
                                     &Key::new().s(&id).bytes(),
                                 )?;
                                 crate::repair::passed(w, &id, &done.sha)?;
+                                super::narrow::abandon(w, &id, &now)?;
                             } else {
                                 crate::repair::failed(w, &id, &done.sha, &done.failed_jobs)?;
+                                super::narrow::start(w, &id, &done, &now)?;
                             }
                             Ok(closed)
                         })
@@ -370,7 +372,9 @@ pub fn start(app: crate::app::Shared) {
                     let repo_path = repo.path.clone();
                     if let Err(e) = app
                         .locked(&id, move |app| async move {
-                            app.ci.advance_verification(&repo, false).await
+                            let count = app.ci.advance_verification(&repo, false).await?;
+                            app.ci.advance_narrowings(&repo).await?;
+                            Ok::<_, crate::error::AppError>(count)
                         })
                         .await
                     {

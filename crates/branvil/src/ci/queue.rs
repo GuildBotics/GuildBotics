@@ -166,6 +166,7 @@ pub struct ArtifactMeta {
 pub enum Purpose {
     Check,
     CacheRefresh,
+    Probe,
 }
 
 /// An automatic retry belongs to the first failed attempt's retry budget.
@@ -242,6 +243,7 @@ impl Attempt {
         }
         match self.purpose {
             Purpose::Check => "retry the job",
+            Purpose::Probe => "the narrowing schedules the next probe",
             Purpose::CacheRefresh => {
                 "no manual retry is needed; a later check will request a new refresh if needed"
             }
@@ -547,7 +549,7 @@ pub fn pending_count(r: &impl Rd, limit: usize) -> AppResult<usize> {
 }
 
 /// Capacity for the incoming class, with a hypothetical manual retry applied.
-fn admission_count(
+pub(super) fn admission_count(
     r: &impl Rd,
     class: super::priority::Class,
     limit: usize,
@@ -587,7 +589,23 @@ fn cut(text: &str) -> String {
 }
 
 fn new_attempt(w: &Wtx, run: &Run, job: &JobDef, network: bool, now: &str) -> AppResult<Attempt> {
-    let number = next_number(w, &run.repo, &run.sha, &job.name)?;
+    new_job(
+        w,
+        (&run.repo, &run.repo_path, &run.sha, &run.cache_scope),
+        job,
+        network,
+        now,
+    )
+}
+
+fn new_job(
+    w: &Wtx,
+    (repo, path, sha, scope): (&str, &str, &str, &str),
+    job: &JobDef,
+    network: bool,
+    now: &str,
+) -> AppResult<Attempt> {
+    let number = next_number(w, repo, sha, &job.name)?;
     Ok(Attempt {
         verified_sha: None,
         path_skip: None,
@@ -597,9 +615,9 @@ fn new_attempt(w: &Wtx, run: &Run, job: &JobDef, network: bool, now: &str) -> Ap
         auto_retry: None,
         recovery_notified_at: None,
         wait_for_runner: false,
-        repo: run.repo.clone(),
-        repo_path: run.repo_path.clone(),
-        sha: run.sha.clone(),
+        repo: repo.into(),
+        repo_path: path.into(),
+        sha: sha.into(),
         job: job.clone(),
         image_digest: None,
         reused_from: None,
@@ -614,7 +632,7 @@ fn new_attempt(w: &Wtx, run: &Run, job: &JobDef, network: bool, now: &str) -> Ap
         lease_expires_at: None,
         cancel_requested: false,
         runner: None,
-        cache_scope: run.cache_scope.clone(),
+        cache_scope: scope.into(),
         network,
         created_at: now.to_string(),
         started_at: None,
@@ -1178,7 +1196,9 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
         }
         // A protected branch may have come to want this commit since admission.
         let run = get_run(r, &a.repo, &a.sha)?;
-        if let Some(run) = &run {
+        if a.purpose == Purpose::Check
+            && let Some(run) = &run
+        {
             a.cache_scope = run.cache_scope.clone();
         }
         if a.job.verified_sha {
@@ -1551,10 +1571,12 @@ pub fn cancel(w: &Wtx, id: &str, who: &str, now: &str) -> AppResult<Attempt> {
 pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attempt> {
     let old =
         get_attempt(w, id)?.ok_or_else(|| AppError::not_found(format!("No CI attempt {id}.")))?;
-    if old.purpose == Purpose::CacheRefresh {
-        return Err(AppError::conflict(
-            "Cache refresh attempts cannot be manually retried.",
-        ));
+    if old.purpose != Purpose::Check {
+        return Err(AppError::conflict(match old.purpose {
+            Purpose::CacheRefresh => "Cache refresh attempts cannot be manually retried.",
+            Purpose::Probe => "Probe attempts cannot be manually retried.",
+            Purpose::Check => unreachable!(),
+        }));
     }
     if old.status != "completed" {
         return Err(AppError::conflict(format!(
@@ -1748,8 +1770,19 @@ fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
     let requeue = !old.cancel_requested && !old.superseded && !old.after_interrupt;
     // Its definition is the run's: taking another pipeline stops unfinished
     // attempts of definitions it does not have.
-    let next = if requeue && let Some(run) = get_run(w, &old.repo, &old.sha)? {
-        let mut next = replacement(w, &run, old, now)?;
+    let next = if requeue {
+        let mut next = new_job(
+            w,
+            (&old.repo, &old.repo_path, &old.sha, &old.cache_scope),
+            &old.job,
+            old.network,
+            now,
+        )?;
+        next.seq = old.seq;
+        next.allow_reuse = old.allow_reuse;
+        next.auto_retry = old.auto_retry.clone();
+        next.purpose = old.purpose;
+        next.cache_key = old.cache_key.clone();
         next.after_interrupt = true;
         Some(next)
     } else if old.after_interrupt {
@@ -3964,6 +3997,163 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn probes_are_isolated_reusable_sources_and_survive_interruption_without_runs() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            require_test(w)?;
+            crate::model::rebuild_indexes(w)?;
+            let repo: crate::model::Repo = w
+                .get(store::REPOS, &crate::model::Repo::key("repo_1"))?
+                .unwrap();
+            register(w, reg("base", "main", &["test"]), 10, T0)?;
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo::default(),
+                10,
+                T0,
+            )?;
+            let before = current_attempts(w, "repo_1", "base", &[job("test")])?;
+            let a = probe(w, &repo, "base", &job("test"), 10, T0)?.unwrap();
+            assert_eq!(
+                super::super::priority::class_of(w, &a)?.class,
+                super::super::priority::Class::Landing
+            );
+            let claimed = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(claimed.attempt.cache_scope, "probe");
+            assert!(claimed.reuse.is_none());
+            finish(
+                w,
+                &a.id,
+                &claimed.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    ..Default::default()
+                },
+                10,
+                T0,
+            )?;
+            assert_eq!(
+                before,
+                current_attempts(w, "repo_1", "base", &[job("test")])?
+            );
+            assert!(retry(w, &a.id, 10, T0).is_err());
+            let mut same = reg("same", "feature", &["test"]);
+            same.tree = Some("tree-base".into());
+            register(w, same, 10, T0)?;
+            let reused = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(reused.reuse.unwrap().attempt_id, a.id);
+            cancel(w, &reused.attempt.id, "test", T0)?;
+            let standalone = probe(w, &repo, "middle", &job("test"), 10, T0)?.unwrap();
+            assert!(get_run(w, "repo_1", "middle")?.is_none());
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(c.attempt.id, standalone.id);
+            interrupt_running(w, None, "service stop", T0)?;
+            let again = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(again.attempt.purpose, Purpose::Probe);
+            assert_eq!(again.attempt.seq, c.attempt.seq);
+            assert_eq!(again.attempt.cache_scope, "probe");
+            finish(
+                w,
+                &again.attempt.id,
+                &again.lease,
+                "failure",
+                None,
+                ResultInfo::default(),
+                10,
+                T0,
+            )?;
+            assert!(claim(w, "r", 60, T0)?.is_none());
+            assert!(crate::model::index_problems(w)?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+    #[test]
+    fn probe_inputs_supply_paths_reuse_but_intermediate_probes_have_no_reuse_index() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            require_test(w)?;
+            let repo: crate::model::Repo = w
+                .get(store::REPOS, &crate::model::Repo::key("repo_1"))?
+                .unwrap();
+            let mut r = with_inputs("base");
+            r.protected = true;
+            if let PipelineState::Jobs { jobs } = &mut r.pipeline {
+                jobs[0].paths = vec!["src/**".into()];
+            }
+            let PipelineState::Jobs { jobs } = r.pipeline.clone() else {
+                unreachable!()
+            };
+            register(w, r, 10, T0)?;
+            let original = claim(w, "r", 60, T0)?.unwrap();
+            finish(
+                w,
+                &original.attempt.id,
+                &original.lease,
+                "success",
+                None,
+                ResultInfo::default(),
+                10,
+                T0,
+            )?;
+            probe(w, &repo, "base", &jobs[0], 10, T0)?.unwrap();
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(c.attempt.inputs.as_deref(), Some("d1"));
+            assert_eq!(c.attempt.cache_scope, "probe");
+            let source = finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    ..Default::default()
+                },
+                10,
+                T0,
+            )?;
+            let indexed = by_inputs(w)?;
+            assert!(indexed.contains(&source.id));
+            let mut target = with_inputs("different-tree");
+            target.pipeline = PipelineState::Jobs { jobs: jobs.clone() };
+            target.sha = "different-tree".into();
+            target.tree = Some("different-tree".into());
+            target.protected = false;
+            target.branch = "feature".into();
+            register(w, target, 10, T0)?;
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            assert_eq!(c.reuse.unwrap().attempt_id, source.id);
+            probe(w, &repo, "middle", &jobs[0], 10, T0)?.unwrap();
+            let c = claim(w, "r", 60, T0)?.unwrap();
+            assert!(c.attempt.inputs.is_none());
+            finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    ..Default::default()
+                },
+                10,
+                T0,
+            )?;
+            assert_eq!(by_inputs(w)?, indexed);
+            assert!(get_run(w, "repo_1", "middle")?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -3973,3 +4163,28 @@ mod priority_tests;
 #[cfg(test)]
 #[path = "reuse_tests.rs"]
 mod reuse_tests;
+
+/// Admit one diagnostic attempt without registering or changing a CI run.
+pub(super) fn probe(
+    w: &Wtx,
+    repo: &crate::model::Repo,
+    sha: &str,
+    job: &JobDef,
+    max: usize,
+    now: &str,
+) -> AppResult<Option<Attempt>> {
+    if admission_count(w, super::priority::Class::Landing, max, None)? >= max {
+        return Ok(None);
+    }
+    let mut a = new_job(
+        w,
+        (&repo.id, &repo.path, sha, "probe"),
+        job,
+        repo.ci_network,
+        now,
+    )?;
+    a.purpose = Purpose::Probe;
+    a.allow_reuse = false;
+    put_attempt(w, None, &a)?;
+    Ok(Some(a))
+}

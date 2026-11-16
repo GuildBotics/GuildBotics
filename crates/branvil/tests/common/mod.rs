@@ -705,19 +705,19 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_31(db: &Path) {
-    edit_records(db, "landing", |v| {
-        let repo = v["repo"].clone();
-        let number = v["number"].clone();
-        let head = v["head_sha"].clone();
-        let base = v["base_sha"].clone();
-        *v = json!({"repo":repo,"number":number,"head_sha":head,"base_sha":base,"base":"main","queued_at":"now","sequence":1,"state":"waiting","state_at":"now","gate":null,"reason":null,"notified_at":null,"notify":false,"resume_publish":false,"error":null});
-    });
+pub fn as_schema_32(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(31);
+            *v = json!(32);
         }
     });
+    let database = redb::Database::open(db).unwrap();
+    let txn = database.begin_write().unwrap();
+    for name in ["ci_narrowings", "ix_ci_narrowing"] {
+        let def: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new(name);
+        txn.delete_table(def).unwrap();
+    }
+    txn.commit().unwrap();
 }
 
 /// Every table of a database, by name, as raw keys and values.

@@ -1105,7 +1105,7 @@ is not the full sha of a commit of the repository.
   that was not skipped by the service's path selection.
   `image_digest` is the configuration digest (`sha256:…`) of the image the
   job ran on, as its runner reported it; `null` when the job did not get that
-  far. `purpose` is `check` or `cache_refresh`. `cache_refresh` is the ID of
+  far. `purpose` is `check`, `cache_refresh`, or `probe`. `cache_refresh` is the ID of
   the refresh requested by a reused check, or `null`. Refreshes never count as
   checks and cannot be manually retried. `reused_from` is `null` for an actual
   execution, otherwise
@@ -1168,13 +1168,13 @@ attempts are not interrupted by changes in class.
 - `POST /claim` `{"executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "..."}`
   → `204` (nothing queued, or the service is stopping: see "Stopping the
   service" in `docs/ci.md`) or
-  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>","network":false,"queued_secs","reuse"}`.
+  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse"}`.
   `timeout_secs` is `null` when the pipeline gives none; the runner applies its
   own CPUs, memory, and time limit. `cache_scope` is `protected` for a run a
   protected branch asked for, the only runs that save the dependency cache
   (`docs/ci.md`). `queued_secs` is how long the attempt
   waited in the queue (from its registration to this claim).
-  `purpose` is `check` or `cache_refresh`; refreshes always execute with
+  `purpose` is `check`, `cache_refresh`, or `probe`; refreshes always execute with
   protected scope and `reuse: null`.
   `reuse` is `null` or `{"attempt_id","sha","image_digest","cache_key","basis"}`
   of the latest finished actual successful execution whose files have not
@@ -1571,6 +1571,10 @@ changing the record, including when only one list is supplied. Other callers get
 Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are completed
 `skipped` checks, cannot supply reusable results or duration estimates, and are
 executed by manual retry and protected registration.
+
+Diagnostic `probe` attempts use the commit's own job definition, never reuse or
+save caches, and cannot be manually retried. Their job and log routes are the
+same as other attempts. They are excluded from commit checks and readiness.
 
 PR responses, including patrol lists, expose `repair: true|false`. It is true
 only for open PRs linked locally to the repository's open repair ticket. Closing

@@ -17,6 +17,7 @@ pub mod admin;
 pub mod api;
 pub mod config;
 pub mod files;
+pub mod narrow;
 pub mod notify;
 mod order;
 pub mod pipeline;
@@ -664,6 +665,12 @@ impl Ci {
                 "CI: verifying {} failed (retried in a minute): {e}",
                 repo.path
             ),
+        }
+        if let Err(e) = self.advance_narrowings(repo).await {
+            tracing::warn!(
+                "CI: narrowing {} failed (retried in a minute): {e}",
+                repo.path
+            );
         }
         wanted.sort();
         wanted.dedup();
