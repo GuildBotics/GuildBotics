@@ -244,8 +244,8 @@ describe("settings", () => {
   });
 
   it.each([
-    { upstream: null, says: /merges an open pull request by itself \(fast-forward\)/ },
-    { upstream: { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} }, says: /publishes an open pull request to GitHub by itself, as its author/ },
+    { upstream: null, says: /Branvil merges automatically/ },
+    { upstream: { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} }, says: /Branvil publishes to GitHub automatically as the author/ },
   ])("turns automatic landing on from the CI tab and says what it does ($says)", async ({ upstream, says }) => {
     const repo = { ...REPO, upstream };
     const fake = fakeApi({

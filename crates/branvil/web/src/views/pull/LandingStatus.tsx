@@ -1,6 +1,7 @@
-import { Anchor, Badge, Card, Stack, Text } from "@mantine/core";
+import { Anchor, Badge, Card, Group, Stack, Text } from "@mantine/core";
+import { Check, Cloud, GitBranch, GitMerge, ListChecks, X } from "lucide-react";
 import type { PullRequest, Repository } from "../../api/types";
-import { useT } from "../../i18n";
+import { useT, type MessageKey } from "../../i18n";
 import { useChecks } from "../../query/hooks";
 
 export type CheckState = "checking" | "check.missing" | "check.running" | "check.pathsSkipped" | "check.postMergeSkipped" | "check.success" | "check.failure";
@@ -25,17 +26,29 @@ export type Mark = "now" | "turn" | "failed";
 export function whereabouts(pull: PullRequest, repo: Repository, personNeeded: boolean): { stops: Stop[]; at: Stop; mark: Mark } {
   const stops: Stop[] = repo.upstream ? ["conditions", "host", "merge", "base"] : ["conditions", "merge", "base"];
   const next = pull.landing?.next ?? "conditions";
-  const at = next.includes("following") ? "base" : ["owner_merge_host", "owner_merge", "auto_merge"].includes(next) ? "merge" : next === "conditions" ? "conditions" : "host";
+  const at = next.includes("following") ? "base" : ["owner_merge_host", "owner_merge", "auto_merge"].includes(next) ? "merge" : next === "conditions" ? "conditions" : repo.upstream ? "host" : "merge";
   return { stops, at, mark: next.startsWith("owner_fix") || next === "host_closed" ? "failed" : next.startsWith("owner_") || personNeeded ? "turn" : "now" };
 }
+const stopIcons = { conditions: ListChecks, host: Cloud, merge: GitMerge, base: GitBranch };
+const markColors = { now: "var(--color-brand)", turn: "var(--color-warning-text)", failed: "var(--color-danger-text)" };
+const blockerName = (code: string) => `landing.blocker.${code}` as MessageKey;
+
 export function LandingJourney({ pull, repo }: { pull: PullRequest; repo: Repository }) {
   const t = useT();
   const l = pull.landing;
   const { stops, at, mark } = whereabouts(pull, repo, pull.unanswered.length > 0);
+  const HeadingIcon = mark === "failed" ? X : stopIcons[at];
   return <Card p="lg" component="section" aria-label={t("landing.journey", { base: pull.base })}><Stack gap="sm">
-    <Text fw={700}>{!l || l.next === "conditions" ? t("landing.missing") : t(`landing.next.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base })}</Text>
-    <ol className="journey">{stops.map(stop => <li key={stop} className="journey-stop" data-stop={stop} data-state={stop === at ? mark : "todo"} aria-current={stop === at ? "step" : undefined}>{stop === "host" ? repo.upstream?.host : stop === "base" ? pull.base : t(`landing.stop.${stop}`)}</li>)}</ol>
-    {l?.blockers.map(b => <Text key={b.code} size="sm">{b.message}</Text>)}
+    <Group gap="xs"><HeadingIcon size={18} color={markColors[mark]} aria-hidden="true" /><Text fw={700} c={mark === "now" ? undefined : markColors[mark]}>{!l || l.next === "conditions" ? t("landing.missing") : t(`landing.next.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base })}</Text></Group>
+    <ol className="journey">{stops.map((stop, index) => {
+      const state = index < stops.indexOf(at) ? "done" : stop === at ? mark : "todo";
+      const Icon = state === "done" ? Check : state === "failed" ? X : stopIcons[stop];
+      return <li key={stop} className="journey-stop" data-stop={stop} data-state={state} aria-current={stop === at ? "step" : undefined}>
+        <span className="journey-dot" aria-hidden="true"><Icon size={16} /></span>
+        {stop === "host" ? repo.upstream?.host : stop === "base" ? pull.base : t(`landing.stop.${stop}`)}
+      </li>;
+    })}</ol>
+    {l?.blockers.map(b => <Stack key={b.code} gap={2}><Text size="sm" fw={700}>{t(blockerName(b.code))}</Text><Text size="sm">{b.message}</Text></Stack>)}
     {pull.unanswered.map(u => <Anchor key={u.id} href={`#${encodeURIComponent(u.id)}`} size="sm">{t(`landing.statement.${u.kind}`, { author: u.author })}</Anchor>)}
     {l?.next_detail && <Text size="sm">{l.next_detail}</Text>}
     {l?.host_url && ["owner_merge_host", "host_closed"].includes(l.next) && <Anchor href={l.host_url} target="_blank" rel="noopener noreferrer">{t("landing.action")}</Anchor>}
@@ -45,6 +58,9 @@ export function JourneyBadge({ pull, repo }: { pull: PullRequest; repo: Reposito
   const t = useT();
   const l = pull.landing;
   const { at, mark } = whereabouts(pull, repo, false);
-  const text = !l || l.next === "conditions" ? (l?.blockers[0]?.message ?? t("landing.missing")) : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
-  return <Badge color={mark === "failed" ? "danger" : mark === "turn" ? "warning" : "neutral"} variant="light" size="sm" title={l?.blockers.map(b => b.message).join(" / ")} data-stop={at} data-state={mark}>{pull.base === repo.default_branch ? text : `${pull.base} · ${text}`}</Badge>;
+  const text = !l || l.next === "conditions" ? (l?.blockers.length ? `${t(blockerName(l.blockers[0]!.code))}${l.blockers.length > 1 ? ` +${l.blockers.length - 1}` : ""}` : t("landing.missing")) : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
+  const color = l?.next === "conditions" ? (l.blockers.some(b => b.code === "conflict" || b.code === "host_failed") ? "danger" : "neutral")
+    : l && ["owner_publish", "owner_fix_auto", "owner_fix_following"].includes(l.next) ? "danger"
+    : l && ["owner_merge_host", "owner_merge"].includes(l.next) ? "warning" : "neutral";
+  return <Badge color={color} variant="light" size="sm" title={l?.blockers.map(b => b.message).join(" / ")} data-stop={at} data-state={mark}>{pull.base === repo.default_branch ? text : `${pull.base} · ${text}`}</Badge>;
 }
