@@ -585,15 +585,56 @@ async fn approval_diagnostics_are_localized_before_service_access() {
                 .unwrap_err(),
             );
         }
-        for error in errors {
-            let rendered = error.render(translate);
-            assert!(rendered.contains("--human-approved"));
-            assert!(!rendered.contains("%{"));
-            assert!(rendered.contains(if language == "ja" {
-                "人の依頼"
+        for placement in [
+            TicketPlacement::Before("anchor".into()),
+            TicketPlacement::After("anchor".into()),
+        ] {
+            errors.push(
+                r.ticket_update(
+                    "url",
+                    UpdateTicket {
+                        placement: Some(placement),
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .await
+                .unwrap_err(),
+            );
+        }
+        let actions = if language == "ja" {
+            vec![
+                "チケットの作成".to_owned(),
+                "チケットの状態の 'open' への変更".into(),
+                "チケットの状態の 'closed' への変更".into(),
+                "チケットの対話指定の切り替え".into(),
+                "チケットの対話指定の切り替え".into(),
+                "チケットの着手の順の変更".into(),
+                "チケットの着手の順の変更".into(),
+            ]
+        } else {
+            vec![
+                "Creating a ticket".to_owned(),
+                "Changing the ticket state to 'open'".into(),
+                "Changing the ticket state to 'closed'".into(),
+                "Changing the ticket interactive mode".into(),
+                "Changing the ticket interactive mode".into(),
+                "Changing the ticket order".into(),
+                "Changing the ticket order".into(),
+            ]
+        };
+        assert_eq!(errors.len(), actions.len());
+        for (error, action) in errors.into_iter().zip(actions) {
+            let expected = if language == "ja" {
+                format!(
+                    "{action}には、人の依頼または承認が必要です。人に確認してから --human-approved を付けて再実行してください。"
+                )
             } else {
-                "human instruction"
-            }));
+                format!(
+                    "{action} requires a human instruction or approval. Ask the human first, then re-run with --human-approved."
+                )
+            };
+            assert_eq!(error.render(translate), expected);
         }
     }
 }

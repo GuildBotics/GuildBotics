@@ -110,6 +110,6 @@ ja:
   prepare_branch_anchor: "--branch と --issue-url または --pr-url は同時に指定できません。"
   ticket_no_repository: "%{url} にリポジトリがありません。--repo で指定してください。"
   ticket_repository_mismatch: "%{url} のリポジトリは %{repository} です。%{requested} には変更できません。"
-  ticket_order: "着手の順の変更には人の承認が必要です。"
+  ticket_order: "チケットの着手の順の変更"
   ticket_order_conflict: "--before と --after は同時に指定できません。"
   ticket_order_workflow: "着手の順は対話セッションでのみ変更できます。"

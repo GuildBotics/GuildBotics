@@ -110,6 +110,6 @@ en:
   prepare_branch_anchor: "--branch cannot be combined with --issue-url or --pr-url."
   ticket_no_repository: "%{url} belongs to no repository: name one with --repo."
   ticket_repository_mismatch: "%{url} belongs to %{repository}, not %{requested}."
-  ticket_order: "Reordering tickets requires human approval."
+  ticket_order: "Changing the ticket order"
   ticket_order_conflict: "Use only one of --before and --after."
   ticket_order_workflow: "Ticket order can only be changed in an interactive session."
