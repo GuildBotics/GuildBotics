@@ -14,3 +14,4 @@ en:
   continuation: "Invalid pagination response or continuation. Reuse the same resource, subject, and conditions."
   attachment_missing: "%{url} refers to no attachment '%{id}'. Read its ticket_attachments for the attachments it refers to."
   attachment_too_large: "Attachment '%{name}' is above the %{limit} byte limit. Ask a human to look at it."
+  ticket_placement: "The placement ticket must be a different ticket in the same tracker and board lane."

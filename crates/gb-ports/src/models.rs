@@ -25,6 +25,7 @@ pub struct TicketRelative {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TicketSummary {
+    pub assignees: Vec<ActorName>,
     pub kind: WorkKind,
     pub url: String,
     pub title: String,

@@ -192,12 +192,24 @@ impl Session<'_> {
                 .await?
             }
             "ticket update" => {
+                if p.optional("before").is_some() && p.optional("after").is_some() {
+                    return Err(invalid("cli.member.ticket_order_conflict"));
+                }
+                if (self.workflow || self.delegated_to.is_some())
+                    && (p.optional("before").is_some() || p.optional("after").is_some())
+                {
+                    return Err(invalid("cli.member.ticket_order_workflow"));
+                }
                 if p.optional("state-reason").is_some() && p.text("state") != "closed" {
                     return Err(invalid("cli.member.state_reason"));
                 }
                 r.ticket_update(
                     p.text("url"),
                     UpdateTicket {
+                        placement: p
+                            .optional("before")
+                            .map(TicketPlacement::Before)
+                            .or_else(|| p.optional("after").map(TicketPlacement::After)),
                         body,
                         title: p.optional("title").map(|v| title(&v)).transpose()?,
                         add_labels: p.list("add-label"),

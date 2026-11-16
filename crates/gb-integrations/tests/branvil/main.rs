@@ -407,6 +407,11 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         running.stop().await.unwrap();
         return;
     }
+    owner
+        .repos_create(input(json!({"path":"acme/order-other"})))
+        .await
+        .unwrap();
+    contracts::ticket_placement_tracker_contract(t.as_ref(), REPO, "acme/order-other").await;
     if board_order_only {
         let git = Git::new(temp.path());
         let driver = driver::Driver {

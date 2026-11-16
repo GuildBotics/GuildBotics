@@ -348,3 +348,66 @@ async fn checks_retry_returns_url_and_preserves_service_errors() {
         }
     }
 }
+
+#[tokio::test]
+async fn ticket_order_requires_interactive_approval_and_exclusive_anchor() {
+    let services = Services(support::Probe::new(Some(ServiceError::Unavailable)));
+    let roster = BTreeMap::new();
+    let records = Records::default();
+    for flag in ["--before", "--after"] {
+        let input = args(&[
+            "ticket",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "url",
+            flag,
+            "anchor",
+            "--human-approved",
+        ]);
+        for (workflow, delegated) in [(true, Some("aiko")), (false, Some("aiko"))] {
+            let mut s = session(&services, &roster, &records);
+            s.workflow = workflow;
+            s.delegated_to = delegated;
+            assert_eq!(
+                s.execute(&input, "").await.err().unwrap().to_string(),
+                "cli.member.ticket_order_workflow"
+            );
+        }
+        let mut s = session(&services, &roster, &records);
+        s.workflow = false;
+        s.delegated_to = None;
+        let no_approval = input[..input.len() - 1].to_vec();
+        assert_eq!(
+            s.execute(&no_approval, "").await.err().unwrap().to_string(),
+            "cli.member.human_approval_required"
+        );
+        // A placement alone must reach the provider rather than empty-update validation.
+        let result = s.execute(&input, "").await;
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "integrations.resources.unavailable"
+        );
+    }
+    let input = args(&[
+        "ticket",
+        "update",
+        "--person",
+        "aiko",
+        "--url",
+        "url",
+        "--before",
+        "a",
+        "--after",
+        "b",
+        "--human-approved",
+    ]);
+    let mut s = session(&services, &roster, &records);
+    s.workflow = false;
+    s.delegated_to = None;
+    assert_eq!(
+        s.execute(&input, "").await.err().unwrap().to_string(),
+        "cli.member.ticket_order_conflict"
+    );
+}

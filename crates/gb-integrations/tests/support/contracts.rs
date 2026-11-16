@@ -383,14 +383,13 @@ pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str, 
 }
 
 pub trait TicketContractDriver: Send + Sync {
-    fn reorder_before<'a>(&'a self, url: &'a str, before: &'a str) -> ServiceFuture<'a, ()>;
     fn human_comment<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()>;
     fn assign<'a>(&'a self, url: &'a str, actor: &'a ActorName) -> ServiceFuture<'a, ()>;
     fn merge_reference<'a>(&'a self, ticket_url: &'a str) -> ServiceFuture<'a, ()>;
 }
 pub async fn ticket_board_order_contract(
     t: &dyn TicketService,
-    driver: &dyn TicketContractDriver,
+    _driver: &dyn TicketContractDriver,
     tracker: &str,
     actor: &ActorName,
     other: &ActorName,
@@ -414,7 +413,80 @@ pub async fn ticket_board_order_contract(
             .collect()
     }
     assert_eq!(order(t, &urls).await, urls);
-    driver.reorder_before(&urls[2], &urls[0]).await.unwrap();
+    async fn read_order(t: &dyn TicketService, tracker: &str, urls: &[String]) -> Vec<String> {
+        tracker_items(t, tracker, &json!({"lane":"ready","page_size":1}))
+            .await
+            .into_iter()
+            .filter_map(|v| {
+                assert!(v["assignees"].is_array());
+                assert_eq!(v["lane"], "ready");
+                v["url"]
+                    .as_str()
+                    .filter(|u| urls.iter().any(|x| x == u))
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+    assert_eq!(read_order(t, tracker, &urls).await, urls);
+    let other_lane = ticket_create(t, tracker, "Other lane").await;
+    let before = read_order(t, tracker, &urls).await;
+    for placement in [
+        TicketPlacement::Before(other_lane.clone()),
+        TicketPlacement::After(other_lane),
+    ] {
+        let e = t
+            .update_ticket(
+                &urls[0],
+                UpdateTicket {
+                    placement: Some(placement),
+                    title: Some("Must not change".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.to_string(), "integrations.resources.ticket_placement");
+        assert_ne!(ticket_detail(t, &urls[0]).await["title"], "Must not change");
+        assert_eq!(read_order(t, tracker, &urls).await, before);
+    }
+    t.update_ticket(
+        &urls[0],
+        UpdateTicket {
+            placement: Some(TicketPlacement::After(urls[1].clone())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read_order(t, tracker, &urls).await,
+        vec![
+            urls[1].clone(),
+            urls[0].clone(),
+            urls[2].clone(),
+            urls[3].clone()
+        ]
+    );
+    assert_eq!(ticket_detail(t, &urls[0]).await["lane"], "ready");
+    t.update_ticket(
+        &urls[0],
+        UpdateTicket {
+            placement: Some(TicketPlacement::Before(urls[1].clone())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    t.update_ticket(
+        &urls[2],
+        UpdateTicket {
+            placement: Some(TicketPlacement::Before(urls[0].clone())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         order(t, &urls).await,
         vec![
@@ -424,7 +496,16 @@ pub async fn ticket_board_order_contract(
             urls[3].clone()
         ]
     );
-    driver.reorder_before(&urls[1], &urls[2]).await.unwrap();
+    t.update_ticket(
+        &urls[1],
+        UpdateTicket {
+            placement: Some(TicketPlacement::Before(urls[2].clone())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(read_order(t, tracker, &urls).await, order(t, &urls).await);
     t.update_ticket(
         &urls[1],
         UpdateTicket {
@@ -1031,6 +1112,40 @@ pub async fn ticket_scope_contract(
         .unwrap_err(),
         ServiceError::OutOfScope
     );
+    for placement in [
+        TicketPlacement::Before(theirs.into()),
+        TicketPlacement::After(theirs.into()),
+    ] {
+        assert_eq!(
+            t.update_ticket(
+                &mine,
+                UpdateTicket {
+                    placement: Some(placement),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap_err(),
+            ServiceError::OutOfScope
+        );
+    }
+    for placement in [
+        TicketPlacement::Before(mine.clone()),
+        TicketPlacement::After(mine.clone()),
+    ] {
+        assert_eq!(
+            t.update_ticket(
+                theirs,
+                UpdateTicket {
+                    placement: Some(placement),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap_err(),
+            ServiceError::OutOfScope
+        );
+    }
     for q in [
         UpdateTicket {
             parent: Some(theirs.into()),
@@ -2478,4 +2593,32 @@ pub async fn code_open_order_contract(
             .unwrap()
             .is_empty()
     );
+}
+
+pub async fn ticket_placement_tracker_contract(t: &dyn TicketService, tracker: &str, other: &str) {
+    let mut q = ticket_request(tracker, "Order source");
+    q.lane = Some(CreateLane::Ready);
+    let source = t.create_ticket(q).await.unwrap().target.url;
+    let mut q = ticket_request(other, "Order anchor");
+    q.lane = Some(CreateLane::Ready);
+    let anchor = t.create_ticket(q).await.unwrap().target.url;
+    for placement in [
+        TicketPlacement::Before(anchor.clone()),
+        TicketPlacement::After(anchor.clone()),
+    ] {
+        let e = t
+            .update_ticket(
+                &source,
+                UpdateTicket {
+                    placement: Some(placement),
+                    title: Some("Must not change".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.to_string(), "integrations.resources.ticket_placement");
+        assert_eq!(ticket_detail(t, &source).await["title"], "Order source");
+        assert_eq!(ticket_detail(t, &anchor).await["lane"], "ready");
+    }
 }
