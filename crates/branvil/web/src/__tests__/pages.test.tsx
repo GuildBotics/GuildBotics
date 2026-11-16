@@ -130,7 +130,8 @@ describe("pages", () => {
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["acme/web !1 Draft work", "acme/demo !3 Fix login"]);
     expect(rows[1]).toHaveAttribute("href", "/acme/demo/-/pulls/3");
-    expect(await within(rows[0] as HTMLElement).findByText("The pull request is a draft.")).toBeInTheDocument();
+    expect(await within(rows[0] as HTMLElement).findByText("Draft")).toBeInTheDocument();
+    expect(within(rows[0] as HTMLElement).getByTitle("The pull request is a draft.")).toHaveTextContent("Draft");
     expect(within(table).getByRole("columnheader", { name: "Reviewers" })).toBeInTheDocument();
     for (const row of rows) {
       expect(within(row).getByRole("img", { name: "Reviewers: owner (Requested)" })).toBeInTheDocument();
