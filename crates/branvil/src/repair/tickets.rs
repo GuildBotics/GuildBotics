@@ -387,30 +387,135 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         .store
         .read(move |r| crate::domain::repo_by_id(r, &id))
         .await?;
-    let (body, pulls) = evidence(app, &repo, &p).await?;
+    let id = p.repo.clone();
+    let old = app.store.read(move |r| open_ticket(r, &id)).await?;
+    let mut lines = Vec::new();
+    let mut merged = Vec::new();
+    if let Some(t) = &old {
+        let repair = t.repair.as_ref().unwrap();
+        let (t2, id) = (t.clone(), repo.id.clone());
+        let pulls = app
+            .store
+            .read(move |r| {
+                Ok(
+                    r.prefix_all::<Pull>(store::PULLS, &Key::new().s(&id).bytes())?
+                        .into_iter()
+                        .filter(|p| {
+                            p.merged
+                                && p.tickets
+                                    .iter()
+                                    .any(|l| l.local.as_ref() == Some(&(id.clone(), t2.number)))
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .await?;
+        let dir = app.git.repo_dir(&repo.path);
+        for pull in pulls {
+            if let Some(sha) = pull.merge_sha
+                && app.git.is_ancestor(&dir, &sha, &p.sha).await?
+                && !app.git.is_ancestor(&dir, &sha, &repair.reported).await?
+            {
+                merged.push(pull.number);
+            }
+        }
+        for f in &p.failures {
+            let root = format!("{}/{}", app.base_url, repo.path);
+            let link = f.attempt_id.as_ref().map_or_else(
+                || format!("{root}/-/commit/{}", p.sha),
+                |id| format!("{root}/-/jobs/{id}"),
+            );
+            let job = text(&f.name);
+            if !repair.jobs.contains(&f.name) {
+                lines.push(format!("- New failing job: {job} — {link}"));
+            }
+            for n in &merged {
+                lines.push(format!(
+                    "- Still failing after !{n} (linked here) was merged: {job} — {link}"
+                ));
+            }
+            if repair.reported == p.sha {
+                lines.push(format!(
+                    "- Still failing after its failed jobs were retried: {job} — {link}"
+                ));
+            }
+        }
+    }
+    let evidence = if old.is_none() {
+        Some(evidence(app, &repo, &p).await?)
+    } else {
+        None
+    };
     let path = repo.path.clone();
-    let created = app
+    let changed = app
         .store
         .write(move |w| {
             let key = Key::new().s(&p.repo).s(&p.sha).bytes();
-            // A pass may have removed this failure while evidence was being read.
             if w.get::<Pending>(store::REPAIR_PENDING, &key)?.is_none() {
                 return Ok(None);
             }
-            let created = if open_ticket(w, &p.repo)?.is_none() {
-                let repo = crate::domain::repo_by_id(w, &p.repo)?;
-                Some(create(w, &repo, &p, body, &pulls)?.number)
+            let current = open_ticket(w, &p.repo)?;
+            if current
+                .as_ref()
+                .map(|t| (&t.number, &t.repair.as_ref().unwrap().reported))
+                != old
+                    .as_ref()
+                    .map(|t| (&t.number, &t.repair.as_ref().unwrap().reported))
+            {
+                return Ok(None);
+            }
+            let changed = if let Some(old) = current {
+                if lines.is_empty() {
+                    None
+                } else {
+                    let mut t = if matches!(old.lane.as_str(), "new" | "done") {
+                        Ticket {
+                            lane: "ready".into(),
+                            rank: tickets::rank_first(w, &old.workspace, "ready")?,
+                            ..old.clone()
+                        }
+                    } else {
+                        old.clone()
+                    };
+                    let repair = t.repair.as_mut().unwrap();
+                    repair.reported = p.sha.clone();
+                    for f in &p.failures {
+                        if !repair.jobs.contains(&f.name) {
+                            repair.jobs.push(f.name.clone());
+                        }
+                    }
+                    t.revision += 1;
+                    t.updated_at = crate::util::now();
+                    tickets::insert_comment(
+                        w,
+                        &Target::Ticket {
+                            repo: p.repo.clone(),
+                            number: t.number,
+                        },
+                        "branvil",
+                        format!(
+                            "Verification of main failed again at {}.\n\n{}",
+                            short(&p.sha),
+                            lines.join("\n")
+                        ),
+                        None,
+                    )?;
+                    tickets::write_ticket(w, Some(&old), &t)?;
+                    Some(t.number)
+                }
             } else {
-                None
+                let (body, pulls) = evidence.unwrap();
+                Some(create(w, &repo, &p, body, &pulls)?.number)
             };
             w.del(store::REPAIR_PENDING, &key)?;
-            Ok(created)
+            Ok(changed)
         })
         .await?;
-    if let Some(number) = created {
+    if let Some(number) = changed {
         app.events.publish("ticket", &path, number.to_string());
         app.events
             .publish("board", tickets::workspace_of(&path), "");
+        app.events.publish("verification", &path, "");
     }
     Ok(())
 }

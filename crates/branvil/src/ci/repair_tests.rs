@@ -11,6 +11,618 @@ use crate::{
 };
 use serde_json::json;
 
+async fn failure_fixture() -> (
+    tempfile::TempDir,
+    crate::app::Shared,
+    Repo,
+    std::path::PathBuf,
+    String,
+) {
+    let (temp, ci, repo) = setup();
+    let app = app(&temp, &ci);
+    let dir = app.git.repo_dir(&repo.path);
+    app.git.init_bare(&dir, "main").await.unwrap();
+    let work = temp.path().join("work");
+    app.git
+        .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+        .await
+        .unwrap();
+    let base = commit_all(&app.git, &work, "base").await;
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await
+        .unwrap();
+    let (r2, sha) = (repo.clone(), base.clone());
+    app.store
+        .write(move |w| {
+            w.put(store::REPOS, &Repo::key(&r2.id), &r2)?;
+            let m = Member {
+                name: "owner".into(),
+                display_name: "Owner".into(),
+                kind: MemberKind::Owner,
+                accounts: vec![],
+                reviewers: vec![],
+                created_at: "0".into(),
+                avatar: None,
+            };
+            w.put(store::MEMBERS, &Member::key("owner"), &m)?;
+        let peer: Ticket = serde_json::from_value(json!({
+            "repo":r2.id, "workspace":r2.workspace, "number":2, "title":"Existing ready card", "body":"", "mentions":[],
+            "state":"open", "author":"owner", "labels":[], "interactive":false, "lane":"ready", "rank":"0|a",
+            "blocked_by":[], "created_at":"0", "updated_at":"0", "revision":1
+        })).unwrap();
+        crate::domain::tickets::write_ticket(w, None, &peer)?;
+            repair::failed(w, &r2.id, &sha, &[test_failure()])
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    let id = repo.id.clone();
+    app.store
+        .read(move |r| {
+            let repair = repair::open_ticket(r, &id)?.unwrap();
+            let peer = r
+                .get::<Ticket>(store::TICKETS, &Ticket::key(&id, 2))?
+                .unwrap();
+            assert!(
+                repair.rank < peer.rank,
+                "new repair must precede existing ready card"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    (temp, app, repo, work, base)
+}
+
+fn test_failure() -> FailedJob {
+    FailedJob {
+        name: "test".into(),
+        attempt_id: None,
+        details: None,
+    }
+}
+
+#[tokio::test]
+async fn failure_returns_to_ready_front_and_preserves_active_positions() {
+    let (_temp, app, repo, _work, base) = failure_fixture().await;
+    for lane in ["new", "done", "ready", "in_progress"] {
+        let (id, sha) = (repo.id.clone(), base.clone());
+        let (rank, other_rank) = app
+            .store
+            .write(move |w| {
+                let old = repair::open_ticket(w, &id)?.unwrap();
+                let mut other = old.clone();
+                let previous = w.get::<Ticket>(store::TICKETS, &Ticket::key(&id, 2))?;
+                other.number = 2;
+                other.repair = None;
+                other.lane = "ready".into();
+                other.rank = crate::domain::tickets::rank_first(w, &old.workspace, "ready")?;
+                crate::domain::tickets::write_ticket(w, previous.as_ref(), &other)?;
+                let t = crate::domain::tickets::place(w, &old, lane, None, None)?;
+                crate::domain::tickets::write_ticket(w, Some(&old), &t)?;
+                repair::failed(w, &id, &sha, &[test_failure()])?;
+                Ok((t.rank, other.rank))
+            })
+            .await
+            .unwrap();
+        repair::sweep(&app).await.unwrap();
+        let id = repo.id.clone();
+        app.store
+            .read(move |r| {
+                let t = repair::open_ticket(r, &id)?.unwrap();
+                if matches!(lane, "new" | "done") {
+                    assert_eq!(t.lane, "ready");
+                    assert!(
+                        t.rank < other_rank,
+                        "{lane}: repair must precede existing ready card"
+                    );
+                } else {
+                    assert_eq!(t.lane, lane);
+                    assert_eq!(t.rank, rank);
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn merged_repair_is_reported_only_after_inclusion_and_only_once() {
+    let (_temp, app, repo, work, base) = failure_fixture().await;
+    let before = commit_all(&app.git, &work, "before merge").await;
+    let merged = commit_all(&app.git, &work, "repair merge").await;
+    let after = commit_all(&app.git, &work, "after merge").await;
+    let dir = app.git.repo_dir(&repo.path);
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await
+        .unwrap();
+    let (id, merge_sha) = (repo.id.clone(), merged.clone());
+    app.store
+        .write(move |w| {
+            let mut p = super::tests::open_pull(&id, 1, "fix", "main");
+            p.state = "closed".into();
+            p.merged = true;
+            p.merge_sha = Some(merge_sha);
+            p.tickets.push(model::TicketLink {
+                url: "ticket".into(),
+                local: Some((id.clone(), 1)),
+                closes: true,
+            });
+            model::put_indexed(
+                w,
+                store::PULLS,
+                &Pull::key(&id, 1),
+                None,
+                &p,
+                model::pull_index(&p),
+            )?;
+            let old = repair::open_ticket(w, &id)?.unwrap();
+            let t = crate::domain::tickets::place(w, &old, "done", None, None)?;
+            crate::domain::tickets::write_ticket(w, Some(&old), &t)
+        })
+        .await
+        .unwrap();
+    for (sha, count, reported, lane) in [
+        (before, 0, base, "done"),
+        (merged.clone(), 1, merged.clone(), "ready"),
+        (after, 1, merged, "ready"),
+    ] {
+        let id = repo.id.clone();
+        app.store
+            .write(move |w| repair::failed(w, &id, &sha, &[test_failure()]))
+            .await
+            .unwrap();
+        repair::sweep(&app).await.unwrap();
+        repair::sweep(&app).await.unwrap();
+        let id = repo.id.clone();
+        app.store
+            .read(move |r| {
+                let t = repair::open_ticket(r, &id)?.unwrap();
+                assert_eq!(t.lane, lane);
+                assert_eq!(t.repair.unwrap().reported, reported);
+                let comments = crate::domain::tickets::comments_of(
+                    r,
+                    &model::Target::Ticket {
+                        repo: id,
+                        number: 1,
+                    },
+                )?;
+                assert_eq!(comments.len(), count);
+                if count > 0 {
+                    assert!(
+                        comments[0]
+                            .body
+                            .contains("Still failing after !1 (linked here) was merged: test")
+                    );
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn repeated_failures_and_repair_head_selection() {
+    let (temp, ci, mut repo) = setup();
+    let app = app(&temp, &ci);
+    repo.post_merge_jobs = vec!["post".into()];
+    let dir = app.git.repo_dir(&repo.path);
+    app.git.init_bare(&dir, "main").await.unwrap();
+    let work = temp.path().join("work");
+    app.git
+        .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+        .await
+        .unwrap();
+    std::fs::create_dir(work.join(".branvil")).unwrap();
+    std::fs::write(work.join(".branvil/ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\n").unwrap();
+    let base = commit_all(&app.git, &work, "base").await;
+    let head = commit_all(&app.git, &work, "head").await;
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                &format!("{base}:refs/heads/main"),
+                &format!("{head}:refs/heads/fix"),
+            ],
+        )
+        .await
+        .unwrap();
+    let (r2, b) = (repo.clone(), base.clone());
+    app.store
+        .write(move |w| {
+            w.put(store::REPOS, &Repo::key(&r2.id), &r2)?;
+            let m = Member {
+                name: "owner".into(),
+                display_name: "Owner".into(),
+                kind: MemberKind::Owner,
+                accounts: vec![],
+                reviewers: vec![],
+                created_at: "0".into(),
+                avatar: None,
+            };
+            w.put(store::MEMBERS, &Member::key("owner"), &m)?;
+            let p = super::tests::open_pull(&r2.id, 1, "fix", "main");
+            model::put_indexed(
+                w,
+                store::PULLS,
+                &Pull::key(&r2.id, 1),
+                None,
+                &p,
+                model::pull_index(&p),
+            )?;
+            repair::failed(
+                w,
+                &r2.id,
+                &b,
+                &[FailedJob {
+                    name: "test".into(),
+                    attempt_id: None,
+                    details: None,
+                }],
+            )
+        })
+        .await
+        .unwrap();
+    use futures_util::{FutureExt, StreamExt};
+    let mut events = Box::pin(app.events.subscribe());
+    repair::sweep(&app).await.unwrap();
+    let mut verification_event = false;
+    while let Some(Some(e)) = events.next().now_or_never() {
+        if let crate::events::Notice::Change(e) = e {
+            verification_event |= e.kind == "verification";
+        }
+    }
+    assert!(verification_event);
+    let state = super::verify::main_state(&app, &repo).await.unwrap();
+    assert_eq!(state.repair.unwrap().number, 1);
+    ci.on_pull_opened(&app, &repo, "fix").await;
+    let (id, sha) = (repo.id.clone(), head.clone());
+    app.store
+        .read(move |r| {
+            let attempts = queue::attempts_of(r, &id, &sha)?;
+            assert_eq!(attempts.len(), 2);
+            assert!(attempts.iter().all(|a| a.path_skip.is_some()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (id, sha) = (repo.id.clone(), head.clone());
+    app.store
+        .write(move |w| {
+            let mut t = repair::open_ticket(w, &id)?.unwrap();
+            let old = t.clone();
+            t.lane = "done".into();
+            crate::domain::tickets::write_ticket(w, Some(&old), &t)?;
+            let mut p = w.get::<Pull>(store::PULLS, &Pull::key(&id, 1))?.unwrap();
+            let old = p.clone();
+            p.tickets.push(model::TicketLink {
+                url: "ticket".into(),
+                local: Some((id.clone(), 1)),
+                closes: true,
+            });
+            model::put_indexed(
+                w,
+                store::PULLS,
+                &Pull::key(&id, 1),
+                Some(model::pull_index(&old)),
+                &p,
+                model::pull_index(&p),
+            )?;
+            assert!(repair::is_pull(w, &p)?);
+            repair::failed(
+                w,
+                &id,
+                &sha,
+                &[FailedJob {
+                    name: "new".into(),
+                    attempt_id: None,
+                    details: None,
+                }],
+            )
+        })
+        .await
+        .unwrap();
+    ci.on_pull_opened(&app, &repo, "fix").await;
+    let (id, sha) = (repo.id.clone(), head.clone());
+    app.store
+        .read(move |r| {
+            let run = queue::get_run(r, &id, &sha)?.unwrap();
+            assert!(run.selection.is_none());
+            let super::queue::PipelineState::Jobs { jobs } = &run.pipeline else {
+                panic!()
+            };
+            assert!(
+                queue::current_attempts(r, &id, &sha, jobs)?
+                    .iter()
+                    .all(|a| a.path_skip.is_none() && a.status == "queued")
+            );
+            assert_eq!(
+                super::priority::run_class(r, &run)?.class,
+                super::priority::Class::Repair
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    for retry in 0..3 {
+        let (id, sha) = (repo.id.clone(), head.clone());
+        app.store
+            .write(move |w| {
+                let t = repair::open_ticket(w, &id)?.unwrap();
+                assert_eq!(t.lane, "ready");
+                assert!(t.repair.unwrap().jobs.contains(&"new".to_string()));
+                let comments = crate::domain::tickets::comments_of(
+                    w,
+                    &model::Target::Ticket {
+                        repo: id.clone(),
+                        number: 1,
+                    },
+                )?;
+                assert_eq!(comments.len(), retry + 1);
+                assert!(comments[0].body.contains("New failing job: new"));
+                if retry < 2 {
+                    repair::failed(
+                        w,
+                        &id,
+                        &sha,
+                        &[FailedJob {
+                            name: "new".into(),
+                            attempt_id: None,
+                            details: None,
+                        }],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        repair::sweep(&app).await.unwrap();
+        repair::sweep(&app).await.unwrap();
+    }
+    let (id, sha) = (repo.id.clone(), head.clone());
+    let p = app
+        .store
+        .write(move |w| {
+            for mut a in queue::attempts_of(w, &id, &sha)?
+                .into_iter()
+                .filter(|a| a.path_skip.is_none())
+            {
+                let old = a.clone();
+                a.status = "completed".into();
+                a.conclusion = Some(
+                    if a.job.name == "post" {
+                        "failure"
+                    } else {
+                        "success"
+                    }
+                    .into(),
+                );
+                model::put_indexed(
+                    w,
+                    store::CI_ATTEMPTS,
+                    &queue::Attempt::key(&a.id),
+                    Some(queue::attempt_index(&old)),
+                    &a,
+                    queue::attempt_index(&a),
+                )?;
+            }
+            Ok(w.get::<Pull>(store::PULLS, &Pull::key(&id, 1))?.unwrap())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::landing::pull_head_checks(&app, &repo, &p, &head)
+            .await
+            .unwrap(),
+        crate::landing::HeadChecks::Failed
+    );
+    let tips = app.git.branch_tips(&dir).await.unwrap();
+    assert!(
+        crate::domain::pulls::pull_view(&app, &repo, &p, &tips)
+            .await
+            .unwrap()
+            .repair
+    );
+    let mut ordinary = p.clone();
+    ordinary.tickets.clear();
+    assert!(
+        !crate::domain::pulls::pull_view(&app, &repo, &ordinary, &tips)
+            .await
+            .unwrap()
+            .repair
+    );
+    assert_eq!(
+        crate::landing::pull_head_checks(&app, &repo, &ordinary, &head)
+            .await
+            .unwrap(),
+        crate::landing::HeadChecks::Passed
+    );
+    let (id, sha) = (repo.id.clone(), head.clone());
+    app.store
+        .write(move |w| {
+            for mut a in queue::attempts_of(w, &id, &sha)?
+                .into_iter()
+                .filter(|a| a.path_skip.is_none())
+            {
+                let old = a.clone();
+                a.conclusion = Some("success".into());
+                model::put_indexed(
+                    w,
+                    store::CI_ATTEMPTS,
+                    &queue::Attempt::key(&a.id),
+                    Some(queue::attempt_index(&old)),
+                    &a,
+                    queue::attempt_index(&a),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::landing::pull_head_checks(&app, &repo, &p, &head)
+            .await
+            .unwrap(),
+        crate::landing::HeadChecks::Passed
+    );
+    let (id, sha) = (repo.id.clone(), head.clone());
+    app.store
+        .write(move |w| {
+            let run = queue::get_run(w, &id, &sha)?.unwrap();
+            for mut a in queue::attempts_of(w, &id, &sha)?
+                .into_iter()
+                .filter(|a| a.path_skip.is_none())
+            {
+                let old = a.clone();
+                a.conclusion = Some("failure".into());
+                model::put_indexed(
+                    w,
+                    store::CI_ATTEMPTS,
+                    &queue::Attempt::key(&a.id),
+                    Some(queue::attempt_index(&old)),
+                    &a,
+                    queue::attempt_index(&a),
+                )?;
+            }
+            let mut v = Verification {
+                sha: sha.clone(),
+                base: None,
+                state: "failed".into(),
+                started_at: "0".into(),
+                finished_at: None,
+                failed_jobs: vec![FailedJob {
+                    name: "test".into(),
+                    attempt_id: None,
+                    details: None,
+                }],
+                failing_since: Some(sha),
+                last_verified: None,
+            };
+            for running in [false, true] {
+                if running {
+                    v.state = "running".into();
+                    v.failed_jobs.clear();
+                }
+                w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v)?;
+                assert_eq!(
+                    super::priority::run_class(w, &run)?.class,
+                    super::priority::Class::Repair
+                );
+            }
+            v.failing_since = None;
+            w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v)?;
+            assert_eq!(
+                super::priority::run_class(w, &run)?.class,
+                super::priority::Class::Deferred
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let merged = commit_all(&app.git, &work, "merge repair").await;
+    app.git
+        .run_ok(
+            None,
+            &[
+                "-C",
+                work.to_str().unwrap(),
+                "push",
+                "-q",
+                dir.to_str().unwrap(),
+                &format!("{merged}:refs/heads/main"),
+            ],
+        )
+        .await
+        .unwrap();
+    let (id, sha) = (repo.id.clone(), merged);
+    app.store
+        .write(move |w| {
+            let mut p = w.get::<Pull>(store::PULLS, &Pull::key(&id, 1))?.unwrap();
+            let old = p.clone();
+            p.state = "closed".into();
+            p.merged = true;
+            p.merge_sha = Some(sha.clone());
+            model::put_indexed(
+                w,
+                store::PULLS,
+                &Pull::key(&id, 1),
+                Some(model::pull_index(&old)),
+                &p,
+                model::pull_index(&p),
+            )?;
+            assert!(!repair::is_pull(w, &p)?);
+            let mut t = repair::open_ticket(w, &id)?.unwrap();
+            let old = t.clone();
+            t.lane = "in_progress".into();
+            crate::domain::tickets::write_ticket(w, Some(&old), &t)?;
+            repair::failed(
+                w,
+                &id,
+                &sha,
+                &[FailedJob {
+                    name: "new".into(),
+                    attempt_id: None,
+                    details: None,
+                }],
+            )
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    repair::sweep(&app).await.unwrap();
+    let id = repo.id.clone();
+    app.store
+        .read(move |r| {
+            assert_eq!(repair::open_ticket(r, &id)?.unwrap().lane, "in_progress");
+            let comments = crate::domain::tickets::comments_of(
+                r,
+                &model::Target::Ticket {
+                    repo: id,
+                    number: 1,
+                },
+            )?;
+            assert_eq!(comments.len(), 4);
+            assert!(
+                comments[3]
+                    .body
+                    .contains("Still failing after !1 (linked here) was merged")
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn assignments_evidence_and_lifecycle() {
     for (verified, authors, chosen, expected) in [
@@ -278,17 +890,22 @@ async fn assignments_evidence_and_lifecycle() {
                         number: 1,
                     },
                 )?;
-                assert_eq!(comments.len(), 1);
+                assert_eq!(comments.len(), 2);
+                assert!(
+                    comments[0]
+                        .body
+                        .contains("Still failing after its failed jobs were retried")
+                );
                 if r.get::<Pull>(store::PULLS, &Pull::key(&t.repo, 1))?
                     .is_some()
                 {
                     assert!(
-                        comments[0]
+                        comments[1]
                             .body
                             .contains("Merged pull requests linked here: !1.")
                     );
                 } else {
-                    assert!(comments[0].body.contains("failure may be intermittent"));
+                    assert!(comments[1].body.contains("failure may be intermittent"));
                 }
                 Ok(())
             })

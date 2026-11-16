@@ -4,6 +4,8 @@ export const en = {
   "verification.verified": "verified",
   "verification.verifying": "verifying",
   "verification.pending": "awaiting verification",
+  "ticket.repair": "Repair",
+  "verification.repair": "failed (waiting for repair #{number})",
   "verification.failing": "failed",
   "verification.failed": "failed",
   "verification.retry": "verifying (retry {number}/{max})",

@@ -43,6 +43,26 @@ impl Ci {
         }
         let dir = self.inner.git.repo_dir(&repo.path);
         let tips = self.inner.git.branch_tips(&dir).await?;
+        let candidates: Vec<_> = pulls
+            .iter()
+            .filter(|p| tips.get(&p.head).is_some_and(|tip| tip == sha))
+            .cloned()
+            .collect();
+        let repair = self
+            .inner
+            .store
+            .read(move |r| {
+                for p in candidates {
+                    if crate::repair::is_pull(r, &p)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .await?;
+        if repair {
+            return Ok(None);
+        }
         let mut bases: Vec<SelectionBase> = pulls
             .into_iter()
             .filter(|p| tips.get(&p.head).is_some_and(|tip| tip == sha))

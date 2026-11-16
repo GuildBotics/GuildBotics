@@ -926,6 +926,10 @@ pub async fn update_ticket(
         })
         .await?;
     publish_tickets(app, [&before, &result.ticket]);
+    if result.ticket.repair && result.state_changed {
+        app.events
+            .publish("verification", &result.ticket.repository, "");
+    }
     for d in &descendants {
         app.events.publish("ticket", &d.repository, d.key.clone());
     }

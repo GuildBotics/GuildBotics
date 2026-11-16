@@ -6,6 +6,8 @@ export const ja: Record<MessageKey, string> = {
   "verification.verified": "確認済み",
   "verification.verifying": "確認中",
   "verification.pending": "確認待ち",
+  "ticket.repair": "修復",
+  "verification.repair": "失敗（修復 #{number} を待っている）",
   "verification.failing": "失敗",
   "verification.failed": "失敗",
   "verification.retry": "確認中（再試行 {number}/{max}）",

@@ -238,6 +238,7 @@ export interface Unanswered {
 }
 
 export interface PullRequest {
+  repair: boolean;
   url: string;
   repository: string;
   number: number;
@@ -570,6 +571,7 @@ export interface ChangeEvent {
 
 export type VerificationState = "empty" | "verifying" | "failing" | "verified" | "pending";
 export interface Verification {
+  repair: { number: number; assignee: string | null; url: string } | null;
   branch: string;
   tip: string | null;
   state: VerificationState;

@@ -74,6 +74,13 @@ const CHECKS = {
 
 const lane = (name: RegExp) => screen.getByRole("region", { name });
 
+it.each([true, false])("shows repair badge only on repair cards (%s)", async (repair) => {
+  fakeApi(boardRoutes({ "GET /api/v1/workspaces/acme/board/cards": json(200, { items: [card("1", "ready", { repair })], next_cursor: null }) }));
+  renderApp("/acme/-/board", "ja");
+  await screen.findByText("Title of 1");
+  expect(screen.queryByText("修復") !== null).toBe(repair);
+});
+
 /** How often each card rendered since the last reset (a card renders its key link twice per render). */
 function cardRenders() {
   const spy = vi.spyOn(href, "ticket");
