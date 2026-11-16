@@ -248,7 +248,7 @@ describe("settings", () => {
   it.each([
     { lang: "en", upstream: false, help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held." },
     { lang: "ja", upstream: false, help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。" },
-    { lang: "en", upstream: true, help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published there. Those PRs are shown as held." },
+    { lang: "en", upstream: true, help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held." },
     { lang: "ja", upstream: true, help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。" },
   ] as const)("explains hold behavior ($lang, upstream=$upstream)", async ({ lang, upstream, help }) => {
     const words = lang === "ja" ? ja : en;

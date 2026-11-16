@@ -220,7 +220,7 @@ export const en = {
   "landing.action": "Open for action",
   "settings.holdWhileFailing": "Publish only repair PRs while main verification is failing",
   "settings.holdWhileFailingHelp": "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
-  "settings.holdWhileFailingHelpUpstream": "PRs without a repair ticket stay unpublished to {host} until main verification passes. Branvil cannot stop merges on {host} for PRs already published there. Those PRs are shown as held.",
+  "settings.holdWhileFailingHelpUpstream": "PRs without a repair ticket stay unpublished to {host} until main verification passes. Branvil cannot stop merges on {host} for PRs already published to {host}. Those PRs are shown as held.",
   "landing.blocker.held": "Held (main failing)",
   "landing.held": "Held: main verification is failing (repair #{number}, assigned to {name}). The hold lifts when main verification passes.",
   "landing.heldUnassigned": "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes.",
