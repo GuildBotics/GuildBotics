@@ -255,3 +255,17 @@ fn repair_reference_explains_retry_priority_and_recovery() {
         assert!(text.contains(term), "{term}");
     }
 }
+
+#[test]
+fn reference_requires_approved_interactive_order_and_readback() {
+    let text = help();
+    for phrase in [
+        "Never reorder in workflow or delegated runs",
+        "read tracker_tickets with lane",
+        "work still waits until the blocker closes",
+        "人が承認した着手の順",
+        "assignees",
+    ] {
+        assert!(text.contains(phrase), "{phrase}");
+    }
+}

@@ -14,3 +14,4 @@ ja:
   continuation: "ページ送りの応答または継続指定が不正です。同じリソース・対象・取得条件を使用してください。"
   attachment_missing: "%{url} は添付 '%{id}' を参照していません。参照している添付は ticket_attachments で確認してください。"
   attachment_too_large: "添付 '%{name}' は上限の %{limit} バイトを超えています。人に内容の確認を依頼してください。"
+  ticket_placement: "置き場所には、同じトラッカーの同じレーンにある別のチケットを指定してください。"

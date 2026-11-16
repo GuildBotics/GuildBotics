@@ -90,8 +90,50 @@ impl TicketService for BranvilService {
             let m = self.member().await?;
             if resource == Resource::TrackerTickets {
                 self.repository(subject)?;
+                if c["lane"].is_string() {
+                    let mut cursor = None;
+                    let mut entries = vec![];
+                    loop {
+                        let p = m.tickets_list_tickets(subject, decode(json!({"q":c["text"],"state":c["state"],"lane":c["lane"],"label":c["label"].as_str().filter(|s|!s.is_empty())}))?, m.page(format!("gb:lane:{subject}:{c}"), Some(100), cursor.as_deref()).map_err(|e|error(e,"page"))?).await.map_err(|e|error(e,"tickets_list_tickets"))?;
+                        for t in p.items {
+                            let v = value(t)?;
+                            if self.on_board(&v) {
+                                entries.push(v);
+                            }
+                        }
+                        cursor = p.next_cursor;
+                        if cursor.is_none() {
+                            break;
+                        }
+                    }
+                    entries.sort_by(|a, b| text(a, "rank").cmp(text(b, "rank")));
+                    let start = if continuation.is_empty() {
+                        0
+                    } else {
+                        continuation
+                            .parse::<usize>()
+                            .map_err(|_| ServiceError::InvalidContinuation)?
+                    };
+                    let size = c["page_size"].as_u64().unwrap_or(30) as usize;
+                    let next = (start.saturating_add(size) < entries.len())
+                        .then(|| start.saturating_add(size).to_string());
+                    return ReadPage::of(
+                        resource,
+                        entries
+                            .iter()
+                            .skip(start)
+                            .take(size)
+                            .map(|v| self.ticket_summary(v)),
+                        next,
+                        None,
+                    );
+                }
                 let p=m.tickets_list_tickets(subject,decode(json!({"q":c["text"],"state":c["state"],"label":c["label"].as_str().filter(|s|!s.is_empty())}))?,self.page(&m,resource,subject,&c,continuation)?).await.map_err(|e| error(e, "tickets_list_tickets"))?;
-                let items=p.items.into_iter().map(|t|{let v=value(t)?;let target=self.target(&v,WorkKind::Ticket);Ok(json!({"kind":"ticket","url":target.url,"title":target.title,"label":target.label,"key":v["key"],"state":v["state"],"lane":if self.on_board(&v){v["lane"].clone()}else{Value::Null},"labels":v["labels"],"updated_at":v["updated_at"]}))}).collect::<Result<Vec<_>,ServiceError>>()?;
+                let items = p
+                    .items
+                    .into_iter()
+                    .map(|t| value(t).map(|v| self.ticket_summary(&v)))
+                    .collect::<Result<Vec<_>, ServiceError>>()?;
                 return ReadPage::of(resource, items, p.next_cursor, None);
             }
             let (r, k) = self.item(subject, "tickets")?;
@@ -260,6 +302,32 @@ impl TicketService for BranvilService {
                     .chain(&r.remove_blocked_by)
                     .cloned(),
             )?;
+            let m = self.member().await?;
+            let placement = if let Some(ref placement) = r.placement {
+                let (anchor_repo, anchor_key) = self.item(placement.url(), "tickets")?;
+                self.writable(&anchor_repo)?;
+                let own = value(
+                    m.tickets_get_ticket(&repo, &key)
+                        .await
+                        .map_err(|e| error(e, "tickets_get_ticket"))?,
+                )?;
+                let anchor = value(
+                    m.tickets_get_ticket(&anchor_repo, &anchor_key)
+                        .await
+                        .map_err(|e| error(e, "tickets_get_ticket"))?,
+                )?;
+                if repo != anchor_repo
+                    || key == anchor_key
+                    || !self.on_board(&own)
+                    || !self.on_board(&anchor)
+                    || own["lane"] != anchor["lane"]
+                {
+                    return Err(diagnostic("integrations.resources.ticket_placement", []));
+                }
+                Some((own["lane"].clone(), format!("{anchor_repo}#{anchor_key}")))
+            } else {
+                None
+            };
             let include_reason = r.state.is_some();
             let mut patch = json!({"title":r.title,"body":r.body,"add_labels":r.add_labels,"remove_labels":r.remove_labels,"interactive":r.interactive,"state":r.state,"add_blocked_by":r.add_blocked_by,"remove_blocked_by":r.remove_blocked_by});
             if let Some(p) = r.parent {
@@ -275,6 +343,16 @@ impl TicketService for BranvilService {
                 .await
                 .map_err(|e| error(e, "tickets_update_ticket"))?;
             let changed = t.state_changed;
+            if let Some((lane, anchor)) = placement {
+                let mut board = json!({"lane":lane});
+                board[match r.placement {
+                    Some(TicketPlacement::Before(_)) => "before",
+                    _ => "after",
+                }] = json!(anchor);
+                m.tickets_put_on_board(&repo, &key, decode(board)?)
+                    .await
+                    .map_err(|e| error(e, "tickets_put_on_board"))?;
+            }
             let v = value(t.ticket)?;
             Ok(TicketUpdated {
                 body: text(&v, "body").into(),
@@ -336,5 +414,12 @@ impl TicketService for BranvilService {
     }
     fn aclose(&self) -> ServiceFuture<'_, ()> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+impl BranvilService {
+    fn ticket_summary(&self, v: &Value) -> Value {
+        let t = self.ticket_value(v.clone());
+        json!({"kind":t["kind"],"url":t["url"],"title":t["title"],"label":t["label"],"key":t["key"],"state":t["state"],"lane":t["lane"],"labels":t["labels"],"updated_at":v["updated_at"],"assignees":t["assignees"]})
     }
 }

@@ -127,17 +127,22 @@ impl LocalService {
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             let mut entries = vec![];
-            for (r, v) in self.store.items(WorkKind::Ticket, Some(s))? {
+            let mut items = self.store.items(WorkKind::Ticket, Some(s))?;
+            if c["lane"].is_string() {
+                items.sort_by_key(|(_, v)| v["rank"].as_i64());
+            }
+            for (r, v) in items {
                 let searchable = format!("{}\n{}", text(&v, "title"), text(&v, "body"))
                     .case_fold()
                     .collect::<String>();
-                if (c["state"] == "all" || c["state"] == v["state"])
+                if (c["lane"].is_null() || c["lane"] == v["lane"])
+                    && (c["state"] == "all" || c["state"] == v["state"])
                     && (c["label"] == "" || array(&v, "labels").contains(&c["label"]))
                     && terms.iter().all(|t| searchable.contains(t))
                 {
                     let mut e =
                         serde_json::to_value(r.target(&v)).map_err(|_| ServiceError::Failed)?;
-                    for k in ["state", "lane", "labels", "updated_at"] {
+                    for k in ["state", "lane", "labels", "updated_at", "assignees"] {
                         e[k] = v[k].clone()
                     }
                     e["key"] = json!(r.name);
@@ -399,6 +404,37 @@ impl TicketService for LocalService {
             let _g = lock()?;
             let r = Ref::locate(u, WorkKind::Ticket)?;
             let mut v = self.store.load(&r)?;
+            self.store.scope.authorize(&r.place)?;
+            let mut reordered = if let Some(ref placement) = q.placement {
+                let anchor = Ref::locate(placement.url(), WorkKind::Ticket)?;
+                self.store.scope.authorize(&anchor.place)?;
+                let a = self.store.load(&anchor)?;
+                if r.place != anchor.place
+                    || r.url() == anchor.url()
+                    || v["lane"].is_null()
+                    || v["lane"] != a["lane"]
+                {
+                    return Err(gb_ports::ServiceError::Diagnostic {
+                        class: gb_ports::ServiceErrorClass::Failure,
+                        key: "integrations.resources.ticket_placement",
+                        args: Default::default(),
+                    });
+                }
+                let mut items = self.store.items(WorkKind::Ticket, Some(&r.place))?;
+                items.retain(|(item, x)| x["lane"] == v["lane"] && item.url() != r.url());
+                items.sort_by_key(|(_, x)| x["rank"].as_i64());
+                let index = items
+                    .iter()
+                    .position(|(item, _)| item.url() == anchor.url())
+                    .ok_or(ServiceError::NotFound)?;
+                items.insert(
+                    index + usize::from(matches!(placement, TicketPlacement::After(_))),
+                    (r.clone(), v.clone()),
+                );
+                Some(items)
+            } else {
+                None
+            };
             let labels = self.labels(&r.place, &q.add_labels)?;
             if let Some(p) = q.parent {
                 if !text(&v, "parent").is_empty() {
@@ -461,6 +497,16 @@ impl TicketService for LocalService {
             }
             v["labels"] = json!(ls);
             let ancestor = self.ancestor(&v)?;
+            if let Some(items) = reordered.as_mut() {
+                for (rank, (item, x)) in items.iter_mut().enumerate() {
+                    if item.url() == r.url() {
+                        v["rank"] = json!(rank as i64 + 1);
+                    } else {
+                        x["rank"] = json!(rank as i64 + 1);
+                        self.store.save(item, x)?;
+                    }
+                }
+            }
             self.store.save(&r, &mut v)?;
             Ok(TicketUpdated {
                 body: text(&v, "body").into(),

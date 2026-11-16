@@ -158,6 +158,9 @@ impl Repository<'_> {
         mut request: UpdateTicket,
         approved: bool,
     ) -> Result<Value> {
+        if request.placement.is_some() {
+            require_human(approved, "cli.member.ticket_order", BTreeMap::new())?;
+        }
         if request.interactive.is_some() {
             require_human(approved, "cli.member.ticket_interactive", BTreeMap::new())?;
         }
@@ -177,6 +180,7 @@ impl Repository<'_> {
             && request.state.is_none()
             && request.parent.is_none()
             && request.interactive.is_none()
+            && request.placement.is_none()
             && request.add_labels.is_empty()
             && request.remove_labels.is_empty()
             && request.add_blocked_by.is_empty()

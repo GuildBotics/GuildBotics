@@ -363,6 +363,15 @@ fn every_resource_diagnostic_preserves_its_key_and_safe_arguments_at_runtime() {
     use gb_ports::{ServiceError, ServiceErrorClass};
     let cases = [
         (ServiceError::Failed, "service_failed", vec![]),
+        (
+            ServiceError::Diagnostic {
+                class: ServiceErrorClass::Failure,
+                key: "integrations.resources.ticket_placement",
+                args: Default::default(),
+            },
+            "ticket_placement",
+            vec![],
+        ),
         (ServiceError::OutOfScope, "out_of_scope", vec![]),
         (
             ServiceError::MissingCredential {
