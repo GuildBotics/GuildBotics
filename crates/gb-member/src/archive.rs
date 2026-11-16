@@ -116,7 +116,11 @@ pub fn extract(content: &[u8], destination: &Path) -> Result<Vec<PathBuf>> {
                 ]
             )
         );
-        let name = item.name().replace('\\', "/");
+        let raw_name = item
+            .name()
+            .map_err(|_| diagnostic("cli.member.artifact_invalid", []))?
+            .into_owned();
+        let name = raw_name.replace('\\', "/");
         let path = Path::new(&name);
         ensure!(
             !path.is_absolute()
@@ -129,19 +133,16 @@ pub fn extract(content: &[u8], destination: &Path) -> Result<Vec<PathBuf>> {
                 ))
                 && !(cfg!(windows) && name.contains(':'))
                 && !name.contains('\0'),
-            diagnostic("cli.member.artifact_path", [("path", item.name().into())])
+            diagnostic("cli.member.artifact_path", [("path", raw_name.clone())])
         );
         ensure!(
             item.unix_mode().is_none_or(|m| m & 0o170000 != 0o120000),
-            diagnostic(
-                "cli.member.artifact_symlink",
-                [("path", item.name().into())]
-            )
+            diagnostic("cli.member.artifact_symlink", [("path", raw_name.clone())])
         );
         let target = destination.join(path);
         ensure!(
             gb_base::shared_writes::resolved(&target)?.starts_with(&destination),
-            diagnostic("cli.member.artifact_path", [("path", item.name().into())])
+            diagnostic("cli.member.artifact_path", [("path", raw_name.clone())])
         );
         ensure!(
             seen.insert(target.clone()),

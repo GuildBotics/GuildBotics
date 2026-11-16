@@ -395,7 +395,8 @@ fn downloads_preserve_diagnostic_arguments_and_unix_colons() {
         .unwrap()
         .by_index(0)
         .unwrap()
-        .data_start() as usize;
+        .data_start()
+        .unwrap() as usize;
     data[offset] ^= 0xff;
     typed(
         &archive::extract(&data, &out).unwrap_err(),
