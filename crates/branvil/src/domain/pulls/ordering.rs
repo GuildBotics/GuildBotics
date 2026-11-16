@@ -77,6 +77,7 @@ mod tests {
         codes
             .iter()
             .map(|code| crate::model::LandingReason {
+                held: None,
                 code: (*code).into(),
                 message: String::new(),
                 jobs: vec![],

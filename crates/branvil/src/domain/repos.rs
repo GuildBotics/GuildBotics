@@ -22,6 +22,7 @@ pub struct RepoView {
     pub required_checks: Vec<String>,
     pub required_approvals: u64,
     pub auto_land: bool,
+    pub hold_while_failing: bool,
     pub ci_network: bool,
     pub responder: crate::repair::Responder,
     pub labels: Vec<String>,
@@ -46,6 +47,7 @@ pub async fn repo_view(app: &App, r: &Repo) -> AppResult<RepoView> {
         post_merge_jobs: r.post_merge_jobs.clone(),
         required_approvals: r.required_approvals,
         auto_land: r.auto_land,
+        hold_while_failing: r.hold_while_failing,
         ci_network: r.ci_network,
         responder,
         labels: r.labels.clone(),
@@ -165,6 +167,7 @@ async fn create_locked(
         required_checks: Vec::new(),
         required_approvals: 1,
         auto_land: false,
+        hold_while_failing: false,
         ci_network: false,
         responder: None,
         labels,
@@ -208,6 +211,7 @@ pub struct RepoPatch {
     pub post_merge_jobs: Option<Vec<String>>,
     pub required_approvals: Option<u64>,
     pub auto_land: Option<bool>,
+    pub hold_while_failing: Option<bool>,
     pub protected_branches: Option<Vec<String>>,
     pub ci_network: Option<bool>,
     #[serde(default, deserialize_with = "crate::domain::double_option")]
@@ -302,6 +306,9 @@ async fn update_record(app: &App, id: String, patch: RepoPatch) -> AppResult<Rep
             }
             if let Some(n) = patch.required_approvals {
                 r.required_approvals = n;
+            }
+            if let Some(a) = patch.hold_while_failing {
+                r.hold_while_failing = a;
             }
             if let Some(a) = patch.auto_land {
                 r.auto_land = a;

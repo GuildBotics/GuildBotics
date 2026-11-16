@@ -24,6 +24,7 @@ const REPO = {
   post_merge_jobs: [], required_checks: [],
   required_approvals: 1,
   auto_land: false,
+  hold_while_failing: false,
   ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
   upstream: null,
@@ -238,9 +239,32 @@ describe("settings", () => {
       post_merge_jobs: ["slow"], required_checks: ["test", "lint"],
       required_approvals: 2,
       auto_land: false,
+      hold_while_failing: false,
       ci_network: true, responder: null,
       labels: ["bug", "ui"],
     });
+  });
+
+  it.each([
+    { lang: "en", upstream: false, help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held." },
+    { lang: "ja", upstream: false, help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。" },
+    { lang: "en", upstream: true, help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held." },
+    { lang: "ja", upstream: true, help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。" },
+  ] as const)("explains hold behavior ($lang, upstream=$upstream)", async ({ lang, upstream, help }) => {
+    const words = lang === "ja" ? ja : en;
+    const repo = { ...REPO, upstream: upstream ? { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} } : null };
+    const fake = fakeApi({ ...SHELL, "GET /api/v1/repos": page([repo]), "GET /api/v1/members": page([]), "PATCH /api/v1/repos/acme/demo": json(200, { ...repo, hold_while_failing: true, revision: 5 }) });
+    const user = userEvent.setup();
+    renderApp("/-/settings", lang);
+    await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
+    await user.click(screen.getByRole("tab", { name: "CI" }));
+    const ci = screen.getByRole("tabpanel", { name: "CI" });
+    expect(within(ci).getByText(help)).toBeInTheDocument();
+    const hold = within(ci).getByRole("switch", { name: name => name.startsWith(words["settings.holdWhileFailing"]) });
+    expect(hold).not.toBeChecked();
+    await user.click(hold);
+    await user.click(within(ci).getByRole("button", { name: words["common.save"] }));
+    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, hold_while_failing: true }));
   });
 
   it.each([
@@ -264,9 +288,10 @@ describe("settings", () => {
     expect(within(ci).getByText(says)).toBeInTheDocument();
     expect(within(ci).getByText(/keep it a draft to hold it/i)).toBeInTheDocument();
     await user.click(auto);
+    await user.click(within(ci).getByRole("switch", { name: /^Publish only repair PRs while main verification is failing/ }));
     await user.click(within(ci).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, auto_land: true });
+    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, auto_land: true, hold_while_failing: true });
   });
 
   it("sets the notification webhook, shows only its host, and removes it", async () => {

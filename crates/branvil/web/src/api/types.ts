@@ -67,6 +67,7 @@ export interface Repository {
   required_approvals: number;
   /** Its pull requests land by themselves (merged, or published to the upstream) once they can. */
   auto_land: boolean;
+  hold_while_failing: boolean;
   /** Whether its CI jobs may reach public network destinations. */
   ci_network: boolean;
   responder: { member: string; chosen: boolean; automatic: string };
@@ -288,7 +289,7 @@ export interface Landing {
   told: string[];
   notified_at: string | null;
   error: string | null;
-  blockers: { code: string; message: string; jobs: string[]; files: string[] }[];
+  blockers: { held?: { number: number; assignee: string | null } | null; code: string; message: string; jobs: string[]; files: string[] }[];
   next: LandingNext;
   host_url: string | null;
   next_detail: string | null;
