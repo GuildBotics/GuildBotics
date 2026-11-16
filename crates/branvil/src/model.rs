@@ -200,6 +200,7 @@ pub struct Assignee {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Repair {
+    pub notice: Option<String>,
     pub jobs: Vec<String>,
     pub reported: String,
 }
@@ -678,6 +679,12 @@ pub fn ticket_index(t: &Ticket) -> Vec<IxEntry> {
     if t.repair.is_some() && t.state == "open" {
         out.push(IxEntry::mark(
             store::IX_OPEN_REPAIRS,
+            Ticket::key(&t.repo, t.number),
+        ));
+    }
+    if t.repair.as_ref().is_some_and(|r| r.notice.is_some()) {
+        out.push(IxEntry::mark(
+            store::IX_REPAIR_UNNOTIFIED,
             Ticket::key(&t.repo, t.number),
         ));
     }

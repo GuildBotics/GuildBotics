@@ -1324,10 +1324,6 @@ mod tests {
                 queue::register(w, all, 1, "2026-10-27T00:00:01Z")?;
                 let run = queue::get_run(w, &id, "head")?.unwrap();
                 assert!(run.waiting);
-                assert!(
-                    !run.failure_pending,
-                    "the old skipped attempt is history, not a protected failure"
-                );
                 Ok(())
             })
             .await

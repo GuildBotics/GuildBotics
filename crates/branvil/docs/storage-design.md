@@ -59,13 +59,12 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `33`). The current
+`meta["schema_version"]` is written on creation (currently `34`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
-requested them, whether a required failure awaits notification, and its
-successful webhook delivery time.
+requested them. Repair tickets retain their undelivered creation notice.
 Runs also hold the input digest of each job with `paths`, and attempts the one
 of their job when claimed. `ci_verifications` is keyed by repository id and stores
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
@@ -118,7 +117,7 @@ check did not change stored records or raise the version.
 | `ref_journal` | `(journal id)` | repo, ref, expected old/new, operation | merge (before `update-ref`) | completion, startup recovery |
 | `idempotency` | `(fold(member), key)` | request hash, status, response body, time | API middleware | API middleware |
 | `ci_narrowings` | `(repo id, base sha, job name)` | failed SHA, first-parent history, observations and attempt IDs, pending probe, conclusion, boundary/reason, start and finish times | failed verification, check event, reconciler | repair hints |
-| `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, pending failure notice, failure delivery time, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
+| `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
 | `ci_attempts` | `(attempt id)` | purpose (`check`, `cache_refresh`, `probe`), job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
 
 Each comment, review, and inline comment is its own record, so adding one never
@@ -172,7 +171,7 @@ Every index entry of a record comes from one function in `src/model.rs`
 | `ix_ci_pending` | `(queue sequence)` → attempt id, queued attempts only | claim (oldest first), queue length and bound, no-runner sweep |
 | `ix_ci_active` | `(attempt id)`, in-progress attempts only | lease-expiry sweep (also the orphans found after a restart) |
 | `ix_ci_waiting` | `(run sequence)` → run key, runs that did not fit the queue | admission in order when room frees up |
-| `ix_ci_unnotified` | `(repo id, sha)` → run key | protected runs with a final required-check failure awaiting webhook delivery; maintained in the same transaction as run/attempt changes |
+| `ix_repair_unnotified` | `(repo id, ticket number)` | repair tickets with a non-null notice, including closed tickets; maintained by `model::ticket_index`, rebuilt by `admin reindex` |
 | `ix_ci_tree` | `(repo id, tree, sha)` → run key, runs with a known tree | finding successful actual executions with the same tree at claim |
 | `ix_ci_inputs` | `(repo id, job, input digest, attempt id)` → attempt id, completed successful attempts that were not reused, have an input digest, and keep their files | finding the successful actual executions of a job's inputs in one range read |
 
@@ -254,17 +253,20 @@ random bytes made at each start: a restart ends the cursors handed out before
 
 ## Repair records (schema 30)
 
-`Ticket.repair` is null for ordinary tickets or `{jobs: [...], reported: sha}` for
+`Ticket.repair` is null for ordinary tickets or `{jobs: [...], reported: sha, notice: text or null}` for
 repair tickets. `REPAIR_PENDING` (`repair_pending`) keys are `(repo id, sha)` and
 values contain the repository, SHA and failed jobs (name, optional attempt ID,
 details). `IX_OPEN_REPAIRS` (`ix_open_repairs`) marks `(repo id, ticket number)`
 for open tickets with a repair marker. `model::ticket_index` maintains it and
 `admin reindex` rebuilds it; the oldest entry is the repository's open repair.
-The 29 → 30 upgrade adds `repair: null` to all tickets; the two new tables start
-empty. There is no parallel reader for older schemas.
+Ordinary tickets have `repair: null`. There is no parallel reader for older schemas.
 
 Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
 (`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
 the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
 `reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
 queue, reuse, retention, and landing semantics.
+
+The 33 → 34 upgrade removes run failure-delivery fields, attempt recovery-delivery
+fields and `ix_ci_unnotified` / `ix_ci_recovered`. Existing repair tickets get
+`notice: null`; the new `ix_repair_unnotified` starts empty.

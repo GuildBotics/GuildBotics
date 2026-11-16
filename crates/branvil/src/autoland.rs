@@ -128,11 +128,11 @@ async fn sweep(app: &App, dirty: &Dirty) {
         Ok(r) => r,
         Err(e) => return tracing::error!("autoland: {e}"),
     };
-    if let Err(e) = crate::ci::notify::sweep(app).await {
-        tracing::warn!("CI notifications: {e}");
-    }
     if let Err(e) = crate::repair::sweep(app).await {
         tracing::warn!("repair tickets: {e}");
+    }
+    if let Err(e) = crate::ci::notify::sweep(app).await {
+        tracing::warn!("repair notifications: {e}");
     }
     // There is one webhook: once a send to it fails, this sweep sends no more.
     let mut webhook_ok = true;

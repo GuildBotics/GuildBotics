@@ -477,9 +477,8 @@ automatic retry queued after it. It asks for a manual retry only when none is
 queued, including when the automatic retry budget is exhausted.
 
 A retry queued because no runner was available stays queued until a runner
-claims it. Once all three retries fail, the existing final-failure notice
-becomes pending. A successful retry queues a recovery notice with the
-repository, commit, job, and links to failed and successful attempts.
+claims it. The attempt history retains all failures and successful retries.
+Neither final required-check failures nor automatic recovery send webhook notices.
 
 ## Limits
 
@@ -782,33 +781,24 @@ reports itself unavailable without it, as without `msb`).
   user that cannot read a file of mode 0, `/tmp` on a disk, the cache
   restored in the next attempt, nothing left behind).
 
-## Required-check notifications
+## 修復チケットの知らせ
 
-A protected-branch run whose required checks finish unsuccessfully sends the
-configured notification webhook its repository, protected branches, commit,
-failed check names, and job/log links. Missing required jobs and invalid or
-absent pipelines are failures too; those notices link the commit page.
-An outstanding automatic retry defers this notice. Nonrequired jobs do not
-decide this notice. Normal supersession is not a failure.
+main の確認が失敗して修復チケットを作るとき、チケットと同じ書き込みで
+`repair.notice` に知らせを保存する。webhook へ送る文は次のとおり。
 
-Run and attempt writes maintain an index of undelivered required failures.
-The notification task reads that index on check/repository events, startup,
-and each minute, and sends outside database transactions. It records successful
-delivery on the current run without rewriting concurrent queue changes. A
-restart does not repeat delivered notices; a crash between the webhook answer
-and recording it can repeat one. An unavailable or unset webhook leaves
-notices pending. This applies to CI runs registered by the existing triggers;
-it does not add CI triggers for other protected branches.
+```text
+Main verification failed: <repo> <branch> <sha7> (<job>, …)
+Range: <verified sha7 or "no verified commit">..<sha7>, <n> pull request(s): !12 !13
+Repair ticket: <ticket URL>, assigned to <member name>
+```
 
-Successful automatic retries maintain an index of undelivered recovery notices.
-Recovery notices include the retained protected-branch names, as final-failure
-notices do. The same task and delivery rules apply, with delivery recorded on
-the successful attempt. A later branch move or manual retry does not discard
-the notice.
-Final-failure delivery remains once per run; recovery delivery is once per
-successful automatic retry. Neither is repeated on ordinary restart; a crash
-between delivery and recording may repeat either notice.
-
+`IX_REPAIR_UNNOTIFIED` のチケットをイベント、起動時、毎分の巡回で読み、
+トランザクションの外で送る。送れたら現在のチケットの `notice` を `null` にする。
+webhook が未設定または送信失敗なら残して次の巡回で再送する。
+通常の再起動では重複しないが、送信成功から保存までに停止すると重複し得る。
+開いている修復チケットへの追加の失敗、チケットの終了、必須チェックだけの失敗、
+自動再実行の回復は通知しない。自動再実行の回数と順、着地の通知は変わらない。
+移行前の修復チケットの `notice` は `null` で、過去の作成は通知しない。
 
 ### 確認の状態を見る
 

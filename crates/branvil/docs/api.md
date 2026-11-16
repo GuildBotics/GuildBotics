@@ -1357,7 +1357,7 @@ is polled when, and how conflicts are settled: `docs/architecture.md`,
 ### Webhook
 
 Branvil tells the webhook when an automatically landing pull request is ready to merge on the host, when a
-protected run's required checks finally fail, and when a scripted service
+repair ticket is created after main verification fails, and when a scripted service
 update or activation stops. Its URL is a credential of another system:
 it is kept in the service's vault (not in the data directory), never returned,
 and not in backups.
@@ -1383,16 +1383,14 @@ supersession, optional jobs, PR runs, and cache refreshes are excluded.
 The failed attempt and queued retry commit atomically; commit checks show
 the retry as queued. Retries caused by runner absence wait until claimed.
 
-The service records successful CI failure delivery on the run. Undelivered
-failures are indexed and retried on relevant events, startup, and every minute.
-A successful automatic retry sends an intermittent-failure recovery notice
-with links to the failed and successful attempts. Delivery is recorded on that
-successful attempt and retained after branch moves. Final-failure notices wait
-until automatic retries are exhausted. A crash between delivery and recording
-may repeat a notice (at least once).
-Ordinary supersession does not send a failure notice. Missing required jobs,
-absent pipelines, and invalid pipelines do: they include a commit-page link
-when no attempt/log exists.
+Creating a repair ticket atomically stores one webhook notice containing the
+repository, branch, failed commit and jobs, verified-to-failed range, PR numbers,
+ticket URL and assignee. Delivery clears `Ticket.repair.notice`; an unset or
+unavailable webhook leaves it indexed for the next sweep (events, startup and
+every minute). Ordinary restart does not repeat delivery; a crash between sending
+and recording may repeat it. Existing tickets gain `notice: null` on upgrade.
+Further failures on an open repair ticket, closing it, required-check failures
+alone and automatic retry recovery do not send notices.
 
 ### CI settings
 

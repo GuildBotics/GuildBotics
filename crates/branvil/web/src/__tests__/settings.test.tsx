@@ -1,3 +1,5 @@
+import { en } from "../i18n/en";
+import { ja } from "../i18n/ja";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -535,4 +537,9 @@ describe("settings", () => {
     });
     expect(await screen.findByText("(chosen)")).toBeInTheDocument();
   });
+});
+
+it("explains repair-ticket creation notices in both languages", () => {
+  expect(en["notifications.help"]).toContain("Creating a repair ticket");
+  expect(ja["notifications.help"]).toContain("修復チケットを作ると");
 });

@@ -193,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_32_upgrade_preserves_existing_records() {
+async fn schema_33_upgrade_preserves_records_and_removes_old_notices() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -259,16 +259,14 @@ async fn schema_32_upgrade_preserves_existing_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_32(&db);
+    as_schema_33(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 32 to 33"), "{output}");
-    for name in ["ci_narrowings", "ix_ci_narrowing"] {
-        assert_eq!(tables(&db).get(name), Some(&Vec::new()));
-    }
+    assert!(output.contains("from schema version 33 to 34"), "{output}");
+    assert_eq!(tables(&db).get("ix_repair_unnotified"), Some(&Vec::new()));
     assert_eq!(records(&db, "repos"), repos);
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
@@ -277,8 +275,21 @@ async fn schema_32_upgrade_preserves_existing_records() {
     assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
-    assert!(run["failure_notified_at"].is_null());
-    assert!(!tables(&db)["ix_ci_unnotified"].is_empty());
+    for run in &runs {
+        assert!(run.get("failure_pending").is_none());
+        assert!(run.get("failure_notified_at").is_none());
+    }
+    for attempt in records(&db, "ci_attempts") {
+        assert!(attempt.get("recovery_notified_at").is_none());
+    }
+    for name in ["ix_ci_unnotified", "ix_ci_recovered"] {
+        assert!(!tables(&db).contains_key(name));
+    }
+    for ticket in records(&db, "tickets") {
+        if ticket["repair"].is_object() {
+            assert_eq!(ticket["repair"]["notice"], Value::Null);
+        }
+    }
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let backup = std::fs::read_dir(&data)
         .unwrap()
@@ -287,7 +298,7 @@ async fn schema_32_upgrade_preserves_existing_records() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-32-")
+                .starts_with("branvil-schema-33-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1025,7 +1036,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_32(&db);
+    as_schema_33(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = std::process::Command::new(BIN)
             .args(["admin", command, "--data-dir"])
