@@ -15,7 +15,8 @@
     "./components.css": "./src/components.css",
     "./MarkdownView": "./src/MarkdownView.tsx",
     "./AppShell": "./src/AppShell.tsx",
-    "./markdown.css": "./src/markdown.css"
+    "./markdown.css": "./src/markdown.css",
+    "./HubStatus": "./src/HubStatus.tsx"
   },
   "scripts": {
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{json,js,ts}\"",

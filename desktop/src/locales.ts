@@ -1,6 +1,21 @@
 export const resources = {
   en: {
     translation: {
+      hub: {
+        preparingVersions:
+          "Preparing an automatic Hub update from {{current}} to {{target}}. New runs will stop being accepted soon.",
+        updateVersions:
+          "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch from {{current}} to {{target}}. Services will resume afterward if they were running when the stop was accepted.",
+        title: "Hub maintenance",
+        version: "Hub version",
+        dismiss: "Dismiss until the phase changes",
+        preparing: "Preparing an automatic Hub update. New runs will stop being accepted soon.",
+        update:
+          "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch versions. Services will resume afterward if they were running when the stop was accepted.",
+        restart:
+          "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. Restart will follow completion of {{runs}} running tasks and {{ci_jobs}} CI jobs.",
+        stop: "The Hub is stopping and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will stop after {{runs}} running tasks and {{ci_jobs}} CI jobs finish.",
+      },
       decision: {
         title: "Chat judgment engine",
         team: "Applies to all members unless overridden in member settings.",
@@ -1435,6 +1450,21 @@ export const resources = {
   },
   ja: {
     translation: {
+      hub: {
+        preparingVersions:
+          "Hub を {{current}} から {{target}} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
+        updateVersions:
+          "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、{{current}} から {{target}} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
+        title: "Hub の作業",
+        version: "Hub の版",
+        dismiss: "段階が変わるまで閉じる",
+        preparing: "Hub を自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
+        update:
+          "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、版を切り替えます。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
+        restart:
+          "Hub の再起動のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、再起動します。",
+        stop: "Hub の停止のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、停止します。",
+      },
       decision: {
         title: "チャット判断エンジン",
         team: "メンバー設定で上書きしない限り、チーム全体に適用します。",

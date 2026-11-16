@@ -636,8 +636,29 @@ impl Hub {
         self.state.insert("result".into(), "updating".into());
         self.save()?;
         *stage = "update";
-        self.git(&["merge", "--ff-only", sha])?;
         let previous_failure = self.failure_record()?;
+        let subject = self.git(&["show", "-s", "--format=%s", sha])?;
+        if let Err(error) = self.run(
+            &current,
+            &[
+                "server",
+                "hub-phase",
+                "--phase",
+                "preparing",
+                "--commit",
+                sha,
+                "--subject",
+                &subject,
+            ],
+            None,
+            None,
+        ) {
+            eprintln!("Hub phase notification failed: {error:#}");
+        }
+        if let Err(error) = self.git(&["merge", "--ff-only", sha]) {
+            let _ = self.run(&current, &["server", "hub-phase", "--clear"], None, None);
+            return Err(error);
+        }
         match self.run(
             Path::new("sh"),
             &["scripts/hub-server.sh", "update"],
@@ -649,6 +670,11 @@ impl Hub {
                 self.state.insert("result".into(), "success".into());
             }
             Err(error) => {
+                if let Err(error) =
+                    self.run(&current, &["server", "hub-phase", "--clear"], None, None)
+                {
+                    eprintln!("Hub phase notification failed: {error:#}");
+                }
                 self.state.insert("result".into(), "failed".into());
                 let failure = self.failure_record()?;
                 let mut detail = if !failure.is_empty() && failure != previous_failure {

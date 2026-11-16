@@ -31,6 +31,7 @@ use loopback_auth::CSP;
 
 /// What every request of the server shares.
 pub struct Api {
+    pub(crate) hub_phase: std::sync::Mutex<Option<crate::hub_status::Phase>>,
     pub(crate) health_lock: tokio::sync::Mutex<()>,
     pub(crate) activity_sync:
         std::sync::Mutex<std::collections::BTreeMap<(PathBuf, String, String), std::time::Instant>>,
@@ -111,6 +112,7 @@ impl Api {
                 .map(gb_observability::Diagnostics::open),
         );
         Api {
+            hub_phase: Default::default(),
             health_lock: Default::default(),
             activity_sync: Default::default(),
             #[cfg(test)]
@@ -416,6 +418,8 @@ routes!(
         crate::activity::history
     ),
     (OwnerSession, post, "/shutdown", crate::server::shutdown),
+    (OwnerSession, get, "/hub-status", crate::hub_status::read),
+    (OwnerSession, post, "/hub-status", crate::hub_status::set),
     (
         OwnerSession,
         get,
@@ -1851,6 +1855,7 @@ mod tests {
         use std::collections::BTreeSet;
         let allowed: &[((&str, &str), &str)] = &[
             (("post", "/shutdown"), "asks for the stop itself"),
+            (("post", "/hub-status"), "maintenance display only"),
             (("post", "/scheduler/stop"), "stops the service"),
             (
                 ("post", "/member/run"),
@@ -2114,6 +2119,7 @@ mod tests {
                 "the device-local workspace registry",
             ),
             (("post", "/shutdown"), "server lifetime"),
+            (("post", "/hub-status"), "device-local maintenance state"),
             (("post", "/scheduler/start"), "service lifetime"),
             (("post", "/scheduler/stop"), "service lifetime"),
             (

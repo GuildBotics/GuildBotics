@@ -128,6 +128,8 @@ case "$name" in
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"
         case "$1:${2:-}" in
+            server:hub-build-info) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;
+            server:hub-phase) [ ! -f "$FAKE_ROOT/fail-hub-phase" ] ;;
             server:hub-data)
                 case "$3" in
                     backup) touch "$5/manifest.json" ;;
@@ -207,6 +209,7 @@ case "$name" in
                 fi
                 ;;
             server:stop)
+                printf '%s\n' "${GUILDBOTICS_HUB_STOP_REASON:-}" >>"$FAKE_ROOT/stop-reasons"
                 # Like clap, refuse an option: the build being stopped may predate any.
                 [ "$#" -eq 2 ] || exit 2
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1

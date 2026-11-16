@@ -43,6 +43,8 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
   const id = event.id ?? "";
   if (!path) return null;
   switch (event.kind) {
+    case "hub_status_changed":
+      return [(q) => keyOf(q)[0] === "diagnostics"];
     case "ticket":
       return [
         isCheckList,

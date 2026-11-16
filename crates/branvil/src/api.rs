@@ -24,7 +24,35 @@ pub struct DataApi {
     pub(crate) app: Shared,
 }
 
+pub type HubStatus = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = serde_json::Value> + Send>>
+        + Send
+        + Sync,
+>;
+
 impl DataApi {
+    /// Supply device-local maintenance information from the embedding host.
+    pub fn attach_hub_status(&self, status: HubStatus) {
+        let _ = self.app.hub_status.set(status);
+    }
+    /// Status reported by the embedding host, with this service's live CI count.
+    pub async fn hub_status(&self) -> serde_json::Value {
+        let Some(status) = self.app.hub_status.get() else {
+            return serde_json::Value::Null;
+        };
+        let mut value = status().await;
+        if value["operation"].is_object() {
+            value["operation"]["waiting"]["ci_jobs"] =
+                self.app.ci.diagnostics().await["queue"]["in_progress"].clone();
+        }
+        value
+    }
+    pub fn hub_status_changed(&self) {
+        self.app.events.publish("hub_status_changed", "hub", "");
+    }
+    pub async fn running_ci_jobs(&self) -> Option<u64> {
+        self.app.ci.diagnostics().await["queue"]["in_progress"].as_u64()
+    }
     pub(crate) fn new(app: Shared) -> Self {
         Self { app }
     }

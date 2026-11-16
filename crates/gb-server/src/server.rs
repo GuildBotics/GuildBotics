@@ -101,6 +101,7 @@ impl Shutdown {
 #[derive(Default)]
 pub(crate) struct ShutdownRequest {
     force: bool,
+    reason: Option<crate::hub_status::Kind>,
 }
 
 pub(crate) async fn shutdown(
@@ -110,6 +111,7 @@ pub(crate) async fn shutdown(
     // Refuse new work before sampling, but do not let the drain change the
     // service state until the admitted start has settled.
     api.shutdown.refusing.cancel();
+    crate::hub_status::drain(&api, body.reason);
     let selected = api.selected();
     let service_running = if body.force {
         // Force must cancel a drain even when a restart holds the start gate.
@@ -226,6 +228,16 @@ impl Server {
     }
 
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
+        let weak = Arc::downgrade(&self.api);
+        branvil.attach_hub_status(Arc::new(move || {
+            let api = weak.upgrade();
+            Box::pin(async move {
+                match api {
+                    Some(api) => crate::hub_status::snapshot(&api).await,
+                    None => serde_json::Value::Null,
+                }
+            })
+        }));
         let workspace = self.api.selected().workspace.clone();
         self.api
             .branvil
@@ -570,7 +582,10 @@ mod tests {
             std::time::Duration::from_secs(1),
             shutdown(
                 axum::extract::State(api.clone()),
-                api::Body(ShutdownRequest { force: true }),
+                api::Body(ShutdownRequest {
+                    force: true,
+                    ..Default::default()
+                }),
             ),
         )
         .await

@@ -478,6 +478,7 @@ export interface JobLog {
 
 /** What `/admin/diagnostics` says that the warnings use; the rest is for people reading the API. */
 export interface Diagnostics {
+  hub?: import("@guildbotics/ui/HubStatus").HubStatus | null;
   runner?: { state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string; detail: string; mode: string };
   upstream?: { state: string; problems?: { repository: string; problem: string }[] };
 }
@@ -562,7 +563,7 @@ export interface ImageOperation {
   loaded: { reference: string }[];
 }
 
-export type ChangeKind = "verification" |"ticket" | "pull" | "board" | "check" | "upstream" | "repo";
+export type ChangeKind = "hub_status_changed" | "verification" |"ticket" | "pull" | "board" | "check" | "upstream" | "repo";
 
 export interface ChangeEvent {
   kind: ChangeKind;

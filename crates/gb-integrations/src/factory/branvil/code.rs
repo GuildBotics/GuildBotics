@@ -3,6 +3,24 @@ use super::*;
 use branvil::api::{pulls, tickets};
 use std::collections::BTreeMap;
 impl BranvilService {
+    pub(in crate::factory) fn commit_url_for(
+        api: &::branvil::api::DataApi,
+        repo: &str,
+        sha: &str,
+    ) -> String {
+        format!("{}/{repo}/-/commits/{sha}", api.base_url())
+    }
+    pub(in crate::factory) fn repository_for_remote(
+        api: &::branvil::api::DataApi,
+        url: &str,
+    ) -> Option<String> {
+        let path = url
+            .trim()
+            .strip_prefix(&format!("{}/git/", api.base_url()))?;
+        let repo = path.strip_suffix(".git").unwrap_or(path);
+        crate::valid_repository_path(repo).then(|| repo.into())
+    }
+
     async fn validate_ticket_links(
         &self,
         repository: &str,
@@ -573,14 +591,10 @@ impl CodeHostingService for BranvilService {
         self.writable(repo)
     }
     fn commit_url(&self, repo: &str, sha: &str) -> String {
-        format!("{}/{repo}/-/commits/{sha}", self.api.base_url())
+        Self::commit_url_for(&self.api, repo, sha)
     }
     fn repository_from_remote(&self, url: &str) -> Option<String> {
-        let path = url
-            .trim()
-            .strip_prefix(&format!("{}/git/", self.api.base_url()))?;
-        let repo = path.strip_suffix(".git").unwrap_or(path);
-        crate::valid_repository_path(repo).then(|| repo.into())
+        Self::repository_for_remote(&self.api, url)
     }
     fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
         Box::pin(async {

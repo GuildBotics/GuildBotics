@@ -1304,6 +1304,7 @@ fn failed_build_does_not_restore_service() {
     hub.mark("fail-build");
     hub.run("auto-once", None, true);
     let actions = hub.lines("actions");
+    assert!(actions.contains("server|hub-phase|--clear"), "{actions}");
     assert!(!actions.contains("service|start"));
     assert!(!actions.contains("service|stop"));
     assert!(
@@ -1995,4 +1996,28 @@ fn automatic_updates_wait_for_client_artifacts_but_manual_updates_continue() {
     let out = hub.run("update", None, true);
     assert_ne!(hub.installed_build(), before);
     assert!(text(&out).contains("Client distribution is unavailable"));
+}
+
+#[test]
+fn maintenance_reason_reaches_the_old_build_without_new_stop_arguments() {
+    let hub = Hub::new();
+    hub.install();
+    hub.run("restart", None, true);
+    assert_eq!(hub.lines("stop-reasons"), "restart\n");
+    hub.auto_candidate();
+    hub.mark("fail-hub-phase");
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.auto_state()["result"], "success");
+    assert_eq!(hub.lines("stop-reasons"), "restart\nupdate\n");
+    let actions = hub.lines("actions");
+    assert!(actions.contains("old|server|stop\n"));
+    assert!(actions.contains("server|hub-phase|--phase|preparing|--commit|"));
+    assert!(actions.contains("|--subject|"));
+    let binary = hub.installed_build();
+    let source = binary.parent().unwrap();
+    let sha = source.file_name().unwrap().to_str().unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(source.join("hub-build.json")).unwrap()).unwrap();
+    assert_eq!(metadata["sha"], sha);
+    assert!(metadata["subject"].is_string());
 }

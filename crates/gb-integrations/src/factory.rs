@@ -20,6 +20,28 @@ pub async fn human_git_credential(
     branvil::owner_git::credential(origin, data, admin, device_id, display_name).await
 }
 
+/// Resolve a public commit link without loading a member's credentials.
+/// URL rules remain those of the configured provider.
+pub fn commit_url_from_remote(
+    provider: &str,
+    remote: &str,
+    sha: &str,
+    embedded: Option<&::branvil::api::DataApi>,
+) -> Option<String> {
+    match provider.to_lowercase().as_str() {
+        "branvil" => {
+            let api = embedded?;
+            let repository = branvil::BranvilService::repository_for_remote(api, remote)?;
+            Some(branvil::BranvilService::commit_url_for(
+                api,
+                &repository,
+                sha,
+            ))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct IntegrationConfig {
     pub local_root: PathBuf,
