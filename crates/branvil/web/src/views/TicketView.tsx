@@ -98,6 +98,7 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
         }
         meta={
           <>
+            {tk.repair && <StateBadge tone="warning">{t("ticket.repair")}</StateBadge>}
             <StateBadge tone={tk.state === "open" ? "success" : "neutral"}>{t(tk.state === "open" ? "ticket.open" : "ticket.closed")}</StateBadge>
             {tk.state_reason && <Text span size="sm" c="dimmed">{t(`ticket.reason.${tk.state_reason}`)}</Text>}
             <span>{tk.repository}</span>

@@ -14,7 +14,7 @@ import type { Verification, VerificationState } from "../api/types";
 const SHA = "a".repeat(40);
 const OLD = "b".repeat(40);
 const state = (name: VerificationState = "verified"): Verification => ({
-  branch: "main", tip: name === "empty" ? null : SHA, state: name, ahead: name === "verified" ? 0 : 3,
+  repair: null, branch: "main", tip: name === "empty" ? null : SHA, state: name, ahead: name === "verified" ? 0 : 3,
   latest_verified: { sha: OLD, verified_at: "2026-11-15" }, failing_since: null,
   current: { sha: OLD, base: null, state: "running", started_at: "2026-11-15", finished_at: null, retry: { number: 1, max: 3 }, failed_jobs: [] },
 });
@@ -29,6 +29,22 @@ function show(paths: string[], repo: string | null = null, language: "en" | "ja"
 const history = { items: [{ sha: SHA, title: "new", author: "Test", authored_at: "2026-11-15T11:02:59+09:00", mark: "verifying" }, { sha: OLD, title: "old", author: "Test", authored_at: "2026-11-14T22:15:00Z", mark: "verified" }], next_cursor: "next" };
 
 describe("default branch verification", () => {
+  it.each(["ja", "en"] as const)("links the open repair in header and drawer (%s)", async (language) => {
+    fakeApi({
+      "GET /api/v1/repos/acme/demo/verification": json(200, { ...state("failing"), repair: { number: 12, assignee: "alice", url: "/acme/demo/-/tickets/12" } }),
+      "GET /api/v1/repos/acme/demo/verification/commits": json(200, { items: [], next_cursor: null }),
+      [`GET /api/v1/repos/acme/demo/commits/${OLD}/checks`]: json(200, { sha: OLD, checks: [], checks_expected: false }),
+    });
+    show(["acme/demo"], "acme/demo", language);
+    const text = language === "ja" ? "失敗（修復 #12 を待っている）" : "failed (waiting for repair #12)";
+    await waitFor(() => expect(screen.getByRole("button")).toHaveTextContent(text));
+    expect(screen.getByRole("link", { name: "#12" })).toHaveAttribute("href", "/acme/demo/-/tickets/12");
+    await userEvent.setup().click(screen.getByRole("button"));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(text)).toBeInTheDocument();
+    expect(dialog.getByRole("link", { name: "#12" })).toHaveAttribute("href", "/acme/demo/-/tickets/12");
+  });
+
   it.each([ ["verified", "確認済み", "success"], ["verifying", "確認中（再試行 1/3）", "warning"], ["pending", "確認待ち", "warning"], ["failing", "失敗", "danger"], ["empty", "コミットなし", "color-bg-hover"] ] as const)("shows %s with its tone", async (name, label, color) => {
     fakeApi({ "GET /api/v1/repos/acme/demo/verification": json(200, state(name)) });
     show(["acme/demo"], "acme/demo", "ja");

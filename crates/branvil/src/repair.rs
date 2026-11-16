@@ -5,6 +5,38 @@ use crate::model::{Member, MemberKind, Pull, Repo};
 use crate::store::{self, Rd};
 pub use tickets::{failed, open_ticket, passed, sweep};
 
+/// One predicate for API, scheduling, selection and landing.
+pub fn is_pull(r: &impl Rd, p: &Pull) -> AppResult<bool> {
+    Ok(p.state == "open"
+        && open_ticket(r, &p.repo)?.is_some_and(|t| {
+            p.tickets
+                .iter()
+                .any(|l| l.local.as_ref() == Some(&(p.repo.clone(), t.number)))
+        }))
+}
+
+/// Whether any open repair pull wants this run's commit.
+pub fn is_run(r: &impl Rd, run: &crate::ci::queue::Run) -> AppResult<bool> {
+    for p in r.prefix_all::<Pull>(store::PULLS, &store::Key::new().s(&run.repo).bytes())? {
+        if run.branches.contains(&p.head) && is_pull(r, &p)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Failures inherited from main do not demote unrelated PR work.
+pub fn failing_jobs(r: &impl Rd, repo: &str) -> AppResult<Vec<String>> {
+    let Some(v) = crate::ci::verify::get(r, repo)?.filter(|v| v.failing_since.is_some()) else {
+        return Ok(vec![]);
+    };
+    let mut jobs: Vec<_> = v.failed_jobs.into_iter().map(|j| j.name).collect();
+    if let Some(t) = open_ticket(r, repo)? {
+        jobs.extend(t.repair.unwrap().jobs);
+    }
+    Ok(jobs)
+}
+
 /// Effective repair assignee and the current automatic candidate.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct Responder {

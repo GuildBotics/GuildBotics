@@ -506,6 +506,7 @@ pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
     };
     let current = current_attempts(r, &run.repo, &run.sha, jobs)?;
     let protected = run.cache_scope == "protected";
+    let repair = crate::repair::is_run(r, run)?;
     let mut out = Vec::new();
     for j in jobs.iter().filter(|j| !run.skips(&j.name)) {
         let again = match current.iter().find(|a| a.job.name == j.name) {
@@ -521,7 +522,7 @@ pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
                         && j.cache.is_some()
                         && a.status != "queued"
                         && a.cache_scope != "protected")
-                    || (protected && source_of(r, a)?.basis == Some(Basis::Paths))
+                    || ((protected || repair) && source_of(r, a)?.basis == Some(Basis::Paths))
             }
         };
         if again {
@@ -1092,7 +1093,12 @@ fn can_reuse(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<bool> {
     {
         return Ok(false);
     }
-    Ok(match basis(a) {
+    let repair = get_run(r, &a.repo, &a.sha)?
+        .as_ref()
+        .map(|run| crate::repair::is_run(r, run))
+        .transpose()?
+        .unwrap_or(false);
+    Ok(match if repair { Basis::Tree } else { basis(a) } {
         Basis::Tree => {
             let tree = tree_of(r, a)?;
             tree.is_some() && tree == tree_of(r, source)?
@@ -1198,7 +1204,16 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
         if a.job.verified_sha {
             a.verified_sha = super::verify::latest_verified(r, &a.repo)?.map(|v| v.sha);
         }
-        a.inputs = run.and_then(|run| run.inputs.get(&a.job.name).cloned());
+        let repair = run
+            .as_ref()
+            .map(|run| crate::repair::is_run(r, run))
+            .transpose()?
+            .unwrap_or(false);
+        a.inputs = if repair {
+            None
+        } else {
+            run.and_then(|run| run.inputs.get(&a.job.name).cloned())
+        };
         candidates.push((class, a));
     }
     let mut sources = std::collections::BTreeMap::new();

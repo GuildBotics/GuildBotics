@@ -262,6 +262,7 @@ export function CardView({
           {ref}
         </TicketLink>
         {lane}
+        {card.repair && <StateBadge tone="warning">{t("ticket.repair")}</StateBadge>}
         {card.state === "closed" && <StateBadge>{t("ticket.closed")}</StateBadge>}
         {card.state === "open" && card.blocked_by.some((b) => b.state === "open") && <StateBadge tone="warning">{t("board.blocked")}</StateBadge>}
         {(card.interactive || card.interactive_ancestor) && (

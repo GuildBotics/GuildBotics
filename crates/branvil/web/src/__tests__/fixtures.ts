@@ -44,6 +44,7 @@ export function landing(extra: Partial<Landing> = {}): Landing {
 
 export function pull(extra: Partial<ListedPull> = {}): ListedPull {
   return {
+    repair: false,
     merge_order: [0, 0, 0],
     url: `${window.location.origin}/acme/demo/-/pulls/3`,
     repository: "acme/demo",

@@ -1528,7 +1528,8 @@ affect attempts running at the time of each call. Check events announce changes.
 
 `GET /api/v1/repos/{repo}/verification` accepts an owner or member token or a
 session. It returns `branch`, `tip`, `state`, `ahead`, `latest_verified`,
-`current`, and `failing_since`. Internal consumers use `ci::verify::main_state`.
+`current`, `failing_since`, and `repair`. `repair` is null without an open repair
+ticket, otherwise `{number, assignee, url}` (assignee may be null). Internal consumers use `ci::verify::main_state`.
 `tip` and `ahead` are null without the branch. `latest_verified` is null until
 verification first succeeds, then contains `sha` and `verified_at`. `current`
 is null without a record; otherwise it contains `sha`, `base`, `state`,
@@ -1571,7 +1572,12 @@ Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are comp
 `skipped` checks, cannot supply reusable results or duration estimates, and are
 executed by manual retry and protected registration.
 
-
 Diagnostic `probe` attempts use the commit's own job definition, never reuse or
 save caches, and cannot be manually retried. Their job and log routes are the
 same as other attempts. They are excluded from commit checks and readiness.
+
+PR responses, including patrol lists, expose `repair: true|false`. It is true
+only for open PRs linked locally to the repository's open repair ticket. Closing
+links never close repair tickets on merge; passing main verification or a human
+operation closes them. Repair ticket creation and closure also publish a
+`verification` event so clients refetch the linked ticket.

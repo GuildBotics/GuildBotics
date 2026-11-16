@@ -10,6 +10,7 @@ use crate::store::{self, Key, Rd};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Class {
     Protected,
+    Repair,
     Landing,
     Normal,
     Deferred,
@@ -221,11 +222,15 @@ fn failed_check(
         path_skip: a.path_skip.clone(),
         ..Check::default()
     })?;
+    let inherited = crate::repair::failing_jobs(r, &repo.id)?;
     Ok(checks
         .checks
         .into_iter()
         .find(|c| {
-            repo.required_checks.contains(&c.name) && c.status == "completed" && !c.head_satisfied()
+            repo.required_checks.contains(&c.name)
+                && !inherited.contains(&c.name)
+                && c.status == "completed"
+                && !c.head_satisfied()
         })
         .map(|c| c.name))
 }
@@ -258,6 +263,9 @@ fn pull_class(
                 s.member, repo.required_approvals
             ),
         ));
+    }
+    if crate::repair::is_pull(r, p)? {
+        return Ok(Priority::new(Class::Repair));
     }
     Ok(Priority::new(if approvals >= repo.required_approvals {
         Class::Landing

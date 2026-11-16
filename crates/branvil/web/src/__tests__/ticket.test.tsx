@@ -38,6 +38,12 @@ function ticketRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string
 }
 
 describe("ticket view", () => {
+  it.each([true, false])("shows repair badge only for repair tickets (%s)", async (repair) => {
+    fakeApi(ticketRoutes({ [`GET ${TICKET}`]: json(200, card("1", "ready", { repair })) }));
+    renderApp("/acme/demo/-/tickets/1", "ja");
+    await screen.findByText("Title of 1");
+    expect(screen.queryByText("修復") !== null).toBe(repair);
+  });
   it("shows the system avatar for the author of a repair ticket", async () => {
     fakeApi(ticketRoutes({ [`GET ${TICKET}`]: json(200, card("1", "ready", { author: "branvil", repair: true })) }));
     renderApp("/acme/demo/-/tickets/1");

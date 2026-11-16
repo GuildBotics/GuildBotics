@@ -35,6 +35,7 @@ pub struct LinkView {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct PullView {
+    pub repair: bool,
     /// Present on lists requested with sort=readiness; compared lexicographically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_order: Option<[u64; 3]>,
@@ -263,7 +264,13 @@ pub async fn pull_view(app: &App, repo: &Repo, p: &Pull, tips: &Tips) -> AppResu
         "open" => app.store.read(move |r| unanswered(r, &p2, &url2)).await?,
         _ => Vec::new(),
     };
+    let p2 = p.clone();
+    let repair = app
+        .store
+        .read(move |r| crate::repair::is_pull(r, &p2))
+        .await?;
     Ok(PullView {
+        repair,
         merge_order: None,
         url,
         unanswered,
@@ -957,14 +964,7 @@ async fn patrol_rank(app: &App, repo: &Repo, p: &Pull, me: &str, tips: &Tips) ->
     let head = tips.get(&p.head).cloned().unwrap_or_default();
     let base = tips.get(&p.base).cloned().unwrap_or_default();
     let approved = approvals(&read_review_states(app, p, &head).await?) >= repo.required_approvals;
-    let mut checks = crate::landing::head_checks(
-        repo,
-        &if head.is_empty() {
-            Vec::new()
-        } else {
-            app.ci.head_checks(repo, &head).await?.checks
-        },
-    );
+    let mut checks = crate::landing::pull_head_checks(app, repo, p, &head).await?;
     let (id, number) = (repo.id.clone(), p.number);
     let conflict = app
         .store
@@ -1038,6 +1038,7 @@ pub async fn update(
             "Only the owner marks a pull request ready for review.",
         ));
     }
+    let reselect = patch.tickets.is_some() || patch.drop_ticket_links;
     let base_url = app.base_url.clone();
     let r2 = repo.clone();
     let p = app
@@ -1081,6 +1082,9 @@ pub async fn update(
             Ok(p)
         })
         .await?;
+    if reselect {
+        app.ci.on_pull_opened(app, &repo, &p.head).await;
+    }
     app.events.publish("pull", &repo.path, number.to_string());
     if p.upstream.is_some() {
         app.upstream.wake();
