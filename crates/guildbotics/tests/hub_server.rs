@@ -1270,6 +1270,80 @@ fn auto_update_resumes_only_a_previously_running_service_even_after_rollback() {
 }
 
 #[test]
+fn auto_update_uses_service_intent_at_stop_instead_of_before_build() {
+    for running in [false, true] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        if running {
+            hub.mark("service-running");
+        }
+        hub.mark(if running {
+            "stop-during-build"
+        } else {
+            "start-during-build"
+        });
+        hub.run("auto-once", None, true);
+        assert_eq!(hub.root().join("service-running").exists(), !running);
+        assert_eq!(hub.lines("actions").contains("service|start"), !running);
+        assert!(
+            !hub.builds()
+                .parent()
+                .unwrap()
+                .join("service-before")
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn failed_build_does_not_restore_service() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.mark("fail-build");
+    hub.run("auto-once", None, true);
+    let actions = hub.lines("actions");
+    assert!(!actions.contains("service|start"));
+    assert!(!actions.contains("service|stop"));
+    assert!(
+        !hub.builds()
+            .parent()
+            .unwrap()
+            .join("service-before")
+            .exists()
+    );
+}
+
+#[test]
+fn auto_once_resumes_interrupted_update_after_server_returns() {
+    for after_update in [false, true] {
+        let hub = Hub::new();
+        hub.install();
+        let saved = hub.builds().parent().unwrap().join("service-before");
+        if after_update {
+            hub.auto_candidate();
+            hub.mark("service-running");
+            hub.mark("unresponsive-after-update");
+        } else {
+            fs::write(&saved, r#"{"service_running":true}"#).unwrap();
+            hub.mark("unresponsive");
+        }
+        hub.run("auto-once", None, true);
+        assert!(saved.exists());
+        assert!(!hub.lines("actions").contains("service|start"));
+        assert!(
+            hub.lines("notifications")
+                .contains("Server is unavailable; service resume remains pending")
+        );
+        fs::remove_file(hub.root().join("unresponsive")).unwrap();
+        hub.run("auto-once", None, true);
+        assert!(hub.root().join("service-running").exists());
+        assert!(!saved.exists());
+    }
+}
+
+#[test]
 fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
     for condition in [
         "operation",

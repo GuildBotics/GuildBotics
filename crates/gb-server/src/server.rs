@@ -57,6 +57,7 @@ fn announce(port: u16) -> std::io::Result<()> {
 /// Remote stop requests take the same drain and cancellation paths as signals.
 #[derive(Clone, Default)]
 pub struct Shutdown {
+    refusing: tokio_util::sync::CancellationToken,
     stop: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     close: tokio_util::sync::CancellationToken,
@@ -77,7 +78,7 @@ impl Shutdown {
     /// Whether the server is stopping, for any reason: it then refuses what
     /// would start more work for it to wait for (`api::REFUSED_WHILE_STOPPING`).
     pub fn stopping(&self) -> bool {
-        self.stop.is_cancelled()
+        self.refusing.is_cancelled() || self.stop.is_cancelled()
     }
 
     /// The listener is about to close: open event streams end so that the
@@ -106,10 +107,14 @@ pub(crate) async fn shutdown(
     axum::extract::State(api): axum::extract::State<api::Shared>,
     api::Body(body): api::Body<ShutdownRequest>,
 ) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    // Refuse new work before sampling, but do not let the drain change the
+    // service state until the admitted start has settled.
+    api.shutdown.refusing.cancel();
+    let service_running = api.selected().service.resume_on_shutdown().await;
     api.shutdown.request(body.force);
     (
         axum::http::StatusCode::ACCEPTED,
-        axum::Json(serde_json::json!({})),
+        axum::Json(serde_json::json!({"service_running": service_running})),
     )
 }
 
@@ -537,6 +542,115 @@ mod tests {
     use std::io::Read;
 
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_waits_for_start_and_refuses_new_starts_before_sampling() {
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(api::Api::new(
+            api::Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let selected = api.selected();
+        let gate = selected.service.hold_start_for_test().await;
+        let mut request = Box::pin(shutdown(
+            axum::extract::State(api.clone()),
+            api::Body(ShutdownRequest::default()),
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut request)
+                .await
+                .is_err()
+        );
+        assert!(api.shutdown.stopping());
+        assert!(!api.shutdown.stop.is_cancelled());
+        use tower::ServiceExt;
+        let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let response = api::router(api.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/-/guildbotics/api/scheduler/start")
+                    .header("host", "127.0.0.1:7878")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["code"],
+            "server_stopping"
+        );
+        // Simulate the admitted start completing while shutdown waits on its gate.
+        selected.service.service.starting().await;
+        drop(gate);
+        let (status, axum::Json(body)) = request.await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        assert_eq!(body, serde_json::json!({"service_running":true}));
+        assert!(api.shutdown.stop.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_stopping_service_as_not_requested() {
+        struct Worker(tokio_util::sync::CancellationToken);
+        impl crate::service::Worker for Worker {
+            fn cycle<'a>(
+                &'a self,
+                _: &'a str,
+                _: &'a crate::service_settings::Settings,
+            ) -> crate::service::Pending<'a, crate::service::Outcome> {
+                Box::pin(std::future::pending())
+            }
+            fn worker_failed(&self, _: &str, _: u8) {}
+            fn shutdown(&self) -> crate::service::Pending<'_, ()> {
+                Box::pin(self.0.cancelled())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(api::Api::new(
+            api::Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let selected = api.selected();
+        let worker = Arc::new(Worker(tokio_util::sync::CancellationToken::new()));
+        selected
+            .service
+            .service
+            .start(
+                root.path(),
+                root.path(),
+                vec!["alice".into()],
+                Default::default(),
+                worker.clone(),
+            )
+            .await
+            .unwrap();
+        selected.service.service.request_stop(false).await;
+        let state = selected.service.service.status().await;
+        assert_eq!(state.state, "stopping");
+        assert!(state.running);
+        let (_, axum::Json(body)) = shutdown(
+            axum::extract::State(api),
+            api::Body(ShutdownRequest::default()),
+        )
+        .await;
+        assert_eq!(body, serde_json::json!({"service_running":false}));
+        worker.0.cancel();
+        selected.service.stop(true).await;
+    }
 
     /// The record of the lock at `path`: its holder's PID and port.
     fn read_lock(path: &Path) -> Option<(u32, u16)> {

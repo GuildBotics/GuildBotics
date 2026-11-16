@@ -222,6 +222,8 @@ enum ServerCommand {
         /// Cancel in-flight work and force termination if teardown takes too long
         #[arg(long)]
         force: bool,
+        #[arg(long, hide = true)]
+        service_state: Option<std::path::PathBuf>,
     },
     /// Report the lock holder to the Hub's LaunchAgent script.
     #[command(hide = true)]
@@ -404,8 +406,12 @@ fn main() -> ExitCode {
         } => outcome(start(services)),
         #[cfg(feature = "hub")]
         Command::Server {
-            command: ServerCommand::Stop { force },
-        } => outcome(block(service_cli::stop(force)).map(|()| 0)),
+            command:
+                ServerCommand::Stop {
+                    force,
+                    service_state,
+                },
+        } => outcome(block(service_cli::stop(force, service_state.as_deref())).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command:

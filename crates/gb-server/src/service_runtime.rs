@@ -130,6 +130,11 @@ impl Controller {
             .await?;
         Ok(self.service.status().await)
     }
+    /// Sample intent after every previously admitted start has settled.
+    pub(crate) async fn resume_on_shutdown(&self) -> bool {
+        let _gate = self.gate.lock().await;
+        matches!(self.service.status().await.state, "starting" | "running")
+    }
     pub async fn stop(&self, force: bool) -> crate::service::Status {
         let (done, generation) = {
             let _gate = self.gate.lock().await;

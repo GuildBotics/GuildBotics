@@ -744,6 +744,48 @@ async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
 }
 
 #[tokio::test]
+async fn server_stop_atomically_records_shutdown_service_intent() {
+    for running in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let peer = CliPeer::bind(root.path()).await;
+        let saved = root.path().join("service before");
+        std::fs::write(&saved, "old").unwrap();
+        let mut cli = peer_cli(
+            root.path(),
+            &["server", "stop", "--service-state", saved.to_str().unwrap()],
+        );
+        let task = tokio::spawn(async move { cli.output().await.unwrap() });
+        peer.prove().await;
+        let (socket, body) = peer.authorized("POST", "shutdown").await;
+        assert_eq!(body, json!({"force":false}));
+        CliPeer::respond(
+            socket,
+            "202 Accepted",
+            &json!({"service_running":running}).to_string(),
+        )
+        .await;
+        drop(peer);
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(&saved).unwrap(),
+            format!("{}\n", json!({"service_running":running}))
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+                .count(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
 async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_force() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 

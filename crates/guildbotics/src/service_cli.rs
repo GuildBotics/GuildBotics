@@ -107,7 +107,7 @@ pub async fn hub_probe(ready: bool) -> anyhow::Result<u8> {
     Ok(0)
 }
 
-pub async fn stop(force: bool) -> anyhow::Result<()> {
+pub async fn stop(force: bool, service_state: Option<&std::path::Path>) -> anyhow::Result<()> {
     let language = client::language().await;
     let data = gb_base::home::data()?;
     let text = |key| i18n::t(language, key, &[]);
@@ -122,14 +122,22 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
             .await?
             .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.api_unavailable")))?;
         owner
-            .post(
-                "/shutdown",
-                Some(&json!({"force": force})),
-                Some(Duration::from_secs(5)),
-            )
+            .post("/shutdown", Some(&json!({"force": force})), None)
             .await
     }
     .await;
+    if let Some(path) = service_state {
+        let response = request
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+        let running = response["service_running"]
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.api_unavailable")))?;
+        gb_base::files::atomic_write(
+            path,
+            format!("{}\n", json!({"service_running": running})).as_bytes(),
+        )?;
+    }
     if let Err(error) = request
         && still_running()?
     {
