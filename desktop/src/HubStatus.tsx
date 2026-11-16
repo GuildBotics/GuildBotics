@@ -10,7 +10,7 @@ const useHubStatus = () =>
   useQuery({
     queryKey: ["hub-status"],
     queryFn: () => request<HubStatus>("/hub-status"),
-    refetchInterval: 2000,
+    refetchInterval: (query) => (query.state.data?.operation ? 2000 : 30_000),
   });
 export function HubBand() {
   const { t } = useTranslation();
@@ -30,7 +30,7 @@ export function HubVersion() {
   const version = useHubStatus().data?.current;
   return version ? (
     <Text>
-      {t("hub.version")}: <HubVersionLabel version={version} />
+      {t("hub.version")}: <HubVersionLabel version={version} t={t} />
     </Text>
   ) : null;
 }

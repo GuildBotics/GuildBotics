@@ -16,31 +16,41 @@ export interface HubStatus {
     waiting: { runs: number; ci_jobs: number | null };
   };
 }
-export function HubVersionLabel({ version }: { version: HubVersion }) {
+type HubTranslate = (
+  key: `hub.${"versionLabel" | "dismiss" | "title" | "preparing" | "preparingVersions" | "update" | "updateVersions" | "restart" | "stop"}`,
+  params?: Record<string, string | number>,
+) => string;
+export function HubVersionLabel({ version, t }: { version: HubVersion; t: HubTranslate }) {
   const sha = version.sha.slice(0, 8);
+  const label = t("hub.versionLabel", { sha: "__HUB_SHA__", subject: "__HUB_SUBJECT__" });
   return (
     <>
-      {version.url ? <Anchor href={version.url}>{sha}</Anchor> : sha} {version.subject}
+      {label.split(/(__HUB_SHA__|__HUB_SUBJECT__)/).map((part, index) => (
+        <Fragment key={index}>
+          {part === "__HUB_SHA__" ? (
+            version.url ? (
+              <Anchor href={version.url}>{sha}</Anchor>
+            ) : (
+              sha
+            )
+          ) : part === "__HUB_SUBJECT__" ? (
+            version.subject
+          ) : (
+            part
+          )}
+        </Fragment>
+      ))}
     </>
   );
 }
-export function HubStatusBand({
-  status,
-  t,
-}: {
-  status?: HubStatus | null;
-  t: (
-    key: `hub.${"dismiss" | "title" | "preparing" | "preparingVersions" | "update" | "updateVersions" | "restart" | "stop"}`,
-    params?: Record<string, string | number>,
-  ) => string;
-}) {
+export function HubStatusBand({ status, t }: { status?: HubStatus | null; t: HubTranslate }) {
   const [dismissed, setDismissed] = useState<string | null>(null);
   const op = status?.operation;
   if (!op) return null;
   const id = `${op.kind}:${op.phase}:${op.since}`;
   if (dismissed === id) return null;
   const version = (v: HubVersion | null | undefined): ReactNode =>
-    v ? <HubVersionLabel version={v} /> : null;
+    v ? <HubVersionLabel version={v} t={t} /> : null;
   const hasVersions = Boolean(status?.current && status?.target);
   const phaseKey = op.phase === "preparing" ? "preparing" : op.kind;
   const key =

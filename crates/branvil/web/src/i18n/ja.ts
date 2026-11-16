@@ -3,6 +3,7 @@
 import type { MessageKey } from "./en";
 
 export const ja: Record<MessageKey, string> = {
+  "hub.versionLabel": "{sha}（{subject}）",
   "hub.preparingVersions": "Hub を {current} から {target} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
   "hub.updateVersions": "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {runs} 件と CI のジョブ {ci_jobs} 件が終わると、{current} から {target} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
   "hub.title": "Hub の作業",

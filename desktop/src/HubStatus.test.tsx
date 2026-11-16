@@ -4,7 +4,7 @@ import { HubStatusBand, type HubStatus } from "@guildbotics/ui/HubStatus";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import i18n from "./i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { HubVersion } from "./HubStatus";
 import { request } from "./api/client";
 vi.mock("./api/client", async (original) => ({
@@ -82,3 +82,59 @@ it.each([true, false])(
     client.clear();
   },
 );
+
+it.each(["en", "ja"])("delimits version subjects inside the banner in %s", (language) => {
+  render(
+    <TestMantineProvider>
+      <HubStatusBand status={status} t={i18n.getFixedT(language)} />
+    </TestMantineProvider>,
+  );
+  const banner = screen.getByText(/Current title/);
+  expect(banner.textContent).toContain(
+    language === "ja" ? "12345678（Current title）" : '12345678 ("Current title")',
+  );
+  expect(banner.textContent).toContain(
+    language === "ja" ? "abcdef01（Next title）" : 'abcdef01 ("Next title")',
+  );
+});
+
+it("polls Hub status slowly when idle and quickly only during maintenance", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let value: HubStatus = { ...status, operation: null };
+  vi.mocked(request).mockReset().mockResolvedValue(value);
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <TestMantineProvider>
+          <HubVersion />
+        </TestMantineProvider>
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29999);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+    value = status;
+    vi.mocked(request).mockResolvedValue(value);
+    await act(async () => {
+      client.setQueryData(["hub-status"], value);
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    value = { ...status, operation: null };
+    vi.mocked(request).mockResolvedValue(value);
+    await act(async () => {
+      client.setQueryData(["hub-status"], value);
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+  } finally {
+    client.clear();
+    vi.useRealTimers();
+  }
+});

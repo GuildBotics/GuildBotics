@@ -1,5 +1,7 @@
-import { screen } from "@testing-library/react";
-import { it, expect } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useDiagnostics } from "../query/hooks";
+import { act, renderHook, screen } from "@testing-library/react";
+import { it, expect, vi } from "vitest";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 
 it.each([true, false])(
@@ -46,3 +48,23 @@ it.each([true, false])(
     }
   },
 );
+
+it("polls standalone and idle diagnostics slowly, with short intervals only during Hub work", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+  let operation: unknown = null;
+  const calls = fakeApi({"GET /api/v1/admin/diagnostics": () => json(200,{hub:{operation}})});
+  try {
+    renderHook(() => useDiagnostics(),{wrapper:({children}) => <QueryClientProvider client={client}>{children}</QueryClientProvider>});
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(calls.requests).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(29999); });
+    expect(calls.requests).toHaveLength(2);
+    operation = {kind:"update",phase:"preparing"};
+    await act(async () => { client.setQueryData(["diagnostics"],{hub:{operation}}); await vi.advanceTimersByTimeAsync(2000); });
+    expect(calls.requests).toHaveLength(3);
+    operation = null;
+    await act(async () => { client.setQueryData(["diagnostics"],{hub:{operation}}); await vi.advanceTimersByTimeAsync(2000); });
+    expect(calls.requests).toHaveLength(3);
+  } finally { client.clear(); vi.useRealTimers(); }
+});

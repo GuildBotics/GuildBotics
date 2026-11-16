@@ -1,6 +1,7 @@
 // English messages. `ja.ts` must have exactly the same keys.
 
 export const en = {
+  "hub.versionLabel": '{sha} ("{subject}")',
   "hub.preparingVersions": "Preparing an automatic Hub update from {current} to {target}. New runs will stop being accepted soon.",
   "hub.updateVersions": "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {runs} running tasks and {ci_jobs} CI jobs finish, the Hub will switch from {current} to {target}. Services will resume afterward if they were running when the stop was accepted.",
   "hub.title": "Hub maintenance",
@@ -11,7 +12,7 @@ export const en = {
   "hub.update":
     "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {runs} running tasks and {ci_jobs} CI jobs finish, the Hub will switch versions. Services will resume afterward if they were running when the stop was accepted.",
   "hub.restart":
-    "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. Restart will follow completion of {runs} running tasks and {ci_jobs} CI jobs.",
+    "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will restart after {runs} running tasks and {ci_jobs} CI jobs finish.",
   "hub.stop":
     "The Hub is stopping and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will stop after {runs} running tasks and {ci_jobs} CI jobs finish.",
   "verification.verified": "verified",

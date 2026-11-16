@@ -2,6 +2,7 @@ export const resources = {
   en: {
     translation: {
       hub: {
+        versionLabel: '{{sha}} ("{{subject}}")',
         preparingVersions:
           "Preparing an automatic Hub update from {{current}} to {{target}}. New runs will stop being accepted soon.",
         updateVersions:
@@ -13,7 +14,7 @@ export const resources = {
         update:
           "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch versions. Services will resume afterward if they were running when the stop was accepted.",
         restart:
-          "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. Restart will follow completion of {{runs}} running tasks and {{ci_jobs}} CI jobs.",
+          "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will restart after {{runs}} running tasks and {{ci_jobs}} CI jobs finish.",
         stop: "The Hub is stopping and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will stop after {{runs}} running tasks and {{ci_jobs}} CI jobs finish.",
       },
       decision: {
@@ -1451,6 +1452,7 @@ export const resources = {
   ja: {
     translation: {
       hub: {
+        versionLabel: "{{sha}}（{{subject}}）",
         preparingVersions:
           "Hub を {{current}} から {{target}} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
         updateVersions:
