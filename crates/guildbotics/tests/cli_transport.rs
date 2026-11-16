@@ -139,6 +139,7 @@ fn peer_cli(root: &Path, arguments: &[&str]) -> tokio::process::Command {
         .env("LANGUAGE", "ja")
         .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
         .env_remove("GUILDBOTICS_CONFIG_DIR")
+        .env_remove("GUILDBOTICS_HUB_SERVICE_STATE")
         .stdin(Stdio::null());
     cli
 }
@@ -745,15 +746,27 @@ async fn hub_probe_requires_the_lock_and_authenticates_readiness() {
 
 #[tokio::test]
 async fn server_stop_atomically_records_shutdown_service_intent() {
-    for running in [false, true] {
+    // An empty value requests nothing, like an unset one.
+    for (request, running) in [
+        (Some(true), false),
+        (Some(true), true),
+        (Some(false), true),
+        (None, true),
+    ] {
         let root = tempfile::tempdir().unwrap();
         let peer = CliPeer::bind(root.path()).await;
         let saved = root.path().join("service before");
         std::fs::write(&saved, "old").unwrap();
-        let mut cli = peer_cli(
-            root.path(),
-            &["server", "stop", "--service-state", saved.to_str().unwrap()],
-        );
+        let mut cli = peer_cli(root.path(), &["server", "stop"]);
+        let requested = request == Some(true);
+        if let Some(named) = request {
+            let value = if named {
+                saved.as_os_str()
+            } else {
+                "".as_ref()
+            };
+            cli.env("GUILDBOTICS_HUB_SERVICE_STATE", value);
+        }
         let task = tokio::spawn(async move { cli.output().await.unwrap() });
         peer.prove().await;
         let (socket, body) = peer.authorized("POST", "shutdown").await;
@@ -772,7 +785,11 @@ async fn server_stop_atomically_records_shutdown_service_intent() {
         assert!(result.status.success(), "{result:?}");
         assert_eq!(
             std::fs::read_to_string(&saved).unwrap(),
-            format!("{}\n", json!({"service_running":running}))
+            if requested {
+                format!("{}\n", json!({"service_running":running}))
+            } else {
+                "old".to_owned()
+            }
         );
         assert_eq!(
             std::fs::read_dir(root.path())

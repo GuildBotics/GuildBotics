@@ -1316,6 +1316,29 @@ fn failed_build_does_not_restore_service() {
 }
 
 #[test]
+fn update_from_a_build_without_the_service_state_request_completes_without_resuming() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.mark("no-service-state");
+    hub.mark("service-running");
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.auto_state()["result"], "success");
+    hub.assert_runs_signed("new");
+    let actions = hub.lines("actions");
+    assert!(actions.contains("old|server|stop\n"), "{actions}");
+    assert!(!actions.contains("service|start"));
+    assert!(!actions.contains("service|stop"));
+    assert!(
+        !hub.builds()
+            .parent()
+            .unwrap()
+            .join("service-before")
+            .exists()
+    );
+}
+
+#[test]
 fn auto_once_resumes_interrupted_update_after_server_returns() {
     for after_update in [false, true] {
         let hub = Hub::new();
