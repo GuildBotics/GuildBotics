@@ -87,7 +87,11 @@ fn text(s: &str) -> String {
         .replace(['\r', '\n'], " ")
 }
 
-async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(String, Vec<Pull>)> {
+async fn evidence(
+    app: &App,
+    repo: &Repo,
+    pending: &Pending,
+) -> AppResult<(String, Vec<Pull>, String)> {
     let id = repo.id.clone();
     let verified = app
         .store
@@ -261,7 +265,11 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
     if commits.len() > 100 {
         body.push_str(&format!("\n{} more commits.\n", commits.len() - 100));
     }
-    Ok((body, matched))
+    Ok((
+        body,
+        matched,
+        verified.map_or_else(|| "no verified commit".into(), |v| short(&v.sha).to_owned()),
+    ))
 }
 
 fn create(
@@ -270,6 +278,8 @@ fn create(
     pending: &Pending,
     mut body: String,
     pulls: &[Pull],
+    verified: &str,
+    base_url: &str,
 ) -> AppResult<Ticket> {
     let first = pulls.first();
     let author = first
@@ -325,10 +335,11 @@ fn create(
     };
     body.push_str(&format!("\n## Assignee\n\n{}: {reason}\n", text(&name)));
     let now = crate::util::now();
+    let number = w.next(&format!("ticket:{}", repo.id))?;
     let t = Ticket {
         repo: repo.id.clone(),
         workspace: repo.workspace.clone(),
-        number: w.next(&format!("ticket:{}", repo.id))?,
+        number,
         title: format!(
             "Repair {}: verification failed ({})",
             repo.default_branch,
@@ -345,7 +356,7 @@ fn create(
         state: "open".into(),
         state_reason: None,
         assignee: Some(Assignee {
-            name,
+            name: name.clone(),
             assigned_at: now.clone(),
         }),
         labels: vec![],
@@ -356,6 +367,28 @@ fn create(
         parent: None,
         blocked_by: vec![],
         repair: Some(Repair {
+            notice: Some(format!(
+                "Main verification failed: {} {} {} ({})\nRange: {}..{}, {} pull request(s): {}\nRepair ticket: {}, assigned to {}",
+                repo.path,
+                repo.default_branch,
+                short(&pending.sha),
+                pending
+                    .failures
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                verified,
+                short(&pending.sha),
+                pulls.len(),
+                pulls
+                    .iter()
+                    .map(|p| format!("!{}", p.number))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                tickets::ticket_url(base_url, repo, number),
+                name
+            )),
             jobs: pending.failures.iter().map(|f| f.name.clone()).collect(),
             reported: pending.sha.clone(),
         }),
@@ -447,6 +480,7 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         None
     };
     let path = repo.path.clone();
+    let base_url = app.base_url.clone();
     let changed = app
         .store
         .write(move |w| {
@@ -504,8 +538,8 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                     Some(t.number)
                 }
             } else {
-                let (body, pulls) = evidence.unwrap();
-                Some(create(w, &repo, &p, body, &pulls)?.number)
+                let (body, pulls, verified) = evidence.unwrap();
+                Some(create(w, &repo, &p, body, &pulls, &verified, &base_url)?.number)
             };
             w.del(store::REPAIR_PENDING, &key)?;
             Ok(changed)
@@ -518,4 +552,178 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         app.events.publish("verification", &path, "");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    fn app(path: &std::path::Path) -> crate::app::Shared {
+        let config = crate::config::Config::load(None, Some(path), None, None).unwrap();
+        config.layout().create().unwrap();
+        let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
+        let vault = crate::vault::Sealed::new(&path.join("vault"), &[7; 32]).unwrap();
+        App::new(
+            config,
+            "http://127.0.0.1:7878".into(),
+            store,
+            Arc::new(vault),
+            "http://127.0.0.1:7878".into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn creation_delivery_retry_restart_and_closure_keep_one_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let repo: Repo = serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":["test"],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"ci_network":false,"responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"})).unwrap();
+        app.store.write_sync(|w| {
+            w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
+            let m: model::Member = serde_json::from_value(json!({"name":"agent","display_name":"Agent","kind":"agent","accounts":[],"reviewers":[],"created_at":"0","avatar":null})).unwrap();
+            w.put(store::MEMBERS, &model::Member::key(&m.name), &m)
+        }).unwrap();
+        let pulls: Vec<Pull> = [12,13].map(|n| serde_json::from_value(json!({"repo":"repo","number":n,"title":"test","body":"","state":"closed","merged":true,"draft":false,"author":"agent","head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"ready_at":null,"created_at":"0","updated_at":"0","closed_at":null,"merged_at":"1","merge_sha":null,"merged_head":null,"merged_base":null,"upstream":null,"revision":1})).unwrap()).to_vec();
+        let pending = Pending {
+            repo: repo.id.clone(),
+            sha: "abcdef0123".into(),
+            failures: vec![verify::FailedJob {
+                name: "test".into(),
+                attempt_id: None,
+                details: None,
+            }],
+        };
+        let ticket = app
+            .store
+            .write_sync(|w| {
+                create(
+                    w,
+                    &repo,
+                    &pending,
+                    "body".into(),
+                    &pulls,
+                    "1234567",
+                    "http://127.0.0.1:7878",
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            ticket.repair.as_ref().unwrap().notice.as_deref(),
+            Some(
+                "Main verification failed: acme/demo main abcdef0 (test)\nRange: 1234567..abcdef0, 2 pull request(s): !12 !13\nRepair ticket: http://127.0.0.1:7878/acme/demo/-/tickets/1, assigned to agent"
+            )
+        );
+        async fn sweep(app: &App) {
+            crate::ci::notify::sweep(app).await.unwrap();
+        }
+        fn indexed(app: &App) -> Vec<Vec<u8>> {
+            app.store
+                .read_sync(|r| r.prefix_keys(store::IX_REPAIR_UNNOTIFIED, &[]))
+                .unwrap()
+        }
+        let index = indexed(&app);
+        assert_eq!(index.len(), 1);
+        app.store.write_sync(model::rebuild_indexes).unwrap();
+        assert_eq!(indexed(&app), index);
+        sweep(&app).await;
+        assert_eq!(indexed(&app), index, "unset webhook retains notice");
+        let received = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let copy = received.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/webhook", listener.local_addr().unwrap());
+        let router = axum::Router::new().route(
+            "/webhook",
+            axum::routing::post(move |axum::Json(v): axum::Json<serde_json::Value>| {
+                let copy = copy.clone();
+                async move {
+                    let mut items = copy.lock().unwrap();
+                    items.push(v);
+                    if items.len() == 1 {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        app.secrets.set(app.secrets.webhook(), url).await.unwrap();
+        sweep(&app).await;
+        assert_eq!(received.lock().unwrap().len(), 1);
+        assert_eq!(indexed(&app), index, "503 retains notice");
+        // Close while delivery is pending: acknowledgment must preserve closure.
+        app.store
+            .write_sync(|w| passed(w, &repo.id, "passed"))
+            .unwrap();
+        assert_eq!(indexed(&app), index);
+        sweep(&app).await;
+        sweep(&app).await;
+        assert_eq!(received.lock().unwrap().len(), 2);
+        assert_eq!(
+            received.lock().unwrap()[1]["text"],
+            ticket.repair.unwrap().notice.unwrap()
+        );
+        assert!(indexed(&app).is_empty());
+        let t: Ticket = app
+            .store
+            .read_sync(|r| Ok(r.get(store::TICKETS, &Ticket::key(&repo.id, 1))?.unwrap()))
+            .unwrap();
+        assert_eq!(t.state, "closed");
+        assert!(t.repair.unwrap().notice.is_none());
+        drop(app);
+        let app = self::app(dir.path());
+        sweep(&app).await;
+        app.store.write_sync(model::rebuild_indexes).unwrap();
+        assert!(indexed(&app).is_empty());
+        assert_eq!(received.lock().unwrap().len(), 2);
+        let second = app
+            .store
+            .write_sync(|w| {
+                create(
+                    w,
+                    &repo,
+                    &pending,
+                    "body".into(),
+                    &[],
+                    "no verified commit",
+                    "http://127.0.0.1:7878",
+                )
+            })
+            .unwrap();
+        assert!(
+            second
+                .repair
+                .unwrap()
+                .notice
+                .unwrap()
+                .contains("Range: no verified commit..abcdef0, 0 pull request(s): ")
+        );
+        sweep(&app).await;
+        sweep(&app).await;
+        assert_eq!(received.lock().unwrap().len(), 3);
+        // Protected CI alone has no notification lifecycle, including recovery.
+        for (sha, success) in [("failed-only", false), ("recovered-only", true)] {
+            app.store.write_sync(|w| {
+                queue::register(w, queue::Registration {
+                    repo: repo.id.clone(), repo_path: repo.path.clone(), sha: sha.into(),
+                    tree: None, branch: "protected".into(), protected: true,
+                    pipeline: queue::PipelineState::Jobs { jobs: vec![serde_json::from_value(json!({
+                        "name":"test", "image":"alpine", "commands":["true"],
+                        "timeout_secs":null, "artifacts":[], "cache":null, "paths":[], "verified_sha":false
+                    })).unwrap()] }, network: false, order: vec![], inputs: Default::default(), selection: None
+                }, 10, "2026-01-01T00:00:00Z")?;
+                let mut number = 0;
+                while let Some(c) = queue::claim(w, "runner", 60, "2026-01-01T00:00:00Z")? {
+                    queue::finish(w, &c.attempt.id, &c.lease, if success && number > 0 { "success" } else { "failure" }, None, queue::ResultInfo::default(), 10, "2026-01-01T00:00:00Z")?;
+                    number += 1;
+                }
+                assert_eq!(number, if success { 2 } else { 4 });
+                Ok(())
+            }).unwrap();
+            sweep(&app).await;
+            assert_eq!(received.lock().unwrap().len(), 3);
+        }
+        task.abort();
+    }
 }

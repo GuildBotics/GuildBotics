@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 33;
+pub const SCHEMA_VERSION: u64 = 34;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -48,6 +48,7 @@ pub const REFS: Tbl = TableDefinition::new("ref_snapshots");
 pub const JOURNAL: Tbl = TableDefinition::new("ref_journal");
 pub const IDEMPOTENCY: Tbl = TableDefinition::new("idempotency");
 pub const REPAIR_PENDING: Tbl = TableDefinition::new("repair_pending");
+pub const IX_REPAIR_UNNOTIFIED: Tbl = TableDefinition::new("ix_repair_unnotified");
 pub const IX_OPEN_REPAIRS: Tbl = TableDefinition::new("ix_open_repairs");
 pub const CI_NARROWINGS: Tbl = TableDefinition::new("ci_narrowings");
 pub const IX_CI_NARROWING: Tbl = TableDefinition::new("ix_ci_narrowing");
@@ -79,8 +80,6 @@ pub const IX_CI_PENDING: Tbl = TableDefinition::new("ix_ci_pending");
 pub const IX_CI_ACTIVE: Tbl = TableDefinition::new("ix_ci_active");
 pub const IX_CI_WAITING: Tbl = TableDefinition::new("ix_ci_waiting");
 pub const IX_CI_TREE: Tbl = TableDefinition::new("ix_ci_tree");
-pub const IX_CI_UNNOTIFIED: Tbl = TableDefinition::new("ix_ci_unnotified");
-pub const IX_CI_RECOVERED: Tbl = TableDefinition::new("ix_ci_recovered");
 pub const IX_CI_REFRESH: Tbl = TableDefinition::new("ix_ci_refresh");
 /// (repo id, job name, input digest, attempt id) → attempt id: actual,
 /// successful executions whose files are kept, by the inputs they ran on.
@@ -119,6 +118,7 @@ pub const INDEX_TABLES: &[Tbl] = &[
     IX_PATHS,
     IX_CARDS,
     IX_OPEN_REPAIRS,
+    IX_REPAIR_UNNOTIFIED,
     IX_TICKET_LABELS,
     IX_TICKET_MENTIONS,
     IX_CLOSED_TICKETS,
@@ -136,9 +136,7 @@ pub const INDEX_TABLES: &[Tbl] = &[
     IX_CI_ACTIVE,
     IX_CI_WAITING,
     IX_CI_TREE,
-    IX_CI_UNNOTIFIED,
     IX_CI_REFRESH,
-    IX_CI_RECOVERED,
     IX_CI_INPUTS,
 ];
 

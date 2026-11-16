@@ -54,8 +54,9 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | `runner/` | `guildbotics branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
 | `upstream/` | the upstream code host: the provider boundary (`host.rs`, `github.rs`), members' accounts, following the default branch, publishing pull requests, carrying changes both ways, the host's check runs (see below) |
 | `landing.rs` | per-pull landing conditions, pair checks and conflict/host failure comments |
+| `ci/notify.rs` | sends indexed repair-ticket notices outside transactions and clears them after delivery |
 | `webhook.rs` | bounded webhook delivery shared by the service and offline CLI; never exposes the URL in errors |
-| `autoland.rs` | the task that checks every open PR, automatically merges or publishes with `auto_land`, and tells the webhook when host checks pass; independently sweeps CI failure notifications (`ci/notify.rs`) |
+| `autoland.rs` | the task that checks every open PR, automatically merges or publishes with `auto_land`, and tells the webhook when host checks pass; creates repair tickets then delivers their pending notices (`ci/notify.rs`) |
 | `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `guildbotics branvil restore` (`docs/backup-restore.md`) |
 | `events.rs` | bounded broadcast for SSE and the landing task |
 | `http.rs` | router, Host/Origin guard, security headers, idempotency middleware, extractors, SSE, GUI files |
