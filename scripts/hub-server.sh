@@ -163,7 +163,9 @@ stop_agent() {
     if [ -n "$holder" ]; then
         [ "$holder" = "$(job_pid)" ] ||
             fail "A GuildBotics server outside this LaunchAgent is running (PID $holder)."
-        "$current" server stop "$@" || return
+        # This script is newer than the build it stops: a request goes in the
+        # environment, which a build without it ignores, never as an option.
+        env -u GUILDBOTICS_HUB_SERVICE_STATE ${1+"GUILDBOTICS_HUB_SERVICE_STATE=$1"} "$current" server stop || return
     fi
     unload
 }
@@ -468,7 +470,7 @@ case "$action" in
         cp "$current" "$lock/update-from"
         backup_and_rehearse
         stage="stopping the previous build"
-        stop_agent --service-state "$hub/service-before"
+        stop_agent "$hub/service-before"
         assert_stopped "$current"
         cp "$candidate" "$builds/update-to"
         mv -f "$lock/update-from" "$pending"

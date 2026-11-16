@@ -107,7 +107,13 @@ pub async fn hub_probe(ready: bool) -> anyhow::Result<u8> {
     Ok(0)
 }
 
-pub async fn stop(force: bool, service_state: Option<&std::path::Path>) -> anyhow::Result<()> {
+/// Stops the server. When `GUILDBOTICS_HUB_SERVICE_STATE` names a file, the
+/// service state the server reported on accepting the stop is written there.
+/// The Hub's update script is newer than the build it stops, so it passes the
+/// request where a build without it ignores it, not as an argument.
+pub async fn stop(force: bool) -> anyhow::Result<()> {
+    let service_state =
+        std::env::var_os("GUILDBOTICS_HUB_SERVICE_STATE").filter(|path| !path.is_empty());
     let language = client::language().await;
     let data = gb_base::home::data()?;
     let text = |key| i18n::t(language, key, &[]);
@@ -134,7 +140,7 @@ pub async fn stop(force: bool, service_state: Option<&std::path::Path>) -> anyho
             .as_bool()
             .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.api_unavailable")))?;
         gb_base::files::atomic_write(
-            path,
+            std::path::Path::new(&path),
             format!("{}\n", json!({"service_running": running})).as_bytes(),
         )?;
     }

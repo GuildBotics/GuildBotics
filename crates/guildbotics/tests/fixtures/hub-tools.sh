@@ -207,10 +207,13 @@ case "$name" in
                 fi
                 ;;
             server:stop)
+                # Like clap, refuse an option: the build being stopped may predate any.
+                [ "$#" -eq 2 ] || exit 2
                 [ ! -f "$FAKE_ROOT/fail-stop" ] || exit 1
-                if [ "${3:-}" = --service-state ]; then
+                # A build from before the request ignores it.
+                if [ -n "${GUILDBOTICS_HUB_SERVICE_STATE:-}" ] && [ ! -f "$FAKE_ROOT/no-service-state" ]; then
                     if [ -f "$FAKE_ROOT/service-running" ]; then active=true; else active=false; fi
-                    printf '{"service_running":%s}\n' "$active" >"$4"
+                    printf '{"service_running":%s}\n' "$active" >"$GUILDBOTICS_HUB_SERVICE_STATE"
                 fi
                 rm -f "$FAKE_ROOT/holder" "$FAKE_ROOT/job-pid" "$FAKE_ROOT/service-running"
                 ;;
