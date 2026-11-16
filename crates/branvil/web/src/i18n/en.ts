@@ -627,7 +627,7 @@ export const en = {
   "settings.autoLandHelp": "Branvil merges an open pull request by itself (fast-forward) when it reaches the front of the landing queue and passes the gate. Head checks and approvals must succeed before it joins the queue. Keep it a draft to hold it.",
   "settings.autoLandHelpUpstream": "Branvil publishes an open pull request to {host} by itself, as its author, after it reaches the front of the queue and passes the gate. Head checks and approvals must succeed before it joins. People merge it on {host}. The Notifications webhook is told whenever the gate passes. Keep it a draft to hold it.",
   "settings.notifications": "Notifications",
-  "notifications.help": "When a pull request in a repository that lands automatically passes the gate, Branvil tells this webhook that it is ready to merge, including when an already published pull request passes a new gate. The message links to both pull requests (a Slack Incoming Webhook accepts it). People merge it on the host. The URL is kept like a credential and is never shown again.",
+  "notifications.help": "When a pull request in a repository that lands automatically passes the gate, Branvil tells this webhook that it is ready to merge, including when an already published pull request passes a new gate. The message links to both pull requests (a Slack Incoming Webhook accepts it). People merge it on the host. Creating a repair ticket after main verification fails sends one notice with the failed jobs, range, ticket URL and assignee. The webhook URL is kept like a credential and is never shown again.",
   "notifications.url": "Webhook URL",
   "notifications.urlHelp": "An http or https URL; saving replaces the one set.",
   "notifications.set": "Set ({host})",

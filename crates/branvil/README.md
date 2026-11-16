@@ -664,6 +664,8 @@ outside see. Branvil never pushes the default branch; it follows it.
    Under
    Settings → Notifications, the owner enters its URL (a Slack Incoming Webhook takes the
    message as it is), which is kept like a credential and never shown again.
+   Creating a repair ticket after main verification fails sends one notice with
+   the failed jobs, commit range, ticket URL and assignee to this webhook.
 
 Members read the GitHub repository's Dependabot alerts through Branvil
 (`docs/api.md`, "Dependency alerts"), with the reader's account; Branvil

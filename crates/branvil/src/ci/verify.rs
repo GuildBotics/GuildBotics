@@ -151,7 +151,7 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
         repair: repair.map(|t| RepairTicket {
             number: t.number,
             assignee: t.assignee.map(|a| a.name),
-            url: format!("{}/{}/-/tickets/{}", app.base_url, repo.path, t.number),
+            url: crate::domain::tickets::ticket_url(&app.base_url, repo, t.number),
         }),
         branch: repo.default_branch.clone(),
         tip,

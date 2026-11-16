@@ -1,3 +1,5 @@
+import { en } from "../i18n/en";
+import { ja } from "../i18n/ja";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -535,4 +537,12 @@ describe("settings", () => {
     });
     expect(await screen.findByText("(chosen)")).toBeInTheDocument();
   });
+});
+
+it("explains repair-ticket creation notices in both languages", () => {
+  expect(en["notifications.help"]).toContain("Creating a repair ticket");
+  expect(ja["notifications.help"]).toContain("修復チケットを作ると");
+  expect(en["notifications.help"].indexOf("Creating a repair ticket")).toBeLessThan(en["notifications.help"].indexOf("The webhook URL"));
+  expect(ja["notifications.help"].indexOf("修復チケットを作ると")).toBeLessThan(ja["notifications.help"].indexOf("webhookのURLは"));
+  expect(ja["notifications.help"]).not.toContain("。 ");
 });
