@@ -131,14 +131,9 @@ pub struct Run {
     pub superseded_by: Option<String>,
     /// Protected branches that asked for this run, retained when they move.
     pub protected_branches: Vec<String>,
-    /// Successful delivery of this run's required-check failure notice.
-    pub failure_notified_at: Option<String>,
     /// The input digest of every job of the pipeline with paths, by job
     /// name, as of the latest registration (`Ci::job_inputs`).
     pub inputs: BTreeMap<String, String>,
-    /// A final required-check failure awaits delivery (maintained with every
-    /// run/attempt change, so sweeps never scan successful history).
-    pub failure_pending: bool,
 }
 
 impl Run {
@@ -186,7 +181,6 @@ pub struct Attempt {
     /// The refresh requested by this reused check, including an existing one.
     pub cache_refresh: Option<String>,
     pub auto_retry: Option<AutoRetry>,
-    pub recovery_notified_at: Option<String>,
     /// An absence retry stays queued until a runner claims it.
     pub wait_for_runner: bool,
     pub repo: String,
@@ -277,13 +271,6 @@ pub fn run_key(repo: &str, sha: &str) -> Vec<u8> {
 
 pub fn run_index(r: &Run) -> Vec<IxEntry> {
     let mut out = Vec::new();
-    if r.failure_pending {
-        out.push(IxEntry {
-            table: store::IX_CI_UNNOTIFIED,
-            key: run_key(&r.repo, &r.sha),
-            value: run_key(&r.repo, &r.sha),
-        });
-    }
     if let Some(tree) = &r.tree {
         out.push(IxEntry {
             table: store::IX_CI_TREE,
@@ -312,16 +299,6 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
             .bytes(),
         value: a.id.as_bytes().to_vec(),
     }];
-    if a.auto_retry.is_some()
-        && a.conclusion.as_deref() == Some("success")
-        && a.recovery_notified_at.is_none()
-    {
-        out.push(IxEntry {
-            table: store::IX_CI_RECOVERED,
-            key: Attempt::key(&a.id),
-            value: a.id.as_bytes().to_vec(),
-        });
-    }
     if a.purpose == Purpose::CacheRefresh
         && a.status != "completed"
         && let Some(key) = &a.cache_key
@@ -377,53 +354,9 @@ pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
     Ok(out)
 }
 
-/// The required checks are evaluated in the same transaction as an attempt
-/// change. Missing required jobs are failures even without an attempt. A
-/// superseded attempt is routine cancellation, not an operational failure.
-fn refresh_failure(r: &impl Rd, run: &mut Run) -> AppResult<()> {
-    run.failure_pending = false;
-    if run.protected_branches.is_empty() || run.failure_notified_at.is_some() {
-        return Ok(());
-    }
-    let Some(repo) =
-        r.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&run.repo))?
-    else {
-        return Ok(());
-    };
-    let jobs = match &run.pipeline {
-        PipelineState::Jobs { jobs } => jobs.as_slice(),
-        _ => &[],
-    };
-    let latest = current_attempts(r, &run.repo, &run.sha, jobs)?;
-    let mut failed = false;
-    for name in &repo.required_checks {
-        if !jobs.iter().any(|j| &j.name == name) {
-            failed = true;
-            continue;
-        }
-        let Some(a) = latest
-            .iter()
-            .find(|a| &a.job.name == name && run.includes(a))
-        else {
-            if run.superseded_by.is_some() {
-                continue;
-            }
-            return Ok(());
-        };
-        if a.status != "completed" {
-            return Ok(());
-        }
-        failed |= a.conclusion.as_deref() != Some("success") && !a.superseded;
-    }
-    run.failure_pending = failed;
-    Ok(())
-}
-
 pub fn put_run(w: &Wtx, new: &Run) -> AppResult<()> {
     let old = get_run(w, &new.repo, &new.sha)?;
-    let mut new = new.clone();
-    refresh_failure(w, &mut new)?;
-    if old.as_ref() == Some(&new) {
+    if old.as_ref() == Some(new) {
         return Ok(());
     }
     put_indexed(
@@ -431,8 +364,8 @@ pub fn put_run(w: &Wtx, new: &Run) -> AppResult<()> {
         store::CI_RUNS,
         &run_key(&new.repo, &new.sha),
         old.as_ref().map(run_index),
-        &new,
-        run_index(&new),
+        new,
+        run_index(new),
     )
 }
 
@@ -613,7 +546,6 @@ fn new_job(
         purpose: Purpose::Check,
         cache_refresh: None,
         auto_retry: None,
-        recovery_notified_at: None,
         wait_for_runner: false,
         repo: repo.into(),
         repo_path: path.into(),
@@ -727,8 +659,6 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
             cache_scope: scope,
             waiting: false,
             superseded_by: None,
-            failure_notified_at: None,
-            failure_pending: false,
             inputs: BTreeMap::new(),
         },
     };
@@ -793,7 +723,6 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
         }
         admit_jobs(w, &mut run, &todo, &reg.order, reg.network, queue_max, now)?
     };
-    refresh_failure(w, &mut run)?;
     let changed = old.as_ref() != Some(&run);
     put_run(w, &run)?;
     Ok(queued || skipped || changed)
@@ -1491,15 +1420,6 @@ fn prepare_auto_retry(
     Ok(Some(next))
 }
 
-pub fn mark_recovery_notified(w: &Wtx, id: &str, now: &str) -> AppResult<()> {
-    if let Some(old) = get_attempt(w, id)? {
-        let mut next = old.clone();
-        next.recovery_notified_at = Some(now.into());
-        put_attempt(w, Some(&old), &next)?;
-    }
-    Ok(())
-}
-
 /// One unfinished refresh per repository, job name, and cache key. Refreshes
 /// use the same bounded queue as checks, but never make a run wait for room.
 fn enqueue_refresh(
@@ -1940,14 +1860,11 @@ mod tests {
                         T0,
                     )?;
                     let current = latest_attempts(w, "repo_1", "sha")?.remove(0);
-                    let run = get_run(w, "repo_1", "sha")?.unwrap();
                     if n <= MAX_AUTO_RETRIES {
                         assert_eq!(
                             current.status, "queued",
                             "failure must never be the current check"
                         );
-                        assert!(!run.failure_pending);
-                        assert!(w.prefix_keys(store::IX_CI_UNNOTIFIED, &[])?.is_empty());
                         assert_eq!(
                             current.auto_retry.as_ref().unwrap(),
                             &AutoRetry {
@@ -1963,8 +1880,6 @@ mod tests {
                         Ok(Some(next))
                     } else {
                         assert_eq!(done.id, current.id);
-                        assert!(run.failure_pending);
-                        assert_eq!(w.prefix_keys(store::IX_CI_UNNOTIFIED, &[])?.len(), 1);
                         Ok(None)
                     }
                 })
@@ -2104,12 +2019,10 @@ mod tests {
                         );
                         assert!(!details.contains("retry the job"), "{cause}: {details}");
                         assert!(retry(w, &ended.id, 10, &second_end).is_err());
-                        assert!(!get_run(w, "repo_1", "sha")?.unwrap().failure_pending);
                     } else {
                         assert_eq!(current.id, ended.id, "{cause}");
                         assert!(details.contains("retry the job"), "{cause}: {details}");
                         assert!(!details.contains("queued as"), "{cause}: {details}");
-                        assert!(get_run(w, "repo_1", "sha")?.unwrap().failure_pending);
                         let manual = retry(w, &ended.id, 10, &second_end)?;
                         assert!(manual.auto_retry.is_none());
                         assert_eq!(
@@ -2158,7 +2071,6 @@ mod tests {
                     number: 2,
                 }
             );
-            assert!(!get_run(w, "repo_1", "sha")?.unwrap().failure_pending);
             Ok(())
         })
         .unwrap();
@@ -2192,7 +2104,6 @@ mod tests {
                 10,
                 T2,
             )?;
-            assert_eq!(w.prefix_keys(store::IX_CI_RECOVERED, &[])?.len(), 1);
             let manual = retry(w, &success.id, 10, T2)?;
             assert!(manual.auto_retry.is_none());
             let c = claim(w, "r", 60, T2)?.unwrap();

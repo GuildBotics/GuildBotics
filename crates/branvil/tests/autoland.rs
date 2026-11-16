@@ -210,7 +210,7 @@ impl Hook {
 }
 
 #[tokio::test]
-async fn protected_required_failure_is_sent_on_check_event_and_not_repeated_after_restart() {
+async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
     let mut w = World::new().await;
     let hook = Hook::start(&w, &[]).await;
     let runner = Runner::new(&w, "runner1").await;
@@ -234,21 +234,56 @@ async fn protected_required_failure_is_sent_on_check_event_and_not_repeated_afte
         c = runner.claim().await.unwrap();
     }
     assert_eq!(runner.finish(&c, "failure").await.0, 200);
-    eventually("required-check failure notification", || async {
+    eventually("repair ticket notice", || async {
         hook.received().len() == 1
     })
     .await;
     let text = hook.received()[0].1["text"].as_str().unwrap().to_string();
-    assert!(text.contains("acme/demo [main]"), "{text}");
-    assert!(text.contains(c["sha"].as_str().unwrap()), "{text}");
-    assert!(text.contains(c["attempt_id"].as_str().unwrap()), "{text}");
+    for part in [
+        "Main verification failed: acme/demo main",
+        "(test)",
+        "Range:",
+        "pull request(s): !",
+        "/acme/demo/-/tickets/",
+        "assigned to",
+    ] {
+        assert!(text.contains(part), "{text}");
+    }
+    let state = w
+        .server
+        .ok(&format!("{}/verification", w.repo_path()), &w.owner)
+        .await;
+    let verified = state["latest_verified"]["sha"].as_str().unwrap();
+    let failed = c["sha"].as_str().unwrap();
+    assert!(
+        text.contains(&format!("Range: {}..{}", &verified[..7], &failed[..7])),
+        "{text}"
+    );
     swept(&w, &barrier).await;
     w.restart(&[]);
     swept(&w, &barrier).await;
     assert_eq!(hook.received().len(), 1);
-    w.server.stop();
-    let runs = records(&w.server.data.join("branvil.redb"), "ci_runs");
-    assert!(runs.iter().find(|r| r["sha"] == c["sha"]).unwrap()["failure_notified_at"].is_string());
+    // A failed retry while the ticket is open must not create another notice.
+    let runner = Runner::new(&w, "runner2").await;
+    let retry_url = format!(
+        "{}/jobs/{}/retry",
+        w.repo_path(),
+        c["attempt_id"].as_str().unwrap()
+    );
+    assert_eq!(w.server.post(&retry_url, &w.owner, json!({})).await.0, 200);
+    let retry = runner.next_claim().await;
+    assert_eq!(runner.finish(&retry, "failure").await.0, 200);
+    let recovery = runner.next_claim().await;
+    assert_eq!(runner.finish(&recovery, "success").await.0, 200);
+    eventually("main recovered", || async {
+        w.server
+            .ok(&format!("{}/verification", w.repo_path()), &w.owner)
+            .await["state"]
+            == "verified"
+    })
+    .await;
+    swept(&w, &barrier).await;
+    assert_eq!(hook.received().len(), 1);
 }
 
 #[tokio::test]
