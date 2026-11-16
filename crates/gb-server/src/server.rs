@@ -201,7 +201,8 @@ impl Server {
         let api = Arc::new(api);
         let opening = api.clone();
         let selected =
-            tokio::task::spawn_blocking(move || Selected::open_idle(workspace, &opening)).await??;
+            tokio::task::spawn_blocking(move || Selected::restore_idle(workspace, &opening))
+                .await?;
         api.select(selected);
         if let Some(workspace) = &api.selected().workspace {
             let diagnostics = gb_observability::Diagnostics::open(workspace);
@@ -477,6 +478,17 @@ impl Server {
 }
 
 impl Selected {
+    /// A failed restore must leave the workspace recovery screens available.
+    pub(crate) fn restore_idle(workspace: Option<PathBuf>, api: &Api) -> Selected {
+        match Self::open_idle(workspace.clone(), api) {
+            Ok(selected) => selected,
+            Err(error) => {
+                tracing::error!("cannot recover abandoned runs: {error:#}");
+                Self::open(workspace, api, api.branvil.get().cloned())
+            }
+        }
+    }
+
     /// Recover abandoned runs before constructing an idle workspace's services.
     /// Provider attachment reopens the backend without repeating recovery.
     pub(crate) fn open_idle(workspace: Option<PathBuf>, api: &Api) -> anyhow::Result<Selected> {

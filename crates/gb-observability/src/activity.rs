@@ -43,13 +43,18 @@ impl ActivityEvents {
         &self,
     ) -> anyhow::Result<std::collections::BTreeMap<String, DateTime<FixedOffset>>> {
         let mut latest = std::collections::BTreeMap::new();
-        for year in children(&self.root)? {
-            for month in children(&year)? {
-                for path in children(&month)? {
+        for year in readable_children(&self.root) {
+            for month in readable_children(&year) {
+                for path in readable_children(&month) {
                     if path.extension().is_none_or(|e| e != "json") {
                         continue;
                     }
-                    let event: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+                    let Ok(bytes) = std::fs::read(path) else {
+                        continue;
+                    };
+                    let Ok(event) = serde_json::from_slice::<Value>(&bytes) else {
+                        continue;
+                    };
                     let trace = text(&event, &["local_trace_id"]);
                     if !trace.is_empty()
                         && let Some(stamp) = timestamp(&event, "occurred_at")

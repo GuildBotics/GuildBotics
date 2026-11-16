@@ -120,7 +120,7 @@ impl RunStore {
         events: &crate::activity::ActivityEvents,
     ) -> anyhow::Result<()> {
         let running: Vec<_> = self
-            .records()?
+            .readable_records()?
             .into_iter()
             .filter(|r| r.status == RunState::Running)
             .collect();
@@ -129,7 +129,9 @@ impl RunStore {
         }
         let latest = events.latest_by_trace()?;
         for record in running {
-            let mut last = DateTime::parse_from_rfc3339(&record.started_at)?;
+            let Ok(mut last) = DateTime::parse_from_rfc3339(&record.started_at) else {
+                continue;
+            };
             if let Some(stamp) = latest.get(&record.run_id) {
                 last = last.max(*stamp);
             }
@@ -331,6 +333,12 @@ impl RunStore {
             let Ok(record) = serde_json::from_slice::<RunRecord>(&bytes) else {
                 continue;
             };
+            if checked_id(&record.run_id).is_err()
+                || record.run_id.trim() != record.run_id
+                || dir.file_name().and_then(|n| n.to_str()) != Some(record.run_id.as_str())
+            {
+                continue;
+            }
             records.push(record);
         }
         Ok(records)

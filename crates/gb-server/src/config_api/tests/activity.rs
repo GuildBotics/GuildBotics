@@ -57,24 +57,50 @@ async fn history_excludes_sessions_whose_derived_end_is_before_the_window() {
 }
 
 #[tokio::test]
-async fn recovery_failure_does_not_publish_or_persist_the_new_workspace() {
+async fn corrupt_history_does_not_block_workspace_selection() {
     let f = fixture();
     f.init().await;
-    let previous = gb_workspace::selection::read_active(&f.data()).unwrap();
     let other = f.root.join("other");
     f.write(
         &other.join(".guildbotics/state/task-runs/broken/result.json"),
         "broken",
     );
-    assert!(Selected::open_idle(Some(other.clone()), &f.api).is_err());
+    assert!(Selected::open_idle(Some(other.clone()), &f.api).is_ok());
     let (status, _) = f
         .call("POST", "/workspace", json!({"workspace_dir":other}))
         .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(f.api.selected().workspace.as_ref(), Some(&f.workspace()));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(f.api.selected().workspace.as_ref(), Some(&other));
     assert_eq!(
         gb_workspace::selection::read_active(&f.data()).unwrap(),
-        previous
+        Some(other)
+    );
+}
+
+#[tokio::test]
+async fn restore_keeps_recovery_screens_when_the_shared_writer_is_unavailable() {
+    let f = fixture();
+    let held = IdentityLock::acquire(&f.api.identity_root, Duration::from_secs(1)).unwrap();
+    let workspace = f.workspace();
+    assert!(Selected::open_idle(Some(workspace.clone()), &f.api).is_err());
+    let restored = Selected::restore_idle(Some(workspace.clone()), &f.api);
+    assert_eq!(restored.workspace.as_ref(), Some(&workspace));
+    f.api.select(restored);
+    drop(held);
+    let other = f.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let held = IdentityLock::acquire(&f.api.identity_root, Duration::from_secs(1)).unwrap();
+    let (status, _) = f
+        .call("POST", "/workspace", json!({"workspace_dir":other}))
+        .await;
+    assert!(status.is_server_error());
+    assert_eq!(f.api.selected().workspace.as_ref(), Some(&workspace));
+    drop(held);
+    assert_eq!(
+        f.call("POST", "/workspace", json!({"workspace_dir":other}))
+            .await
+            .0,
+        StatusCode::OK
     );
 }
 
