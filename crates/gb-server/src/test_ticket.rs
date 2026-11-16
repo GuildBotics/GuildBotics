@@ -6,6 +6,7 @@ pub struct Faults {
     pub inner: Arc<dyn TicketService>,
     pub errors: Mutex<std::collections::BTreeMap<&'static str, ServiceError>>,
     pub omit_comment_url: bool,
+    pub candidates: Mutex<Option<Vec<Task>>>,
 }
 impl Faults {
     pub fn new(inner: Arc<dyn TicketService>) -> Self {
@@ -13,6 +14,7 @@ impl Faults {
             inner,
             errors: Default::default(),
             omit_comment_url: false,
+            candidates: Default::default(),
         }
     }
     fn check(&self, operation: &str) -> Result<(), ServiceError> {
@@ -78,12 +80,18 @@ impl TicketService for Faults {
     fn candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
         Box::pin(async {
             self.check("candidates")?;
+            if let Some(tasks) = self.candidates.lock().unwrap().clone() {
+                return Ok(tasks);
+            }
             self.inner.candidates().await
         })
     }
     fn refresh<'a>(&'a self, task: &'a Task) -> ServiceFuture<'a, Option<Task>> {
         Box::pin(async move {
             self.check("refresh")?;
+            if self.candidates.lock().unwrap().is_some() {
+                return Ok(Some(task.clone()));
+            }
             self.inner.refresh(task).await
         })
     }

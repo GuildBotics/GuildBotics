@@ -170,18 +170,6 @@ impl Selector<'_> {
         Ok(candidates)
     }
 
-    pub async fn repair_candidates(&self) -> Result<Vec<Task>, ServiceError> {
-        self.adopt_repairs().await?;
-        let mut tasks = if let Some(code) = self.code {
-            code.pull_request_candidates().await?
-        } else {
-            vec![]
-        };
-        tasks.extend(self.ticket.candidates().await?);
-        tasks.retain(|task| task.repair);
-        Ok(tasks)
-    }
-
     async fn adopt_repairs(&self) -> Result<(), ServiceError> {
         let Some(code) = self.code else {
             return Ok(());
