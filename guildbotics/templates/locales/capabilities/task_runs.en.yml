@@ -8,4 +8,4 @@ en:
   identity_changed: "The run or its evidence changed during completion; inspect it and retry."
   evidence_required: "The run has no required write evidence."
   not_completed: "The run has no completion record."
-  repair_required: "Repair work cannot stop for asking/blocked or finish without a repair action. Fix the failure, open a PR reverting the cause, or retry the failed job with checks retry if the external cause has cleared."
+  repair_required: "Repair work cannot stop for asking/blocked or finish without an open PR linked to its repair ticket or a retried job. Fix the failure, open a PR reverting the cause, or retry the failed job with checks retry if the external cause has cleared."

@@ -184,11 +184,7 @@ pub async fn patrol(
         .iter()
         .filter(|c| c.author == me)
         .filter_map(|c| c.status.as_ref())
-        .rfind(|s| {
-            s.reason() != WorkflowStatusReason::RateLimited
-                || s.holds_selection(now)
-                    && !(pr.repair && s.reason() == WorkflowStatusReason::Failed)
-        })
+        .rfind(|s| s.reason() != WorkflowStatusReason::RateLimited || s.holds_selection(now))
         .filter(|s| {
             s.reason() == WorkflowStatusReason::AwaitingChecks
                 && pr.author == me

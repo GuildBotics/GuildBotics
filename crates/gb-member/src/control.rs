@@ -77,13 +77,6 @@ fn evidence_kind(command: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-fn repair_pr_action(evidence: &Value) -> bool {
-    (evidence["type"] == "pr_create" && evidence["payload"]["created"] == true)
-        || matches!(evidence["type"].as_str(), Some("pr_update" | "pr_review"))
-        || (matches!(evidence["type"].as_str(), Some("git_publish" | "git_push"))
-            && evidence["payload"]["pushed"] == true)
-}
-
 impl RunControl<'_> {
     fn snapshot(&self) -> Result<RunRecord> {
         let record = RunStore::open(self.workspace)
@@ -137,18 +130,10 @@ impl RunControl<'_> {
             .map_err(failed)
     }
     fn check_evidence(&self, record: &RunRecord, status: Completion, summary: &str) -> Result<()> {
-        if self.identity.repair {
-            let action = record
-                .provider_evidence
-                .iter()
-                .any(|e| e["type"] == "checks_retry" || repair_pr_action(e));
-            if matches!(status, Completion::Asking | Completion::Blocked)
-                || (status == Completion::Done && !action)
-            {
-                return Err(MemberError::Capability(
-                    "capabilities.task_runs.repair_required",
-                ));
-            }
+        if self.identity.repair && matches!(status, Completion::Asking | Completion::Blocked) {
+            return Err(MemberError::Capability(
+                "capabilities.task_runs.repair_required",
+            ));
         }
         let present = record
             .provider_evidence
@@ -329,13 +314,32 @@ impl RunControl<'_> {
                 .any(|e| e["type"] == "checks_retry")
             {
                 let mut linked = false;
-                let actions: Vec<_> = snapshot
-                    .provider_evidence
-                    .iter()
-                    .filter(|e| repair_pr_action(e))
-                    .cloned()
-                    .collect();
-                for url in repository::evidence_urls(&actions) {
+                let origin = matches!(
+                    self.identity.work_kind,
+                    "ticket" | "pull_request" | "pull_request_review"
+                )
+                .then_some(self.identity.work_identity);
+                let evidence = if origin.is_some() {
+                    &[][..]
+                } else {
+                    snapshot.provider_evidence.as_slice()
+                };
+                for url in repository::work_pull_request_urls(
+                    self.repository.services.code()?,
+                    origin,
+                    evidence,
+                )
+                .await?
+                {
+                    let page = self
+                        .repository
+                        .services
+                        .code()?
+                        .read(gb_ports::Resource::PullRequests, &url, None, "")
+                        .await?;
+                    if !page.items().iter().any(|pr| pr["state"] == "open") {
+                        continue;
+                    }
                     for link in self
                         .repository
                         .services

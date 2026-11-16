@@ -190,18 +190,7 @@ impl Selector<'_> {
         let Some(account_key) = identity.keys().find(|key| key.ends_with("_username")) else {
             return Ok(());
         };
-        let active: Vec<_> = self
-            .roster
-            .iter()
-            .filter(|member| member.is_active)
-            .filter_map(|member| {
-                member
-                    .accounts
-                    .get(account_key.trim_end_matches("_username"))
-                    .filter(|name| !name.is_empty())
-                    .map(|name| (member.person_id.as_str(), name.as_str()))
-            })
-            .collect();
+        let active = repair_members(self.roster, account_key.trim_end_matches("_username"));
         for ticket in self.ticket.repair_tickets().await? {
             if !ticket.repair || ticket.state != "open" {
                 continue;
@@ -589,6 +578,23 @@ impl Selector<'_> {
             "review_limit.finished"
         });
     }
+}
+
+fn repair_members<'a>(
+    roster: &'a [gb_member::context::PublicMember],
+    provider: &str,
+) -> Vec<(&'a str, &'a str)> {
+    roster
+        .iter()
+        .filter(|member| member.is_active && member.person_type != "human")
+        .filter_map(|member| {
+            member
+                .accounts
+                .get(provider)
+                .filter(|name| !name.is_empty())
+                .map(|name| (member.person_id.as_str(), name.as_str()))
+        })
+        .collect()
 }
 
 fn repair_owner<'a>(active: &[(&'a str, &str)], assignees: &[&str]) -> Option<&'a str> {
