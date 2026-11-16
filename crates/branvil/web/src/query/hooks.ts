@@ -100,7 +100,7 @@ export const useMemberTokens = (name: string) =>
 
 /** The service's state: what the warnings at the top of every page are made of. The runner has no events, so it is polled. */
 export const useDiagnostics = () =>
-  useQuery({ queryKey: keys.diagnostics(), queryFn: () => api.admin.diagnostics(), refetchInterval: 30_000 });
+  useQuery({ queryKey: keys.diagnostics(), queryFn: () => api.admin.diagnostics(), refetchInterval: (query) => query.state.data?.hub?.operation ? 2000 : 30_000 });
 
 /** The notification webhook; polled, since how its last send went has no events. */
 export const useWebhook = () => useQuery({ queryKey: keys.webhook(), queryFn: () => api.admin.webhook(), refetchInterval: 30_000 });

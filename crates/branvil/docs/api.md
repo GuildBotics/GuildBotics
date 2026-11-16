@@ -1607,3 +1607,6 @@ are unique per failed commit and job on that ticket. They do not change the
 assignee, lane, rank, or repair record. Conclusions available before creation
 are attached in the ticket creation transaction; closed tickets receive none.
 Undetermined and abandoned searches produce no hint.
+
+
+Embedded hosts may attach a device-local Hub status callback through `DataApi::attach_hub_status`. Diagnostics returns its result as `hub` (`null` for standalone Branvil): `current` and `target` versions (`sha`, `subject`, nullable `url`) and nullable `operation` (`kind`, `phase`, `since`, `commit`, `waiting`). Branvil supplies `operation.waiting.ci_jobs` from its own queue. `hub_status_changed` events invalidate diagnostics. This state is never persisted.

@@ -123,12 +123,17 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
     };
     let still_running =
         || gb_server::running(&data, language).map(|owner| owner.as_ref() == Some(&running));
+    let reason = std::env::var("GUILDBOTICS_HUB_STOP_REASON").unwrap_or_else(|_| "stop".into());
     let request = async {
         let owner = OwnerClient::connect(&data, running.port, language)
             .await?
             .ok_or_else(|| anyhow::anyhow!(text("runtime.service_lock.api_unavailable")))?;
         owner
-            .post("/shutdown", Some(&json!({"force": force})), None)
+            .post(
+                "/shutdown",
+                Some(&json!({"force": force, "reason": reason})),
+                None,
+            )
             .await
     }
     .await;
@@ -171,5 +176,36 @@ pub async fn stop(force: bool) -> anyhow::Result<()> {
         }
         println!("{}", text("runtime.service_lock.stopped"));
     }
+    Ok(())
+}
+
+/// Send a best-effort maintenance announcement to the local server.
+pub async fn hub_phase(
+    clear: bool,
+    phase: Option<String>,
+    commit: Option<String>,
+    subject: Option<String>,
+) -> anyhow::Result<()> {
+    let language = client::language().await;
+    let data = gb_base::home::data()?;
+    let running = gb_server::running(&data, language)?.ok_or_else(|| {
+        anyhow::anyhow!(i18n::t(language, "runtime.service_lock.not_running", &[]))
+    })?;
+    let owner = OwnerClient::connect(&data, running.port, language)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(i18n::t(
+                language,
+                "runtime.service_lock.api_unavailable",
+                &[]
+            ))
+        })?;
+    owner
+        .post(
+            "/hub-status",
+            Some(&json!({"clear":clear,"phase":phase,"commit":commit,"subject":subject})),
+            None,
+        )
+        .await?;
     Ok(())
 }

@@ -5,6 +5,7 @@
 // until what it says changes; the lost connection cannot be dismissed, as it
 // goes away by itself once the page is up to date again.
 
+import { HubStatusBand } from "@guildbotics/ui/HubStatus";
 import { Alert, Anchor, Stack, Text } from "@mantine/core";
 import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
@@ -28,7 +29,7 @@ export function AlertBand({ streamLost }: { streamLost: boolean }) {
   const warnings: Warning[] = [];
   if (streamLost) warnings.push({ id: "stream", text: t("alert.streamLost"), dismissible: false });
   const runner = d?.runner;
-  if (runner && (runner.state === "stopping" || (runner.mode !== "off" && runner.state !== "ready"))) {
+  if (runner && ((runner.state === "stopping" && !d?.hub?.operation) || (runner.state !== "stopping" && runner.mode !== "off" && runner.state !== "ready"))) {
     const text =
       runner.state === "stopping"
         ? t("alert.stopping")
@@ -46,9 +47,10 @@ export function AlertBand({ streamLost }: { streamLost: boolean }) {
     });
   }
   const shown = warnings.filter((w) => !dismissed.has(w.id));
-  if (shown.length === 0) return null;
+  if (shown.length === 0 && !d?.hub?.operation) return null;
   return (
     <Stack gap="xs" role="region" aria-label={t("alert.region")}>
+      <HubStatusBand status={d?.hub} t={t} />
       {shown.map((w) => (
         <Alert
           key={w.id}

@@ -46,6 +46,8 @@ mod health;
 pub mod host_window;
 #[cfg(feature = "server")]
 pub mod hub_data;
+#[cfg(feature = "server")]
+mod hub_status;
 pub mod i18n;
 #[cfg(feature = "server")]
 mod input_files;

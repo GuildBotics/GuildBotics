@@ -140,6 +140,7 @@ fn peer_cli(root: &Path, arguments: &[&str]) -> tokio::process::Command {
         .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
         .env_remove("GUILDBOTICS_CONFIG_DIR")
         .env_remove("GUILDBOTICS_HUB_SERVICE_STATE")
+        .env_remove("GUILDBOTICS_HUB_STOP_REASON")
         .stdin(Stdio::null());
     cli
 }
@@ -147,11 +148,15 @@ fn peer_cli(root: &Path, arguments: &[&str]) -> tokio::process::Command {
 #[tokio::test]
 async fn service_cli_preserves_server_errors_and_never_retries_a_post() {
     for (args, path, payload) in [
-        (&["server", "stop"][..], "shutdown", json!({"force": false})),
+        (
+            &["server", "stop"][..],
+            "shutdown",
+            json!({"force": false, "reason":"stop"}),
+        ),
         (
             &["server", "stop", "--force"][..],
             "shutdown",
-            json!({"force": true}),
+            json!({"force": true,"reason":"stop"}),
         ),
         (&["service", "start"][..], "scheduler/start", Value::Null),
         (
@@ -758,6 +763,7 @@ async fn server_stop_atomically_records_shutdown_service_intent() {
         let saved = root.path().join("service before");
         std::fs::write(&saved, "old").unwrap();
         let mut cli = peer_cli(root.path(), &["server", "stop"]);
+        cli.env("GUILDBOTICS_HUB_STOP_REASON", "update");
         let requested = request == Some(true);
         if let Some(named) = request {
             let value = if named {
@@ -770,7 +776,7 @@ async fn server_stop_atomically_records_shutdown_service_intent() {
         let task = tokio::spawn(async move { cli.output().await.unwrap() });
         peer.prove().await;
         let (socket, body) = peer.authorized("POST", "shutdown").await;
-        assert_eq!(body, json!({"force":false}));
+        assert_eq!(body, json!({"force":false,"reason":"update"}));
         CliPeer::respond(
             socket,
             "202 Accepted",
@@ -853,7 +859,7 @@ async fn server_stop_waits_for_the_lock_and_authenticates_before_requesting_forc
         let mut stdout = String::new();
         peer.prove().await;
         let (socket, body) = peer.authorized("POST", "shutdown").await;
-        assert_eq!(body, json!({"force":force}));
+        assert_eq!(body, json!({"force":force,"reason":"stop"}));
         CliPeer::respond(socket, "200 OK", "{}").await;
         if force {
             assert!(

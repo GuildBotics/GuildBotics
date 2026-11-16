@@ -1,3 +1,4 @@
+import { HubBand, HubVersion } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
 import { AppShell } from "@guildbotics/ui/AppShell";
 import {
@@ -219,6 +220,7 @@ export function App() {
           {config.data.input_store_problem}
         </Alert>
       ) : null}
+      <HubBand />
       {configured ? <SystemAlertBand /> : null}
       <Routes>
         <Route
@@ -641,6 +643,7 @@ function ServicePage() {
       <Group justify="space-between">
         <div>
           <Title order={2}>{t("service.title")}</Title>
+          <HubVersion />
         </div>
         {showStopAction ? (
           <Group gap="xs">

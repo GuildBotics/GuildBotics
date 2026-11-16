@@ -165,7 +165,7 @@ stop_agent() {
             fail "A GuildBotics server outside this LaunchAgent is running (PID $holder)."
         # This script is newer than the build it stops: a request goes in the
         # environment, which a build without it ignores, never as an option.
-        env -u GUILDBOTICS_HUB_SERVICE_STATE ${1+"GUILDBOTICS_HUB_SERVICE_STATE=$1"} "$current" server stop || return
+        env -u GUILDBOTICS_HUB_STOP_REASON -u GUILDBOTICS_HUB_SERVICE_STATE ${1:+"GUILDBOTICS_HUB_SERVICE_STATE=$1"} "GUILDBOTICS_HUB_STOP_REASON=${2:-stop}" "$current" server stop || return
     fi
     unload
 }
@@ -262,6 +262,7 @@ build_head() {
     [ "$team" = "${running_team-$team}" ] ||
         fail "\"$identity\" signs for Team ID $team, but the running build is signed for $running_team. To change teams, $(reinstall_hint). See docs/hub-server.md."
     mv -f "$candidate.new" "$candidate"
+    "$candidate" server hub-build-info --checkout "$repo" --to "$source"
 }
 backup_and_rehearse() {
     stage=backup
@@ -470,7 +471,7 @@ case "$action" in
         cp "$current" "$lock/update-from"
         backup_and_rehearse
         stage="stopping the previous build"
-        stop_agent "$hub/service-before"
+        stop_agent "$hub/service-before" update
         assert_stopped "$current"
         cp "$candidate" "$builds/update-to"
         mv -f "$lock/update-from" "$pending"
@@ -487,7 +488,7 @@ case "$action" in
         ;;
     restart)
         stage=restart
-        stop_agent
+        stop_agent "" restart
         assert_stopped "$current"
         start_agent
         ;;

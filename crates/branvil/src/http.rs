@@ -986,6 +986,7 @@ async fn diagnostics(State(app): State<Shared>, c: Caller) -> R {
             "queues": app.store.stats().snapshot(),
         },
         "git": {"version": git_version, "repositories": repos},
+        "hub": crate::api::DataApi::new(app.clone()).hub_status().await,
         "runner": app.ci.diagnostics().await,
         "upstream": app.upstream.diagnostics(&app).await,
     })))

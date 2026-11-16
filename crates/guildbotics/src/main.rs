@@ -149,6 +149,24 @@ use environment_cli::EnvironmentCommand;
 #[cfg(feature = "hub")]
 enum ServerCommand {
     #[command(hide = true)]
+    HubBuildInfo {
+        #[arg(long)]
+        checkout: std::path::PathBuf,
+        #[arg(long)]
+        to: std::path::PathBuf,
+    },
+    #[command(hide = true)]
+    HubPhase {
+        #[arg(long)]
+        clear: bool,
+        #[arg(long)]
+        phase: Option<String>,
+        #[arg(long)]
+        commit: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        subject: Option<String>,
+    },
+    #[command(hide = true)]
     HubClients {
         #[arg(long)]
         checkout: std::path::PathBuf,
@@ -398,6 +416,20 @@ fn main() -> ExitCode {
                     to,
                 },
         } => outcome(block(hub_data::run(operation, data_dir, to)).map(|()| 0)),
+        #[cfg(feature = "hub")]
+        Command::Server {
+            command: ServerCommand::HubBuildInfo { checkout, to },
+        } => outcome(hub_cli::build_info(&checkout, &to).map(|()| 0)),
+        #[cfg(feature = "hub")]
+        Command::Server {
+            command:
+                ServerCommand::HubPhase {
+                    clear,
+                    phase,
+                    commit,
+                    subject,
+                },
+        } => outcome(block(service_cli::hub_phase(clear, phase, commit, subject)).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::Start { services },
