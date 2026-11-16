@@ -542,4 +542,7 @@ describe("settings", () => {
 it("explains repair-ticket creation notices in both languages", () => {
   expect(en["notifications.help"]).toContain("Creating a repair ticket");
   expect(ja["notifications.help"]).toContain("修復チケットを作ると");
+  expect(en["notifications.help"].indexOf("Creating a repair ticket")).toBeLessThan(en["notifications.help"].indexOf("The webhook URL"));
+  expect(ja["notifications.help"].indexOf("修復チケットを作ると")).toBeLessThan(ja["notifications.help"].indexOf("webhookのURLは"));
+  expect(ja["notifications.help"]).not.toContain("。 ");
 });

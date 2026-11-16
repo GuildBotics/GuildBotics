@@ -259,7 +259,9 @@ values contain the repository, SHA and failed jobs (name, optional attempt ID,
 details). `IX_OPEN_REPAIRS` (`ix_open_repairs`) marks `(repo id, ticket number)`
 for open tickets with a repair marker. `model::ticket_index` maintains it and
 `admin reindex` rebuilds it; the oldest entry is the repository's open repair.
-Ordinary tickets have `repair: null`. There is no parallel reader for older schemas.
+Ordinary tickets have `repair: null`. The 29 → 30 upgrade adds `repair: null`
+to all tickets; `repair_pending` and `ix_open_repairs` start empty.
+There is no parallel reader for older schemas.
 
 Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
 (`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing

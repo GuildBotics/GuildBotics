@@ -629,7 +629,7 @@ export const ja: Record<MessageKey, string> = {
   "settings.autoLandHelp": "検問の列の先頭で検問を通過すると、Branvilが開いているPRを自動でマージ（fast-forward）します。列に並ぶには、headの必須チェックと承認が必要です。止めておくにはドラフトのままにしてください。",
   "settings.autoLandHelpUpstream": "検問の列の先頭で検問を通過すると、Branvilが開いているPRを作成者として自動で{host}に出します。列に並ぶには、headの必須チェックと承認が必要です。マージは{host}で人が行います。検問を通過するたびに「通知」のwebhookに知らせます。止めておくにはドラフトのままにしてください。",
   "settings.notifications": "通知",
-  "notifications.help": "自動公開・マージを有効にしたリポジトリのPRが検問を通過すると、マージできることをこのwebhookに知らせます。公開済みのPRが新しい検問を通り直した場合も送ります。メッセージには両方のPRへのリンクがあり、SlackのIncoming Webhookがそのまま受け取れます。マージはホスト上で人が行います。URLは資格情報として保管し、二度と表示しません。 mainの確認が失敗して修復チケットを作ると、落ちたジョブ、範囲、チケットのURL、担当を1通知らせます。",
+  "notifications.help": "自動公開・マージを有効にしたリポジトリのPRが検問を通過すると、マージできることをこのwebhookに知らせます。公開済みのPRが新しい検問を通り直した場合も送ります。メッセージには両方のPRへのリンクがあり、SlackのIncoming Webhookがそのまま受け取れます。マージはホスト上で人が行います。mainの確認が失敗して修復チケットを作ると、落ちたジョブ、範囲、チケットのURL、担当を1通知らせます。webhookのURLは資格情報として保管し、二度と表示しません。",
   "notifications.url": "Webhook の URL",
   "notifications.urlHelp": "http または https の URL です。保存すると設定済みのものを置き換えます。",
   "notifications.set": "設定済み（{host}）",

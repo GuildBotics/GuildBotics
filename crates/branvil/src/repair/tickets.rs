@@ -368,7 +368,7 @@ fn create(
         blocked_by: vec![],
         repair: Some(Repair {
             notice: Some(format!(
-                "Main verification failed: {} {} {} ({})\nRange: {}..{}, {} pull request(s): {}\nRepair ticket: {}/{}/-/tickets/{}, assigned to {}",
+                "Main verification failed: {} {} {} ({})\nRange: {}..{}, {} pull request(s): {}\nRepair ticket: {}, assigned to {}",
                 repo.path,
                 repo.default_branch,
                 short(&pending.sha),
@@ -386,9 +386,7 @@ fn create(
                     .map(|p| format!("!{}", p.number))
                     .collect::<Vec<_>>()
                     .join(" "),
-                base_url,
-                repo.path,
-                number,
+                tickets::ticket_url(base_url, repo, number),
                 name
             )),
             jobs: pending.failures.iter().map(|f| f.name.clone()).collect(),

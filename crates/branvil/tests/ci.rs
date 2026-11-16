@@ -2960,6 +2960,10 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
             .contains(last["attempt_id"].as_str().unwrap())
     );
     let failed = w.server.ok(&url, &w.owner).await;
+    assert_eq!(
+        failed["repair"]["url"],
+        format!("{}/{path}/-/tickets/1", w.server.url)
+    );
     assert_eq!(failed["failing_since"], failed["tip"]);
     assert_eq!(
         w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],
