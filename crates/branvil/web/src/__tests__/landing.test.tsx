@@ -5,7 +5,7 @@ import { render, screen, within } from "@testing-library/react";
 import { theme } from "@guildbotics/ui/theme";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
-import type { Landing, LandingNext, Repository } from "../api/types";
+import type { Check, Landing, LandingNext, Repository } from "../api/types";
 import { dictionaries, I18nProvider } from "../i18n";
 import { JourneyBadge, LandingJourney } from "../views/pull/LandingStatus";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
@@ -42,14 +42,14 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
 
 describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
   const words = dictionaries[lang];
-  function component(next: LandingNext, blockers: Landing["blockers"] = [], journey = false, repo = REPO) {
+  function component(next: LandingNext, blockers: Landing["blockers"] = [], journey = false, repo = REPO, checks: Partial<Check>[] = [
+    { name: "test", status: "in_progress" },
+    { name: "rust-test", status: "completed", conclusion: "failure" },
+    { name: "passed", status: "completed", conclusion: "success" },
+  ]) {
     const p = pull({ landing: landing({ next, blockers }), unanswered: blockers.some(b => b.code === "unanswered") ? [{ kind: "comment", id: "question", author: "reviewer", url: "#question" }] : [] });
     const client = createQueryClient();
-    client.setQueryData(keys.pullPart(p.repository, p.number, "checks"), { head_sha: HEAD, checks: [
-      { name: "test", status: "in_progress" },
-      { name: "rust-test", status: "completed", conclusion: "failure" },
-      { name: "passed", status: "completed", conclusion: "success" },
-    ] });
+    client.setQueryData(keys.pullPart(p.repository, p.number, "checks"), { head_sha: HEAD, checks });
     return render(<QueryClientProvider client={client}><MantineProvider theme={theme}><I18nProvider initial={lang}>{journey ? <LandingJourney pull={p} repo={repo} /> : <JourneyBadge pull={p} repo={repo} load={false} />}</I18nProvider></MantineProvider></QueryClientProvider>);
   }
   it("marks a failed local automatic merge at the merge step", () => {
@@ -95,6 +95,24 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     journey.unmount();
     component("conditions", blockers);
     expect(screen.getByText(`${words["landing.blocker.head_checks"]} +8`).closest(".mantine-Badge-root")).toHaveAttribute("title", expected.join(" / "));
+  });
+  it.each([true, false])("shows server-unmet successes and skips as checking (journey=%s)", journey => {
+    const checks: Check[] = [
+      { name: "success", status: "completed", conclusion: "success" },
+      { name: "reused", status: "completed", conclusion: "success", reused_from: { attempt_id: "previous", sha: BASE, url: "/previous", basis: "paths" } },
+      ...(["paths", "post_merge"] as const).map(reason => ({ name: reason, status: "completed" as const, conclusion: "skipped" as const, path_skip: { reason, paths: [], bases: [] } })),
+    ];
+    const blockers = [{ code: "head_checks", message: "Server detail", jobs: checks.map(c => c.name), files: [] }];
+    component("conditions", blockers, journey, REPO, checks);
+    const expected = checks.map(c => `${c.name} · ${words["landing.check.checking"]}`);
+    if (journey) {
+      for (const text of expected) expect(screen.getByText(text)).toBeInTheDocument();
+      for (const key of ["success", "pathsSkipped", "postMergeSkipped"] as const) {
+        expect(screen.queryByText(new RegExp(`· ${words[`landing.check.${key}`]}$`))).not.toBeInTheDocument();
+      }
+    } else {
+      expect(screen.getByText(words["landing.blocker.head_checks"]).closest(".mantine-Badge-root")).toHaveAttribute("title", expected.join(" / "));
+    }
   });
   it.each([
     ["owner_merge_host", "warning"], ["owner_merge", "warning"],

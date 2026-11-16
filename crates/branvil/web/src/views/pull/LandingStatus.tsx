@@ -40,7 +40,7 @@ function useBlockerDetails(pull: PullRequest, load = true) {
   const checks = useRequiredChecks(pull, jobs, load);
   return blockers.map(b => {
     switch (b.code) {
-      case "head_checks": return checks.length ? checks.map(c => `${c.name} · ${t(c.state === "checking" ? "landing.check.checking" : `landing.${c.state}`)}`) : [t("landing.detail.head_checks")];
+      case "head_checks": return checks.length ? checks.map(c => `${c.name} · ${t(c.state === "checking" || satisfied(c.state) ? "landing.check.checking" : `landing.${c.state}`)}`) : [t("landing.detail.head_checks")];
       case "approvals": return [t("merge.approvals", { count: b.count!, required: b.required! })];
       case "unanswered": return [t("landing.unanswered")];
       case "conflict": return [t("landing.detail.conflict", { files: b.files.join(", ") })];
