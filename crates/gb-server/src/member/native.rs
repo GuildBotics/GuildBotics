@@ -1262,7 +1262,13 @@ pub(crate) mod tests {
         api.work.wait().await;
         assert!(RunStore::open(&workspace).records().unwrap().is_empty());
         let second = crate::service_runtime::Controller::new(native, host);
-        assert!(second.start().await.unwrap().running);
+        assert!(
+            second
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap()
+                .running
+        );
         assert!(!second.stop(true).await.running);
         let project_path = workspace.join(".guildbotics/config/team/project.yml");
         let mut project: Value =
@@ -1277,7 +1283,14 @@ pub(crate) mod tests {
         let project_path = workspace.join(".guildbotics/config/team/project.yml");
         project["services"]["chat_service"] = json!({"name":"slack"});
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.selected().service.start().await.unwrap().running);
+        assert!(
+            api.selected()
+                .service
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap()
+                .running
+        );
         let response = app
             .clone()
             .oneshot(
@@ -1312,7 +1325,14 @@ pub(crate) mod tests {
         );
         project["services"]["chat_service"] = json!({"name":"local"});
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.selected().service.start().await.unwrap().running);
+        assert!(
+            api.selected()
+                .service
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap()
+                .running
+        );
         assert_eq!(
             api.selected().service.view().await["events"]["listener_count"],
             1
@@ -1327,7 +1347,14 @@ pub(crate) mod tests {
             .unwrap()
             .remove("chat_service");
         std::fs::write(&project_path, project.to_string()).unwrap();
-        assert!(api.selected().service.start().await.unwrap().running);
+        assert!(
+            api.selected()
+                .service
+                .start(&crate::server::Shutdown::default())
+                .await
+                .unwrap()
+                .running
+        );
         assert_eq!(
             api.selected().service.view().await["events"]["listener_count"],
             0

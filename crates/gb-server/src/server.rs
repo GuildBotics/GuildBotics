@@ -110,7 +110,17 @@ pub(crate) async fn shutdown(
     // Refuse new work before sampling, but do not let the drain change the
     // service state until the admitted start has settled.
     api.shutdown.refusing.cancel();
-    let service_running = api.selected().service.resume_on_shutdown().await;
+    let selected = api.selected();
+    let service_running = if body.force {
+        // Force must cancel a drain even when a restart holds the start gate.
+        selected.service.execution.begin_drain(true);
+        matches!(
+            selected.service.service.status().await.state,
+            "starting" | "running"
+        )
+    } else {
+        selected.service.resume_on_shutdown().await
+    };
     api.shutdown.request(body.force);
     (
         axum::http::StatusCode::ACCEPTED,
@@ -322,7 +332,7 @@ impl Server {
             if let Some(workspace) = &selected.workspace {
                 match crate::service_settings::Settings::read(workspace) {
                     Ok(settings) if start_services || settings.start_with_server => {
-                        if let Err(error) = selected.service.start().await {
+                        if let Err(error) = selected.service.start(&autostart_api.shutdown).await {
                             tracing::error!("cannot automatically start service: {error:#}");
                         }
                     }
@@ -542,6 +552,34 @@ mod tests {
     use std::io::Read;
 
     use super::*;
+
+    #[tokio::test]
+    async fn forced_shutdown_does_not_wait_for_start_gate_to_cancel() {
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        let selected = api.selected();
+        let gate = selected.service.hold_start_for_test().await;
+        let generation = selected.service.execution.generation();
+        let (_, axum::Json(body)) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            shutdown(
+                axum::extract::State(api.clone()),
+                api::Body(ShutdownRequest { force: true }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(body["service_running"], false);
+        assert!(api.shutdown.cancel.is_cancelled());
+        assert!(generation.cancelled.is_cancelled());
+        drop(gate);
+    }
 
     #[tokio::test]
     async fn shutdown_waits_for_start_and_refuses_new_starts_before_sampling() {

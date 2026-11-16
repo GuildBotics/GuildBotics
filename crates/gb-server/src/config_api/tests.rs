@@ -2133,7 +2133,14 @@ async fn a_service_the_servers_work_starts_after_its_stop_is_stopped_too() {
         let (begin, selected) = (begin.clone(), selected.clone());
         async move {
             begin.cancelled().await;
-            assert!(selected.service.start().await.unwrap().running);
+            assert!(
+                selected
+                    .service
+                    .start(&crate::server::Shutdown::default())
+                    .await
+                    .unwrap()
+                    .running
+            );
             // A turn of the late service, which ends only when cancelled.
             let turn = selected.service.execution.generation();
             selected
@@ -2408,7 +2415,14 @@ fn running() -> (Fixture, Arc<Selected>) {
 #[tokio::test]
 async fn a_workspace_switch_under_active_work_is_refused_and_changes_nothing() {
     let (f, selected) = running();
-    assert!(selected.service.start().await.unwrap().running);
+    assert!(
+        selected
+            .service
+            .start(&crate::server::Shutdown::default())
+            .await
+            .unwrap()
+            .running
+    );
     let other = f.root.join("other");
     std::fs::create_dir(&other).unwrap();
     let (status, body) = f
@@ -2506,7 +2520,14 @@ async fn the_workspace_switch_is_refused_exactly_while_the_status_has_active_wor
     std::fs::create_dir(&other).unwrap();
     let switch = || f.call("POST", "/workspace", json!({"workspace_dir": other}));
     assert_eq!(f.get("/scheduler/status").await["has_active_work"], false);
-    assert!(selected.service.start().await.unwrap().running);
+    assert!(
+        selected
+            .service
+            .start(&crate::server::Shutdown::default())
+            .await
+            .unwrap()
+            .running
+    );
     assert_eq!(f.get("/scheduler/status").await["has_active_work"], true);
     assert_eq!(switch().await.0, StatusCode::CONFLICT);
     selected.service.stop(true).await;
