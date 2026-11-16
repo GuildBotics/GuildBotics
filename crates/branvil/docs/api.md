@@ -1577,3 +1577,5 @@ only for open PRs linked locally to the repository's open repair ticket. Closing
 links never close repair tickets on merge; passing main verification or a human
 operation closes them. Repair ticket creation and closure also publish a
 `verification` event so clients refetch the linked ticket.
+
+Board cards accept `repair=true` to select repair tickets independently of assignee (with the usual state and lane filters).

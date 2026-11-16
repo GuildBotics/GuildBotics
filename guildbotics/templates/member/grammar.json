@@ -1827,5 +1827,29 @@
       }
     ],
     "help": "Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
+  },
+  "checks retry": {
+    "help": "Retry a CI job by its page URL.",
+    "options": [
+      {
+        "spelling": "--person",
+        "required": true
+      },
+      {
+        "spelling": "--job-url",
+        "required": true,
+        "help": "Page URL of the CI job to retry."
+      },
+      {
+        "spelling": "--format",
+        "default": "json",
+        "choices": [
+          "json",
+          "text"
+        ]
+      }
+    ],
+    "read_only": false,
+    "content_required": false
   }
 }

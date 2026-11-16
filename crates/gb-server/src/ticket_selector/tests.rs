@@ -479,6 +479,7 @@ impl Fixture {
     }
     fn selector<'a>(&'a self, source: &'a str) -> Selector<'a> {
         Selector {
+            roster: &[],
             person: "aiko",
             source,
             language: "en",
@@ -1750,4 +1751,63 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
             }
         }
     }
+}
+
+#[tokio::test]
+async fn failed_repairs_keep_the_failure_comment_without_a_work_stop() {
+    for repair in [false, true] {
+        let f = Fixture::new();
+        let mut task = f.task().await;
+        task.repair = repair;
+        *f.runner.failure.lock().unwrap() = Some(guest("timeout"));
+        let selector = f.selector("routine");
+        assert!(
+            selector
+                .run(
+                    &task,
+                    selector.invocation(&task).unwrap(),
+                    &f.trace("routine"),
+                    5
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(f.runner.stops.lock().unwrap().len(), usize::from(!repair));
+        let comments = f.comments(&task).await;
+        assert_eq!(comments.len(), 1);
+    }
+}
+
+#[test]
+fn repair_takeover_chooses_one_eligible_member_and_preserves_active_assignees() {
+    let active = [("b", "B"), ("a", "A")];
+    for absent in ["inactive-c", "outside"] {
+        assert_eq!(repair_owner(&active, &[absent]), Some("a"));
+    }
+    assert_eq!(repair_owner(&active, &["b"]), None);
+    assert_eq!(repair_owner(&active, &[]), Some("a"));
+    assert_eq!(repair_owner(&[], &["c"]), None);
+}
+
+#[tokio::test]
+async fn ready_repairs_bypass_the_quota_during_refresh_and_run() {
+    let f = Fixture::new();
+    let mut task = f.task().await;
+    task.repair = true;
+    let quota = PullRequestQuota::new(0);
+    let mut selector = f.selector("routine");
+    selector.quota = Some(&quota);
+    assert!(!selector.defer_ready(&task).await);
+    selector
+        .run(
+            &task,
+            selector.invocation(&task).unwrap(),
+            &f.trace("routine"),
+            5,
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
+    task.repair = false;
+    assert!(selector.defer_ready(&task).await);
 }

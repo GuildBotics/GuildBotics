@@ -139,6 +139,16 @@ impl LocalService {
             .dir(WorkKind::PullRequest, &r.place)
             .join("checks")
             .join(&head);
+        let attempt_path = path.with_extension("attempt");
+        let attempt = if attempt_path.is_file() {
+            fs::read_to_string(attempt_path)
+                .map_err(|_| ServiceError::Failed)?
+                .parse::<u64>()
+                .map_err(|_| ServiceError::InvalidResult)?
+        } else {
+            1
+        };
+        let job_url = format!("local://code/{}/jobs/{head}/{attempt}", r.place);
         let c = if path.is_file() {
             let value = fs::read_to_string(path).map_err(|_| ServiceError::Failed)?;
             if value.is_empty() {
@@ -190,10 +200,10 @@ impl LocalService {
                     .collect();
                 names.sort();
                 failed.push(FailedLog {
-                    job_id: "local@1".into(),
+                    job_id: attempt.to_string(),
                     name: "local".into(),
                     conclusion: c.clone(),
-                    url: "".into(),
+                    url: job_url.clone(),
                     artifact_names: names,
                     log: "".into(),
                     log_bytes: 0,
@@ -218,7 +228,7 @@ impl LocalService {
                 }
                 .into(),
                 conclusion: (c != "pending").then_some(c),
-                details_url: "".into(),
+                details_url: job_url,
                 details: None,
             }],
             false,
@@ -269,6 +279,67 @@ impl LocalService {
     }
 }
 impl CodeHostingService for LocalService {
+    fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async move {
+            let _g = lock()?;
+            let path = url
+                .strip_prefix("local://code/")
+                .ok_or(ServiceError::NotFound)?;
+            let (repo, job) = path.split_once("/jobs/").ok_or(ServiceError::NotFound)?;
+            let (sha, attempt) = job.split_once('/').ok_or(ServiceError::NotFound)?;
+            if !crate::valid_repository_path(repo)
+                || sha.len() != 40
+                || !sha.bytes().all(|c| c.is_ascii_hexdigit())
+            {
+                return Err(ServiceError::NotFound);
+            }
+            self.store.scope.authorize(repo)?;
+            let attempt: u64 = attempt.parse().map_err(|_| ServiceError::NotFound)?;
+            let path = self
+                .store
+                .dir(WorkKind::PullRequest, repo)
+                .join("checks")
+                .join(sha);
+            let attempt_path = path.with_extension("attempt");
+            let current: u64 = if attempt_path.is_file() {
+                fs::read_to_string(&attempt_path)
+                    .map_err(|_| ServiceError::Failed)?
+                    .parse()
+                    .map_err(|_| ServiceError::InvalidResult)?
+            } else {
+                1
+            };
+            if current != attempt {
+                return Err(ServiceError::NotFound);
+            }
+            let state = if path.is_file() {
+                fs::read_to_string(&path).map_err(|_| ServiceError::Failed)?
+            } else {
+                let exists = self
+                    .store
+                    .items(WorkKind::PullRequest, Some(repo))?
+                    .iter()
+                    .map(|(_, value)| self.head(value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .iter()
+                    .any(|head| head == sha);
+                if !exists {
+                    return Err(ServiceError::NotFound);
+                }
+                self.checks.clone()
+            };
+            if !crate::failed_conclusion(&state) {
+                return Err(ServiceError::Failed);
+            }
+            let next = current.checked_add(1).ok_or(ServiceError::Failed)?;
+            fs::create_dir_all(path.parent().ok_or(ServiceError::Failed)?)
+                .map_err(|_| ServiceError::Failed)?;
+            fs::write(&attempt_path, next.to_string()).map_err(|_| ServiceError::Failed)?;
+            fs::write(&path, "pending").map_err(|_| ServiceError::Failed)?;
+            Ok(format!("local://code/{repo}/jobs/{sha}/{next}"))
+        })
+    }
+
     fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         Box::pin(async move {
             let r = Ref::locate(url, WorkKind::PullRequest)?;
@@ -675,6 +746,7 @@ impl LocalService {
         );
         reviews.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
         Ok(crate::PatrolPullRequest {
+            repair: false,
             id: r.url(),
             url: r.url(),
             label: r.label(),

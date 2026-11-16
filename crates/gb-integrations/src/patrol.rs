@@ -29,6 +29,7 @@ pub struct PatrolThread {
 }
 #[derive(Clone, Debug, Default)]
 pub struct PatrolPullRequest {
+    pub repair: bool,
     pub id: String,
     pub label: String,
     pub url: String,
@@ -117,10 +118,9 @@ pub fn pull_request_work(
         return None;
     }
     if let Some(latest) = pr.comments.iter().rev().find(|c| c.author == me)
-        && latest
-            .status
-            .as_ref()
-            .is_some_and(|s| s.holds_selection(now))
+        && latest.status.as_ref().is_some_and(|s| {
+            s.holds_selection(now) && !(pr.repair && s.reason() == WorkflowStatusReason::Failed)
+        })
     {
         let lifted = pr
             .comments
@@ -161,7 +161,10 @@ pub fn pull_request_work(
         return None;
     }
     Some(
-        if !reviewed.contains(pr.head_oid.as_str()) && review_rounds(pr, me).len() >= 3 {
+        if !pr.repair
+            && !reviewed.contains(pr.head_oid.as_str())
+            && review_rounds(pr, me).len() >= 3
+        {
             "pull_request_review_limit"
         } else {
             "pull_request_review"
@@ -181,7 +184,11 @@ pub async fn patrol(
         .iter()
         .filter(|c| c.author == me)
         .filter_map(|c| c.status.as_ref())
-        .rfind(|s| s.reason() != WorkflowStatusReason::RateLimited || s.holds_selection(now))
+        .rfind(|s| {
+            s.reason() != WorkflowStatusReason::RateLimited
+                || s.holds_selection(now)
+                    && !(pr.repair && s.reason() == WorkflowStatusReason::Failed)
+        })
         .filter(|s| {
             s.reason() == WorkflowStatusReason::AwaitingChecks
                 && pr.author == me
@@ -220,6 +227,7 @@ pub async fn patrol(
         }
     });
     Some(Task {
+        repair: pr.repair,
         id: Some(pr.id.clone()),
         url: Some(pr.url.clone()),
         title: pr.title.clone(),

@@ -51,6 +51,34 @@ impl BranvilService {
     }
 }
 impl CodeHostingService for BranvilService {
+    fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async move {
+            let path = url
+                .strip_prefix(self.api.base_url())
+                .and_then(|p| p.strip_prefix('/'))
+                .ok_or(ServiceError::NotFound)?;
+            let (repo, id) = path.split_once("/-/jobs/").ok_or(ServiceError::NotFound)?;
+            if !crate::valid_repository_path(repo)
+                || id.is_empty()
+                || id.contains(['/', '?', '#', '%'])
+            {
+                return Err(ServiceError::NotFound);
+            }
+            self.writable(repo)?;
+            let attempt = self
+                .member()
+                .await?
+                .job_retry(repo, id)
+                .await
+                .map_err(|e| error(e, "job_retry"))?;
+            Ok(format!(
+                "{}/{repo}/-/jobs/{}",
+                self.api.base_url(),
+                attempt.id
+            ))
+        })
+    }
+
     fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;

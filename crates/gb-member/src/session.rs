@@ -128,6 +128,10 @@ impl Session<'_> {
                 .collect::<Vec<_>>()
         };
         answer.payload = match p.command.as_str() {
+            "checks retry" => {
+                self.repository.guard.ensure_current()?;
+                json!({"url": self.repository.services.code()?.retry_job(p.text("job-url")).await.map_err(MemberError::from)?})
+            }
             "context" => {
                 let mut context = self.context.clone();
                 if p.flag("check-credentials") {

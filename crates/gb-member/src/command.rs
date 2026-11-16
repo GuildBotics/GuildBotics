@@ -70,7 +70,7 @@ fn description(command: &str) -> &str {
         "chat" => "Chat identity, posting, replies, reactions, and run completion.",
         "chat inspect" => "Inspect chat channel or thread messages for interactive decisions.",
         "chat reaction" => "Chat reaction operations.",
-        "checks" => "End a run to await the CI checks of its pull requests.",
+        "checks" => "Await CI checks or retry a job.",
         "git" => "Read repositories and prepare, commit, push, and publish member workspaces.",
         "memory" => "Record, recall, and maintain member memory documents.",
         "pr" => {

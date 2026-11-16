@@ -1074,7 +1074,7 @@ impl gb_member::session::Control for NoRecord {
 async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anchors() {
     let mut f = Fixture::new();
     for (url, repository) in [("ticket", Some("owner/repo")), ("loose", None)] {
-        let ticket = json!({"kind":"ticket","url":url,"title":"Ticket","label":"T-1","key":"T-1","tracker":"owner/repo","repository":repository,"body":"","state":"open","assignees":[],"author":"member","labels":[],"lane":null,"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null});
+        let ticket = json!({"repair":false,"kind":"ticket","url":url,"title":"Ticket","label":"T-1","key":"T-1","tracker":"owner/repo","repository":repository,"body":"","state":"open","assignees":[],"author":"member","labels":[],"lane":null,"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null});
         f.services.pages.insert(
             format!("tickets|{url}|"),
             Ok(ReadPage::of(Resource::Tickets, vec![ticket], None, None).unwrap()),
@@ -1295,7 +1295,7 @@ fn lifecycle_page(f: &mut Fixture, kind: &str, url: &str, state: &str, done: boo
         Resource::PullRequests
     };
     let value = if kind == "ticket" {
-        json!({"kind":"ticket","url":url,"title":"Ticket","label":"T","key":"1","tracker":"owner/repo","repository":"owner/repo","body":"","state":state,"assignees":[],"author":"member","labels":[],"lane":if done {json!("done")} else {json!("in_progress")},"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null})
+        json!({"repair":false,"kind":"ticket","url":url,"title":"Ticket","label":"T","key":"1","tracker":"owner/repo","repository":"owner/repo","body":"","state":state,"assignees":[],"author":"member","labels":[],"lane":if done {json!("done")} else {json!("in_progress")},"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null})
     } else {
         json!({"kind":"pull_request","url":url,"title":"PR","label":"P","repository":"owner/repo","body":"","state":state,"assignees":[],"author":"member","requested_reviewers":[],"labels":[],"author_type":"User","head":"feature","head_repository":"owner/repo","head_sha":"a".repeat(40),"base":"main","merged":merged,"draft":false,"changed_files":null})
     };

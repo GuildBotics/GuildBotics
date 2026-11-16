@@ -2,6 +2,79 @@ use super::*;
 use branvil::api::tickets;
 use chrono::{DateTime, Utc};
 impl TicketService for BranvilService {
+    fn comment_takeover<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            let (repo, key) = self.item(url, "tickets")?;
+            self.writable(&repo)?;
+            self.member()
+                .await?
+                .tickets_add_comment(
+                    &repo,
+                    &key,
+                    tickets::NewComment {
+                        body: body.into(),
+                        meta: Some(json!({"repair_takeover": true})),
+                    },
+                )
+                .await
+                .map_err(|e| error(e, "tickets_add_comment"))?;
+            Ok(())
+        })
+    }
+
+    fn repair_tickets(&self) -> ServiceFuture<'_, Vec<Ticket>> {
+        Box::pin(async {
+            let m = self.member().await?;
+            let mut out = vec![];
+            let mut cursor = None;
+            loop {
+                let page = m
+                    .page(
+                        format!("gb:repairs:{}", self.workspace),
+                        Some(100),
+                        cursor.as_deref(),
+                    )
+                    .map_err(|e| error(e, "page"))?;
+                let page = m
+                    .tickets_cards(
+                        &self.workspace,
+                        tickets::CardQuery {
+                            repair: Some(true),
+                            state: Some("open".into()),
+                            comments: Some("none".into()),
+                            ..Default::default()
+                        },
+                        page,
+                    )
+                    .await
+                    .map_err(|e| error(e, "tickets_cards"))?;
+                for card in page.items {
+                    let v = value(card)?;
+                    if self.scope.authorize(text(&v, "repository")).is_ok() {
+                        out.push(decode(self.ticket_value(v))?);
+                    }
+                }
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            Ok(out)
+        })
+    }
+    fn assign_to_me<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            let (repo, key) = self.item(url, "tickets")?;
+            self.writable(&repo)?;
+            self.member()
+                .await?
+                .tickets_set_assignee(&repo, &key, Some(self.username.clone()))
+                .await
+                .map_err(|e| error(e, "tickets_set_assignee"))?;
+            Ok(())
+        })
+    }
+
     fn read<'a>(
         &'a self,
         resource: Resource,

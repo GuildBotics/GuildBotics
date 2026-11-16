@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 pub struct Probe {
     pub error: Option<ServiceError>,
+    pub links: BTreeMap<String, Vec<TicketLink>>,
     pub ticket_requests: std::sync::Mutex<Vec<CreateTicket>>,
     pub closed: Vec<ClosedItem>,
     pub pages: BTreeMap<String, std::result::Result<ReadPage, ServiceError>>,
@@ -19,6 +20,7 @@ impl Probe {
     pub fn new(error: Option<ServiceError>) -> Self {
         Self {
             error,
+            links: Default::default(),
             ticket_requests: Default::default(),
             closed: vec![],
             pages: BTreeMap::new(),
@@ -120,6 +122,23 @@ impl TicketService for Probe {
     }
 }
 impl CodeHostingService for Probe {
+    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+        Box::pin(async move {
+            self.links
+                .get(url)
+                .cloned()
+                .ok_or(ServiceError::Unsupported)
+        })
+    }
+
+    fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async move {
+            self.error
+                .clone()
+                .map_or_else(|| Ok(format!("{url}/next")), Err)
+        })
+    }
+
     fn read<'a>(
         &'a self,
         _resource: Resource,

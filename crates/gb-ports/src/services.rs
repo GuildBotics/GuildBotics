@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Task {
+    /// Created by the code host after default-branch verification failed, or linked to that ticket. Performed before other work.
+    pub repair: bool,
     pub id: Option<String>,
     pub url: Option<String>,
     pub title: String,
@@ -25,6 +27,7 @@ pub struct Task {
 impl Default for Task {
     fn default() -> Self {
         Self {
+            repair: false,
             id: None,
             url: None,
             title: String::new(),
@@ -166,6 +169,17 @@ pub struct ReviewComment {
 }
 
 pub trait TicketService: Send + Sync {
+    /// A neutral assignment fact, excluded from the assignee's work conversation.
+    fn comment_takeover<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move { self.comment(url, body, None).await.map(|_| ()) })
+    }
+    fn repair_tickets(&self) -> ServiceFuture<'_, Vec<Ticket>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+    fn assign_to_me<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async { Err(ServiceError::Unsupported) })
+    }
+
     fn read<'a>(
         &'a self,
         resource: Resource,
@@ -209,6 +223,10 @@ pub trait TicketService: Send + Sync {
     fn aclose(&self) -> ServiceFuture<'_, ()>;
 }
 pub trait CodeHostingService: Send + Sync {
+    fn retry_job<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, String> {
+        Box::pin(async { Err(ServiceError::Unsupported) })
+    }
+
     /// Yield running checks when an author starts changing a deferred PR head.
     fn yield_pull_request_checks<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, usize> {
         Box::pin(async { Err(ServiceError::Unsupported) })

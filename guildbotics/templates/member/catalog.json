@@ -42,6 +42,7 @@
     "--id",
     "--interactive",
     "--issue-url",
+    "--job-url",
     "--keyword",
     "--kind",
     "--label",

@@ -259,3 +259,9 @@ task_schedules:
     schedules:
       - "0 ?(9-17) * * *" # A random hour between 9 and 17 every day (at :00)
 ```
+
+## Repair work
+
+Repair tickets and their linked PRs (author feedback and reviews) take precedence over other patrol work and bypass the open-PR quota. Before consuming the saved candidate list, patrol checks for repair work again. An active member takes over a repair ticket whose assignee cannot work in the workspace; the eligible member with the smallest person ID performs the takeover and comments on it.
+
+A failed repair execution retains its failed trace and comment and is selected again on the next patrol. It sends no work-stop notice and neither increments nor resets consecutive errors or cycle failure counts. Rate limits and the completion-attempt limit still apply. Repair work cannot complete as asking/blocked; it must fix, revert, or retry after an external cause clears. Repair PRs have no review-round limit.

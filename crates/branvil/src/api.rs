@@ -99,6 +99,10 @@ impl MemberApi {
         let _open = self.api.guard()?;
         Ok(members::member_view(&self.caller().await?.member))
     }
+    pub async fn job_retry(&self, repo: &str, id: &str) -> AppResult<crate::ci::api::AttemptView> {
+        let _open = self.api.guard()?;
+        crate::ci::api::data_job_retry(&self.api.app, &self.caller().await?, repo, id).await
+    }
     pub async fn job_log(&self, repo: &str, id: &str, tail: u64) -> AppResult<serde_json::Value> {
         let _open = self.api.guard()?;
         crate::ci::api::data_job_log(&self.api.app, &self.caller().await?, repo, id, tail).await

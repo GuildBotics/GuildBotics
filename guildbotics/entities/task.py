@@ -25,6 +25,11 @@ class Task(BaseModel):
     IN_PROGRESS: ClassVar[str] = "in_progress"
     DONE: ClassVar[str] = "done"
 
+    repair: bool = Field(
+        default=False,
+        description="Created by the code host after default-branch verification failed, or linked to that ticket. Performed before other work.",
+    )
+
     id: str | None = Field(
         default=None, description="The unique identifier for the task."
     )

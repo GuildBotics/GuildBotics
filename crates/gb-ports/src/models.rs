@@ -40,6 +40,8 @@ pub struct TicketSummary {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ticket {
+    /// Created by the code host after default-branch verification failed, or linked to that ticket. Performed before other work.
+    pub repair: bool,
     pub kind: WorkKind,
     pub url: String,
     pub title: String,

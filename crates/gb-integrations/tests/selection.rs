@@ -35,7 +35,10 @@ fn working_conversation_precedes_linked_pr_and_holds_win() {
                 },
                 conversation == "mention" || conversation == "failed",
                 pull,
-                true,
+                TicketPolicy {
+                    finish_merged: true,
+                    repair: false,
+                },
                 Utc::now(),
             );
             assert_eq!(
@@ -167,4 +170,54 @@ fn linked_pull_timestamp_ties_keep_the_first_observed_state() {
         Some("merged")
     );
     assert_eq!(linked_pull_state([]), None);
+}
+
+#[test]
+fn repair_failures_resume_but_rate_limits_still_hold() {
+    let now = Utc::now();
+    for lane in ["ready", "in_progress"] {
+        for repair in [false, true] {
+            for reason in ["failed", "rate_limited"] {
+                let state = WorkflowStatus::from_payload(&json!({"kind":"workflow_error","reason":reason,"person_id":"aiko","retry_after_at":(now+chrono::Duration::hours(1)).to_rfc3339()})).unwrap();
+                let mine = vec![TaskMessage {
+                    author_type: "Assistant".into(),
+                    ..Default::default()
+                }];
+                let d = select_ticket(
+                    lane,
+                    &mine,
+                    Some(&state),
+                    false,
+                    Some("merged"),
+                    TicketPolicy {
+                        finish_merged: true,
+                        repair,
+                    },
+                    now,
+                );
+                assert_eq!(
+                    d.reason,
+                    (repair && reason == "failed").then_some("working_lane")
+                );
+                assert!(!d.finish);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_merged_repair_pr_does_not_finish_a_ticket_before_main_verification() {
+    let d = select_ticket(
+        "in_progress",
+        &[],
+        None,
+        false,
+        Some("merged"),
+        TicketPolicy {
+            finish_merged: true,
+            repair: true,
+        },
+        Utc::now(),
+    );
+    assert!(!d.finish);
 }

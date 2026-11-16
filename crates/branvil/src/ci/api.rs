@@ -184,7 +184,16 @@ async fn job_retry(
     c: Caller,
     Path((repo, id)): Path<(String, String)>,
 ) -> R {
-    let (repo, a) = attempt_of(&app, &c, &repo, &id).await?;
+    Ok(ok(data_job_retry(&app, &c, &repo, &id).await?))
+}
+
+pub(crate) async fn data_job_retry(
+    app: &Shared,
+    c: &Caller,
+    repo: &str,
+    id: &str,
+) -> AppResult<AttemptView> {
+    let (repo, a) = attempt_of(app, c, repo, id).await?;
     // Ref cleanup may still be cancelling work after its landing state
     // became visible. A new explicit retry must follow that cleanup.
     let id = a.id.clone();
@@ -198,7 +207,7 @@ async fn job_retry(
         .await?;
     app.events.publish("verification", &repo.path, "");
     app.events.publish("check", &repo.path, new.sha.clone());
-    Ok(ok(view(&app, &new).await?))
+    view(app, &new).await
 }
 
 #[derive(Serialize, Debug)]

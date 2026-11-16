@@ -319,3 +319,32 @@ async fn context_without_a_code_host_keeps_credentials_unchecked() {
         .unwrap();
     assert_eq!(result.payload["credential_status"], "unchecked");
 }
+
+#[tokio::test]
+async fn checks_retry_returns_url_and_preserves_service_errors() {
+    for error in [
+        None,
+        Some(ServiceError::NotFound),
+        Some(ServiceError::Unsupported),
+    ] {
+        let services = Services(support::Probe::new(error.clone()));
+        let roster = BTreeMap::new();
+        let records = Records::default();
+        let session = session(&services, &roster, &records);
+        let result = session
+            .execute(
+                &args(&["checks", "retry", "--person", "aiko", "--job-url", "job"]),
+                "",
+            )
+            .await;
+        if let Some(error) = error {
+            assert!(
+                matches!(result, Err(e) if e.downcast_ref::<MemberError>().is_some_and(|e| matches!(e, MemberError::Service(actual) if actual == &error)))
+            );
+            assert!(records.0.lock().unwrap().is_empty());
+        } else {
+            assert_eq!(result.unwrap().payload["url"], "job/next");
+            assert_eq!(records.0.lock().unwrap()[0]["command"], "checks retry");
+        }
+    }
+}

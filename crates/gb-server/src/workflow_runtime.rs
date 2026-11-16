@@ -308,6 +308,7 @@ impl Runtime {
         if name == ticket_selector::COMMAND {
             let diagnostics = self.diagnostics();
             let selector = Selector {
+                roster: &self.roster,
                 diagnostics: &diagnostics,
                 person: &self.person.person_id,
                 source,
@@ -421,6 +422,7 @@ impl Runtime {
         let diagnostics = self.diagnostics();
         let selector =
             Selector {
+                roster: &self.roster,
                 diagnostics: &diagnostics,
                 person: &self.person.person_id,
                 source: "manual",
@@ -520,6 +522,7 @@ impl Runtime {
         let diagnostics = self.diagnostics();
         let selector =
             Selector {
+                roster: &self.roster,
                 diagnostics: &diagnostics,
                 person: &self.person.person_id,
                 source: &source,

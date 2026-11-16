@@ -128,6 +128,7 @@ impl PullRequestQuota {
 pub struct Selector<'a> {
     pub diagnostics: &'a Diagnostics,
     pub person: &'a str,
+    pub roster: &'a [gb_member::context::PublicMember],
     pub source: &'a str,
     pub language: &'a str,
     pub ticket: &'a dyn TicketService,
@@ -137,8 +138,8 @@ pub struct Selector<'a> {
 }
 
 impl Selector<'_> {
-    /// Selection is read-only until a refreshed task is handed to the caller's
-    /// execution boundary. An idle patrol opens neither a trace nor a run.
+    /// Adopt unavailable repair assignments before refreshing work for the
+    /// caller's execution boundary. An idle patrol opens neither a trace nor a run.
     pub async fn next(&self) -> Result<Option<(Task, WorkflowInvocation)>, ServiceError> {
         for candidate in self.candidates().await? {
             if let Some(invocation) = self.refresh(&candidate).await? {
@@ -153,6 +154,7 @@ impl Selector<'_> {
         if let (Some(quota), Some(code)) = (self.quota, self.code) {
             quota.observe(code).await;
         }
+        self.adopt_repairs().await?;
         let mut candidates = Vec::new();
         if let Some(code) = self.code {
             for task in code.pull_request_candidates().await? {
@@ -164,7 +166,59 @@ impl Selector<'_> {
             }
         }
         candidates.extend(self.ticket.candidates().await?);
+        candidates.sort_by_key(|task| !task.repair);
         Ok(candidates)
+    }
+
+    pub async fn repair_candidates(&self) -> Result<Vec<Task>, ServiceError> {
+        self.adopt_repairs().await?;
+        let mut tasks = if let Some(code) = self.code {
+            code.pull_request_candidates().await?
+        } else {
+            vec![]
+        };
+        tasks.extend(self.ticket.candidates().await?);
+        tasks.retain(|task| task.repair);
+        Ok(tasks)
+    }
+
+    async fn adopt_repairs(&self) -> Result<(), ServiceError> {
+        let Some(code) = self.code else {
+            return Ok(());
+        };
+        let identity = code.identity(false).await?;
+        let Some(account_key) = identity.keys().find(|key| key.ends_with("_username")) else {
+            return Ok(());
+        };
+        let active: Vec<_> = self
+            .roster
+            .iter()
+            .filter(|member| member.is_active)
+            .filter_map(|member| {
+                member
+                    .accounts
+                    .get(account_key.trim_end_matches("_username"))
+                    .filter(|name| !name.is_empty())
+                    .map(|name| (member.person_id.as_str(), name.as_str()))
+            })
+            .collect();
+        for ticket in self.ticket.repair_tickets().await? {
+            if !ticket.repair || ticket.state != "open" {
+                continue;
+            }
+            let assignees: Vec<_> = ticket
+                .assignees
+                .iter()
+                .map(|name| name.0.as_str())
+                .collect();
+            let leader = repair_owner(&active, &assignees);
+            if leader == Some(self.person) {
+                self.ticket.assign_to_me(&ticket.url).await?;
+                let body = crate::i18n::t(self.language, "integrations.repair.adopted", &[]);
+                self.ticket.comment_takeover(&ticket.url, &body).await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn refresh(&self, task: &Task) -> Result<Option<WorkflowInvocation>, ServiceError> {
@@ -206,7 +260,8 @@ impl Selector<'_> {
     }
 
     async fn defer_ready(&self, task: &Task) -> bool {
-        if self.source != "manual"
+        if !task.repair
+            && self.source != "manual"
             && task.trigger_reason.as_deref() == Some("ready_lane")
             && let (Some(quota), Some(code)) = (self.quota, self.code)
         {
@@ -411,6 +466,7 @@ impl Selector<'_> {
         );
         if let Ok(url) = self.comment(task, &body, &status).await
             && !limited
+            && !task.repair
             && self.source != "manual"
         {
             self.runner
@@ -533,6 +589,17 @@ impl Selector<'_> {
             "review_limit.finished"
         });
     }
+}
+
+fn repair_owner<'a>(active: &[(&'a str, &str)], assignees: &[&str]) -> Option<&'a str> {
+    if assignees.iter().any(|name| {
+        active
+            .iter()
+            .any(|(_, account)| account.eq_ignore_ascii_case(name))
+    }) {
+        return None;
+    }
+    active.iter().min_by_key(|(id, _)| *id).map(|(id, _)| *id)
 }
 
 pub fn task_attributes(task: &Task) -> serde_json::Map<String, Value> {
