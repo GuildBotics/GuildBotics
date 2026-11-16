@@ -239,11 +239,11 @@ export function PickupPanel({
                 {row.stuck.length === 0 && row.waits.length > 0 && (
                   <span className="pickup-waits">
                     {t("pickup.waits", {
-                      blockers: row.waits.map((w) => t("pickup.waitFor", {
-                        ticket: w.ticket,
-                        assignee: w.assignee ?? t("pickup.unassigned"),
-                        lane: w.lane ? t(`lane.${w.lane}`) : t("pickup.unknownLane"),
-                      })).join(t("pickup.and")),
+                      blockers: row.waits.map((w) => t("pickup.waitFor", { ticket: w.ticket }) + (
+                        "lane" in w && w.assignee
+                          ? t("pickup.waitDetails", { assignee: w.assignee, lane: t(`lane.${w.lane}`) })
+                          : ""
+                      )).join(t("pickup.and")),
                     })}
                   </span>
                 )}

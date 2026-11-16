@@ -91,7 +91,7 @@ describe("pickup order", () => {
     // Waiting for #4, still open, #3 keeps its place: when it starts is the system's.
     expect(tagOf("3")).toHaveTextContent(/^3$/);
     expect(tagOf("3")?.querySelector(".pickup-wait")).not.toBeNull();
-    expect(tagOf("3")).toHaveAccessibleName(/until acme\/demo#4 closes; ready tickets further down can start first/);
+    expect(tagOf("3")).toHaveAccessibleName(/all of these tickets are closed: acme\/demo#4; ready tickets further down can start first/);
     expect(tagOf("3")).toHaveAttribute("title", tagOf("3")?.getAttribute("aria-label"));
     expect(tagOf("1")?.querySelector(".pickup-wait")).toBeNull();
     expect(tagOf("6")?.querySelector(".pickup-wait")).toBeNull();
@@ -119,6 +119,30 @@ describe("pickup order", () => {
     expect(tagOf("1")).toHaveAccessibleName(/acme\/demo#W; acme\/demo#K/);
     expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
     expect(rowOf("6")).not.toHaveTextContent("Waiting:");
+  });
+
+  it("keeps unloaded blockers waiting without inventing an assignee or lane", async () => {
+    const missing = card("M", "in_progress", { repository: "other/repo" });
+    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(missing), ref(C4)] } : c);
+    await opened(userEvent.setup(), "1", {
+      "GET /api/v1/workspaces/acme/board/cards": json(200, { items: cards, next_cursor: null }),
+    });
+    expect(rowOf("1").querySelector(".pickup-waits")).toHaveTextContent(/^Waiting: until other\/repo#M closes; until acme\/demo#4 closes \(aiko · Ready\)$/);
+    expect(tagOf("1")?.querySelector(".pickup-wait")).not.toBeNull();
+    expect(within(rowOf("1")).queryByText("Starts next")).not.toBeInTheDocument();
+    expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
+  });
+
+  it("keeps a loaded unassigned blocker stuck rather than showing a wait", async () => {
+    const nobody = card("U", "in_progress");
+    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(nobody)] } : c);
+    await opened(userEvent.setup(), "1", {
+      "GET /api/v1/workspaces/acme/board/cards": json(200, { items: [...cards, nobody], next_cursor: null }),
+    });
+    expect(rowOf("1")).toHaveTextContent("Won't start: acme/demo#U has no assignee");
+    expect(rowOf("1").querySelector(".pickup-waits")).toBeNull();
+    expect(tagOf("1")).toHaveTextContent("!");
+    expect(tagOf("1")?.querySelector(".pickup-wait")).toBeNull();
   });
 
   it("shows no tags outside the owner's session", async () => {

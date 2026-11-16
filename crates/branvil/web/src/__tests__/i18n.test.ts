@@ -42,10 +42,13 @@ describe("i18n", () => {
 
   it("explains waits and the next pickup in Japanese", () => {
     const words = dictionaries.ja;
-    expect(format(words["pickup.waitFor"], { ticket: "acme/demo#237", assignee: "aiko", lane: words["lane.in_progress"] }))
+    expect(format(words["pickup.waitFor"], { ticket: "acme/demo#237" }) + format(words["pickup.waitDetails"], { assignee: "aiko", lane: words["lane.in_progress"] }))
       .toBe("acme/demo#237 が閉じるまで（aiko・作業中）");
     expect(format(words["pickup.waitHint"], { tickets: "acme/demo#237" }))
       .toBe("acme/demo#237 が閉じるまで始まらず、その間は始められる後ろのチケットが先に始まる");
+    expect(format(words["pickup.waitFor"], { ticket: "other/repo#M" })).toBe("other/repo#M が閉じるまで");
+    expect(format(dictionaries.en["pickup.waitHint"], { tickets: "acme/demo#W; acme/demo#K" }))
+      .toBe("Will not start until all of these tickets are closed: acme/demo#W; acme/demo#K; ready tickets further down can start first in the meantime");
     expect(words["pickup.next"]).toBe("次に始まる");
   });
 

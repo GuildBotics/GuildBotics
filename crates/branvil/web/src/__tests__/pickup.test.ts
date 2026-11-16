@@ -131,7 +131,7 @@ describe("open waits and the next pickup", () => {
     const c = card("C", "ready", { ...by("aiko"), blocked_by: [ref(missing)] });
     const rows = pickupOrders([fresh, b, c], isAgent).get("aiko")!;
     expect(rows[0]?.stuck).toEqual([{ ticket: "acme/demo#N", why: "new" }]);
-    expect(rows[1]?.waits).toEqual([{ ticket: "acme/demo#M", lane: null, assignee: null }]);
+    expect(rows[1]?.waits).toEqual([{ ticket: "acme/demo#M" }]);
     expect(nextPickup(rows)).toBeUndefined();
     expect(nextPickup([])).toBeUndefined();
   });

@@ -155,7 +155,8 @@ open and is in New, has no assignee, or is in Done but still open (an agent
 moving it to Done does not close it), and nobody will move it on.
 
 A number with a neutral hourglass waits for its direct open blockers. The
-panel names each blocker, its assignee and lane. **Starts next** marks the first
+panel names each blocker, its assignee and lane when loaded; an unloaded
+blocker shows only its ticket reference. **Starts next** marks the first
 row with neither open blockers nor **!**; there is no badge if none can start.
 While a blocker remains open, including during work or review, patrol skips
 that ticket and starts an available ticket further down first. Numbers keep
@@ -164,9 +165,9 @@ other as a blocker rather than relying on their numbers.
 
 Clicking a number opens the pickup order beside the figure, which narrows
 instead of being covered, at that card's row; the chooser above it switches to
-another agent. A row shows the number, why it will not start (if so), the
-ticket, and its parent. Pointing at or focusing a row marks its card (or the
-closed parent it is in) in the figure, clicking it scrolls there, and a row the
+another agent. A row shows the number, why it will not start or what it waits
+for (if so), whether it starts next, the ticket, and its parent. Pointing at or
+focusing a row marks its card (or the closed parent it is in) in the figure, clicking it scrolls there, and a row the
 filters hide says so. The same number, Escape, or the panel's close button
 closes it. Dragging a row, or Space, the arrow keys, and Space again on a
 focused row (Escape cancels), reorders the agent's tickets: the numbers update

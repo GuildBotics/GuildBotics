@@ -16,11 +16,7 @@ export interface Stuck {
 }
 
 /** A direct open blocker, with its board details when loaded. */
-export interface Wait {
-  ticket: string;
-  lane: Lane | null;
-  assignee: string | null;
-}
+export type Wait = { ticket: string } | { ticket: string; lane: Lane; assignee: string | null };
 
 /** A ticket of an agent's pickup order: its number (from 1, in board order), and what keeps it from ever starting. */
 export interface PickupRow {
@@ -87,7 +83,7 @@ export function pickupOrders(cards: readonly Card[], isAgent: (name: string) => 
     });
     const waits = openBlockers(card).map((ticket) => {
       const blocker = byRef.get(ticket);
-      return { ticket, lane: blocker?.lane ?? null, assignee: blocker?.assignee?.name ?? null };
+      return blocker ? { ticket, lane: blocker.lane, assignee: blocker.assignee?.name ?? null } : { ticket };
     });
     rows.push({ ref, card, n: rows.length + 1, stuck, waits });
   }
