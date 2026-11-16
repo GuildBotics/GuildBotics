@@ -128,6 +128,7 @@ pub struct Repo {
     pub required_approvals: u64,
     /// Its pull requests land by themselves once they can (`autoland`).
     pub auto_land: bool,
+    pub hold_while_failing: bool,
     pub ci_network: bool,
     pub responder: Option<String>,
     /// The labels its tickets may carry.
@@ -394,7 +395,14 @@ pub struct Landing {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Held {
+    pub number: u64,
+    pub assignee: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LandingReason {
+    pub held: Option<Held>,
     pub code: String,
     pub message: String,
     pub jobs: Vec<String>,

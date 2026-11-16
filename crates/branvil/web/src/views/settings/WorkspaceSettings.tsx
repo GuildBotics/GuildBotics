@@ -127,6 +127,7 @@ type RepoForm = {
   /** `""` while the field is empty, which cannot be saved. */
   required_approvals: string | number;
   auto_land: boolean;
+  hold_while_failing: boolean;
   ci_network: boolean;
   responder: string | null;
   labels: string[];
@@ -140,6 +141,7 @@ const seed = (r: Repository): RepoForm => ({
   post_merge_jobs: r.post_merge_jobs,
   required_approvals: r.required_approvals,
   auto_land: r.auto_land,
+  hold_while_failing: r.hold_while_failing,
   ci_network: r.ci_network,
   responder: r.responder.chosen ? r.responder.member : null,
   labels: r.labels,
@@ -269,6 +271,12 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
               description={repo.upstream ? t("settings.autoLandHelpUpstream", { host: repo.upstream.host }) : t("settings.autoLandHelp")}
               checked={form.auto_land}
               onChange={(e) => setForm({ ...form, auto_land: e.currentTarget.checked })}
+            />
+            <Switch
+              label={t("settings.holdWhileFailing")}
+              description={t("settings.holdWhileFailingHelp", { host: repo.upstream?.host ?? "Branvil" })}
+              checked={form.hold_while_failing}
+              onChange={(e) => setForm({ ...form, hold_while_failing: e.currentTarget.checked })}
             />
           </Stack>
           {footer}

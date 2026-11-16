@@ -479,6 +479,13 @@ no `meta` and await the author's answer. All consumers use the same blockers.
 `autoland::start` sweeps on pull, check, repo, upstream and verification events,
 at startup and every minute. It also runs CI notification and repair sweeps.
 With `auto_land`, every eligible PR merges or publishes in the same sweep.
+The opt-in repository setting `hold_while_failing` adds `held` for ordinary
+PRs targeting the default branch while verification has `failing_since` and
+an open repair ticket exists. `landing::held` reads only store records and is
+shared with CI priority classification in the caller's transaction. Repair
+PRs bypass the hold. Published PRs still show it and receive head updates;
+host merges cannot be prevented. Local merges, publication and ready notices
+use the blocker. Verification events and ticket closure trigger re-evaluation.
 Each local merge reads the newly advanced base before the next PR is evaluated.
 Automatic publication happens once; a stopped publication is replaced directly
 by the owner's publish after rechecking its conditions. Automatic errors are

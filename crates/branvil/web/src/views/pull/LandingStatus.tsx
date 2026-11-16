@@ -48,7 +48,11 @@ export function LandingJourney({ pull, repo }: { pull: PullRequest; repo: Reposi
         {stop === "host" ? repo.upstream?.host : stop === "base" ? pull.base : t(`landing.stop.${stop}`)}
       </li>;
     })}</ol>
-    {l?.blockers.map(b => <Stack key={b.code} gap={2}><Text size="sm" fw={700}>{t(blockerName(b.code))}</Text><Text size="sm">{b.message}</Text></Stack>)}
+    {l?.blockers.map(b => <Stack key={b.code} gap={2}><Text size="sm" fw={700}>{t(blockerName(b.code))}</Text>{b.code === "held" && b.held ? <>
+      <Text size="sm">{t("landing.held", { number: b.held.number, name: b.held.assignee ?? t("board.unassigned") })}</Text>
+      <Anchor href={`/${pull.repository}/-/tickets/${b.held.number}`} size="sm">#{b.held.number}</Anchor>
+      {l.host_url && <Text size="sm">{t("landing.heldPublished", { host: repo.upstream?.host ?? "" })}</Text>}
+    </> : <Text size="sm">{b.message}</Text>}</Stack>)}
     {pull.unanswered.map(u => <Anchor key={u.id} href={`#${encodeURIComponent(u.id)}`} size="sm">{t(`landing.statement.${u.kind}`, { author: u.author })}</Anchor>)}
     {l?.next_detail && <Text size="sm">{l.next_detail}</Text>}
     {l?.host_url && ["owner_merge_host", "host_closed"].includes(l.next) && <Anchor href={l.host_url} target="_blank" rel="noopener noreferrer">{t("landing.action")}</Anchor>}
@@ -59,7 +63,7 @@ export function JourneyBadge({ pull, repo }: { pull: PullRequest; repo: Reposito
   const l = pull.landing;
   const { at, mark } = whereabouts(pull, repo, false);
   const text = !l || l.next === "conditions" ? (l?.blockers.length ? `${t(blockerName(l.blockers[0]!.code))}${l.blockers.length > 1 ? ` +${l.blockers.length - 1}` : ""}` : t("landing.missing")) : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
-  const color = l?.next === "conditions" ? (l.blockers.some(b => b.code === "conflict" || b.code === "host_failed") ? "danger" : "neutral")
+  const color = l?.next === "conditions" && l.blockers[0]?.code === "held" ? "warning" : l?.next === "conditions" ? (l.blockers.some(b => b.code === "conflict" || b.code === "host_failed") ? "danger" : "neutral")
     : l && ["owner_publish", "owner_fix_auto", "owner_fix_following"].includes(l.next) ? "danger"
     : l && ["owner_merge_host", "owner_merge"].includes(l.next) ? "warning" : "neutral";
   return <Badge color={color} variant="light" size="sm" title={l?.blockers.map(b => b.message).join(" / ")} data-stop={at} data-state={mark}>{pull.base === repo.default_branch ? text : `${pull.base} · ${text}`}</Badge>;

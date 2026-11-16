@@ -267,11 +267,13 @@ fn pull_class(
     if crate::repair::is_pull(r, p)? {
         return Ok(Priority::new(Class::Repair));
     }
-    Ok(Priority::new(if approvals >= repo.required_approvals {
-        Class::Landing
-    } else {
-        Class::Normal
-    }))
+    Ok(Priority::new(
+        if approvals >= repo.required_approvals && crate::landing::held(r, repo, p)?.is_none() {
+            Class::Landing
+        } else {
+            Class::Normal
+        },
+    ))
 }
 
 /// Classify a registration before it has been persisted.

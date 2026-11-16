@@ -114,7 +114,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | PR | A required check completed without satisfying the head, including a missing required job | 4a (deferred) |
   | PR | A current changes-requested verdict, too few approvals, and an unanswered statement for the author | 4a |
   | PR | Linked to the open repair ticket | 2 (before other class 2 work) |
-  | PR | Enough current approvals | 2 |
+  | PR | Enough current approvals and not held by `landing::held` | 2 |
   | PR | Otherwise | 3 (normal) |
 
   While verification has `failing_since`, required failures with names in its
@@ -864,3 +864,8 @@ retry, survive branch replacement, and recover from interruption like other
 attempts. Their job page and logs use the usual routes. Class 2 admission counts
 only class 1–3 queued attempts: a full lower-priority queue does not block probes;
 when class 1–3 capacity is full, the next event or sweep retries admission.
+
+`landing::held` uses repository `hold_while_failing`, default base, verification
+`failing_since`, the open repair ticket and repair PR links from the current
+store transaction. Held approved work is normal (3); repair work stays in 2.
+Verification success or repair ticket closure restores approved work to 2.

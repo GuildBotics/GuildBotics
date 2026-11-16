@@ -24,6 +24,7 @@ const REPO = {
   post_merge_jobs: [], required_checks: [],
   required_approvals: 1,
   auto_land: false,
+  hold_while_failing: false,
   ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
   upstream: null,
@@ -238,6 +239,7 @@ describe("settings", () => {
       post_merge_jobs: ["slow"], required_checks: ["test", "lint"],
       required_approvals: 2,
       auto_land: false,
+      hold_while_failing: false,
       ci_network: true, responder: null,
       labels: ["bug", "ui"],
     });
@@ -264,9 +266,10 @@ describe("settings", () => {
     expect(within(ci).getByText(says)).toBeInTheDocument();
     expect(within(ci).getByText(/keep it a draft to hold it/i)).toBeInTheDocument();
     await user.click(auto);
+    await user.click(within(ci).getByRole("switch", { name: /^Publish only repair PRs while main verification is failing/ }));
     await user.click(within(ci).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, auto_land: true });
+    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, auto_land: true, hold_while_failing: true });
   });
 
   it("sets the notification webhook, shows only its host, and removes it", async () => {

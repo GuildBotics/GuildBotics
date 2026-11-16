@@ -23,11 +23,29 @@ pub struct LandingView {
 
 fn reason(code: &str, message: impl Into<String>) -> LandingReason {
     LandingReason {
+        held: None,
         code: code.into(),
         message: message.into(),
         jobs: vec![],
         files: vec![],
     }
+}
+
+/// Store-only predicate shared by landing and CI admission in their transaction.
+pub fn held(r: &impl Rd, repo: &Repo, p: &Pull) -> AppResult<Option<crate::model::Held>> {
+    if !repo.hold_while_failing
+        || p.base != repo.default_branch
+        || crate::ci::verify::get(r, &repo.id)?.is_none_or(|v| v.failing_since.is_none())
+        || crate::repair::is_pull(r, p)?
+    {
+        return Ok(None);
+    }
+    Ok(
+        crate::repair::open_ticket(r, &repo.id)?.map(|t| crate::model::Held {
+            number: t.number,
+            assignee: t.assignee.map(|a| a.name),
+        }),
+    )
 }
 
 pub(crate) fn next(
@@ -139,7 +157,25 @@ pub async fn blockers(
     base: &str,
     e: &Landing,
 ) -> AppResult<Vec<LandingReason>> {
+    let hold = if repo.hold_while_failing {
+        let (r2, p2) = (repo.clone(), p.clone());
+        app.store.read(move |r| held(r, &r2, &p2)).await?
+    } else {
+        None
+    };
     let mut out = vec![];
+    if let Some(hold) = hold {
+        let mut why = reason(
+            "held",
+            format!(
+                "Repair #{}; assignee: {}.",
+                hold.number,
+                hold.assignee.as_deref().unwrap_or("unassigned")
+            ),
+        );
+        why.held = Some(hold);
+        out.push(why);
+    }
     if p.draft {
         out.push(reason("draft", "The pull request is a draft."));
     }
@@ -449,7 +485,7 @@ mod tests {
     fn fixture() -> (Repo, Pull, Landing) {
         let repo = serde_json::from_value(json!({
             "id":"r", "path":"acme/demo", "workspace":"w", "default_branch":"main", "protected_branches":[],
-            "required_checks":[], "post_merge_jobs":[], "required_approvals":0, "auto_land":true, "ci_network":false, "labels":[],
+            "required_checks":[], "post_merge_jobs":[], "required_approvals":0, "auto_land":true,"hold_while_failing":false, "ci_network":false, "labels":[],
             "upstream":null, "revision":1, "created_at":"now"
         })).unwrap();
         let pull = serde_json::from_value(json!({
