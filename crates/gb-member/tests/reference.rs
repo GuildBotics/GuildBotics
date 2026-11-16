@@ -243,6 +243,13 @@ fn repair_reference_explains_retry_priority_and_recovery() {
         "reverting",
         "deterministic",
         "next patrol",
+        "Hint:",
+        "do not change the assignee",
+        "first failing commit",
+        "outside the range",
+        "do not split",
+        "same repair PR",
+        "CI configuration",
         "no limit",
     ] {
         assert!(text.contains(term), "{term}");

@@ -1583,3 +1583,14 @@ operation closes them. Repair ticket creation and closure also publish a
 `verification` event so clients refetch the linked ticket.
 
 Board cards accept `repair=true` to select repair tickets independently of assignee (with the usual state and lane filters).
+
+### Repair hint comments
+
+Branvil adds diagnostic `Hint:` comments to open repair tickets when failed-job
+narrowing finds the first failing commit, fails again at the last verified
+commit, or observes inconsistent passing/failing results. Comments include
+`meta: {"repair_hint": {"sha": "<failed commit>", "job": "<job name>"}}` and
+are unique per failed commit and job on that ticket. They do not change the
+assignee, lane, rank, or repair record. Conclusions available before creation
+are attached in the ticket creation transaction; closed tickets receive none.
+Undetermined and abandoned searches produce no hint.

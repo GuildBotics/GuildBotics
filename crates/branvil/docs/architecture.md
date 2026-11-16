@@ -704,3 +704,23 @@ sweep/restart reports while allowing each explicit verification retry to report.
 A shared repair-PR predicate uses the open repair ticket and local ticket links
 for API responses, CI priority, full head-job selection and landing. Repair PRs
 run ahead of ordinary approved heads in class 2 and require all jobs to succeed.
+
+### Diagnostic repair hints
+
+The transaction recording a narrowing conclusion calls `repair::hint` for
+`found`, `outside`, and `inconsistent`; `undetermined` and `abandoned` add nothing.
+With an open repair ticket it inserts a Branvil comment, deduplicated by
+`meta.repair_hint`'s failed `sha` and `job`. Without one it stores nothing.
+Ticket creation reads each failed job's conclusion at the latest verified commit
+inside the same transaction and attaches the same comments after the body.
+No schema or repair-state change is needed, and hints never move or reassign work.
+The first failing commit is mapped to a local PR by `merge_sha`; inconsistent
+observations include their job-page links.
+
+The range table distinguishes paths reuse as `reused <sha7> (same contents of
+paths)` while tree reuse remains success. If at least one PR is in the range and
+all its heads skipped a failed job by paths, reused it by paths, or lack a record,
+the body asks the repairer to include causal files outside the job's paths in
+`.branvil/ci.toml`. Actual executions, tree reuse, and post-merge-only skips
+suppress this hint for that job. The decision covers the full range even when
+the displayed table is truncated.

@@ -74,7 +74,6 @@ pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
         .flat_map(index)
         .collect())
 }
-#[allow(dead_code)] // Repair-hint consumer is added by ticket #239.
 pub fn concluded(r: &impl Rd, repo: &str, base: &str, job: &str) -> AppResult<Option<Narrowing>> {
     Ok(
         r.get::<Narrowing>(store::CI_NARROWINGS, &key(repo, base, job))?
@@ -106,7 +105,11 @@ fn conclude(
     n.conclusion = state.into();
     n.reason = reason;
     n.finished_at = Some(now.into());
-    put(w, n)
+    put(w, n)?;
+    if let Some(hint) = crate::repair::Hint::from_conclusion(n) {
+        crate::repair::hint(w, &n.repo, &n.failed_sha, &n.job, hint)?;
+    }
+    Ok(())
 }
 pub(super) fn start(w: &Wtx, repo: &str, v: &Verification, now: &str) -> AppResult<()> {
     let Some(base) = &v.base else {
@@ -436,5 +439,31 @@ mod tests {
             decide(&sample(&[&["failure"], &["failure"]])),
             Next::Probe(0)
         ));
+    }
+    #[tokio::test]
+    async fn conclusion_transaction_attaches_hint_and_resolves_local_pull() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(&dir.path().join("test.redb"), 1 << 20, 1).unwrap();
+        store.write(|w| {
+            let (_temp, _ci, mut repo) = super::super::tests::setup();
+            repo.id = "repo".into();
+            w.put(store::REPOS, &crate::model::Repo::key(&repo.id), &repo)?;
+            let t: crate::model::Ticket = serde_json::from_value(serde_json::json!({
+                "repo":"repo","workspace":"ws","number":1,"title":"repair","body":"","mentions":[],"state":"open","author":"branvil","labels":[],"interactive":false,"lane":"ready","rank":"0|a","blocked_by":[],"created_at":"0","updated_at":"0","revision":1,"repair":{"jobs":["test"],"reported":"cn"}
+            })).unwrap();
+            crate::domain::tickets::write_ticket(w, None, &t)?;
+            let p: crate::model::Pull = serde_json::from_value(serde_json::json!({"repo":"repo","number":2,"title":"change","body":"","state":"closed","merged":true,"draft":false,"author":"agent","head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"created_at":"0","updated_at":"0","revision":1,"merge_sha":"c1"})).unwrap();
+            w.put(store::PULLS, &crate::model::Pull::key("repo", 2), &p)?;
+            let mut n = sample(&[&["success"], &["failure"]]);
+            n.boundary = Some(("c0".into(), "c1".into()));
+            conclude(w, &mut n, "found", None, "now")?;
+            assert_eq!(concluded(w, "repo", "c0", "test")?.unwrap().conclusion, "found");
+            let target = crate::model::Target::Ticket { repo: "repo".into(), number: 1 };
+            let comments = crate::domain::tickets::comments_of(w, &target)?;
+            assert_eq!(comments.len(), 1);
+            assert!(comments[0].body.contains("[!2](/acme/demo/-/pulls/2) by agent"));
+            assert!(comments[0].body.contains("the assignment stays"));
+            Ok(())
+        }).await.unwrap();
     }
 }

@@ -76,12 +76,12 @@ pub fn passed(w: &Wtx, repo: &str, sha: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn short(sha: &str) -> &str {
+pub(super) fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
 
 // Prevent evidence originating in commit subjects, titles or logs from making mentions.
-fn text(s: &str) -> String {
+pub(super) fn text(s: &str) -> String {
     s.replace('@', "&#64;")
         .replace('|', "&#124;")
         .replace(['\r', '\n'], " ")
@@ -203,7 +203,8 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
         "\n| --- | --- | --- |{}\n",
         " --- |".repeat(pending.failures.len())
     ));
-    for sha in commits.iter().take(100) {
+    let mut unrun = vec![!matched.is_empty(); pending.failures.len()];
+    for (position, sha) in commits.iter().enumerate() {
         let pull = matched.iter().find(|p| p.merge_sha.as_ref() == Some(sha));
         let cells = if let Some(p) = pull {
             format!(
@@ -223,7 +224,9 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
                 text(author.trim())
             )
         };
-        body.push_str(&format!("| {} | {cells} |", commit_link(sha)));
+        if position < 100 {
+            body.push_str(&format!("| {} | {cells} |", commit_link(sha)));
+        }
         let (id, head) = (repo.id.clone(), pull.and_then(|p| p.merged_head.clone()));
         let attempts = app
             .store
@@ -240,28 +243,68 @@ async fn evidence(app: &App, repo: &Repo, pending: &Pending) -> AppResult<(Strin
                 queue::current_attempts(r, &id, &head, &jobs)
             })
             .await?;
-        for f in &pending.failures {
-            let result = attempts
-                .iter()
-                .find(|a| a.job.name == f.name)
-                .map_or("No record", |a| {
-                    if let Some(skip) = &a.path_skip {
-                        match skip.reason {
-                            queue::SkipReason::PostMerge => "Post-merge only",
-                            queue::SkipReason::Paths => "Skipped by paths",
-                        }
-                    } else {
-                        a.conclusion.as_deref().unwrap_or("No conclusion")
-                    }
-                });
-            body.push_str(&format!(" {} |", text(result)));
+        for (i, f) in pending.failures.iter().enumerate() {
+            let attempt = attempts.iter().find(|a| a.job.name == f.name);
+            let attempt = attempt.cloned();
+            let (result, missing) = app
+                .store
+                .read(move |r| head_result(r, attempt.as_ref()))
+                .await?;
+            if pull.is_some() {
+                unrun[i] &= missing;
+            }
+            if position < 100 {
+                body.push_str(&format!(" {} |", text(&result)));
+            }
         }
-        body.push('\n');
+        if position < 100 {
+            body.push('\n');
+        }
+    }
+    let jobs = pending
+        .failures
+        .iter()
+        .zip(unrun)
+        .filter(|(_, missing)| *missing)
+        .map(|(f, _)| text(&f.name))
+        .collect::<Vec<_>>();
+    if !jobs.is_empty() {
+        body.push_str(&format!("\nNo pull request's head in the range ran {}: they skipped it because no file matching its paths changed, reused a result with the same contents of its paths, or have no record. If the failure comes from a file outside the job's paths, add that file to the job's paths in .branvil/ci.toml as part of the repair.\n",jobs.join(", ")));
     }
     if commits.len() > 100 {
         body.push_str(&format!("\n{} more commits.\n", commits.len() - 100));
     }
     Ok((body, matched))
+}
+
+fn head_result(r: &impl Rd, a: Option<&queue::Attempt>) -> AppResult<(String, bool)> {
+    let Some(a) = a else {
+        return Ok(("No record".into(), true));
+    };
+    if let Some(skip) = &a.path_skip {
+        return Ok(match skip.reason {
+            queue::SkipReason::Paths => ("Skipped by paths".into(), true),
+            queue::SkipReason::PostMerge => ("Post-merge only".into(), false),
+        });
+    }
+    if a.conclusion.as_deref() == Some("success") && a.reused_from.is_some() {
+        let source = queue::source_of(r, a)?;
+        if source.basis == Some(queue::Basis::Paths) {
+            return Ok((
+                format!(
+                    "reused {} (same contents of paths)",
+                    short(&source.attempt.sha)
+                ),
+                true,
+            ));
+        }
+    }
+    Ok((
+        a.conclusion
+            .clone()
+            .unwrap_or_else(|| "No conclusion".into()),
+        false,
+    ))
 }
 
 fn create(
@@ -324,6 +367,7 @@ fn create(
         (responder.member, reason)
     };
     body.push_str(&format!("\n## Assignee\n\n{}: {reason}\n", text(&name)));
+    body.push_str("\nHints from running the failed jobs on the commits in between are added as comments. They do not change the assignee.\n");
     let now = crate::util::now();
     let t = Ticket {
         repo: repo.id.clone(),
@@ -365,6 +409,15 @@ fn create(
         revision: 1,
     };
     tickets::write_ticket(w, None, &t)?;
+    if let Some(v) = verify::latest_verified(w, &repo.id)? {
+        for f in &pending.failures {
+            if let Some(n) = crate::ci::narrow::concluded(w, &repo.id, &v.sha, &f.name)?
+                && let Some(hint) = super::Hint::from_conclusion(&n)
+            {
+                super::hint(w, &repo.id, &n.failed_sha, &f.name, hint)?;
+            }
+        }
+    }
     Ok(t)
 }
 
@@ -518,4 +571,171 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         app.events.publish("verification", &path, "");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::narrow::Narrowing;
+    use crate::model::{Comment, Member};
+    use serde_json::json;
+
+    fn repo() -> Repo {
+        serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":[],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"ci_network":false,"labels":[],"revision":1,"created_at":"0"})).unwrap()
+    }
+    fn conclusion(state: &str) -> Narrowing {
+        serde_json::from_value(json!({"repo":"repo","base":"aaaaaaa0","job":"test","failed_sha":"fffffff0","commits":["aaaaaaa0","bbbbbbb0"],"history_ready":true,"results":[[{"attempt":"pass","outcome":"success","probe":true}],[{"attempt":"fail","outcome":"failure","probe":true}]],"conclusion":state,"boundary":["aaaaaaa0","bbbbbbb0"],"started_at":"0"})).unwrap()
+    }
+    fn comments(r: &impl Rd, t: &Ticket) -> Vec<Comment> {
+        r.prefix_all(
+            store::COMMENTS,
+            &Target::Ticket {
+                repo: t.repo.clone(),
+                number: t.number,
+            }
+            .prefix(),
+        )
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn hints_before_and_after_creation_are_unique_and_leave_ticket_unchanged() {
+        for state in [
+            "found",
+            "outside",
+            "inconsistent",
+            "undetermined",
+            "abandoned",
+        ] {
+            for before in [true, false] {
+                let dir = tempfile::tempdir().unwrap();
+                let store = store::Store::open(&dir.path().join("test.redb"), 1 << 20, 1).unwrap();
+                store.write(move |w| {
+                    let repo = repo();
+                    w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
+                    let m: Member = serde_json::from_value(json!({"name":"member","display_name":"Member","kind":"agent","accounts":[],"reviewers":[],"created_at":"0"})).unwrap();
+                    w.put(store::MEMBERS, &Member::key(&m.name), &m)?;
+                    let n = conclusion(state);
+                    // No open ticket: no comment and no extra repair record.
+                    if let Some(h) = super::super::Hint::from_conclusion(&n) {
+                        super::super::hint(w, &repo.id, &n.failed_sha, &n.job, h)?;
+                    }
+                    assert!(w.prefix_all::<Comment>(store::COMMENTS, &[])?.is_empty());
+                    let save = |w: &Wtx| -> AppResult<()> {
+                        w.put(store::CI_NARROWINGS, &Key::new().s("repo").s(&n.base).s(&n.job).bytes(), &n)?;
+                        w.put(store::CI_VERIFICATIONS, &Key::new().s("repo").bytes(), &json!({"sha":n.failed_sha,"base":n.base,"state":"failed","started_at":"0","failed_jobs":[],"last_verified":{"sha":n.base,"at":"0"}}))
+                    };
+                    if before { save(w)?; }
+                    let pending = Pending { repo: repo.id.clone(), sha: n.failed_sha.clone(), failures: vec![verify::FailedJob { name: n.job.clone(), attempt_id: None, details: None }] };
+                    let t = create(w, &repo, &pending, "Evidence".into(), &[])?;
+                    assert!(t.body.contains("Hints from running the failed jobs"));
+                    assert_eq!(comments(w, &t).len(), usize::from(before && super::super::Hint::from_conclusion(&n).is_some()));
+                    if !before { save(w)?; }
+                    for _ in 0..2 {
+                        if let Some(h) = super::super::Hint::from_conclusion(&n) {
+                            super::super::hint(w, &repo.id, &n.failed_sha, &n.job, h)?;
+                        }
+                    }
+                    let cs = comments(w, &t);
+                    assert_eq!(cs.len(), usize::from(super::super::Hint::from_conclusion(&n).is_some()));
+                    if let Some(c) = cs.first() {
+                        assert_eq!(c.author, "branvil");
+                        assert_eq!(c.meta, Some(json!({"repair_hint":{"sha":n.failed_sha,"job":"test"}})));
+                        match state {
+                            "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this Branvil)")),
+                            "outside" => assert!(c.body.contains("also fails at aaaaaaa, the last verified commit")),
+                            "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/acme/demo/-/jobs/pass), bbbbbbb: failure [Job](/acme/demo/-/jobs/fail)")),
+                            _ => unreachable!(),
+                        }
+                    }
+                    if let Some(mut c) = cs.first().cloned() {
+                        c.meta.as_mut().unwrap()["repair_hint"]["extra"] = json!(true);
+                        let target = Target::Ticket { repo: repo.id.clone(), number: t.number };
+                        w.put(store::COMMENTS, &target.comment_key(c.seq), &c)?;
+                        super::super::hint(w, &repo.id, &n.failed_sha, &n.job, super::super::Hint::FailsOnVerified { sha: n.base.clone() })?;
+                        assert_eq!(comments(w, &t).len(), cs.len());
+                    }
+                    let saved: Ticket = w.get(store::TICKETS, &Ticket::key(&repo.id, t.number))?.unwrap();
+                    assert_eq!(serde_json::to_value(&t).unwrap(), serde_json::to_value(&saved).unwrap());
+                    let closed = Ticket { state: "closed".into(), ..t.clone() };
+                    tickets::write_ticket(w, Some(&t), &closed)?;
+                    if let Some(h) = super::super::Hint::from_conclusion(&n) {
+                        super::super::hint(w, &repo.id, "another failure", &n.job, h)?;
+                    }
+                    assert_eq!(comments(w, &t).len(), cs.len());
+                    Ok(())
+                }).await.unwrap();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn head_evidence_distinguishes_execution_paths_tree_and_post_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(&dir.path().join("test.redb"), 1 << 20, 1).unwrap();
+        store
+            .write(|w| {
+                let jobs = crate::ci::pipeline::parse(
+                    "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\npaths=['src/**']\n",
+                )
+                .unwrap();
+                for (sha, tree) in [("source0", "tree1"), ("head000", "tree2")] {
+                    queue::register(
+                        w,
+                        queue::Registration {
+                            order: vec![],
+                            selection: None,
+                            repo: "repo".into(),
+                            repo_path: "acme/demo".into(),
+                            sha: sha.into(),
+                            tree: Some(tree.into()),
+                            branch: sha.into(),
+                            protected: false,
+                            pipeline: queue::PipelineState::Jobs { jobs: jobs.clone() },
+                            network: false,
+                            inputs: Default::default(),
+                        },
+                        100,
+                        "0",
+                    )?;
+                }
+                let mut source = queue::attempts_of(w, "repo", "source0")?.remove(0);
+                source.status = "completed".into();
+                source.conclusion = Some("success".into());
+                w.put(
+                    store::CI_ATTEMPTS,
+                    &queue::Attempt::key(&source.id),
+                    &source,
+                )?;
+                let mut a = queue::attempts_of(w, "repo", "head000")?.remove(0);
+                assert_eq!(head_result(w, None)?, ("No record".into(), true));
+                for outcome in ["success", "failure", "timed_out"] {
+                    a.conclusion = Some(outcome.into());
+                    assert_eq!(head_result(w, Some(&a))?, (outcome.into(), false));
+                }
+                for (reason, label, missing) in [
+                    (queue::SkipReason::Paths, "Skipped by paths", true),
+                    (queue::SkipReason::PostMerge, "Post-merge only", false),
+                ] {
+                    a.path_skip = Some(queue::PathSkip {
+                        reason,
+                        paths: vec![],
+                        bases: vec![],
+                    });
+                    assert_eq!(head_result(w, Some(&a))?, (label.into(), missing));
+                }
+                a.path_skip = None;
+                a.conclusion = Some("success".into());
+                a.reused_from = Some(source.id);
+                assert_eq!(
+                    head_result(w, Some(&a))?,
+                    ("reused source0 (same contents of paths)".into(), true)
+                );
+                let mut run = queue::get_run(w, "repo", "head000")?.unwrap();
+                run.tree = Some("tree1".into());
+                queue::put_run(w, &run)?;
+                assert_eq!(head_result(w, Some(&a))?, ("success".into(), false));
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
 }
