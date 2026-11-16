@@ -813,6 +813,15 @@ async fn assignments_evidence_and_lifecycle() {
             assert!(t.body.contains("Post-merge only"));
         }
         assert!(t.body.contains("invalid pipeline &#64;alice"));
+        assert!(t.body.contains("Hints from running the failed jobs"));
+        let has_pr = t.body.contains("/pulls/");
+        assert_eq!(
+            t.body
+                .contains("No pull request's head in the range ran paths, missing:"),
+            has_pr
+        );
+        assert!(!t.body.contains("range ran post"));
+        assert!(!t.body.contains("range ran test"));
         assert!(t.body.contains("No record"));
         assert!(t.body.contains("[Job]("));
         assert!(t.body.contains("[Commit]("));
@@ -961,5 +970,88 @@ async fn assignments_evidence_and_lifecycle() {
             })
             .await
             .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn repair_body_reports_paths_reuse_but_accepts_tree_reuse_and_execution() {
+    for mode in ["paths", "tree", "executed", "one_runs"] {
+        let (_temp, app, repo, work, base) = failure_fixture().await;
+        let head = commit_all(&app.git, &work, "head").await;
+        let merge = commit_all(&app.git, &work, "merge").await;
+        app.git
+            .run_ok(
+                None,
+                &[
+                    "-C",
+                    work.to_str().unwrap(),
+                    "push",
+                    "-q",
+                    app.git.repo_dir(&repo.path).to_str().unwrap(),
+                    "HEAD:refs/heads/main",
+                ],
+            )
+            .await
+            .unwrap();
+        let (id, path, b, h, m) = (
+            repo.id.clone(),
+            repo.path.clone(),
+            base.clone(),
+            head.clone(),
+            merge.clone(),
+        );
+        app.store.write(move |w| {
+            let old = repair::open_ticket(w, &id)?.unwrap();
+            let mut closed = old.clone(); closed.state = "closed".into();
+            crate::domain::tickets::write_ticket(w, Some(&old), &closed)?;
+            let jobs = super::pipeline::parse("[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\npaths=['src/**']\n[[jobs]]\nname='other'\nimage='alpine'\ncommands=['true']\n").unwrap();
+            for (sha, tree) in [(&b, "source-tree"), (&h, if mode == "tree" {"source-tree"} else {"head-tree"})] {
+                queue::register(w, queue::Registration {order:vec![],selection:None,repo:id.clone(),repo_path:path.clone(),sha:sha.clone(),tree:Some(tree.into()),branch:sha.clone(),protected:false,pipeline:queue::PipelineState::Jobs{jobs:jobs.clone()},network:false,inputs:Default::default()},100,"0")?;
+            }
+            for mut a in queue::attempts_of(w, &id, &b)? {
+                a.status="completed".into(); a.conclusion=Some("success".into());
+                w.put(store::CI_ATTEMPTS, &queue::Attempt::key(&a.id), &a)?;
+            }
+            let source = queue::attempts_of(w, &id, &b)?.into_iter().find(|a| a.job.name=="test").unwrap();
+            for mut a in queue::attempts_of(w, &id, &h)? {
+                a.status="completed".into(); a.conclusion=Some("success".into());
+                if mode != "executed" && a.job.name=="test" { a.reused_from=Some(source.id.clone()); }
+                w.put(store::CI_ATTEMPTS, &queue::Attempt::key(&a.id), &a)?;
+            }
+            let mut p = super::tests::open_pull(&id, 10, "feature", "main");
+            p.merged=true; p.state="closed".into(); p.author="owner".into(); p.merge_sha=Some(m.clone()); p.merged_head=Some(h.clone());
+            w.put(store::PULLS, &Pull::key(&id, p.number), &p)?;
+            if mode == "one_runs" {
+                p.number=11; p.merge_sha=Some(h); p.merged_head=Some(b.clone());
+                w.put(store::PULLS, &Pull::key(&id, p.number), &p)?;
+            }
+            let failures = vec![test_failure(), FailedJob{name:"other".into(),attempt_id:None,details:None}];
+            let v = Verification {sha:m.clone(),base:Some(b.clone()),state:"failed".into(),started_at:"0".into(),finished_at:None,failed_jobs:failures.clone(),failing_since:Some(m.clone()),last_verified:Some(Verified{sha:b,at:"0".into()})};
+            w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v)?;
+            repair::failed(w, &id, &m, &failures)
+        }).await.unwrap();
+        repair::sweep(&app).await.unwrap();
+        let id = repo.id.clone();
+        let ticket = app
+            .store
+            .read(move |r| repair::open_ticket(r, &id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ticket
+                .body
+                .contains("No pull request's head in the range ran test:"),
+            mode == "paths",
+            "{mode}: {}",
+            ticket.body
+        );
+        assert!(!ticket.body.contains("range ran other"));
+        assert_eq!(
+            ticket
+                .body
+                .contains(&format!("reused {} (same contents of paths)", &base[..7])),
+            ["paths", "one_runs"].contains(&mode)
+        );
     }
 }

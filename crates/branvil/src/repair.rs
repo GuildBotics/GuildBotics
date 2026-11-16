@@ -1,8 +1,10 @@
 //! Repair tickets and their default assignee.
+mod hints;
 mod tickets;
 use crate::error::{AppError, AppResult};
 use crate::model::{Member, MemberKind, Pull, Repo};
 use crate::store::{self, Rd};
+pub use hints::{Hint, hint};
 pub use tickets::{failed, open_ticket, passed, sweep};
 
 /// One predicate for API, scheduling, selection and landing.
