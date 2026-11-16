@@ -289,7 +289,7 @@ export interface Landing {
   told: string[];
   notified_at: string | null;
   error: string | null;
-  blockers: { held?: { number: number; assignee: string | null } | null; code: string; message: string; jobs: string[]; files: string[] }[];
+  blockers: { held?: { number: number; assignee: string | null } | null; code: string; message: string; jobs: string[]; files: string[]; count?: number; required?: number }[];
   next: LandingNext;
   host_url: string | null;
   next_detail: string | null;

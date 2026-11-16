@@ -23,6 +23,8 @@ pub struct LandingView {
 
 fn reason(code: &str, message: impl Into<String>) -> LandingReason {
     LandingReason {
+        count: None,
+        required: None,
         held: None,
         code: code.into(),
         message: message.into(),
@@ -225,24 +227,34 @@ pub async fn blockers(
             ));
         }
     }
-    if head.is_empty() || pull_head_checks(app, repo, p, head).await? != HeadChecks::Passed {
-        out.push(reason(
+    let (check_state, jobs) = if head.is_empty() {
+        (HeadChecks::Running, repo.required_checks.clone())
+    } else {
+        pull_head_check_details(app, repo, p, head).await?
+    };
+    if head.is_empty() || check_state != HeadChecks::Passed {
+        let mut why = reason(
             "head_checks",
             format!(
                 "Required head checks have not succeeded: {}.",
                 repo.required_checks.join(", ")
             ),
-        ));
+        );
+        why.jobs = jobs;
+        out.push(why);
     }
     let approved = pulls::approvals(&pulls::read_review_states(app, p, head).await?);
     if approved < repo.required_approvals {
-        out.push(reason(
+        let mut why = reason(
             "approvals",
             format!(
                 "Approvals of {head}: {approved} / {} required.",
                 repo.required_approvals
             ),
-        ));
+        );
+        why.count = Some(approved);
+        why.required = Some(repo.required_approvals);
+        out.push(why);
     }
     if awaits_answer(app, repo, p).await? {
         out.push(reason(
@@ -400,6 +412,15 @@ pub(crate) async fn pull_head_checks(
     p: &Pull,
     head: &str,
 ) -> AppResult<HeadChecks> {
+    Ok(pull_head_check_details(app, repo, p, head).await?.0)
+}
+
+async fn pull_head_check_details(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+) -> AppResult<(HeadChecks, Vec<String>)> {
     let p = p.clone();
     let repair = app
         .store
@@ -407,10 +428,8 @@ pub(crate) async fn pull_head_checks(
         .await?;
     let checks = app.ci.head_checks(repo, head).await?;
     let mut required = repo.clone();
+    let mut waiting = repair && !checks.run_registered;
     if repair {
-        if !checks.run_registered {
-            return Ok(HeadChecks::Running);
-        }
         required
             .required_checks
             .extend(checks.checks.iter().map(|c| c.name.clone()));
@@ -420,10 +439,38 @@ pub(crate) async fn pull_head_checks(
                     .as_ref()
                     .is_some_and(|s| s.basis == crate::ci::queue::Basis::Paths)
         }) {
-            return Ok(HeadChecks::Running);
+            waiting = true;
         }
     }
-    Ok(head_checks(&required, &checks.checks))
+    let jobs = missing_head_checks(&required, &checks.checks, repair);
+    Ok((
+        if waiting {
+            HeadChecks::Running
+        } else {
+            head_checks(&required, &checks.checks)
+        },
+        jobs,
+    ))
+}
+
+fn missing_head_checks(repo: &Repo, checks: &[Check], repair: bool) -> Vec<String> {
+    let mut jobs = vec![];
+    for name in &repo.required_checks {
+        let check = checks.iter().find(|c| c.name == *name);
+        if check.is_none_or(|c| {
+            c.status != "completed"
+                || !c.head_satisfied()
+                || repair
+                    && (c.path_skip.is_some()
+                        || c.reused_from
+                            .as_ref()
+                            .is_some_and(|s| s.basis == crate::ci::queue::Basis::Paths))
+        }) && !jobs.contains(name)
+        {
+            jobs.push(name.clone());
+        }
+    }
+    jobs
 }
 
 pub(crate) fn head_checks(repo: &Repo, checks: &[Check]) -> HeadChecks {
@@ -508,6 +555,62 @@ mod tests {
             "url":"https://host.test/pulls/2", "state":"open", "pushed":"head", "sent_title":"Feature", "sent_body":"",
             "sent_state":"open", "checks":[], "checks_registered_by":null, "checks_settled":true, "published_at":"now", "error":null, "stopped":null, "auto":true
         })).unwrap()
+    }
+
+    #[test]
+    fn unmet_jobs_exclude_success_and_service_skips() {
+        let (mut repo, _, _) = fixture();
+        repo.required_checks = [
+            "failed",
+            "running",
+            "missing",
+            "success",
+            "paths",
+            "post_merge",
+            "cancelled",
+            "skipped",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let check = |name: &str, status: &str, conclusion: Option<&str>| Check {
+            name: name.into(),
+            status: status.into(),
+            conclusion: conclusion.map(str::to_string),
+            ..Check::default()
+        };
+        let mut checks = vec![
+            check("failed", "completed", Some("failure")),
+            check("running", "in_progress", None),
+            check("success", "completed", Some("success")),
+            check("paths", "completed", Some("skipped")),
+            check("post_merge", "completed", Some("skipped")),
+            check("cancelled", "completed", Some("cancelled")),
+            check("skipped", "completed", Some("skipped")),
+            check("optional", "completed", Some("failure")),
+        ];
+        for (i, why) in [(3, "paths"), (4, "post_merge")] {
+            checks[i].path_skip = Some(
+                serde_json::from_value(json!({"reason": why, "paths": [], "bases": []})).unwrap(),
+            );
+        }
+        assert_eq!(
+            missing_head_checks(&repo, &checks, false),
+            ["failed", "running", "missing", "cancelled", "skipped"]
+        );
+        assert_eq!(
+            missing_head_checks(&repo, &checks, true),
+            [
+                "failed",
+                "running",
+                "missing",
+                "paths",
+                "post_merge",
+                "cancelled",
+                "skipped"
+            ]
+        );
+        repo.required_checks.clear();
+        assert!(missing_head_checks(&repo, &checks, false).is_empty());
     }
 
     #[test]
