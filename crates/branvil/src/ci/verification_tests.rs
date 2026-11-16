@@ -348,48 +348,95 @@ async fn verification_interruptions_and_database_restart_keep_the_same_running_r
 
 #[tokio::test]
 async fn reconciliation_isolates_verification_and_repository_errors() {
-    let f = Fixture::new(&["lint"]).await;
-    let app = tests::app(&f.temp, &f.ci);
-    let dir = f.ci.inner.git.repo_dir(&f.repo.path);
-    f.ci.inner
-        .git
-        .update_ref(&dir, "refs/heads/feature", &f.sha, ZERO_SHA, "test")
-        .await
-        .unwrap();
-    let mut missing = f.repo.clone();
-    missing.id = "repo_0".into();
-    missing.path = "acme/missing".into();
-    f.ci.inner
-        .store
-        .write_sync(|w| {
-            w.put(store::REPOS, &Repo::key(&missing.id), &missing)?;
-            tests::put_pull(w, &tests::open_pull(&f.repo.id, 1, "feature", "main"))?;
-            w.put(
-                store::CI_VERIFICATIONS,
-                &Key::new().s(&f.repo.id).bytes(),
-                &verify::Verification {
-                    sha: "missing-commit".into(),
-                    base: None,
-                    state: "running".into(),
-                    started_at: util::now(),
-                    finished_at: None,
-                    failed_jobs: vec![],
-                    failing_since: None,
-                    last_verified: None,
-                },
-            )
-        })
-        .unwrap();
-    assert!(f.ci.advance_verification(&f.repo, true).await.is_err());
-    f.ci.reconcile(&app).await.unwrap();
-    let run =
+    for (verification_error, narrowing_error) in [(true, false), (false, true), (true, true)] {
+        let f = Fixture::new(&["lint"]).await;
+        let app = tests::app(&f.temp, &f.ci);
+        let dir = f.ci.inner.git.repo_dir(&f.repo.path);
+        f.ci.inner
+            .git
+            .update_ref(&dir, "refs/heads/feature", &f.sha, ZERO_SHA, "test")
+            .await
+            .unwrap();
+        let mut missing = f.repo.clone();
+        missing.id = "repo_0".into();
+        missing.path = "acme/missing".into();
         f.ci.inner
             .store
-            .read_sync(|r| queue::get_run(r, &f.repo.id, &f.sha))
-            .unwrap()
+            .write_sync(|w| {
+                w.put(store::REPOS, &Repo::key(&missing.id), &missing)?;
+                tests::put_pull(w, &tests::open_pull(&f.repo.id, 1, "feature", "main"))?;
+                w.put(
+                    store::CI_VERIFICATIONS,
+                    &Key::new().s(&f.repo.id).bytes(),
+                    &verify::Verification {
+                        sha: if verification_error {
+                            "missing-commit".into()
+                        } else {
+                            f.sha.clone()
+                        },
+                        base: None,
+                        state: if verification_error {
+                            "running"
+                        } else {
+                            "passed"
+                        }
+                        .into(),
+                        started_at: util::now(),
+                        finished_at: None,
+                        failed_jobs: vec![],
+                        failing_since: None,
+                        last_verified: None,
+                    },
+                )?;
+                if narrowing_error {
+                    let v = verify::Verification {
+                        sha: f.sha.clone(),
+                        base: Some("missing-base".into()),
+                        state: "failed".into(),
+                        started_at: util::now(),
+                        finished_at: None,
+                        failed_jobs: vec![verify::FailedJob {
+                            name: "lint".into(),
+                            attempt_id: Some("failed-attempt".into()),
+                            details: None,
+                        }],
+                        failing_since: None,
+                        last_verified: None,
+                    };
+                    narrow::start(w, &f.repo.id, &v, &util::now())?;
+                }
+                Ok(())
+            })
             .unwrap();
-    assert_eq!(run.branches, vec!["feature"]);
-    assert_eq!(f.record().state, "running");
+        assert_eq!(
+            f.ci.advance_verification(&f.repo, true).await.is_err(),
+            verification_error
+        );
+        assert_eq!(
+            f.ci.advance_narrowings(&f.repo).await.is_err(),
+            narrowing_error
+        );
+        f.ci.reconcile(&app).await.unwrap();
+        let run =
+            f.ci.inner
+                .store
+                .read_sync(|r| queue::get_run(r, &f.repo.id, &f.sha))
+                .unwrap()
+                .unwrap();
+        assert_eq!(run.branches, vec!["feature"]);
+        assert_eq!(
+            f.record().state,
+            if verification_error {
+                "running"
+            } else {
+                "passed"
+            }
+        );
+        assert_eq!(
+            f.ci.advance_narrowings(&f.repo).await.is_err(),
+            narrowing_error
+        );
+    }
 }
 
 /// Actual Git history, normal checks, persistent probes, and a restarted controller.
@@ -513,7 +560,7 @@ async fn narrowing_outside_inconsistent_undetermined_dedup_and_abandonment() {
         let record = f.record();
         f.ci.inner
             .store
-            .write_sync(|w| narrow::start(w, &f.repo.id, &record, &commits, &util::now()))
+            .write_sync(|w| narrow::start(w, &f.repo.id, &record, &util::now()))
             .unwrap();
         assert_eq!(
             f.ci.inner
@@ -629,4 +676,88 @@ async fn narrowing_missing_job_is_not_run_and_boundary_disagreement_keeps_attemp
                 .is_some()
         );
     }
+}
+
+#[tokio::test]
+async fn diagnostic_history_failure_preserves_failed_verification_and_repair() {
+    let f = Fixture::new(&["lint"]).await;
+    f.advance().await;
+    for _ in 0..=queue::MAX_AUTO_RETRIES {
+        f.finish(f.claim(), "failure");
+    }
+    let mut record = f.record();
+    record.base = Some("missing-base".into());
+    f.ci.inner
+        .store
+        .write_sync(|w| {
+            w.put(
+                store::CI_VERIFICATIONS,
+                &Key::new().s(&f.repo.id).bytes(),
+                &record,
+            )
+        })
+        .unwrap();
+    f.advance().await;
+    assert_eq!(f.record().state, "failed");
+    assert!(
+        f.ci.inner
+            .store
+            .read_sync(|r| r.get_raw(
+                store::REPAIR_PENDING,
+                &Key::new().s(&f.repo.id).s(&f.sha).bytes()
+            ))
+            .unwrap()
+            .is_some()
+    );
+    assert!(f.ci.advance_narrowings(&f.repo).await.is_err());
+    assert!(
+        f.ci.inner
+            .store
+            .read_sync(|r| narrow::concluded(r, &f.repo.id, "missing-base", "lint"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(f.record().state, "failed");
+}
+
+#[tokio::test]
+async fn narrowing_history_retries_without_losing_failure_evidence() {
+    let (f, commits) = failed_narrowing().await;
+    let snapshot = || {
+        f.ci.inner
+            .store
+            .read_sync(|r| r.prefix_all::<narrow::Narrowing>(store::CI_NARROWINGS, &[]))
+            .unwrap()
+            .remove(0)
+    };
+    let before = snapshot();
+    assert!(!before.history_ready);
+    let evidence = before.results.last().unwrap().clone();
+    assert_eq!(evidence.len(), (queue::MAX_AUTO_RETRIES + 1) as usize);
+    let dir = f.ci.inner.git.repo_dir(&f.repo.path);
+    let unavailable = f.temp.path().join("unavailable.git");
+    std::fs::rename(&dir, &unavailable).unwrap();
+    let failed = f.ci.advance_narrowings(&f.repo).await;
+    std::fs::rename(&unavailable, &dir).unwrap();
+    assert!(failed.is_err());
+    assert_eq!(
+        serde_json::to_value(snapshot()).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    let f = f.restart();
+    f.ci.advance_narrowings(&f.repo).await.unwrap();
+    let after =
+        f.ci.inner
+            .store
+            .read_sync(|r| r.prefix_all::<narrow::Narrowing>(store::CI_NARROWINGS, &[]))
+            .unwrap()
+            .remove(0);
+    assert!(after.history_ready);
+    assert_eq!(after.commits, commits);
+    assert_eq!(
+        serde_json::to_value(after.results.last().unwrap()).unwrap(),
+        serde_json::to_value(evidence).unwrap()
+    );
+    assert_eq!(after.pending.as_ref().unwrap().0, 0);
+    assert_eq!(f.record().state, "failed");
 }

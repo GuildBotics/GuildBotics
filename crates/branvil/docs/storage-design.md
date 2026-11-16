@@ -73,7 +73,7 @@ of their job when claimed. `ci_verifications` is keyed by repository id and stor
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
 snapshots store the opt-in boolean of the same name. `ci_narrowings` is keyed by
 (repository id, base SHA, job name), holding the failed SHA, first-parent commits,
-per-commit attempt IDs and outcomes, pending probe, conclusion and optional
+per-commit attempt IDs and outcomes, history readiness, pending probe, conclusion and optional
 boundary/reason, and start/finish timestamps. `ix_ci_narrowing` contains only
 `running` rows with the same key and a primary-key value. Admin check/reindex
 validate/rebuild it. The 32 → 33 upgrade creates these empty tables without

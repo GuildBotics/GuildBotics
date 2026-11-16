@@ -251,11 +251,6 @@ impl Ci {
                             .collect();
                     }
                     v.finished_at = Some(now.clone());
-                    let commits = if v.state == "failed" {
-                        self.narrowing_commits(repo, v).await?
-                    } else {
-                        vec![]
-                    };
                     let (id, done) = (repo.id.clone(), v.clone());
                     let closed = self
                         .inner
@@ -272,7 +267,7 @@ impl Ci {
                                 super::narrow::abandon(w, &id, &now)?;
                             } else {
                                 crate::repair::failed(w, &id, &done.sha, &done.failed_jobs)?;
-                                super::narrow::start(w, &id, &done, &commits, &now)?;
+                                super::narrow::start(w, &id, &done, &now)?;
                             }
                             Ok(closed)
                         })

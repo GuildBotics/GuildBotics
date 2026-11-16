@@ -29,6 +29,8 @@ pub struct Narrowing {
     pub failed_sha: String,
     /// Includes c0, followed by first-parent commits through cn.
     pub commits: Vec<String>,
+    /// False until Git supplies the full history; initially only the endpoints are stored.
+    pub history_ready: bool,
     pub results: Vec<Vec<Result>>,
     pub pending: Option<(usize, String)>,
     pub conclusion: String,
@@ -106,13 +108,7 @@ fn conclude(
     n.finished_at = Some(now.into());
     put(w, n)
 }
-pub(super) fn start(
-    w: &Wtx,
-    repo: &str,
-    v: &Verification,
-    commits: &[String],
-    now: &str,
-) -> AppResult<()> {
+pub(super) fn start(w: &Wtx, repo: &str, v: &Verification, now: &str) -> AppResult<()> {
     let Some(base) = &v.base else {
         return Ok(());
     };
@@ -128,8 +124,9 @@ pub(super) fn start(
             base: base.clone(),
             job: job.name.clone(),
             failed_sha: v.sha.clone(),
-            commits: commits.to_vec(),
-            results: vec![vec![]; commits.len()],
+            commits: vec![base.clone(), v.sha.clone()],
+            history_ready: false,
+            results: vec![vec![], vec![]],
             pending: None,
             conclusion: "running".into(),
             boundary: None,
@@ -232,11 +229,9 @@ impl Ci {
     pub(super) async fn narrowing_commits(
         &self,
         repo: &Repo,
-        v: &Verification,
+        base: &str,
+        sha: &str,
     ) -> AppResult<Vec<String>> {
-        let Some(base) = &v.base else {
-            return Ok(vec![]);
-        };
         let dir = self.inner.git.repo_dir(&repo.path);
         let history = self
             .inner
@@ -247,12 +242,12 @@ impl Ci {
                     "rev-list",
                     "--first-parent",
                     "--reverse",
-                    &format!("{base}..{}", v.sha),
+                    &format!("{base}..{sha}"),
                     "--",
                 ],
             )
             .await?;
-        Ok(std::iter::once(base.clone())
+        Ok(std::iter::once(base.to_owned())
             .chain(history.lines().map(str::to_owned))
             .collect())
     }
@@ -260,6 +255,16 @@ impl Ci {
         let id = repo.id.clone();
         let ns = self.inner.store.read(move |r| running(r, &id)).await?;
         for mut n in ns {
+            if !n.history_ready {
+                let commits = self.narrowing_commits(repo, &n.base, &n.failed_sha).await?;
+                let failures = n.results.remove(1);
+                n.results = vec![vec![]; commits.len()];
+                *n.results.last_mut().expect("history includes the base") = failures;
+                n.commits = commits;
+                n.history_ready = true;
+                let saved = n.clone();
+                self.inner.store.write(move |w| put(w, &saved)).await?;
+            }
             // An interrupted attempt can have a replacement queued at its old sequence.
             if let Some((pos, id)) = n.pending.clone() {
                 let copy = n.clone();
@@ -377,6 +382,7 @@ mod tests {
             job: "test".into(),
             failed_sha: "cn".into(),
             commits: (0..results.len()).map(|i| format!("c{i}")).collect(),
+            history_ready: true,
             results: results
                 .iter()
                 .map(|rs| {

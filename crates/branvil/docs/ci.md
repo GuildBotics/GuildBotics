@@ -824,7 +824,11 @@ then notes that the failure may be intermittent).
 A failed default-branch verification starts one persistent narrowing per failed
 job with an attempt, keyed by repository, verified base, and job. Without a base
 it starts none; later failures with the same key do not restart it. Verification
-failure and repair records are written in the same transaction as the narrowing.
+failure and repair records are written in the same transaction as the narrowing
+intent, initially containing the endpoints and cn's observations. The full history
+is fetched afterward, so a diagnostic Git failure cannot hold up the failure or
+repair records. Unfinished history reads remain retryable. Diagnostic errors in
+the reconciler are logged without skipping ordinary PR head registrations.
 
 A narrowing reads the first-parent history from its verified base c0 through the
 failed commit cn. It executes one `probe` at a time, using that commit's own job

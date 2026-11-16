@@ -666,7 +666,12 @@ impl Ci {
                 repo.path
             ),
         }
-        self.advance_narrowings(repo).await?;
+        if let Err(e) = self.advance_narrowings(repo).await {
+            tracing::warn!(
+                "CI: narrowing {} failed (retried in a minute): {e}",
+                repo.path
+            );
+        }
         wanted.sort();
         wanted.dedup();
         for branch in wanted {
