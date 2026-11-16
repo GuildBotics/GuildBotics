@@ -14,7 +14,7 @@ import { usePublishPreview } from "../../query/hooks";
 import { keys } from "../../query/keys";
 
 
-function refusalOf(t: Translate, err: unknown, notReady: "merge.notMergeable" | "publish.notReady" | "landing.notReady"): string {
+function refusalOf(t: Translate, err: unknown, notReady: "merge.notMergeable" | "publish.notReady"): string {
   if (isApiError(err, "head_moved")) return t("merge.headMoved");
   if (isApiError(err, "base_moved")) return t("merge.baseMoved");
   if (isApiError(err, "not_mergeable")) return t(notReady, { message: err.message });

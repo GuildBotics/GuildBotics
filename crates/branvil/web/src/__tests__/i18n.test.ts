@@ -9,6 +9,18 @@ describe("i18n", () => {
     expect(ja).toEqual(en);
   });
 
+  it("describes independent landing without a gate or queue", () => {
+    for (const words of Object.values(dictionaries)) {
+      for (const key of ["settings.autoLandHelp", "settings.autoLandHelpUpstream", "notifications.help", "landing.missing"] as const) {
+        expect(words[key]).not.toMatch(/gate|queue|検問|列/i);
+      }
+    }
+    expect(dictionaries.ja["notifications.help"]).toContain("PR ごとに 1 回");
+    expect(dictionaries.en["notifications.help"]).toContain("once per PR");
+    expect(dictionaries.ja["notifications.help"]).toContain("修復チケット");
+    expect(dictionaries.en["notifications.help"]).toContain("repair ticket");
+  });
+
   it("has no empty messages and the same placeholders in both languages", () => {
     const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
     for (const [key, value] of Object.entries(dictionaries.en)) {
