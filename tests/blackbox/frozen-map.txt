@@ -15,3 +15,5 @@ tests/blackbox/test_member.py::test_chat_post_and_read → 移さない：言語
 tests/blackbox/test_member.py::test_memory_record_and_search → 移さない：言語非依存の CLI 黒箱テストを同名 Python テストに保持。既存 rust-cli-blackbox CI（#92）で Rust の CLI と HTTP サーバーを検証。
 tests/blackbox/test_record_golden.py::test_existing_record_endpoints_match_golden → 移さない：言語非依存の黒箱・harness テストを同名 Python テストに保持。Rust テストへの書換えは不要。前処理・限定比較の根拠と回帰テストを同じファイルに保持。
 tests/blackbox/test_run.py::test_bundled_inspections_run_in_the_environment → #108 に回す：実機の隔離環境が必要な opt-in テスト。両入口と broker の検証を同名 Python テストに保持。
+crates/guildbotics/tests/server.rs::current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking → tests/blackbox/test_current_git.py::test_current_git_uses_the_caller_commit_hook_the_pushurl_and_remote_tracking（Branvil。caller hook、push URL、追跡参照、競合・拒否・空branchの検査を保持）
+crates/guildbotics/tests/support/real_device.rs::real_device_member_git_runs_the_clone_inside_the_command → tests/blackbox/test_run.py::test_member_git_runs_the_clone_inside_the_command（既存 Branvil seed と隔離環境の opt-in fixture を共用。guest内hook、clone/publish、追跡参照・author・内容の検査を保持）

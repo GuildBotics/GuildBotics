@@ -93,3 +93,55 @@ def test_bundled_inspections_run_in_the_environment(stack, repository):
     assert checked["head_sha"] == checked["current_head_sha"] == repository
     assert checked["readiness"] == "ready"
     assert checked["completion_blockers"] == []
+
+
+def test_member_git_runs_the_clone_inside_the_command(stack, checkout):
+    source = r"""
+import json
+from pathlib import Path
+import subprocess
+
+from guildbotics.guest.host_client import command_window
+
+async def main():
+    client = command_window()
+    assert client is not None
+    async def git(*args, stdin=""):
+        result = await client.acall(
+            "member", arguments=["git", *args, "--person", "blackbox", "--format", "json"],
+            stdin=stdin,
+        )
+        assert result["exit_code"] == 0, result["stderr"]
+        return json.loads(result["stdout"])
+
+    prepared = await git("prepare", "--repo", "acme/demo", "--branch", "probe")
+    clone = Path(prepared["repo_path"])
+    assert (clone / "README.md").read_text() == "base\n"
+    hook = clone / ".git/hooks/pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        '#!/bin/sh\n'
+        'test -d /opt/guildbotics/code/guildbotics || exit 1\n'
+        'echo inside > "$(git rev-parse --git-dir)/real-device-hook"\n'
+    )
+    hook.chmod(0o755)
+    (clone / "probe").write_text("isolated commit")
+    subprocess.run(["git", "add", "probe"], cwd=clone, check=True, timeout=30)
+    published = await git("publish", "--repo-path", str(clone), "--content-stdin", stdin="probe")
+    assert published["pushed"] is True
+    assert (clone / ".git/real-device-hook").read_text().strip() == "inside"
+    assert subprocess.check_output(
+        ["git", "rev-parse", "refs/remotes/origin/probe"], cwd=clone, text=True, timeout=30,
+    ).strip() == published["commit_sha"]
+    return published["commit_sha"]
+"""
+    (stack.workspace / ".guildbotics/config/commands/probe.py").write_text(
+        source, encoding="utf-8"
+    )
+    head = stack.cli("run", "probe", "--person", PERSON, timeout=180).strip()
+    assert checkout.git("ls-remote", "origin", "refs/heads/probe").split()[0] == head
+    checkout.git("fetch", "origin", "probe")
+    assert (
+        checkout.git("show", "-s", "--format=%ae", head) == "blackbox@guildbotics.local"
+    )
+    assert checkout.git("show", f"{head}:probe") == "isolated commit"
