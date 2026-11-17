@@ -139,3 +139,99 @@ async fn status_preserves_the_declared_network_and_dns_wire_fields() {
         );
     }
 }
+
+#[tokio::test]
+async fn failed_snapshot_exposes_its_deadline_and_only_becomes_buildable_when_due() {
+    let (_d, host, workspace) = fixture();
+    let name = Recipe::load(&host.package.join("templates"))
+        .unwrap()
+        .name(None);
+    assert!(
+        snapshot::build(&workspace, &name, "timeout".into(), |_, _| async {
+            Err("outage".into())
+        })
+        .await
+        .is_err()
+    );
+    let waiting = device::read(&host, &workspace).await;
+    assert_eq!(waiting.view["snapshot"]["state"], "failed");
+    assert!(waiting.view["snapshot"]["next_retry_at"].as_u64().is_some());
+    assert_eq!(waiting.view["snapshot"]["build_due"], false);
+    let marker = snapshot::snapshots_dir(&workspace).join(format!("{name}.failed"));
+    std::fs::File::options()
+        .write(true)
+        .open(marker)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(601)),
+        )
+        .unwrap();
+    let due = device::read(&host, &workspace).await;
+    assert_eq!(due.view["snapshot"]["build_due"], true);
+    assert_eq!(due.view["snapshot"]["detail"], "outage");
+}
+
+#[tokio::test]
+async fn automatic_build_schedule_requires_build_prerequisites_for_every_buildable_state() {
+    for blocker in ["", "runtime", "image", "declaration", "resources", "home"] {
+        for state in ["missing", "stale", "failed"] {
+            let (_d, mut host, workspace) = fixture();
+            let declaration = ".guildbotics/config/intelligences/agent_environment.yml";
+            let custom = ["image", "home"].contains(&blocker);
+            if custom {
+                write(&workspace, declaration, &serde_json::json!({"dns":{"nameservers":["1.1.1.1"]},"image":{"reference":"local/custom:1","digests":{(gb_environment::image::device_architecture()):format!("sha256:{}", "a".repeat(64))}}}).to_string());
+            }
+            let name = Recipe::load(&host.package.join("templates"))
+                .unwrap()
+                .name(custom.then_some(""));
+            let directory = snapshot::snapshots_dir(&workspace);
+            std::fs::create_dir_all(&directory).unwrap();
+            if state == "stale" {
+                std::fs::create_dir(directory.join("guildbotics-1111111111111111")).unwrap();
+            } else if state == "failed" {
+                let marker = directory.join(format!("{name}.failed"));
+                std::fs::write(&marker, "outage").unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(marker)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(
+                        std::time::SystemTime::now() - std::time::Duration::from_secs(601),
+                    ))
+                    .unwrap();
+            }
+            match blocker {
+                "runtime" => {
+                    std::fs::remove_dir_all(host.data.join("msb")).unwrap();
+                    std::fs::write(host.data.join("msb"), "not a directory").unwrap();
+                }
+                "declaration" => write(&workspace, declaration, "dns: {nameservers: [not-ipv4]}"),
+                "home" => host.home = PathBuf::from("relative"),
+                "resources" => write(&workspace, declaration, "resources: {cpus: false}"),
+                _ => {}
+            }
+            let view = device::read(&host, &workspace).await.view;
+            let eligible = blocker.is_empty();
+            assert_eq!(
+                view["snapshot"]["build_due"], eligible,
+                "{blocker}/{state}: {view}"
+            );
+            assert_eq!(
+                view["snapshot"]["next_retry_at"].is_number(),
+                eligible && state == "failed",
+                "{blocker}/{state}"
+            );
+            let setting = if blocker == "resources" {
+                "declaration"
+            } else if blocker == "home" {
+                "image"
+            } else if eligible {
+                "snapshot"
+            } else {
+                blocker
+            };
+            assert_eq!(view["problem_setting"], setting);
+        }
+    }
+}

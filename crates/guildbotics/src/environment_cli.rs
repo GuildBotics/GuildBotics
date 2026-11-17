@@ -342,7 +342,7 @@ fn status_payload(view: &Value) -> Value {
         "warning": view["warning"],
         "runtime": view["runtime"],
         "resources": view["resources"],
-        "snapshot": fields(&view["snapshot"], &["state", "name", "path", "detail"]),
+        "snapshot": fields(&view["snapshot"], &["state", "name", "path", "detail", "next_retry_at"]),
         "image": fields(&view["image"], &["reference", "architecture", "digest", "digests", "present", "held", "problem", "warning"]),
         "network": view["network"],
         "dns": view["dns"],
@@ -434,6 +434,19 @@ fn print_status(view: &Value, language: &str) {
         println!("snapshot: {state} {name} ({detail})");
     }
     println!("location: {}", text(&snapshot["path"]));
+    if let Some(at) = snapshot["next_retry_at"]
+        .as_i64()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+    {
+        println!(
+            "{}",
+            gb_server::i18n::t(
+                language,
+                "intelligences.agent_environment.snapshot.next_retry",
+                &[("time", &at.with_timezone(&chrono::Local).to_rfc3339())]
+            )
+        );
+    }
 
     let network = &view["network"];
     let mode = text(&network["mode"]);
@@ -468,5 +481,31 @@ fn print_status(view: &Value, language: &str) {
             problem.to_owned()
         };
         println!("{}: {reason}", text(&tool["name"]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn retry_deadline_guidance_is_localized() {
+        for language in ["en", "ja"] {
+            let text = gb_server::i18n::t(
+                language,
+                "intelligences.agent_environment.snapshot.next_retry",
+                &[("time", "2026-11-17T12:00:00Z")],
+            );
+            assert!(text.contains("2026-11-17T12:00:00Z"));
+            assert!(!text.contains("intelligences.agent_environment"));
+        }
+    }
+
+    #[test]
+    fn status_retains_the_automatic_retry_deadline() {
+        let view =
+            serde_json::json!({"snapshot":{"state":"failed","next_retry_at":1800000000000u64}});
+        assert_eq!(
+            super::status_payload(&view)["snapshot"]["next_retry_at"],
+            1800000000000u64
+        );
     }
 }

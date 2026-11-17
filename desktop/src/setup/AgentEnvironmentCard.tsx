@@ -60,7 +60,7 @@ export function AgentEnvironmentCard({
   /** The element id a system alert asked to bring into view. */
   focusElement?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["agent-environment-status"],
@@ -198,6 +198,13 @@ export function AgentEnvironmentCard({
                     {data.snapshot.detail ? (
                       <Text size="sm" c={data.snapshot.state === "failed" ? "danger" : undefined}>
                         {data.snapshot.detail}
+                      </Text>
+                    ) : null}
+                    {data.snapshot.next_retry_at != null ? (
+                      <Text size="sm">
+                        {t("setup.intelligence.environment.nextRetry", {
+                          time: new Date(data.snapshot.next_retry_at).toLocaleString(i18n.language),
+                        })}
                       </Text>
                     ) : null}
                     {build.isError ? (

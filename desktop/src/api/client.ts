@@ -912,6 +912,8 @@ export type EnvironmentRuntimeStatus = {
 export type SnapshotState = "missing" | "stale" | "building" | "failed" | "ready";
 
 export type EnvironmentSnapshotStatus = {
+  // Unix milliseconds; only failed snapshots have an automatic retry deadline.
+  next_retry_at?: number | null;
   state: SnapshotState;
   name: string;
   detail: string;
