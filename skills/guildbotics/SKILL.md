@@ -131,6 +131,7 @@ inherited interactive mode still applies and must be reported.
 
 Before sending your final interactive reply, complete the standard work procedure from the member capabilities in the user's current repository: verification of code changes, the requested publishing steps (commit, push, PR, comments, replies, or reactions), and memory maintenance.
 When the work created, reused, or updated an open PR, run `guildbotics run repository/pr_checks` after the final push and do not report completion unless its `readiness` is `ready`. Resolve its `completion_blockers`; `base_out_of_date` requires updating the head only when the host requires it. `base_conflict` means the head conflicts with the current base; merge the base into the head, resolve conflicts, publish, and check again. The checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
+While you wait for CI in the turn, keep the `feedback` of the first `pr_checks` read and compare it on every repeated read. When it changes, stop waiting even if checks are still pending: read the new reviews and comments, answer them with the Handling review feedback procedure, publish any fix, and then wait again from the latest `feedback`.
 Then write the final reply in the active member's voice.
 
 ## Interactive Memory Obligations

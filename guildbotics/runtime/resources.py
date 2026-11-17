@@ -262,6 +262,32 @@ class FailedLog(ReadModel):
     truncated: bool
 
 
+class Remark(ReadModel):
+    """One remark on a pull request, by its opaque id and when it was made."""
+
+    id: str
+    at: str
+
+
+class Remarks(ReadModel):
+    """How many remarks of one kind were made, and the latest of them."""
+
+    count: int
+    latest: Remark | None
+
+
+class Feedback(ReadModel):
+    """What people other than the pull request's author have said on it,
+    leaving out workflow status notices.
+
+    A reader that compares two reads sees any change as new feedback.
+    """
+
+    reviews: Remarks
+    comments: Remarks
+    thread_comments: Remarks
+
+
 class Readiness(ReadModel):
     """Whether a pull request's head may be reported complete."""
 
@@ -277,6 +303,7 @@ class Readiness(ReadModel):
     checks_expected: bool
     readiness: Literal["ready", "blocked", "not_applicable"]
     completion_blockers: list[CompletionBlocker]
+    feedback: Feedback
     #: Present only when failed logs were asked for.
     failed_logs: list[FailedLog] | None = Field(default=None, exclude_if=_absent)
 

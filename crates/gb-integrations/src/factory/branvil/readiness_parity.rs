@@ -39,6 +39,14 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
         "aiko".into(),
         std::sync::Arc::new(|_| {}),
     );
+    let activity = json!({
+        "comments":[{"id":"c1","author":"aiko","created_at":"1"},{"id":"c2","author":"kenji","created_at":"5","meta":{"kind":"workflow_error","reason":"failed","person_id":"kenji","run_id":"r"}}],
+        "reviews":[{"id":"v1","author":"AIKO","submitted_at":"1"},{"id":"v2","author":"kenji","submitted_at":"2"}],
+        "threads":[
+            {"comments":[{"id":"t1","author":"kenji","created_at":"1"},{"id":"t2","author":"aiko","created_at":"4"}]},
+            {"comments":[{"id":"t3","author":"Yuki","created_at":"3"}]}
+        ]
+    });
     for (head, base, codes) in [
         ("observed-head", "observed-base", vec![]),
         ("moved-head", "observed-base", vec!["head_changed"]),
@@ -49,10 +57,15 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
             vec!["head_changed", "base_changed"],
         ),
     ] {
-        let current = json!({"url":"http://example.invalid/test/repo/-/pulls/1","label":"!1","title":"Current title","state":"open","head_sha":head,"base_sha":base});
+        let current = json!({"url":"http://example.invalid/test/repo/-/pulls/1","label":"!1","title":"Current title","state":"open","head_sha":head,"base_sha":base,"author":"Aiko"});
         let normalized = service
-            .readiness_result(report(), current, Some(vec![]))
+            .readiness_result(report(), &activity, current, Some(vec![]))
             .unwrap();
+        // Actor names compare case-folded, as Branvil spells them.
+        assert_eq!(
+            json!(normalized.feedback),
+            json!({"reviews":{"count":1,"latest":{"id":"v2","at":"2"}},"comments":{"count":0,"latest":null},"thread_comments":{"count":2,"latest":{"id":"t3","at":"3"}}})
+        );
         assert_eq!(normalized.head_sha, "observed-head");
         assert_eq!(normalized.current_head_sha, head);
         assert_eq!(normalized.base_sha.as_deref(), Some("observed-base"));
@@ -107,7 +120,9 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
             _ => current["base_sha"] = json!(""),
         }
         assert_eq!(
-            service.readiness_result(checks, current, None).unwrap_err(),
+            service
+                .readiness_result(checks, &json!({}), current, None)
+                .unwrap_err(),
             diagnostic(expected, [("url", url.to_owned())])
         );
     }

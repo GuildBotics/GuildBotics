@@ -1,6 +1,6 @@
 use gb_ports::{
-    Check, CompletionBlocker, FailedLog, MAX_PAGE_BYTES, Readiness, ReadinessReadiness,
-    ReadinessRollup, ServiceError, WorkTarget,
+    Check, CompletionBlocker, FailedLog, Feedback, MAX_PAGE_BYTES, Readiness, ReadinessReadiness,
+    ReadinessRollup, Remark, Remarks, ServiceError, WorkTarget,
 };
 use serde_json::{Value, json};
 
@@ -70,8 +70,47 @@ pub fn effective_tail_bytes(requested: usize, jobs: usize) -> Result<usize, Serv
     Ok(requested.min((MAX_PAGE_BYTES / jobs).max(1)))
 }
 
+/// A remark as a provider read it: its author, opaque id, and time. Authors
+/// are spelled as the provider compares actors; times as the provider orders them.
+/// A notice is a comment carrying a workflow status, which nobody answers.
+pub struct Said {
+    pub author: String,
+    pub id: String,
+    pub at: String,
+    pub notice: bool,
+}
+
+/// Count each kind of remark not made by the PR's `author` and not a notice,
+/// and pick the latest by time; a tie goes to the one the provider listed last.
+pub fn feedback_of(
+    author: &str,
+    reviews: Vec<Said>,
+    comments: Vec<Said>,
+    thread_comments: Vec<Said>,
+) -> Feedback {
+    let remarks = |said: Vec<Said>| {
+        let others: Vec<_> = said
+            .into_iter()
+            .filter(|s| s.author != author && !s.notice)
+            .collect();
+        Remarks {
+            count: others.len() as i64,
+            latest: others
+                .into_iter()
+                .max_by(|a, b| a.at.cmp(&b.at))
+                .map(|s| Remark { id: s.id, at: s.at }),
+        }
+    };
+    Feedback {
+        reviews: remarks(reviews),
+        comments: remarks(comments),
+        thread_comments: remarks(thread_comments),
+    }
+}
+
 /// Checks belong to `head_sha`; callers re-read the PR after collecting them.
 /// No observation of another head or base is accepted as completion evidence.
+#[allow(clippy::too_many_arguments)]
 pub fn readiness_of(
     target: WorkTarget,
     head_sha: String,
@@ -79,6 +118,7 @@ pub fn readiness_of(
     checks: Vec<Check>,
     checks_expected: bool,
     freshness: Option<Freshness>,
+    feedback: Feedback,
     failed_logs: Option<Vec<FailedLog>>,
 ) -> Result<Readiness, ServiceError> {
     let rollup = check_rollup(&checks);
@@ -95,6 +135,7 @@ pub fn readiness_of(
         checks_expected: false,
         readiness: ReadinessReadiness::NotApplicable,
         completion_blockers: vec![],
+        feedback,
         failed_logs,
     };
     if let Some(f) = freshness {

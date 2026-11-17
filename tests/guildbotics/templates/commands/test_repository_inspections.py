@@ -233,6 +233,41 @@ async def test_checks_displays_host_result_verbatim(readiness):
 
 
 @pytest.mark.asyncio
+async def test_checks_show_feedback_held_to_the_readiness_schema():
+    remarks = {"count": 2, "latest": {"id": "r2", "at": "2026-11-17T11:00:00Z"}}
+    feedback = {
+        "reviews": remarks,
+        "comments": {"count": 0, "latest": None},
+        "thread_comments": remarks,
+    }
+    readiness = {
+        "target": {"kind": "pull_request", "url": PR_URL, "title": "T", "label": "#7"},
+        "base_sha": "base",
+        "head_sha": "head",
+        "behind_by": 0,
+        "out_of_date": False,
+        "current_base_sha": "base",
+        "current_head_sha": "head",
+        "rollup": "pending",
+        "checks": [],
+        "checks_expected": True,
+        "readiness": "blocked",
+        "completion_blockers": [],
+        "feedback": feedback,
+    }
+    # The guest holds the host's answer to the schema the same way.
+    held = ReadPage.of("pull_request_readiness", [readiness]).model_dump()
+    service = Pages({"pull_request_readiness": [held]})
+    shown = json.loads(
+        await command("pr_checks").main(service.context(), PR_URL, "false")
+    )
+    assert shown["feedback"] == feedback
+    without = {k: v for k, v in readiness.items() if k != "feedback"}
+    with pytest.raises(ValueError):
+        ReadPage.of("pull_request_readiness", [without])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resource", ["ticket_comments", "ticket_pull_requests"])
 async def test_partial_failure_is_not_an_empty_or_complete_issue(resource):
     pages = {

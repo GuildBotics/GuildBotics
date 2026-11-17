@@ -312,3 +312,18 @@ fn reference_requires_approved_interactive_order_and_readback() {
         assert!(text.contains(phrase), "{phrase}");
     }
 }
+
+#[test]
+fn interactive_ci_waits_answer_new_feedback_before_checks_finish() {
+    assert!(help().contains(
+        "Its `feedback` counts the reviews, conversation comments, and review thread comments made by people other than the PR's author"
+    ));
+    let skill = include_str!("../../../skills/guildbotics/SKILL.md");
+    for term in [
+        "keep the `feedback` of the first `pr_checks` read and compare it on every repeated read",
+        "stop waiting even if checks are still pending",
+        "then wait again from the latest `feedback`",
+    ] {
+        assert!(skill.contains(term), "{term}");
+    }
+}

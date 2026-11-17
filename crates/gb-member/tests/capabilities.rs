@@ -247,7 +247,7 @@ fn evidence_includes_written_pushed_and_resumed_prs_once() {
 fn readiness(blockers: &[&str]) -> Readiness {
     serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"base_sha":"base","head_sha":"head",
         "behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":"pending","checks":[],"checks_expected":true,
-        "readiness":if blockers.is_empty(){"ready"}else{"blocked"},"completion_blockers":blockers.iter().map(|b|json!({"code":b,"message":b,"next_action":"fix"})).collect::<Vec<_>>()})).unwrap()
+        "readiness":if blockers.is_empty(){"ready"}else{"blocked"},"feedback":gb_ports::Feedback::default(),"completion_blockers":blockers.iter().map(|b|json!({"code":b,"message":b,"next_action":"fix"})).collect::<Vec<_>>()})).unwrap()
 }
 #[test]
 fn only_pending_checks_of_nondraft_prs_can_be_awaited() {
