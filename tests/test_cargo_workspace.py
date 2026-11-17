@@ -306,3 +306,16 @@ def test_rust_test_jobs_run_on_changes_to_what_their_tests_build_from() -> None:
             )
         }
         assert uncovered == set(), name
+
+
+def test_branvil_contracts_only_run_in_the_workspace_rust_test_job() -> None:
+    jobs = _load(".branvil/ci.toml")["jobs"]
+    assert all(job["name"] != "branvil-integration" for job in jobs)
+    assert not (ROOT / "scripts/branvil-integration.sh").exists()
+    commands = next(job["commands"] for job in jobs if job["name"] == "rust-test")
+    assert any(
+        "--workspace" in command
+        and "--exclude gb-integrations" not in command
+        and "-E" not in command
+        for command in commands
+    )
