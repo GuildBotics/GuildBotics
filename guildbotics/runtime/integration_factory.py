@@ -18,7 +18,7 @@ class IntegrationFactory(ABC):
     def create_ticket_service(
         self, logger: Logger, person: Person, team: Team
     ) -> TicketService:
-        """The member's tickets and board."""
+        """The member's ticket resources."""
 
     @abstractmethod
     def create_chat_service(

@@ -705,7 +705,7 @@ Python commands support three types of arguments:
 - context: If the first parameter of `main` is named `context` / `ctx` / `c`, you can access the execution context. Typical use cases:
   - Retrieve team and person information
   - Invoke other commands
-  - Post and react in chat as the member (`context.get_chat_service()`, which runs the member's chat commands; the ticket manager is not available in the isolated environment)
+  - Post in chat as the member (`context.get_chat_service()`, which runs the member's chat commands; the ticket and code-hosting services provide read access)
 - positional arguments: Define as positional parameters of `main`.
 - keyword arguments: Define as keyword parameters of `main`.
 
@@ -801,7 +801,7 @@ async def main(context, channel_id):
         raise CommandError(str(exc)) from exc
 ```
 
-Every service a command reaches -- the chat, the code host, the tickets -- reports an anticipated failure as `ServiceError` (`ServiceNotFound` when what it names is not there, `ServiceUnsupported` when the service cannot do it at all). Converting it to `CommandError` makes the screen show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
+Every service a command reaches -- the chat, the code host, the tickets -- reports an anticipated failure as `ServiceError`. Converting it to `CommandError` makes the screen show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
 
 API-key inference failures show the exception type and the reported status when available, without the provider's raw error text. A reported status may be an SDK default even when no HTTP response was received; for example, Agno defaults to 502. Window failures retain their own reasons, such as a timeout or an oversized result. The bundled `examples/reports/tools/fetch_ai_news` command reports request failures with guidance to allow `news.google.com` in `intelligences/agent_environment.yml`.
 

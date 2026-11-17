@@ -17,7 +17,6 @@ import pytest
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
-from guildbotics.runtime.chat_service import ChatIdentity
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.import_utils import ClassResolver
@@ -31,33 +30,6 @@ class DummyTicketService(TicketService):
 
     async def read(self, resource, subject, *, parameters=None, continuation=""):
         raise NotImplementedError
-
-    def attachment(self, url, attachment_id, limit):
-        raise NotImplementedError
-
-    async def comment(self, url, body, *, status=None):
-        raise NotImplementedError
-
-    async def create_ticket(self, tracker, title, body, labels, *, add_to_board=True):
-        raise NotImplementedError
-
-    async def update_ticket(self, url, **_changes):
-        raise NotImplementedError
-
-    async def add_reaction(self, url, target_id, reaction):
-        raise NotImplementedError
-
-    async def candidates(self) -> list:
-        return []
-
-    async def refresh(self, task):
-        return None
-
-    async def move(self, task, lane) -> bool:
-        return False
-
-    async def closed_since(self, start, end) -> list:
-        return []
 
     async def aclose(self) -> None:
         return None
@@ -78,7 +50,7 @@ class DummyIntegrationFactory(IntegrationFactory):
     ) -> TicketService:
         """Return a new DummyTicketService and record the call."""
         self.ticket_service_calls.append((person, team))
-        return DummyTicketService(logger, person, team)
+        return DummyTicketService()
 
     def create_chat_service(self, logger: logging.Logger, person: Person, team: Team):
         """Record the call and return a minimal chat service stub."""
@@ -87,9 +59,6 @@ class DummyIntegrationFactory(IntegrationFactory):
         class _DummyChatService:
             def __init__(self) -> None:
                 self.closed = False
-
-            async def get_bot_identity(self):
-                return ChatIdentity(user_id="U_TEST", display_name="dummy")
 
             async def aclose(self):
                 self.closed = True
@@ -265,7 +234,7 @@ async def test_closing_the_context_closes_the_board_it_made():
 
     class _Factory(DummyIntegrationFactory):
         def create_ticket_service(self, logger, person, team):
-            return _Board(logger, person, team)
+            return _Board()
 
     context = make_context(
         _make_team(),

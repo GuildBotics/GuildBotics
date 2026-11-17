@@ -9,8 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from guildbotics.entities import Task
-from guildbotics.entities.team import Person, Project, Team
+from guildbotics.entities.team import Person
 from guildbotics.guest.window import (
     MemberCommandError,
     WindowChatService,
@@ -46,19 +45,15 @@ def _answering(page: dict[str, object]) -> SimpleNamespace:
 
 
 def _ticket_service(client: SimpleNamespace) -> WindowTicketService:
-    return WindowTicketService(
-        client, _PERSON, Team(project=Project(name="demo"), members=[_PERSON])
-    )
+    return WindowTicketService(client, _PERSON.person_id)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "args"),
     [
-        ("get_bot_identity", ()),
         ("resolve_channel_id", ("general",)),
         ("post_message", ("C1", "hello")),
-        ("add_reaction", ("C1", "1.0", "ack")),
     ],
 )
 @pytest.mark.parametrize("failure", ["reported", "defect", "refused"])
@@ -233,48 +228,3 @@ async def test_a_reported_read_failure_is_the_ports_service_error():
 
     with pytest.raises(ServiceError, match="Ticket not found."):
         await WindowCodeHostingService(client, "aiko").read("pull_requests", _PR_URL)
-
-
-_TASK = Task(id="1", url=_TICKET_URL, title="Fix it", description="")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda s: s.comment(_TICKET_URL, "hello"),
-        lambda s: s.create_ticket(
-            "acme/team/demo", "title", "body", [], add_to_board=False
-        ),
-        lambda s: s.update_ticket(
-            _TICKET_URL,
-            body=None,
-            title="new",
-            add_labels=[],
-            remove_labels=[],
-            state=None,
-        ),
-        lambda s: s.add_reaction(_TICKET_URL, "comment-1", "ack"),
-        lambda s: s.candidates(),
-        lambda s: s.refresh(_TASK),
-        lambda s: s.move(_TASK, "in_progress"),
-        lambda s: s.closed_since(datetime.now(UTC), datetime.now(UTC)),
-    ],
-    ids=[
-        "comment",
-        "create_ticket",
-        "update_ticket",
-        "add_reaction",
-        "candidates",
-        "refresh",
-        "move",
-        "closed_since",
-    ],
-)
-async def test_ticket_writes_and_the_board_are_not_available_in_a_command(call):
-    client = _client()
-
-    with pytest.raises(NotImplementedError, match="isolated environment"):
-        await call(_ticket_service(client))
-
-    client.acall.assert_not_called()

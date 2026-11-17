@@ -709,7 +709,7 @@ Python コマンドでは、以下の3種類の引数を利用することがで
 - context: `main` 関数の最初の引数として `context` / `ctx` / `c` のいずれかを指定すると、実行コンテキストにアクセスできます。以下のような用途で利用できます:
   - team や person の情報取得。
   - 別コマンドの呼び出し。
-  - メンバーとしてのチャットへの投稿やリアクション（`context.get_chat_service()`。メンバーのチャットコマンドを実行します。チケット管理サービスは隔離環境の中では使えません）。
+  - メンバーとしてのチャットへの投稿（`context.get_chat_service()`。メンバーのチャットコマンドを実行します。チケット・コードホストの窓口は読み取りに使えます）。
 - 位置引数: `main` 関数の位置引数として定義します。
 - キーワード引数: `main` 関数のキーワード引数として定義します。
 
@@ -807,7 +807,7 @@ async def main(context, channel_id):
         raise CommandError(str(exc)) from exc
 ```
 
-コマンドが使うサービス（チャット・コードホスト・チケット）は、想定内の失敗を `ServiceError` で報告します（対象が無いときは `ServiceNotFound`、サービスがその操作をそもそもできないときは `ServiceUnsupported`）。これを `CommandError` に変換すると、画面には理由が、CLI には `Error: <理由>` が表示されます。ほかの想定内の失敗でも、利用者に見せてよい本文で `CommandError` を投げてください。
+コマンドが使うサービス（チャット・コードホスト・チケット）は、想定内の失敗を `ServiceError` で報告します。これを `CommandError` に変換すると、画面には理由が、CLI には `Error: <理由>` が表示されます。ほかの想定内の失敗でも、利用者に見せてよい本文で `CommandError` を投げてください。
 
 API キーを使う推論の失敗は、例外名と取得できた「報告されたステータス」を表示し、プロバイダのエラー本文は表示しません。ステータスは HTTP 応答が無くても SDK の既定値の場合があります（例えば Agno の既定値は502です）。窓口の時間切れや結果サイズ超過は、それぞれの理由をそのまま表示します。同梱の `examples/reports/tools/fetch_ai_news` は通信に失敗すると、`intelligences/agent_environment.yml` で `news.google.com` への通信許可を確認するよう案内します。
 
