@@ -11,40 +11,18 @@ only what may be handed to an agent.
 from __future__ import annotations
 
 import json
-import logging
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from logging import Logger
-from typing import IO, Any
+from typing import Any
 
-from guildbotics.entities import Person, Task, Team
+from guildbotics.entities import Person, Team
 from guildbotics.guest.host_client import HostClient
-from guildbotics.runtime.chat_service import (
-    ChatEventPage,
-    ChatIdentity,
-    ChatMessageRef,
-    ChatPostResult,
-    ChatService,
-    CredentialCheck,
-)
+from guildbotics.runtime.chat_service import ChatPostResult, ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.port import ServiceError, WorkflowStatus
-from guildbotics.runtime.resources import (
-    RESOURCE_SUBJECTS,
-    Attachment,
-    CommentWritten,
-    ReactionAdded,
-    ReadPage,
-    ReadSubject,
-)
-from guildbotics.runtime.ticket_service import (
-    ClosedItem,
-    MoveLane,
-    TicketCreated,
-    TicketService,
-    TicketUpdated,
-)
+from guildbotics.runtime.resources import RESOURCE_SUBJECTS, ReadPage, ReadSubject
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
 
 
@@ -123,13 +101,11 @@ class WindowCodeHostingService(CodeHostingService):
 
 
 class WindowTicketService(TicketService):
-    """The tickets' reads, via the command's member grant. Their writes and
-    the board are the host's: each is the host's ticket selection, or has no
-    member command that does the same."""
+    """The tickets' reads, via the command's member grant."""
 
-    def __init__(self, client: HostClient, person: Person, team: Team) -> None:
-        super().__init__(logging.getLogger(__name__), person, team)
+    def __init__(self, client: HostClient, person_id: str) -> None:
         self._client = client
+        self._person_id = person_id
 
     async def read(
         self,
@@ -141,41 +117,12 @@ class WindowTicketService(TicketService):
     ) -> ReadPage:
         return await _read(
             self._client,
-            self.person.person_id,
+            self._person_id,
             resource,
             subject,
             parameters,
             continuation,
         )
-
-    def attachment(
-        self, url: str, attachment_id: str, limit: int
-    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
-        raise _unavailable("Downloading a ticket's attachment")
-
-    async def comment(self, url: str, body: str, **_: Any) -> CommentWritten:
-        raise _unavailable("Commenting on a ticket")
-
-    async def create_ticket(self, tracker: str, *_: Any, **__: Any) -> TicketCreated:
-        raise _unavailable("Creating a ticket")
-
-    async def update_ticket(self, url: str, **_: Any) -> TicketUpdated:
-        raise _unavailable("Updating a ticket")
-
-    async def add_reaction(self, url: str, *_: Any) -> ReactionAdded:
-        raise _unavailable("Reacting on a ticket")
-
-    async def candidates(self) -> list[Task]:
-        raise _unavailable("The board's candidates")
-
-    async def refresh(self, task: Task) -> Task | None:
-        raise _unavailable("The board's candidates")
-
-    async def move(self, task: Task, lane: MoveLane) -> bool:
-        raise _unavailable("Moving a ticket")
-
-    async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
-        raise _unavailable("The board's closed work")
 
     async def aclose(self) -> None:
         """The command owns the shared host client."""
@@ -217,28 +164,6 @@ class WindowChatService(ChatService):
         self._client = client
         self._person_id = person_id
 
-    async def get_bot_identity(self) -> ChatIdentity:
-        identity = await self._member("identity")
-        return ChatIdentity(identity["user_id"], identity["display_name"])
-
-    async def check_credentials(self) -> list[CredentialCheck]:
-        raise _unavailable("Checking chat credentials")
-
-    def self_user_id(self, person: Person) -> str:
-        raise _unavailable("Reading a member's chat user")
-
-    def parse_message_url(self, url: str) -> ChatMessageRef:
-        raise _unavailable("Reading a chat message URL")
-
-    def mentioned_user_ids(self, text: str) -> list[str]:
-        raise _unavailable("Reading chat mentions")
-
-    async def list_channel_events(self, channel_id: str, **_: Any) -> ChatEventPage:
-        raise _unavailable("Reading a channel's events")
-
-    async def list_thread_events(self, channel_id: str, **_: Any) -> ChatEventPage:
-        raise _unavailable("Reading a thread's events")
-
     async def resolve_channel_id(self, channel_name: str) -> str | None:
         found = await self._member("resolve-channel", "--channel-name", channel_name)
         return found["channel_id"] or None
@@ -262,20 +187,6 @@ class WindowChatService(ChatService):
             posted["message_id"],
             posted["thread_id"],
             datetime.fromisoformat(posted["occurred_at"]),
-        )
-
-    async def add_reaction(
-        self, channel_id: str, message_id: str, reaction: str
-    ) -> None:
-        await self._member(
-            "reaction",
-            "add",
-            "--channel-id",
-            channel_id,
-            "--message-id",
-            message_id,
-            "--reaction",
-            reaction,
         )
 
     async def _member(self, *arguments: str, stdin: str = "") -> dict[str, Any]:
@@ -310,7 +221,7 @@ class WindowIntegrationFactory(IntegrationFactory):
     def create_ticket_service(
         self, logger: Logger, person: Person, team: Team
     ) -> TicketService:
-        return WindowTicketService(self._client, person, team)
+        return WindowTicketService(self._client, person.person_id)
 
     def create_chat_service(
         self, logger: Logger, person: Person, team: Team

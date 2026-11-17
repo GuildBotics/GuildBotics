@@ -16,18 +16,6 @@ class ServiceError(RuntimeError):
     carries neither what the service answered nor a credential."""
 
 
-class ServiceNotFound(ServiceError):
-    """What the operation names is not there, or is not this service's."""
-
-
-class ServiceUnavailable(ServiceError):
-    """No connection was made, so this operation never reached the service.
-
-    Autonomous callers can defer it until a later polling cycle. Failures
-    after a request may have arrived must not use this type.
-    """
-
-
 class ServiceUnsupported(ServiceError):
     """The service cannot do the operation at all, as opposed to failing to
     do it this time."""
